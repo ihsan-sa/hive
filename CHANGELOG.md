@@ -4,6 +4,14 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Modules update by themselves
+
+A module you added from the catalog now takes new releases on its own, the same way the Hive does and at the same pace. Each release is signed and passed its checks first. A module with your own changes in it is left alone, and one that fails to start after an update goes back to the version it was running.
+
+## The circuit board module is now pcb-flow
+
+The module that designs circuit boards was called `hwde`; it is now `pcb-flow`, to sit beside `chip-flow`. Its command is `pcb-flow`, and `hwde` still runs it. A Hive that added it under the old name keeps its folder and shows it once, as `pcb-flow`; nothing needs doing.
+
 ## Choose how hard an agent thinks
 
 The message box has an Effort menu beside the model, and an agent's page has one in its Effort row. A choice holds on that agent from its next run, because a run's effort is fixed when it starts. On a running agent's page, **Restart now** asks it to finish its current step and come back in the same conversation at the new effort. The menu is off for agents on other providers, which don't take an effort.

@@ -5,7 +5,7 @@
 import { h } from "../core/dom.js";
 import { S } from "../core/store.js";
 import { threadHref } from "../core/router.js";
-import { threadTitle } from "../core/model.js";
+import { threadTitle, labelCodes, agentLabel, isAgent } from "../core/model.js";
 import { jump } from "./message.js";
 import { fenceBlock } from "../rich/blocks.js";
 import { equation, inlineMath } from "../rich/math.js";
@@ -41,7 +41,8 @@ const kbRef = (path, ...kids) => h("a", { class: "ref", "data-kind": "kbfile", "
 const KBNAMED = new RegExp(KBREF.source.slice(1, -1) + "(?![\\w/-]|\\.\\w)", "g");
 // A file named without its folder ("REPORT.md is updated"): the conversation's own earlier mention or attachment says which one.
 // known: name -> { kb: path } or { id: post id }, set for the length of one markdown() call.
-let known = null, inLink = false;
+let known = null, inLink = false, says = false;   // says: a post's words, where an agent's code reads as its name in the app look (E10); a note or a file keeps what it wrote
+const codeName = c => (says && !inLink && S.app && S.app.app && /^@?a[0-9a-f]{4}$/.test(c) && (isAgent(c.replace("@", "")) || /\d/.test(c)) ? agentLabel(c.replace("@", "")) : null);
 const namedRef = (name, ...kids) => { const k = known && !inLink && known.get(name); return !k ? null : k.kb ? kbRef(k.kb, ...kids) : fileRef(k.id, name, ...kids); };
 
 // A thread or post the text names by id ("the results thread (110819468566)"): the thread opens under its title,
@@ -65,6 +66,7 @@ const link = (href, ...kids) => h("a", { href, target: "_blank", rel: "noopener 
 const SLOT = /\uE000(\d+)\uE001/g;
 const raw = (s, ms) => (ms ? s.replace(SLOT, (_, n) => ms[+n].src) : s);
 function text(s, ms) {
+  if (says && !inLink) s = labelCodes(s);
   if (!ms || !s.includes("\uE000")) return s;
   const out = []; let at = 0;
   for (const m of s.matchAll(SLOT)) { out.push(s.slice(at, m.index), inlineMath(ms[+m[1]].tex, ms[+m[1]].src)); at = m.index + m[0].length; }
@@ -78,7 +80,7 @@ function run(s, ms) {
     if (m.index < at) continue;
     let end = m.index + m[0].length, node;
     if (m[1] != null) node = m[1];
-    else if (m[3] != null) { let c = raw(m[3], ms); c = /^ .*[^ ].* $|^ [^ ] $/.test(c) ? c.slice(1, -1) : c; const f = FILE.exec(c), k = !f && KBREF.exec(c); node = f ? fileRef(f[1], f[2], h("code", null, c)) : k ? kbRef(k[1], h("code", null, c)) : namedRef(c, h("code", null, c)) || h("code", null, c); }
+    else if (m[3] != null) { let c = raw(m[3], ms); c = /^ .*[^ ].* $|^ [^ ] $/.test(c) ? c.slice(1, -1) : c; const said = codeName(c), f = !said && FILE.exec(c), k = !said && !f && KBREF.exec(c); node = said ? said : f ? fileRef(f[1], f[2], h("code", null, c)) : k ? kbRef(k[1], h("code", null, c)) : namedRef(c, h("code", null, c)) || h("code", null, c); }
     else if (m[5] != null) { const was = inLink; inLink = true; node = link(raw(m[5], ms), run(m[4], ms)); inLink = was; }
     else if (m[6] != null || m[7] != null) node = h("strong", null, run(m[6] ?? m[7], ms));
     else if (m[8] != null || m[9] != null) node = h("em", null, run(m[8] ?? m[9], ms));
@@ -208,15 +210,15 @@ function blocks(ls) {
 }
 
 /** markdown(text, files): a div.md of DOM nodes. files: what a bare file name in it links to (filesNamed). */
-export function markdown(text, files) {
-  known = files || null;
+export function markdown(text, files, post) {
+  known = files || null; says = !!post;
   const t = String(text ?? "").replace(/\r\n?/g, "\n");
   let ls = t.split("\n");
   notes = t.includes("[^") ? new Map() : null;
   if (notes) ls = takeNotes(ls);
   const body = blocks(ls), got = notes && notes.size ? [...notes] : null;
   const end = got ? h("div", { class: "rc-fns" }, h("ol", null, got.map(([id, n]) => h("li", { "data-fn": id }, blocks(n.body))))) : null;
-  notes = known = null;
+  notes = known = null; says = false;
   return h("div", { class: "md", "data-rich": "" }, body, end);
 }
 

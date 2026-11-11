@@ -253,8 +253,16 @@ def cmd_relay(a):
     print(pid, flush=True)
     print(f"hive relay: copied to thread {thread} for @{to}" + (" (nobody keeps it: a new agent)" if to == "new" else ""), file=sys.stderr)
 
+# Shell text that was never run: a body that is only `$(cat f)` or `$VAR` came through a quoted heredoc, and the reader would get those words (projects/everyday E28).
+SHELL_BODY = re.compile(r"\$\((?:[^()]|\([^()]*\))*\)|\$\{?[A-Za-z_]\w*\}?")
+
+
 def cmd_post(a):
-    text = " ".join(a.text) if a.text else sys.stdin.read()
+    text = " ".join(a.text) if a.text and a.text != ["-"] else sys.stdin.read()   # a lone - means stdin; agents write it, and it once went out as the whole message
+    if SHELL_BODY.fullmatch(text.strip()):
+        sys.exit(f"hive post: nothing posted. The text is only {text.strip()!r}, which nothing ran: a quoted heredoc sends it as those words. Write the text itself in the heredoc.")
+    if (bad := [f for f in a.file or [] if os.path.exists(f) and (not os.path.isfile(f) or not os.path.getsize(f))]):
+        sys.exit(f"hive post: nothing posted. {', '.join(bad)}: not a file with anything in it, so there is nothing to attach.")
     if os.environ.get("HIVE_BROKER"):
         forward({"verb": "post", "thread": a.thread, "to": a.to, "model": a.model, "effort": getattr(a, "effort", None), "reply_to": a.reply_to, "done": a.done or [], "tags": getattr(a, "tag", None) or [], "interrupt": bool(getattr(a, "interrupt", False)), "end": bool(getattr(a, "end", False)), "text": text}, a.file or [])
     given = [post_tag(t) for t in getattr(a, "tag", None) or []]   # checked before anything else, so a bad tag costs a re-post and nothing more
@@ -600,18 +608,31 @@ def catalog():
     for n, e in marketplace(c).items(): c.setdefault(n, e)
     return c
 
+def module_dir(n, c):
+    """Where a catalog module is installed. A renamed module (its entry says formerly) may still be in its old folder on a Hive that added it before."""
+    d = MODULES / n
+    old = MODULES / c["formerly"] if c.get("formerly") else None
+    return old if old and not d.exists() and old.is_dir() else d
+
+def module_dirs(cat):
+    """The installed module folders, each once: not a link left for an old name, and not an old folder that stands for a renamed catalog entry."""
+    old = {c["formerly"] for n, c in cat.items() if c.get("formerly") and not (MODULES / n).exists()}
+    return [d for d in sorted(MODULES.glob("*/")) if (d / "module.json").exists() and not d.is_symlink() and d.name not in old]
+
 def module_rows():
     """Every module the app shows. source: included (ships with the release), public (in its catalog), own (anything else here: made on this Hive, or added by URL)."""
     cat, rows = catalog(), []
     for n, c in cat.items():
-        d = MODULES / n
+        d = module_dir(n, c)
         rows.append({"name": n, "state": "installed" if d.is_dir() else "available", "source": "included" if c.get("bundled") else "public", "about": module_blurb(manifest(d).get("description") or c.get("about")), "needs": c.get("needs"), "default": bool(c.get("default")), "recommended": bool(c.get("recommended"))})
-    for d in sorted(MODULES.glob("*/")):
-        if d.name not in cat and (d / "module.json").exists():
+    for d in module_dirs(cat):
+        if d.name not in cat:
             rows.append({"name": d.name, "state": "installed", "source": "own", "about": module_blurb(manifest(d).get("description")), "needs": None, "default": False, "recommended": False})
     return rows
 
 MODULE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")  # a folder in ~/modules or a command in ~/.local/bin: never a path, and never ..
+
+MODULE_NEVER = {"git", "ssh-keygen", "python", "python3", "sh", "bash", "env", "systemctl", "gh", "curl", "flock", "timeout"}
 
 def module_links(d):
     """(link, target) pairs a module wants: its commands on PATH, its skills in each login."""
@@ -641,10 +662,11 @@ def cmd_module(a):
     cat = catalog()
     if a.do == "list" and a.json: print(json.dumps(module_rows())); return
     if a.do == "list":
-        have = sorted(d for d in MODULES.glob("*/") if (d / "module.json").exists())
-        for d in have: print(f"{d.name:<14} installed  {module_blurb(manifest(d).get('description'))}")
+        for d in module_dirs(cat): print(f"{d.name:<14} installed  {module_blurb(manifest(d).get('description'))}")
         for n, c in cat.items():
-            if not (MODULES / n).exists(): print(f"{n:<14} available  {module_blurb(c.get('about'))}" + (f" [needs {c['needs']}]" if c.get("needs") else ""))
+            d = module_dir(n, c)
+            if d.is_dir() and d.name != n: print(f"{n:<14} installed  {module_blurb(manifest(d).get('description'))} [in the folder {d.name}]")
+            elif not d.exists(): print(f"{n:<14} available  {module_blurb(c.get('about'))}" + (f" [needs {c['needs']}]" if c.get("needs") else ""))
         return
     if not a.name: sys.exit(f"hive module {a.do}: name which module")
     if a.do == "add" and len(a.name) > 1: sys.exit("hive module add: one module at a time")
@@ -655,7 +677,7 @@ def cmd_module(a):
     if os.environ.get("HIVE_BROKER"):  # ~/modules is read-only in the sandbox: the broker adds it, from the catalog only
         if a.do == "remove": sys.exit("hive module remove: only the person removes modules, in the app (Settings, Modules)")
         forward({"verb": "module", "name": a.name})
-    d = MODULES / name
+    d = MODULES / name if a.do == "remove" else module_dir(name, cat.get(a.name, {}))  # add of a renamed module finds its old folder: no second copy
     if a.do == "remove":
         for n in names:  # all or none: a problem with the second doesn't leave the first half done
             if not (MODULES / n).is_dir(): sys.exit(f"{n} isn't installed")
@@ -664,7 +686,7 @@ def cmd_module(a):
         for n in names:
             d = MODULES / n; module_stop_units(d)
             for link, _ in module_links(d): link.unlink(missing_ok=True)
-            shutil.rmtree(d); print(f"removed {n}")
+            shutil.rmtree(d); (STATE / "module-updates" / f"{n}.json").unlink(missing_ok=True); print(f"removed {n}")
         return
     if not d.exists():
         MODULES.mkdir(exist_ok=True)
@@ -677,11 +699,19 @@ def cmd_module(a):
             except subprocess.TimeoutExpired: failed = True
             if failed:
                 shutil.rmtree(d, ignore_errors=True); sys.exit(f"couldn't clone {url}; {a.name} wasn't added")
+            pinned = 0  # a copy of core with no updater has nothing to check against, and stays on what was cloned
+            if (CORE / "update.py").exists():
+                try: pinned = subprocess.run([sys.executable, str(CORE / "update.py"), "--pin-module", str(d)], timeout=900).returncode  # onto its newest signed release, on a Hive that updates
+                except (OSError, subprocess.SubprocessError): pinned = 3
+            if pinned:
+                shutil.rmtree(d, ignore_errors=True); sys.exit(f"couldn't check {a.name}'s releases, so it wasn't added; try again in a few minutes")
     if not manifest(d): print(f"note: {d} has no module.json, so nothing was linked")
     for link, target in module_links(d):
         link.parent.mkdir(parents=True, exist_ok=True)
         if link.exists() and not link.resolve().is_relative_to(d.resolve()):  # a module never takes over another's command or skill (hive, claude, git)
             print(f"note: {link} already belongs to something else, so it was left alone"); continue
+        if link.parent == BIN and link.name in MODULE_NEVER:  # ~/.local/bin comes first on PATH, and the Hive runs these to check and install modules
+            print(f"note: a module can't provide {link.name}, so it wasn't linked"); continue
         link.unlink(missing_ok=True); link.symlink_to(target); print(f"linked {link} -> {target}")
     m = manifest(d)
     print(f"{name}: {m.get('description', '')[:300]}")

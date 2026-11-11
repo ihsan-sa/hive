@@ -235,6 +235,20 @@ def runs_observable(t0, t1):
     except OSError: pass
     return pct(a, b)
 
+BULK, BULK_S = 15, 600   # this many logged searches by one agent inside ten minutes is a replay or a probe of the search, not use (2026-11-11: of 144 agents, 141 never passed 10; the other three ran 19, 29 and 206)
+def bulk(rs):
+    """ids of the searches made in a burst no agent at work makes. A replay that forgot HIVE_KB_TEST=1 otherwise counts as hundreds of searches nobody read:
+    one keeper run's 247 took find_read_pct from 42 to 14 for a day (2026-11-10)."""
+    by, out = {}, set()
+    for r in rs:
+        if "q" in r and r.get("id") and r.get("agent"): by.setdefault(r["agent"], []).append((calendar.timegm(time.strptime(r["at"][:19], "%Y-%m-%dT%H:%M:%S")), r["id"]))
+    for xs in by.values():
+        xs.sort(); j = 0
+        for i in range(len(xs)):
+            while xs[i][0] - xs[j][0] > BULK_S: j += 1
+            if i - j + 1 >= BULK: out.update(x[1] for x in xs[j:i + 1])
+    return out
+
 def numbers(t0, t1, rs=None):
     """The window's use of the knowledge base; t0, t1 as YYYY-MM-DDTHH:MM:SS, UTC. Records from before the logging have no id and stay out of every share."""
     rs = records() if rs is None else rs
@@ -246,7 +260,8 @@ def numbers(t0, t1, rs=None):
             path = r.get("read") or re.sub(r":\d+$", "", r.get("open", ""))
             for i in [r["from"], *r.get("also", [])]: followed.setdefault(i, set()).add(path)
     finds = [r for r in win if "q" in r]
-    logged = [r for r in finds if r.get("id") and r.get("shown") and not r.get("filtered") and not r.get("tester")]
+    burst = bulk(rs)
+    logged = [r for r in finds if r.get("id") and r.get("shown") and not r.get("filtered") and not r.get("tester") and r["id"] not in burst]
     recalls = [r for r in win if r.get("recall") and r.get("id") and r.get("agent") and not r.get("neighbours")]
     pointers = [(r["id"], p) for r in recalls for p, _ in r.get("shown", [])]
     opened = sum(1 for i, p in pointers if any(x == p or x == needle(p) or x.endswith("/" + needle(p)) for x in followed.get(i, ())))
@@ -255,7 +270,7 @@ def numbers(t0, t1, rs=None):
     fr = sum(1 for r in logged if r["id"] in followed)
     nb = [r for r in logged if any(not p.startswith("board:") for p, _ in r["shown"])]   # finds that showed a note or file; board snippets answer in place (find-follow-by-source.md)
     nbr = sum(1 for r in nb if r["id"] in followed)
-    return {"finds": len(finds), "finds_logged": len(logged), "finds_read": fr, "find_read_pct": pct(fr, len(logged)),
+    return {"finds": len(finds), "finds_logged": len(logged), "finds_bulk": sum(1 for r in finds if r.get("id") in burst), "finds_read": fr, "find_read_pct": pct(fr, len(logged)),
             "finds_nb": len(nb), "finds_nb_read": nbr, "find_nb_read_pct": pct(nbr, len(nb)),
             "finds_read_8": sum(1 for r in logged if r["id"] in near), "find_read_8_pct": pct(sum(1 for r in logged if r["id"] in near), len(logged)),
             "recalls": len(recalls), "recalls_opened": sum(1 for r in recalls if r["id"] in followed), "recall_opened_pct": pct(sum(1 for r in recalls if r["id"] in followed), len(recalls)),

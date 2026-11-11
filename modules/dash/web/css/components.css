@@ -1410,6 +1410,23 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 .t{font-size:var(--fs-meta);color:var(--ink-3);white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:400}
 .cm-foci{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:var(--s4);max-width:1100px;margin:var(--s6) auto 0;align-items:start}   /* a short card doesn't stretch to its neighbour's height */
 .cm-foci>*{min-width:0}
+/* Where the work went (ui/workbar.js): two segmented bars over the same parts, one key under them */
+.wkb{width:100%;max-width:1100px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s3)}
+.wkb .sec-h{margin:0}
+.wkb-held{min-height:209px}
+@media (max-width:640px){.wkb-held{min-height:233px}}
+.wkb-r{display:grid;gap:6px}
+.wkb-h{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s3);font-size:var(--fs-small)}
+.wkb-bar{display:flex;gap:2px;height:28px}
+.wkb-bar[data-empty]{background:var(--line);border-radius:4px}
+.wkb-seg{min-width:2px;display:flex;align-items:center;padding-left:4px;border-radius:4px;font-size:var(--fs-micro);font-weight:var(--w-bold);text-decoration:none;white-space:nowrap}
+a.wkb-seg:hover{filter:brightness(1.08)}
+.wkb-seg:focus-visible{outline:none;box-shadow:var(--ring)}
+.wkb-key{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px var(--s4);font-size:var(--fs-meta);color:var(--ink-2)}
+.wkb-key li{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%}
+.wkb-key i{flex:none;width:10px;height:10px;border-radius:3px}
+.wkb-key a{color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wkb-key a:hover{color:var(--ink);text-decoration:underline}
 .cm-foci-msg{max-width:720px;margin:var(--s6) auto 0;padding:var(--s6) var(--s5);border:1px dashed var(--line-2);border-radius:var(--r-l);text-align:center;display:grid;gap:6px;justify-items:center}
 .cm-foci-msg{width:100%}   /* auto margins alone shrink it to its words inside the home's grid */
 .cm-foci-msg b{font-size:var(--fs-title)}
@@ -1885,6 +1902,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 /* agent mark (R7, from the design): the agent's two middle letters (a7c31 → 7c) in a soft square, its status shape at the corner. One colour for everyone: the shape carries the state */
 .av{position:relative;display:inline-grid;place-items:center;width:24px;height:24px;flex:none;border-radius:7px;background:var(--hover);color:var(--ink-2);font:600 10px/1 var(--font);letter-spacing:.02em;text-transform:lowercase;text-decoration:none}
+html:not([data-dev]) .av{text-transform:none}   /* lowercase is for the developer look's codes; the app look's avatars say "A" to match "Agent A", and "Y" for you */
 .av:hover{text-decoration:none;color:var(--ink)}
 .av[data-me]{background:var(--ink);color:var(--on-ink)}
 .av>.st{position:absolute;right:-3px;bottom:-3px;outline:2px solid var(--bg)}
@@ -1989,6 +2007,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .ag-stack .ag .tr>:first-child,.ag-stack .ag .tr:not(.th):hover>:first-child{position:static;background:none;box-shadow:none}
 .ag .tb>.tr>.ag-n{display:flex;align-items:center;gap:8px}
 .ag-stack .ag .tb>.tr>.ag-n{order:-3;flex:1 1 0;display:flex;align-items:center;gap:8px;font-weight:var(--w-med);overflow:visible}
+.ag-stack .ag .tb>.tr>.ag-n{min-width:0}.ag-stack .ag .tb>.tr>.ag-n>.av{flex:none}.ag-stack .ag .tb>.tr>.ag-n>.ref{min-width:0;height:auto;white-space:normal;overflow-wrap:anywhere}   /* a long name wraps inside its column: unwrapped it ran over the avatar and the status at 390 */
 .ag-stack .ag .tb>.tr>.ag-st{order:-2;flex:none;color:var(--ink-2);font-size:var(--fs-meta)}
 .ag-stack .ag .tb>.tr>.ag-on{order:-1;flex:0 0 100%;color:var(--ink);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 .ag-stack .ag .tb>.tr>.ag-on:empty{display:none}
@@ -3135,6 +3154,7 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .cm-need-m{display:flex;flex-wrap:nowrap;white-space:nowrap;min-width:0;gap:0 6px;align-items:center;color:var(--ink-3)}
 .cm-need-m>a:first-child{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}   /* one line: the source gives way, the time never lands alone on a second line */
 .cm-need-m>.th{flex:0 0 auto;max-width:60%;overflow:hidden;text-overflow:ellipsis}   /* the project stays whole and the title gives way (punch list 2026-11-10 item 3); the cap only bites on a very long name */
+.cm-need-m>.ref{flex:0 1 auto;display:inline-block;min-width:6ch;max-width:60%;overflow:clip visible;text-overflow:ellipsis;white-space:nowrap;line-height:20px}   /* a long name gives way with an ellipsis; a pill that shrank without clipping ran over the source and the time at 390 */
 .cm-need-m a{color:var(--ink-2);text-decoration:none}
 .cm-need-m a:hover{text-decoration:underline}
 .cm-need-b{gap:2px}

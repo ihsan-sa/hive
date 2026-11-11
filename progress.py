@@ -517,7 +517,14 @@ def summary_numbers():
     """From the dash module's lint: stale, duplicate and wrong-owner items in Where things stand, and threads open on the person that it lacks. None where there's no dash module."""
     try:
         spec = importlib.util.spec_from_file_location("needs_you", HOME / "modules" / "dash" / "needs_you.py"); n = importlib.util.module_from_spec(spec); spec.loader.exec_module(n)
-        return {"summary_flagged": n.flagged_count(), "needs_gap": n.needs_gap()}
+        c = n.flagged_count()
+        if c is not None and c > 5:   # a high count (22 at 2026-11-10 21:08Z; 2 at 22:55Z, nothing measured between): keep the findings so the cause can be read
+            try:
+                away = n.core("away"); cur = n.load_json(n.OUT, {}) or {}
+                f = [x for x in n.lint(cur.get("brief") or {}, [], n.core("asks").ledger(), list(away.lines(HOME / "board.jsonl")), n.status_bars(), time.time(), links=away.needs_order()[1]) if x["kind"] in n.LINT_FOCUS]
+                with open(HOME / ".cache" / "summary-flagged-spikes.jsonl", "a") as fh: fh.write(json.dumps({"at": dt.datetime.utcnow().isoformat()[:19], "n": c, "findings": [str(x)[:200] for x in f]}) + "\n")
+            except Exception: pass
+        return {"summary_flagged": c, "needs_gap": n.needs_gap()}
     except Exception: return {"summary_flagged": None, "needs_gap": None}
 
 def indep_review(e):

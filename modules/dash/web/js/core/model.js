@@ -11,30 +11,56 @@ export const isRunning = n => S.running.has(n);
 export const sEnd = s => s.end ?? (isRunning(s.name) ? now() : s.start);
 export function agentThread(n) { for (let i = S.sessions.length - 1; i >= 0; i--) if (S.sessions[i].name === n) return S.sessions[i].thread; return null; }
 
-/** What the app look calls an agent: its conversation's agent ("Project 66's agent"), or "an agent". The code stays in the hover title and on the agent page; the developer look shows the code. */
+/** What the app look calls an agent: its conversation's agent ("Project 66's agent"), or "an agent". Outside a conversation the code stays in the hover title; it is always on the agent page, and the developer look shows it. */
+// Inside a conversation an agent is named by its place in that conversation, not by whatever it last worked on (R-1110e-b..e): one agent is "the agent", several are
+// "Agent A", "Agent B" in the order they first appeared, so a name and its avatar letter hold still as the agents move on. Drawing code scopes it with inConversation(th, fn).
+let HERE = null;
+export const inConversation = (th, fn) => { const was = HERE; HERE = th || null; try { return fn(); } finally { HERE = was; } };
+const CODE_NAME = /^a[0-9a-f]{4}$/, CAST = new Map();
+function cast(th) {
+  const d = S.threads.get(th), n = d ? d.posts.length : 0, c = CAST.get(th);
+  if (c && c.n === n && c.s === S.sessions.length && c.live === S.live) return c.names;
+  const first = new Map(), saw = (a, t) => { if (CODE_NAME.test(a) && !(first.get(a) <= t)) first.set(a, t); };
+  if (d) for (const p of d.posts) saw(p.from, p.t);
+  for (const s of S.sessions) if (s.thread === th) saw(s.name, s.start);
+  for (const a of threadPeople(th)) if (CODE_NAME.test(a) && !first.has(a)) first.set(a, Infinity);   // running or queued here, nothing posted yet: after the ones already seen
+  const order = [...first].sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : 1)).map(x => x[0]), names = new Map();
+  order.forEach((a, i) => names.set(a, order.length === 1 ? "the agent" : "Agent " + (i < 26 ? String.fromCharCode(65 + i) : i + 1)));
+  CAST.set(th, { n, s: S.sessions.length, live: S.live, names });
+  return names;
+}
+/** True while drawing inside one conversation (inConversation): the app look's hovers there name no code either (E10). */
+export const inScope = () => HERE != null;
+/** A step that is only the agent talking to its Hive (reading the board, posting, setting its status): nothing a person needs to read in the app look. */
+export const ownStep = d => /^Running:\s*(?:cd\s+\S+\s*(?:&&|;)\s*)?(?:hive|h2|kb)\b/.test(String(d || ""));
+// A title too long to say whole: its first words, cut at a word and never on a little word ("Fix the bug in's agent").
+const titleName = t => { let w = t.split(/\s+/).slice(0, 4); while (w.length > 1 && /^(a|an|the|of|in|on|to|for|and|or|with|at|by|from|is|its)$/i.test(w.at(-1))) w.pop(); return w.join(" ").replace(/[\s,;:.\u2013\u2014-]+$/, ""); };
 export function agentLabel(n) {
   if (!n || !S.app || !S.app.app) return n;
   if (simpleOn()) return plainName(n);
   if (n === "person") return "you";
   if (isWarden(n)) return "the warden";
-  if (!/^a[0-9a-f]{4}$/.test(n)) return n;
+  if (!CODE_NAME.test(n)) return n;
+  const here = HERE && cast(HERE).get(n); if (here) return here;
   const th = agentThread(n), t = th ? threadTitle(th) : "";
   if (!t || t === "A conversation" || /\ba[0-9a-f]{4}\b/.test(t)) return "an agent";
   // "RSI lab: measure the hive and keep improving it" is "RSI lab's agent": the part before the colon names it, and a name cut in the middle read badly beside "'s agent".
   const head = /^Aside:/.test(t) ? "" : (t.match(/^([^:]{3,32}):\s/) || [])[1];
-  return `${head || short(t, 40)}'s agent`;
+  return `${(head || (t.length <= 32 ? t : titleName(t))).replace(/[\s?!.,;:\u2026]+$/, "")}'s agent`;   // "Do modules update?" is "Do modules update's agent", never "?'s agent"
 }
 
 /** An agent's two marks on its avatar: a8779 → 87, other names their first two letters. The app look shows no code there either (E10): the first letter of what agentLabel calls it ("Why is the sky…'s agent" → W). */
 export function agentMono(n) {
   if (!/^[a-z][0-9a-f]{4,}$/.test(n)) return String(n).slice(0, 2);
   if (!S.app || !S.app.app) return n.slice(1, 3);
-  const l = agentLabel(n), c = l && l !== n && l !== "an agent" ? (l.match(/[\p{L}\p{N}]/u) || [])[0] : "";
+  const l = agentLabel(n), letter = /^Agent (\S+)$/.exec(l); if (letter) return letter[1];
+  const c = l && l !== n && l !== "an agent" && l !== "the agent" ? (l.match(/[\p{L}\p{N}]/u) || [])[0] : "";
   return c ? c.toUpperCase() : "A";
 }
 
 /** Agent codes inside a line of text, as agentLabel says them (the app look only; a known agent, or a + 4 hex with a digit, so "added" stays a word and a6aea-mesh.png a file name). */
-export const labelCodes = text => (!text || !S.app || !S.app.app ? text : String(text).replace(/(^|[^\w@])@?(a[0-9a-f]{4})\b(?![-_.]\w)/g, (m, a, n) => (isAgent(n) || /\d/.test(n) ? a + agentLabel(n) : m)));
+export const labelCodes = text => (!text || !S.app || !S.app.app ? text : String(text).replace(/(^|[^\w@])@?(a[0-9a-f]{4})\b(?![-_.]\w)/g, (m, a, n, at) => (isAgent(n) || /\d/.test(n) ? a + (at ? agentLabel(n) : capFirst(agentLabel(n))) : m)));
+export const capFirst = s => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 export function tierOf(th) {
   const P = (S.live && S.live.priorities) || {}; th = th || "";
@@ -425,18 +451,26 @@ function answersPerson(p) {
   const a = askBefore(p);
   return !!a && a.men.includes(p.from) && p.t - a.t < ANSWER_FOR;
 }
-/** Which one a post is. For you: from or to the person, or an agent answering them. Updates: an agent or outsider saying how it's going. Agent comms: agents talking to each other, and the hive's own notices. */
+/** A timer or checker posting under its own name (asks, progress, release-train, report-triage...), as against an agent, the person or another Hive.
+ * What a script writes is for agents, so it is Agent comms, unless it names the person, replies to them or carries a "For you:" line. Any sender that
+ * isn't known to be someone counts as a script: the lists of system senders here went stale and a new script's notes then landed in the person's chat
+ * as Updates (the person, 11101818169f). The two scripts that write for the person without naming them are listed. */
+const FOR_PERSON = new Set(["phone", "morning"]);
+export const isScript = n => !/^[a-z][0-9a-f]{4,5}$/.test(n) && !OUTSIDE.has(n) && !FOR_PERSON.has(n) && !/^hive-/.test(n) && !isAgent(n);
+/** Which one a post is. For you: from or to the person, or an agent answering them. Updates: an agent or outsider saying how it's going. Agent comms: agents talking to each other, and the hive's own notices, a script's among them. */
 export function postKind(p) {
   if (p.lv !== undefined) return p.lv;
   if (p.th === SIDE_THREAD) return p.lv = 0;
   if (p.from === "person" || p.men.includes("person")) return p.lv = SHOW.you;
   if (SYS.has(p.from) || OPS.has(p.from) || isWarden(p.from) || HOUSE.has(p.th)) return p.lv = SHOW.comms;
   if (p.men.some(m => m !== p.from && !OUTSIDE.has(m))) return p.lv = SHOW.comms;
+  if (isScript(p.from)) return FOR_YOU.test(p.text || "") || (p.reply_to && S.byId[p.reply_to]?.from === "person") ? SHOW.you : SHOW.comms;   // not kept in p.lv: a named agent is only known once its first start has loaded
   return p.lv = answersPerson(p) ? SHOW.you : SHOW.updates;
 }
 /** Every kind of post a thread has: a thread with none of what's on isn't listed. */
 export function threadKinds(d) {
   if (btwParent(d.name)) return SHOW.updates;   // a side question is a process the hive runs, not the conversation: listed under Updates only (11041319bbd0)
+  if (d.lvA !== S.agents.size) { d.lvN = 0; d.lvA = S.agents.size; }   // a newly known agent's posts stop counting as a script's
   if (d.lvN !== d.posts.length) { let v = d.lvN ? d.lv : 0; for (let i = d.lvN || 0; i < d.posts.length; i++) v |= postKind(d.posts[i]); d.lv = v; d.lvN = d.posts.length; }
   return d.lv;
 }

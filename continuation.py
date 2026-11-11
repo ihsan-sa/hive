@@ -156,7 +156,7 @@ def wait_holds(line, base, running, cap=7200):
 
 def waits(threads, running, t, cap=7200):
     """{thread: seconds} until which a `Waiting:` holds the floor off it. Only a wait that says who or when holds: a running or queued agent named in the line, or a time; a bare one
-    ("for the next keeper round"), or one on an agent that isn't coming, carries on now. Newest of the last agent post and the status bar decides; no wait outlasts cap after the last agent post, however often the bar is rewritten."""
+    ("for the next keeper round"), or one on an agent that isn't coming, carries on now. Newest of the last agent post and the status bar decides, but a plain bar (no Next, stop or Waiting line) says where things stand and doesn't cancel the post's wait, the rule find_next applies: 37 of 700 floor starts on 2026-11-04..11 were that. No wait outlasts cap after the last agent post, however often the bar is rewritten."""
     out, last = {}, {}
     try:
         with BOARD.open("rb") as fh:
@@ -171,8 +171,9 @@ def waits(threads, running, t, cap=7200):
     for th in threads:
         p, bar = last.get(th), bars.get(th)
         at = epoch(p.get("at")) or 0 if p else 0
-        text = bar["text"] if bar and bar["at"] > at else p.get("text", "") if p else ""
-        lines = [clean(l) for l in str(text).splitlines() if clean(l).lower().startswith("waiting:")]
+        def waiting(text): return [clean(l) for l in str(text).splitlines() if clean(l).lower().startswith("waiting:")]
+        bar_says = bar and bar["at"] > at and (status_line(bar) or waiting(bar.get("text", "")))
+        lines = waiting(bar["text"] if bar_says else p.get("text", "") if p else "")
         if not lines: continue
         base = at or bar["at"]
         if (until := wait_holds(lines[-1], base, running, cap)): out[th] = until

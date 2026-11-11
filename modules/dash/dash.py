@@ -341,6 +341,28 @@ def core_json(script, *args, timeout=90):
         return json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
     except (OSError, ValueError, subprocess.TimeoutExpired): return None
 
+def asks_ledger():
+    """~/asks.jsonl merged per id the way core/asks.py ledger() merges it: the first record keeps who asked and when, later ones add
+    the state, and `updated` / `done_at` are those later records' times. The file itself never carries the two, so a reader that
+    takes the last record per id and waits for `done_at` sees no closed ask at all: until 2026-11-11 this page served none, and the
+    home's "Finished since your last visit" had no ask in it (simuse reading 20261110-1900)."""
+    items = {}
+    try: lines = (HOME / "asks.jsonl").read_text(errors="replace").splitlines()
+    except OSError: return items
+    for line in lines:
+        try: r = json.loads(line)
+        except ValueError: continue
+        if not isinstance(r, dict) or not r.get("id"): continue
+        e = items.get(r["id"])
+        if e is None: e = items[r["id"]] = dict(r)
+        else:
+            e.update({k: v for k, v in r.items() if k not in ("id", "at", "by", "post", "when", "ask", "kind")})
+            e["updated"] = r.get("updated") or r.get("at")
+        if r.get("status") in ("done", "dropped"): e["done_at"] = r.get("done_at") or r.get("at")
+        elif r.get("status"): e.pop("done_at", None)   # reopened
+    return items
+
+
 def progress_state():
     """What /api/progress serves. The scoreboard comes from core/progress.py (a few seconds: cached stale, so a page never waits
     past the first read), with the last snapshots in ~/progress.jsonl as its trend; the rest is read straight from the ledgers."""
@@ -351,7 +373,7 @@ def progress_state():
     except (OSError, ValueError): snaps = []
     if not board and snaps: board = {"now": snaps[-1], "before": snaps[-2] if len(snaps) > 1 else {}, "worse": [], "stale": True}
     asks = []
-    for r in last_per_id(HOME / "asks.jsonl").values():
+    for r in asks_ledger().values():
         if r.get("kind") == "direction" or r.get("status") == "dropped": continue
         if r.get("status") == "done" and (r.get("done_at") or r.get("updated") or "") < (datetime.fromtimestamp(now - 2 * 86400, timezone.utc).isoformat()): continue
         asks.append({k: r.get(k) for k in ("id", "when", "thread", "post", "ask", "status", "owner", "evidence", "why", "done_at", "updated")})
@@ -1260,17 +1282,19 @@ def _part_text(b):
     return c if isinstance(c, str) else json.dumps(c, default=str)
 
 
-def agent_input(name, full=True, limit=40):
+def agent_input(name, full=True, limit=40, turn=None):
     """What went into each model call of an agent's newest session: the call's exact input tokens (fresh, cache write, cache read)
     from the log, and the content that arrived since the previous call, by source, sized by an estimate (4 characters a token).
-    What was already there is 'carried'; on the first call it is the system prompt, tool list, memory and first message, which the log doesn't keep."""
+    What was already there is 'carried'; on the first call it is the system prompt, tool list, memory and first message, which the log doesn't keep.
+    The list carries sizes only, since the page polls it. `turn` (a call's id) returns that one call with its pieces whole, as the log has them, secrets hidden."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", name or ""): return {"turns": []}
+    if turn is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", turn): return {"turns": []}
     try: q = sorted((HOME / "sessions").glob(name + "-*.jsonl"), key=lambda x: x.stat().st_mtime)[-1]
     except (OSError, IndexError): return {"turns": []}
     names, turns, pend, seen = {}, [], [], None
     def add(src, label, b):
         x = _part_text(b)
-        pend.append({"src": src, "label": label, "n": max(1, len(x) // 4), "x": redact(short(x, 500)) if full else ""})
+        pend.append({"src": src, "label": label, "n": max(1, len(x) // 4), "x": x})
     for e in jlines(q, 3 * 1024 * 1024):
         k, m = e.get("type"), e.get("message") or {}
         if k == "assistant":
@@ -1278,13 +1302,14 @@ def agent_input(name, full=True, limit=40):
             if u and m.get("id") != seen:
                 seen = m.get("id")
                 fresh, cw, cr = u.get("input_tokens") or 0, u.get("cache_creation_input_tokens") or 0, u.get("cache_read_input_tokens") or 0
-                parts = []
+                parts, whole = [], full and turn == seen
                 for r in pend:  # same source and label merge into one row
+                    x = redact(r["x"]) if whole else ""
                     o = next((y for y in parts if y["src"] == r["src"] and y["label"] == r["label"]), None)
-                    if o: o["n"] += r["n"]; o["items"].append(r["x"])
-                    else: parts.append({**r, "items": [r["x"]]})
+                    if o: o["n"] += r["n"]; o["items"].append(x)
+                    else: parts.append({**r, "items": [x]})
                 for r in parts: r.pop("x", None)
-                turns.append({"t": ts(e.get("timestamp")), "fresh": fresh, "cw": cw, "cr": cr, "out": u.get("output_tokens") or 0, "parts": parts})
+                turns.append({"id": seen, "t": ts(e.get("timestamp")), "fresh": fresh, "cw": cw, "cr": cr, "out": u.get("output_tokens") or 0, "parts": parts})
                 pend = []
             for b in _blocks(m.get("content")):
                 t = b.get("type")
@@ -1302,7 +1327,8 @@ def agent_input(name, full=True, limit=40):
     for i, r in enumerate(turns):
         r["total"] = r["fresh"] + r["cw"] + r["cr"]
         r["carried"] = max(0, r["total"] - sum(y["n"] for y in r["parts"]))
-    return {"turns": turns, "file": q.name}
+    if turn is not None: turns = [r for r in turns if r["id"] == turn]
+    return {"turns": turns, "file": q.name, "text": bool(full)}
 
 
 _work = {}  # session log path -> {"off", "files": {path: [n, last, kind]}, "commits": [...], "prs": [...]}: read on from where it stopped
@@ -4981,7 +5007,7 @@ def serve(port):
             elif u.path == "/api/agent-work":
                 self.send(json.dumps(agent_work(q.get("name", [""])[0], self.route != "outside" or self.mode == "full")).encode(), J)
             elif u.path == "/api/agent-input":
-                self.send(json.dumps(agent_input(q.get("name", [""])[0], self.route != "outside" or self.mode == "full")).encode(), J)
+                self.send(json.dumps(agent_input(q.get("name", [""])[0], self.route != "outside" or self.mode == "full", turn=q.get("turn", [None])[0])).encode(), J)
             elif u.path == "/api/agent-diff":
                 self.send(json.dumps(agent_diff(q.get("name", [""])[0], q.get("path", [""])[0], self.route != "outside" or self.mode == "full")).encode(), J)
             elif u.path == "/api/ledger":

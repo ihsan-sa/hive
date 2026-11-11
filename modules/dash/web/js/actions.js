@@ -3,7 +3,7 @@ import { h } from "./core/dom.js";
 import { S, can, built, post, poll, pollUsage } from "./core/store.js";
 import { simpleOn } from "./core/simple.js";
 import { short } from "./core/format.js";
-import { threadTitle, tierOf } from "./core/model.js";
+import { threadTitle, tierOf, agentLabel, capFirst, ownStep } from "./core/model.js";
 import { TIERS, tier } from "./core/status.js";
 import { confirm } from "./ui/dialog.js";
 import { button, input, field } from "./ui/kit.js";
@@ -12,7 +12,7 @@ import { button, input, field } from "./ui/kit.js";
 export function killButton(n) {
   if (!can("stop")) return null;
   // A round stop icon everywhere (the person, 2026-11-04 thread feedback); the confirm that follows still asks for the name.
-  if (S.app.app) return stopButton(`Stop ${n}`, e => { e.stopPropagation(); askStop(n); }, "ac-kill");
+  if (S.app.app) return stopButton(`Stop ${agentLabel(n)}`, e => { e.stopPropagation(); askStop(n); }, "ac-kill");
   return stopButton(`Stop ${n}'s run now`, e => { e.stopPropagation(); askKill(n, `Stop ${n}'s run now`); }, "ac-kill");
 }
 export function stopButton(label, onClick, cls) {
@@ -43,20 +43,20 @@ export function askKill(n, said) {
 // ---- Stop: the plain way to stop an agent, from the conversation. Not built yet on the server (POST /api/stop). ----
 // "After this step" lets it finish what it's doing and save, then end; a message wakes it again. Kill stays the hard stop
 // with its typed code, one click further.
-export function askStop(n) {
+export function askStop(n, said = agentLabel(n)) {
   if (!can("stop")) return;
   if (simpleOn()) return confirm({
     title: "Stop this work?", ok: "Stop", kind: "danger", failText: "It didn't stop",
     body: ["This stops it right away. Anything it hasn't saved yet may be lost. Send a message here when you want it to carry on."],
     onOk: async () => { await post("/api/kill", { name: n, confirm: n }); await poll(); },
   });
-  if (!built("stop")) return askKill(n, `Stop ${n} now`);
+  if (!built("stop")) return askKill(n, `Stop ${said} now`);
   const L = S.running.get(n);
   const dlg = confirm({
-    title: `Stop ${n}?`, ok: "Stop after this step", failText: "It wasn't stopped",
+    title: `Stop ${said}?`, ok: "Stop after this step", failText: "It wasn't stopped",
     body: [
-      L && L.doing ? h("p", { class: "meta" }, "Doing now: " + short(L.doing, 160)) : null,
-      `${n} finishes the step it's on, saves what it has, and stops. Nothing is lost, and a message in its conversation wakes it again.`,
+      L && L.doing && !(S.app && S.app.app && ownStep(L.doing)) ? h("p", { class: "meta" }, "Doing now: " + short(L.doing, 160)) : null,
+      `${capFirst(said)} finishes the step it's on, saves what it has, and stops. Nothing is lost, and a message in its conversation wakes it again.`,
       h("p", { class: "meta" }, "Need it to stop this second? ", h("button", { type: "button", class: "linkbtn", onclick: () => { dlg.close(); askKill(n); } }, "Kill it instead"), ", which ends it at once without saving."),
     ],
     onOk: async () => { await post("/api/stop", { name: n, when: "after-step" }); await poll(); },

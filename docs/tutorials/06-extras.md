@@ -16,7 +16,7 @@ Click **Add** next to one. Or ask in Chat:
 
 | Extra | What it does | What it needs |
 |---|---|---|
-| `hwde` | KiCad circuit board design, from a written brief to files ready to order | KiCad 10, freerouting, Java, xvfb, uv |
+| `pcb-flow` | KiCad circuit board design, from a written brief to files ready to order | KiCad 10, freerouting, Java, xvfb, uv |
 | `chip-flow` | Chip design with open tools | The IIC-OSIC-TOOLS image |
 | `mech` | 3D-printable enclosures fitted to boards | uv |
 | `fw` | ESP32 firmware: tests, builds, simulated boots | ESP-IDF, about 2 GB |

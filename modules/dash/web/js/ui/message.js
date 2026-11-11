@@ -6,7 +6,7 @@
 import { h, copyText } from "../core/dom.js";
 import { S, can, jget, SYS, OUTSIDE } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
-import { isAgent, isWarden, isRunning, agentThread, agentLabel, displayText, chatText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
+import { isAgent, isWarden, isRunning, inConversation, capFirst, agentLabel, displayText, chatText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
 import { focusById, focusName, focusOf } from "../core/foci.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
 import { markdown, mdCut, filesNamed } from "./markdown.js";
@@ -105,7 +105,7 @@ export function messageReceipt(p) {
   }
   if (!ds.length) { if (last || all) el.append(icon("check"), h("span", null, "Sent")); return el; }
   const top = ds.reduce((a, d) => RANK[d.key] < RANK[a.key] ? d : a), same = ds.filter(d => d.key === top.key && d.who).map(d => d.who);
-  const app = S.app && S.app.app, X = names((same.length ? same : [top.who || "the agent"]).map(n => app && isAgent(n) ? (agentThread(n) === p.th ? "the agent" : agentLabel(n)) : n));   // E10: no agent code in the app look
+  const app = S.app && S.app.app, X = names((same.length ? same : [top.who || "the agent"]).map(n => app && isAgent(n) ? inConversation(p.th, () => agentLabel(n)) : n));   // E10: no agent code in the app look
   el.dataset.key = top.key;
   if (top.key === "interrupt") { el.dataset.tone = "info"; el.append(icon("stop"), h("span", null, `Interrupting ${X} · it reads this, and anything queued, once its step stops`)); }
   else if (top.key === "unseen") { el.dataset.tone = "bad"; el.append(h("span", { class: "st", "data-tone": "bad", "aria-hidden": "true" }), h("span", null, top.who ? `Hasn't reached ${X}` : top.text)); }
@@ -200,10 +200,10 @@ function cut(t) {
 // A post's markdown, where a bare file name links to the file its conversation means. Rebuilt when the thread grows.
 const NAMED = new Map();
 function mdIn(t, p) {
-  const d = p && S.threads.get(p.th); if (!d) return markdown(t);
+  const d = p && S.threads.get(p.th); if (!d) return markdown(t, null, !!p);
   let c = NAMED.get(p.th);
   if (!c || c.n !== d.posts.length) NAMED.set(p.th, c = { n: d.posts.length, files: filesNamed(d.posts) });
-  return markdown(t, c.files);
+  return markdown(t, c.files, true);
 }
 
 // Fold parsed blocks, so fences, footnotes and inline formatting remain intact.
@@ -302,7 +302,7 @@ let jumper = null;
 export const onJump = fn => { jumper = fn; };
 /** Open post id in its conversation, highlighted (Chat says how; before Chat has drawn, it opens the conversation first). */
 export const jump = id => { if (jumper) jumper(id); else location.hash = "#comms"; };
-const who = n => (n === "person" ? "You" : simpleOn() ? hiveName() : n);
+const who = n => (n === "person" ? "You" : simpleOn() ? hiveName() : capFirst(agentLabel(n)));
 
 // A post passed on from another thread (a relay, or @thread in the text) says where it came from; the original says where its copies went.
 let copyFor = [], copies = new Map();
@@ -328,7 +328,7 @@ export function tagChips(p) {
     const i = String(t).indexOf(":"), kind = String(t).slice(0, i).toLowerCase(), id = String(t).slice(i + 1);
     if (i < 1 || !id) continue;
     if (kind === "focus") { const f = focusById(id.toLowerCase()); if (f && f.id !== focusOf(p.th)) chips.push([kind, focusName(f), href("focus", f.id), `Open the focus ${focusName(f)}`]); }
-    else if (kind === "agent") { chips.push([kind, who(id), agentHref(id), `Open ${id}`]); }
+    else if (kind === "agent") { const app = S.app && S.app.app; if (!(app && p.from === "person" && (p.men || []).includes(id))) chips.push([kind, who(id), agentHref(id), `Open ${app ? agentLabel(id) : id}`]); }   // the agent a person's own message went to needs no chip under it (E10)
     else if (kind === "thread") { if (id !== p.th) chips.push([kind, threadTitle(id), threadHref(id), `Open the conversation ${threadTitle(id)}`]); }
   }
   return chips.length ? h("div", { class: "msg-tags", "aria-label": "Tags" }, chips.map(([kind, label, to, title]) => h("a", { class: "msg-tag", "data-kind": kind, href: to, title }, h("span", null, label)))) : null;
@@ -347,8 +347,8 @@ function copyBtn(p) {
 // Between agents only trouble is worth a word (a running one sees its posts after its current step anyway), and it says who (the person, 11041326b458).
 function unseenNote(ms) {
   if (!ms.length) return null;
-  const names = ms.length === 1 ? ms[0] : ms.slice(0, -1).join(", ") + " and " + ms.at(-1);
-  return h("span", { class: "msg-r", "data-tone": "bad", title: ms.map(m => `Hasn't reached ${m}`).join("\n") }, `${names} ${ms.length === 1 ? "hasn't" : "haven't"} seen this`);
+  const said = ms.map(agentLabel), names = capFirst(said.length === 1 ? said[0] : said.slice(0, -1).join(", ") + " and " + said.at(-1));
+  return h("span", { class: "msg-r", "data-tone": "bad", title: said.map(m => `Hasn't reached ${m}`).join("\n") }, `${names} ${ms.length === 1 ? "hasn't" : "haven't"} seen this`);
 }
 /** The line above a message: author, who it went to, thread (outside a thread), who it woke, Reply, time. */
 export function messageHead(p, { showThread = true, mark, asks } = {}) {
@@ -364,13 +364,13 @@ export function messageHead(p, { showThread = true, mark, asks } = {}) {
     mine ? h("b", { class: "msg-me" }, other ? src.name : "You") : h("b", null, OUTSIDE.has(p.from) ? who(p.from) : hiveName()),
     h("span", { class: "msg-end" }, more(p, mark), h("time", { class: "meta num", datetime: p.at, title: stamp(p.t) }, clock(p.t))));
   return h("div", { class: "msg-h" },
-    mine ? h("b", { class: "msg-me", title: other ? src.said : "you (person)" }, other ? src.name : "You") : agentRef(p.from, { dot: false }),   // §10.2: the consumer head has no dot
+    mine ? h("b", { class: "msg-me", title: other ? src.said : "you (person)" }, other ? src.name : "You") : agentRef(p.from, { dot: false, cap: true }),   // §10.2: the consumer head has no dot
     src ? h("span", { class: "msg-src", title: src.said }, (src.name && src.name !== me && !other ? src.name + " · " : "") + src.how) : null,
     tos.length ? h("span", { class: "msg-to" }, toYou ? "to you" : "to") : null,
     toYou ? null : tos.map(m => m === "person" ? h("b", { class: "msg-me" }, "you") : agentRef(m, { dot: false })),
     toYou ? null : unseenNote(mine ? [] : tos.filter(m => delivery(p, m)?.key === "unseen")),
     showThread ? threadRef(p.th) : null,
-    woke.length && !mine ? h("span", { class: "meta" }, woke.map(s => (s.resumed ? "woke " : "started ") + s.name).join(", ")) : null,
+    woke.length && !mine ? h("span", { class: "meta" }, woke.map(s => (s.resumed ? "woke " : "started ") + agentLabel(s.name)).join(", ")) : null,
     h("time", { class: "meta num msg-time", datetime: p.at, title: stamp(p.t) }, clock(p.t)),
     asks ? h("span", { class: "msg-mark" }, "Waits on you") : null);   // the last thing on the head line (the Nov 8 handoff §8.3)
 }
@@ -379,10 +379,10 @@ export function messageHead(p, { showThread = true, mark, asks } = {}) {
 function messageActions(p, mark) {
   const mine = p.from === "person", tos = p.men.filter(m => m !== "new" && m !== p.from);
   return h("div", { class: "msg-end" },
-    can("post") ? button("Reply", () => replyTo(p), { kind: "icon", size: "s", icon: "reply", cls: "msg-reply", title: mine && tos.length ? `Reply · this went to ${tos.join(", ")}` : "Reply to this message; it goes to its author" }) : null,
+    can("post") ? button("Reply", () => replyTo(p), { kind: "icon", size: "s", icon: "reply", cls: "msg-reply", title: mine && tos.length ? `Reply · this went to ${tos.map(agentLabel).join(", ")}` : "Reply to this message; it goes to its author" }) : null,
     copyBtn(p),
     more(p, mark),
-    h("time", { class: "meta num", datetime: p.at, title: stamp(p.t) }, (mine && tos.length ? `to ${tos.join(", ")} · ` : "") + clock(p.t)));
+    h("time", { class: "meta num", datetime: p.at, title: stamp(p.t) }, (mine && tos.length ? `to ${tos.map(agentLabel).join(", ")} · ` : "") + clock(p.t)));
 }
 
 // A side thread's first post: the hive opened it from a /btw, so it reads as the hive asking, not as a message the person typed here (11041319bbd0).
@@ -410,6 +410,9 @@ function phoneCall(p) {
 }
 export function message(p, opts = {}) {
   if (!S.app.app) return devMessage(p, opts);
+  return opts.showThread === false ? inConversation(p.th, () => appMessage(p, opts)) : appMessage(p, opts);   // read in its own conversation, it names agents by their place there
+}
+function appMessage(p, opts) {
   const files = p.files || [], ws = opts.mark;
   if (ws && ws.length && !OPEN.has(p.id) && displayText(p).length > LONG) {
     const lc = displayText(p).toLowerCase(), f = fold(displayText(p));
@@ -662,7 +665,7 @@ function helpersOf(th) {
 /** The folds for th's helper conversations begun at or before t (all of them when t is Infinity) and not yet in done (a Set of names it fills). */
 export function helperFolds(th, t, done, opts = {}) {
   if (!S.app.app) return [];
-  return helpersOf(th).filter(k => k.t <= t && !done.has(k.name)).map(k => { done.add(k.name); return helperFold(k, opts); });
+  return helpersOf(th).filter(k => k.t <= t && !done.has(k.name)).map(k => { done.add(k.name); return inConversation(th, () => helperFold(k, opts)); });
 }
 function helperFold(k, opts) {
   const first = k.posts[0], lastP = k.posts[k.posts.length - 1];
@@ -674,7 +677,7 @@ function helperFold(k, opts) {
       ontoggle: (e, el) => { if (e.target !== el) return; if (el.open) { HELP_OPEN.add(k.name); fill(el); } else HELP_OPEN.delete(k.name); } },
     h("summary", null, icon("chevron-right"),
       h("span", { class: "avs" }, [asker, helper].filter(Boolean).map(x => agentAvatar(x, { size: "s" }))),
-      h("span", { class: "cm-helper-t" }, h("b", null, asker), helper ? [" asked ", h("b", null, helper)] : " started", " ", task.length > 70 ? short(task, 70) : task),
+      h("span", { class: "cm-helper-t" }, h("b", null, capFirst(agentLabel(asker))), helper ? " asked a helper: " : " started: ", task.length > 70 ? short(task, 70) : task),
       h("span", { class: "meta" }, ` · ${n} ${n === 1 ? "message" : "messages"} · last: ${short(mdPlain(displayText(lastP)).replace(/\s+/g, " "), 60)}`),
       h("span", { class: "meta num cm-helper-when" }, span)),
     h("div", { class: "cm-helper-b" }));

@@ -65,6 +65,8 @@ List `roles` most wanted first: when an org's `per_org` cap is hit on a page, th
 
 The JSON summary a hunt prints has `lead_list`, one entry per lead with `name`, `title`, `organisation`, `check_status` (`verified` or not) and `source_url` (the page the person was read from); `signal` (the evidence line); `--text` prints the first four of these as one line per lead.
 
+Re-running a spec on the same case folder keeps the leads already found and adds only new ones. If an earlier lead belongs to an org that is no longer in the spec, hunt keeps it and logs `hunt: kept earlier leads for <orgs>, not in this spec`.
+
 A complete two-org spec that passes `--dry-run` with no warnings is in `examples/hunt-spec.json`; copy it and change the orgs.
 
 ### Spec checks

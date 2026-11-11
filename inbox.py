@@ -187,7 +187,8 @@ def owns_open(name, rec):
     rows = "\n".join(f"{e['id']}: {str(e.get('ask'))[:120]}" for e in mine[:8])
     stop_log(name, rec, "owns_open")
     return ("You still own these open asks as you stop. Close each one that is delivered with `hive asks done ID --evidence POSTID`, "
-            "mark `hold|person|drop ID --why ...` if it waits or is moot, or leave it if work remains (say so in your thread):\n" + rows)
+            "mark `hold|person|drop ID --why ...` if it waits or is moot, or leave it if work remains: the register already shows it as yours, "
+            "so don't post about it (a post listing open asks is housekeeping the person then has to read, 11101818169f):\n" + rows)
 
 def stop_log(name, rec, event, **kw):
     try: (STATE / STOP_LOG).open("a").write(json.dumps({"at": time.time(), "name": name, "run": rec["at"], "thread": rec.get("thread"), "event": event, **kw}) + "\n")

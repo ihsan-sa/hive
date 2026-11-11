@@ -137,6 +137,7 @@ def unowned_items(items, t=None, after_s=UNOWNED_S):
 def fmt(e, idle=None):
     tag = e.get("status", "open") + (f" by {e['owner']}" if e.get("owner") else "")
     s = f"{e['id']}  {e.get('when', e.get('at', ''))[:16]}  [{tag}]  {e.get('ask', '')}  (thread {e.get('thread') or e.get('post')})"
+    if e.get("continues"): s += f"  (continues {e['continues']}" + (f", worked by {e['continues_worker']}" if e.get("continues_worker") else "") + ")"
     if idle is not None: s += f"  idle {idle/3600:.1f} h"
     return s
 
@@ -501,11 +502,15 @@ def cmd_extract(a):
         except Exception as ex: print(f"continuation notes skipped: {ex}", file=sys.stderr)
         print(f"{added} added, {closed} closed from {len(todo)} posts, ${cost:.2f}")
 
-# Continuation notes (hive-meta/continuity.md, ad6ee's option c, 2026-11-07). The person starts almost every thread @new
+# Continuation links (hive-meta/continuity.md, ad6ee's option c, 2026-11-07). The person starts almost every thread @new
 # (208 of 234 since 11-03), and in 14 of 16 hand-checked follow-ups the agent who did the earlier work never appeared in the
-# new thread. So when a newly filed ask continues an earlier one in another thread, one plain line in the new thread names
-# the earlier ask and its worker; nothing is routed and nobody is woken (the name is in backticks). Word overlap only picks
-# candidates; the model decides, since overlap alone matched "Remove the bubbles" to "Remove the cap".
+# new thread. So when a newly filed ask continues an earlier one in another thread, the ask records the earlier ask and its
+# worker, and `hive asks list` shows them on its row. Word overlap only picks candidates; the model decides, since overlap
+# alone matched "Remove the bubbles" to "Remove the cap".
+# Until 2026-11-10 this was also a board post in the new thread, from "asks". By its own measure (i0193: the earlier worker
+# posts in the new thread within a day; 2 of 16 before) it did nothing: of 153 notes over 11-07..11-10 the worker posted
+# there once and no agent ever called one, 5 threads named the earlier ask at all, and the person saw every note in their
+# chat and asked what it was (11101818169f). A note for agents goes where agents look, not into the person's conversation.
 CONT_DAYS, CONT_CANDS = 7, 12
 CONT_PROMPT = """Each new ask below from the person comes with earlier asks from other threads. For each new ask, say which earlier ask it continues, if any: the same deliverable asked again, a follow-up, fix or extension of that same thing, or a status question about it. Sharing a word, a site or a topic is not enough; most new asks continue none. Reply with JSON only, no prose, no code fence:
 {{"continues": [{{"new": "<new ask id>", "earlier": "<earlier ask id>"}}]}}
@@ -538,8 +543,8 @@ def worker(thread, posts, before=None):
         w = f
     return w
 
-def note_continuations(fresh, model, posts=None, post=None):
-    """Find which fresh asks continue earlier ones; record it on the ask and post one line in the new thread. Returns cost."""
+def note_continuations(fresh, model, posts=None):
+    """Find which fresh asks continue earlier ones and record it on the ask (nothing is posted). Returns cost."""
     fresh = [e for e in fresh if e.get("kind") == "ask"]
     if not fresh: return 0.0
     items, posts = ledger(), posts if posts is not None else board()
@@ -556,23 +561,9 @@ def note_continuations(fresh, model, posts=None, post=None):
         if not e or not old or old["id"] not in {x["id"] for x in cands[e["id"]]}: continue   # only a candidate we offered
         w = old.get("owner") if re.fullmatch(r"a[0-9a-f]{4}", str(old.get("owner", ""))) else None
         w = w or worker(old.get("thread"), posts, before=e.get("when"))
-        here = {str(p.get("from")) for p in posts if (p.get("thread") or p.get("id")) == e.get("thread")}
         append(LEDGER, {"id": e["id"], "at": iso(), "by": "extract", "continues": old["id"], "continues_worker": w})
-        if not w or w in here: continue   # nobody to point at, or the earlier worker is already in this thread
-        line = (f"This ask ({e['id']}) looks like it continues {old['id']}, \"{quiet(old['ask'][:120])}\", in thread {old.get('thread')}, "
-                f"worked by `{w}`. If that agent's detail would help, a mention of it wakes it.")
-        (post or h2_post)(e.get("thread"), line)
         print(f"~ {e['id']} continues {old['id']} ({w})")
     return cost or 0.0
-
-def quiet(text):
-    """Mentions in quoted ask text go in backticks: a title like "picks Opus via @opus @fable" is written about, not a call.
-    On 2026-11-09 a continuation note quoting k0386 started an Opus and a Fable agent for a closed ask (post 1109171434cc)."""
-    return re.sub(r"(?<![\w.`])@([a-z0-9][a-z0-9_-]*)", lambda m: f"`{m.group(0)}`", text)
-
-def h2_post(thread, text):
-    subprocess.run([sys.executable, "-I", str(Hive), "post", "--thread", thread, "--as", "asks"], input=text, text=True, timeout=60,
-                   stdout=subprocess.DEVNULL, check=False)
 
 RECONCILE = """You judge, from the board, which of the person's asks below have been delivered. For each ask you get the agents' posts in its thread after the ask was made (person posts are marked). Reply with JSON only, no prose, no code fence:
 {{"done": [{{"id": "k0012", "evidence": "<id of the post that reports the delivery>", "why": "<what was delivered, one line>"}}],
