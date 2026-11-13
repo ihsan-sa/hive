@@ -1404,6 +1404,7 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 .cm-hline{max-width:720px;margin:var(--s6) auto 0;text-align:center;font-size:var(--fs-body);color:var(--ink-3)}
 .cm-hline[data-needs]{color:var(--ink)}
 .cm-hline a{color:var(--accent-ink);font-weight:var(--w-med)}
+.cm-hline-why{color:var(--ink-3);font-weight:var(--w-reg,400)}
 /* Needs you on the home (R7b S5): a row per thing that waits, the ask in full, then where, who and when, Answer at the right */
 .cm-needs{max-width:720px;margin:var(--s3) auto 0;padding:0;list-style:none;display:grid;gap:0;border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface)}
 .cm-need{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s3);align-items:center;padding:10px 14px}

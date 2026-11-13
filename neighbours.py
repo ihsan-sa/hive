@@ -75,7 +75,7 @@ def lines_for(hits, board, t):
     out = []
     for th, _, ws in hits:
         who, at = last_agent(th, board, t); st = status_of(th)
-        out.append(f"- {th}: {who}, {max(0, int((t - at) // 60))} min ago, shares {', '.join(ws[:3])}" + (f": {st[:140]}" if st else ""))
+        out.append(f"- {th} shares {', '.join(ws[:3])}; {who} last moved it {max(0, int((t - at) // 60))} min ago" + (f" ({st[:140]}). " if st else ". ") + f"Read it before you start this: `hive read --thread {th}`.")
     return out
 
 def main():
@@ -85,7 +85,7 @@ def main():
     if not mine: return
     hits = score("\n".join(str(p.get("text") or "") for p in mine), {thread_of(p) for p in mine}, board, t0)[:CAP]
     if not hits: return  # like a recall that finds nothing, it leaves no pointer to count
-    print("Live threads that share words with this (matched on words, not checked; `hive read --thread T` reads one; ask, borrow or stand down, and the minutes show whether it has stalled):")
+    print("Live threads that may already cover this (matched on words, not checked; ask, borrow or stand down, and the minutes show whether it has stalled):")
     print("\n".join(lines_for(hits, board, t0)))
     if a.who: os.environ["HIVE_NAME"] = a.who
     # the shape of a recall pointer, marked, so kbuse follows it the same way and counts it apart from the notes

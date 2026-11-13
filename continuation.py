@@ -357,7 +357,7 @@ def ladder_brief(thread):
 def wake_note(k, thread, heir):
     head = (f"\n\nThis is a continuation (chain {k['chain']}, hop {k['hop']}). " + ("The agent before you" if heir else "Your last step") + f" (post {k['post']}) ended on: {k['line']}\n"
             "That line is your job: do the step and run its check, unless the thread shows it was overtaken, in which case say so and stop. "
-            "End your result post with the next `Next: <one concrete step, with its check>` if there is one you can take, or with a `Done:`, `Blocked:`, `Needs the person:` or `Waiting:` line if not.\n"
+            "End your result post with the next `Next: <one concrete step, with its check>` if there is one you can take, or with a `Done:`, `Blocked:`, `Needs the person:` or `Waiting:` line if not; when that post is your last act, send it with `hive post --end` so the run stops there.\n"
             "Before you write that line, re-read the ladder in the project's goals.md against what you just learned: tick what is done, and add, split or strike rungs if the goal "
             "has moved (the person, 2026-10-14 and k0492: goals get re-evaluated as work gets done, by the agent that did it, not by a round that comes later). Say in the post which rungs changed.")
     return head + (f"\n\nThe ladder this thread works from, for what comes after that step:\n{b}" if heir and (b := ladder_brief(thread)) else "")

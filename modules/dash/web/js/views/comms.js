@@ -11,7 +11,7 @@ import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../cor
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
 import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
 import { workBar, workBarHeld } from "../ui/workbar.js";
-import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci } from "../core/foci.js";
+import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci, workingIn } from "../core/foci.js";
 import { newIn } from "./focus.js";
 import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
@@ -542,7 +542,7 @@ function threadRows(c, ctx) {
   let ds = [...S.threads.values()].filter(d => pinned(d.name) || important(d.name) || ((threadKinds(d) & mask) && theirs(d)) || d.name === c.thread);
   if (C.scope === "recent" && !simpleOn()) ds = ds.filter(d => pinned(d.name) || important(d.name) || archived(d.name) || d.last > t - (app() ? 7 : 1) * DAY || ran.has(d.name) || d.name === c.thread || (app() && threadState(d.name, seen).key === "asks"));
   if (C.imp) ds = ds.filter(d => important(d.name));
-  if (C.hideFaded && app()) ds = ds.filter(d => !faded(d.name) || d.name === c.thread);
+  if (C.hideFaded && app()) ds = ds.filter(d => !faded(d.name) || workingIn(d.name) || d.name === c.thread);   // live work stays in sight (IM-1b)
   const flat = !app() || C.imp || C.view === "recent";
   // A thread an agent started from a listed conversation folds under it (the person, 110601450d55: one chat made eight side entries
   // and the original got lost). A root is the top of its chain among the listed ones; its row sorts by the latest activity in the family.
@@ -901,7 +901,7 @@ function places() {
     h("nav", { class: "subnav", "aria-label": "Chat's pages" },   // the same sub-bar as Agents' and Usage's rows (R49)
     // Needs me merged into Yours (Nov 9 handoff §A.2): its count, and its list when something waits
     can("post") && needsN() ? link("Yours", "yours", href("yours", "waits"), needsN(), "What waits on you, newest first; every exchange you had is under it", "waiting on you") : link("Yours", "yours", href("yours"), 0, "Every exchange you had, newest first"),
-    can("read") ? link("Inbox", "inbox", href("inbox"), IB.unread || 0, "Every message agents sent you") : null,
+    can("read") ? link("Inbox", "inbox", href("inbox"), IB.unread || 0, "Every message agents sent you; the count is unread messages, not what waits on you", "unread") : null,
     can("files") ? link("Mail", "mail", href("mail"), MN.n, MN.n ? "Mail since you last opened it" : "Your mail") : null,
     link("Files", "file", href("made"), 0, "Files and links from your conversations")));
 }
@@ -935,7 +935,7 @@ const importantStar = ctx => h("button", { type: "button", class: "tm-chip tm-ch
   onclick: () => { C.imp = !C.imp; ctx.update(); } }, icon("star"));
 // In the Show menu: By focus or By recency, and whether the conversations marked Likely not needed are listed at all.
 function viewBar(ctx) {
-  const nFaded = [...S.threads.keys()].filter(th => faded(th) && !archived(th)).length;
+  const nFaded = [...S.threads.keys()].filter(th => faded(th) && !archived(th) && !workingIn(th)).length;
   return h("div", { class: "cm-views", "data-key": "views" },
     seg([["focus", "Focus", "Each conversation under its focus, in the order of the home cards, the rest under Other last; helper conversations folded under the one they came from"],
       ["recent", "Recent", "Every conversation in one list, newest activity first, helper conversations included, each naming the one it came from"]], C.view,
@@ -1255,7 +1255,9 @@ function homePane(ctx) {
   // The waits head (the Nov 8 handoff §1.2): the count as plain words, and All to the full list on the right when there is more than the rows show.
   const waits = n ? `${n} ${n === 1 ? "waits" : "wait"} on you` : "Nothing new waits on you";
   const all = (n > HOME_WAITS || sp.older) && needsHref() ? h("a", { class: "cm-hline-all", href: needsHref(), title: sp.older ? `${plural(sp.older, "older one")} in Stuff to address` : "What waits on you, newest first, each in its conversation" }, "All") : null;
-  const line = n || sp.older ? [h("span", null, waits), all] : simpleOn() || S.live.signin?.length ? null : IB.unread ? "No agent is waiting on you" : "Nothing needs you";
+  // Why the other counts differ, said beside this one rather than in a hover title, so it reads at 390 too (IM-3): older ones fold below, and the Inbox counts unread messages, not things waiting on you.
+  const why = [sp.older ? `${plural(sp.older, "older one")} below` : null, IB.unread && IB.unread !== n ? `Inbox: ${plural(IB.unread, "unread message")}` : null].filter(Boolean).join(" · ");
+  const line = n || sp.older ? [h("span", null, waits), why ? h("span", { class: "cm-hline-why", "data-key": "why" }, why) : null, all] : simpleOn() || S.live.signin?.length ? null : IB.unread ? "No agent is waiting on you" : "Nothing needs you";
   return h("div", { class: "cm-home", "data-key": "home" },
     w ? h("div", { class: "cm-new", "data-key": "new" },
       h("h1", { class: "cm-home-t" }, "What do you want done?"),

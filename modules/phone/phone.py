@@ -22,7 +22,7 @@ wakes or interrupts it, it runs `phone answer` and talks from its own session wh
 person hears hold music meanwhile. If it hasn't picked up in SUMMON_S the person hears "still here"; after SUMMON_LONG_S the phone leaves a board note and ends the call. No copy of the agent ever answers. Calling a
 thread starts a new agent on it the same way. The transcript goes on the board when the call ends.
 """
-import base64, io, json, os, re, shutil, subprocess, sys, threading, time, uuid, wave
+import base64, io, json, os, re, secrets, shutil, subprocess, sys, threading, time, uuid, wave
 import http.client, socket, socketserver
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -32,6 +32,7 @@ HOME = Path.home()
 MOD = Path(__file__).resolve().parent
 LOG = HOME / "log.jsonl"
 STATE = HOME / ".hive"
+RUN, SESSIONS = HOME / "run", HOME / "sessions"
 # A Unix socket in this account's own state dir, not a loopback port: any account on the machine can open loopback, and
 # a call here can put words in the person's mouth to an agent. Only this account can open the socket.
 SOCK = Path(os.environ.get("PHONE_SOCK") or STATE / "phone.sock")
@@ -415,6 +416,23 @@ def last_start(name):
     return found
 
 
+def log_event(**e):
+    """One line in ~/log.jsonl, in the starter's shape."""
+    import datetime as dt
+    try:
+        with open(LOG, "a") as f: f.write(json.dumps({"at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), **e}) + "\n")
+    except OSError: pass
+
+
+def fresh_name():
+    """An agent code nobody has used (a used one would resume that agent's session when next named)."""
+    try: seen = LOG.read_bytes()
+    except OSError: seen = b""
+    while True:
+        n = "a" + secrets.token_hex(2)
+        if f'"name": "{n}"'.encode() not in seen and not (RUN / f"{n}.json").exists(): return n
+
+
 def best_login():
     """The login with the most weekly room (as the starter reads it)."""
     try: u = json.loads((STATE / "usage.json").read_text())
@@ -462,9 +480,14 @@ def speakable(t):
 class Brain:
     """One claude -p process in stream-json mode. Speaks via call.say(); calls call.turn_done() at each result."""
 
-    def __init__(self, call, name, prompt, resume=None, login=None, first=None):
+    def __init__(self, call, name, prompt, resume=None, login=None, first=None, register=None):
+        """register: {thread, post} makes this brain an agent of its own (IM-2): a start record in log.jsonl and ~/run/NAME.json once
+        claude says its session, an end record when it stops, so `hive who`, the Agents page and a later post to NAME (which resumes
+        this session) all see it. Only for a brain under a fresh name: a copy of an existing agent must not touch that agent's records."""
         self.call, self.name, self.dead = call, name, False
+        self.register, self.reg, self._rlock = register, None, threading.Lock()
         login = login or best_login()
+        self.login = login
         argv = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                 "--include-partial-messages", "--model", BRAIN_MODEL, "--dangerously-skip-permissions", "--append-system-prompt", prompt]
         if resume: argv += ["--resume", resume, "--fork-session"]
@@ -472,6 +495,9 @@ class Brain:
                "TMPDIR": os.environ.get("TMPDIR", str(HOME / ".cache/hive-tmp"))}
         self.p = subprocess.Popen(argv, cwd=str(HOME), env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, text=True, bufsize=1)
+        self.out = None
+        if register:
+            SESSIONS.mkdir(exist_ok=True); self.out = SESSIONS / f"{name}-{time.strftime('%m%d-%H%M%S')}.jsonl"
         threading.Thread(target=self._read, daemon=True).start()
         threading.Thread(target=self._err, daemon=True).start()
         if first: self.send(first)
@@ -488,9 +514,14 @@ class Brain:
     def _read(self):
         buf, spoke = "", False
         for line in self.p.stdout:
+            if self.out:
+                try:
+                    with open(self.out, "a") as f: f.write(line)
+                except OSError: pass
             try: m = json.loads(line)
             except ValueError: continue
             t = m.get("type")
+            if t == "system" and m.get("session_id") and self.register and not self.reg: self._registered(m["session_id"])
             if t == "stream_event":
                 ev = m.get("event") or {}
                 if ev.get("type") == "content_block_delta" and (ev.get("delta") or {}).get("type") == "text_delta":
@@ -511,7 +542,35 @@ class Brain:
                 buf, spoke = "", False
                 self.call.turn_done(self)
         self.dead = True
+        self._ended()
         self.call.brain_exit(self)
+
+    def _registered(self, session):
+        with self._rlock:
+            if self.reg or self.dead: return
+            def proc():
+                try: return Path(f"/proc/{self.p.pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+                except (OSError, IndexError): return None
+            try: boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+            except OSError: boot = None
+            rec = {"name": self.name, "pid": self.p.pid, "session": session, "post": self.register.get("post") or f"phone call {self.call.id}",
+                   "login": self.login, "thread": self.register.get("thread"), "from": "phone", "out": str(self.out), "proc": proc(), "boot": boot,
+                   "model": BRAIN_MODEL, "by": "phone"}
+            import datetime as dt
+            rec["at"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+            try:
+                RUN.mkdir(exist_ok=True); (RUN / f"{self.name}.json").write_text(json.dumps(rec))
+            except OSError as e: self.call.note(f"run record: {e}")
+            log_event(event="start", **{k: v for k, v in rec.items() if k not in ("at", "by")}, phone=self.call.id)
+            self.reg = rec
+
+    def _ended(self):
+        with self._rlock:
+            r, self.reg = self.reg, None
+            if not r: return
+            try: (RUN / f"{self.name}.json").unlink()
+            except OSError: pass
+            log_event(event="end", name=self.name, session=r["session"], pid=r["pid"], exit=self.p.poll())
 
     def stop(self):
         self.dead = True
@@ -521,6 +580,7 @@ class Brain:
         except Exception:
             try: self.p.kill()
             except Exception: pass
+        self._ended()
 
 
 # Printed once by `phone answer`, so only the agent that picks up reads it.
@@ -689,9 +749,10 @@ class Call:
         if name == "new":
             self.summoned = None
             self.lines.append(("system", f"no new agent picked up in {SUMMON_S}s; the front desk answered"))
-            self.agent = "Hive"
-            self.brain = Brain(self, "phone", SPEAK_RULES + f"\nYou are a new agent on thread {self.thread}, answering the person's call about it. Read the thread first (hive read --thread {self.thread}, one quick look).",
-                               first="[phone] The person called about this thread and is on hold. Pick up: say hi in a few words and ask what they need.")
+            self.agent = fresh_name()
+            self.brain = Brain(self, self.agent, SPEAK_RULES + f"\nYou are agent {self.agent}, a new agent on thread {self.thread}, answering the person's call about it. Read the thread first (hive read --thread {self.thread}, one quick look).",
+                               first="[phone] The person called about this thread and is on hold. Pick up: say hi in a few words and ask what they need.",
+                               register=None if self.quiet else {"thread": self.thread, "post": f"phone call {self.id}"})
             return
         self.hold_say("Still here. They'll be right with you.")
         threading.Timer(max(1, SUMMON_LONG_S - SUMMON_S), self._give_up, args=(summoned,)).start()

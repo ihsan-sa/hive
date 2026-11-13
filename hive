@@ -521,7 +521,7 @@ def cmd_who(a):
         r = json.loads(f.read_text())
         try: os.kill(r["pid"], 0); alive = "running"
         except OSError: alive = "gone"
-        print(f"@{r['name']:<16} {alive:<8} since {r['at'][:19]}  woken by {r['post']}  login {login_name(c, r['login'])}  model {r.get('model', 'default')}")
+        print(f"@{r['name']:<16} {alive:<8} since {r['at'][:19]}  woken by {r['post']}{'  in ' + r['thread'] if r.get('thread') else ''}  login {login_name(c, r['login'])}  model {r.get('model', 'default')}")
     # Usage is the starter's and the person's business, not an agent's: the person said on a call (2026-11-07, thread
     # 1106213333ad) that agents worrying about usage stop work, so the lines show only on request.
     if not getattr(a, "usage", False): return

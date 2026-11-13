@@ -752,6 +752,10 @@ def running(st=None, by_hand=False):
     grace, quiet = cfg().get("done_grace_s", 900), cfg().get("stall_s", 1800)
     for f in RUN.glob("*.json"):
         r = json.loads(f.read_text())
+        if r.get("by") == "phone":   # a call's front-desk agent (modules/phone, IM-2): the phone service starts and ends it; only a leftover is cleared here
+            if run_gone(r):
+                f.unlink(missing_ok=True); log(event="end", name=r["name"], session=r["session"], pid=r["pid"], exit=None, why="phone run gone")
+            continue
         c = children.get(r["name"])
         g = grace_for(r["name"], grace)
         gone = not c and run_gone(r)  # checked first: nothing below may signal a pid that isn't this run's
@@ -1686,6 +1690,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     hook_inbox(c)  # a login can be added to config.json while the starter runs
     wire_deny(c)
     wire_precompact(c)
+    wire_cite(c)
     sid = w["sid"] if w else resume or str(uuid.uuid4())  # the claude session id, so `claude --resume <session>` works
     first = posts[0]
     model = w["model"] if w else start_model(c, posts)
@@ -2049,6 +2054,21 @@ def wire_precompact(c):
         s.setdefault("hooks", {}).setdefault("PreCompact", []).append({"hooks": [{"type": "command", "command": cmd, "timeout": 10}]})
         f.write_text(json.dumps(s, indent=2) + "\n")
 
+def wire_cite(c):
+    """Make sure each login's settings.json runs bin/cc-cite-hook before a Bash call: a post that answers from web pages it
+    read is sent back once to add footnotes (a second identical send goes through). Everyday E14b: the Sources rule alone
+    left about one search answer in three uncited."""
+    cmd = str(CORE / "bin/cc-cite-hook")
+    if not (CORE / "bin/cc-cite-hook").exists(): return
+    for login in c.get("logins", []) + [pc["config_dir"] for pc in c.get("providers", {}).values() if pc.get("config_dir")]:
+        f = Path(login).expanduser() / "settings.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        try: s = json.loads(f.read_text()) if f.exists() else {}
+        except ValueError: continue
+        if "cc-cite-hook" in json.dumps(s.get("hooks", {})): continue
+        s.setdefault("hooks", {}).setdefault("PreToolUse", []).append({"matcher": "Bash", "hooks": [{"type": "command", "command": cmd, "timeout": 10}]})
+        f.write_text(json.dumps(s, indent=2) + "\n")
+
 DENY_SEEN = None
 def wire_deny(c):
     """When ~/.cc/github-deny is there, the GitHub orgs on it are refused (bin/cc-github-deny has the layers). The list is
@@ -2207,6 +2227,7 @@ def main():
     hook_inbox(cfg())
     wire_deny(cfg())
     wire_precompact(cfg())
+    wire_cite(cfg())
     st = load("starter.json", {"offset": 0, "pending": {}})
     efforts[0] = st.setdefault("efforts", {})
     u, paused, pcache = {}, False, {}
