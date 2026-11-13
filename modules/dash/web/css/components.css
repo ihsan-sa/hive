@@ -395,7 +395,7 @@ table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
   .tbl.tg,.tbl.tg>.tb{display:block}
   .tbl.tg>.th{display:none}
   .tbl.tg>.tb>.tr{display:grid;grid-template-columns:minmax(0,1fr);row-gap:2px;padding:10px 0}
-  .tbl.tg>.tb>.tr>*{display:block;white-space:normal;overflow-wrap:anywhere;text-align:left}
+  .tbl.tg>.tb>.tr>*{display:block;white-space:normal;overflow-wrap:break-word;text-align:left}
   .tbl.tg>.tb>.tr>.lead{order:-1;font-weight:var(--w-med)}
   /* R10 6: the value starts at one left edge under the row's title, its label in a column before it, so a long command wraps under itself, not under the label */
   .tbl.tg>.tb>.tr>[data-label]{position:relative;padding-left:7.5rem}
@@ -867,6 +867,10 @@ rc-lazy[data-mode=inline]{display:inline}
 .rc-tbl th button{display:block;width:100%;height:28px;padding:0 10px;border:0;background:none;color:inherit;font:inherit;text-align:inherit;cursor:pointer;white-space:nowrap}
 .rc-tbl th button:hover{color:var(--ink);background:var(--hover)}
 .rc-tbl tbody tr:hover{background:var(--hover)}
+.rc-wrapcells{max-height:none}
+.rc-wrapcells .rc-tbl{table-layout:fixed;width:auto;max-width:100%}
+.rc-wrapcells .rc-tbl td,.rc-wrapcells .rc-tbl th button{white-space:normal;overflow-wrap:break-word;text-align:left;vertical-align:top}
+.rc-wrapcells .rc-tbl th button{height:auto;min-height:28px;padding:4px 10px}
 .rc-tbl td:last-child,.rc-tbl th:last-child{width:1%;padding:0 4px}
 .rc-tbl [data-t]{text-align:left}
 .rc-tbl td{vertical-align:middle}
@@ -2020,7 +2024,7 @@ html:not([data-dev]) .av>.st[data-tone=ended]{display:none}   /* design 1110g: i
 .ag-stack .tbl.ag>.th{display:none}
 .tblw.ag-stack{margin:0}   /* stacked rows don't scroll sideways: they keep the title's left edge */
 .ag-stack .tbl.ag>.tb>.tr{display:flex;flex-wrap:wrap;gap:2px 12px;padding:10px 0;align-items:center}   /* R48: the labelled facts run on together, a row is about four lines, not seven */
-.ag-stack .ag .tb>.tr>*{white-space:normal;overflow-wrap:anywhere;text-align:left}
+.ag-stack .ag .tb>.tr>*{white-space:normal;overflow-wrap:break-word;text-align:left}
 .ag-stack .ag .tr>:first-child,.ag-stack .ag .tr:not(.th):hover>:first-child{position:static;background:none;box-shadow:none}
 .ag .tb>.tr>.ag-n{display:flex;align-items:center;gap:8px}
 .tblw:not(.ag-stack) .ag .tb>.tr>.ag-n{min-width:0}.tblw:not(.ag-stack) .ag .tb>.tr>.ag-n>.av{flex:none}.tblw:not(.ag-stack) .ag .tb>.tr>:is(.ag-n,.ag-tm)>.ref{max-width:100%}.tblw:not(.ag-stack) .ag .tb>.tr>.ag-n .ref-n{overflow:hidden}   /* 1110h: a long agent or conversation name ends in "…", not cut mid-letter at the column edge */

@@ -57,7 +57,9 @@ export function drawTable(rows, title, api, st) {
   more.onclick = () => { st.shown += PAGE; paint(); };
   api.filter = q => { st.q = q; st.shown = PAGE; paint(); };
   paint();
-  return h("div", null, h("div", { class: "rc-tw", tabindex: "0" }, h("table", { class: "rc-tbl" }, h("thead", null, h("tr", null, ...heads, h("th", { "aria-label": "Ask" }))), tb)), more);
+  // A spreadsheet passes its own column widths (in characters, capped): the table then wraps long text inside its cells.
+  const cols = rows.widths && h("colgroup", null, ...head.map((_, c) => h("col", { style: `width:${Math.min(Math.max(rows.widths[c] || 10, 9), 40)}ch` })), h("col", { style: "width:3.5rem" }));
+  return h("div", null, h("div", { class: "rc-tw" + (cols ? " rc-wrapcells" : ""), tabindex: "0" }, h("table", { class: "rc-tbl" }, cols, h("thead", null, h("tr", null, ...heads, h("th", { "aria-label": "Ask" }))), tb)), more);
 }
 
 export function tableFigure(code, { lang, title }) {
