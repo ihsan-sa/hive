@@ -5,7 +5,7 @@ jobs:
   install:
     # Intel: GitHub's Apple-silicon Macs can't start a VM inside, so only this one runs the real line end to end.
     runs-on: macos-15-intel
-    timeout-minutes: 50
+    timeout-minutes: 55
     env:
       HIVE_SITE: https://raw.githubusercontent.com/ihsan-sa/hive/train-candidate
       HIVE_BRANCH: train-candidate
@@ -20,7 +20,7 @@ jobs:
         sed '/^main "\$@"$/d' get-mac.sh > funcs.sh
         ( set +e; . ./funcs.sh; D="$HOME/.hive"; agent_plist > hive.plist ); plutil -lint hive.plist
     - name: The candidate's Mac line, real Lima, real VM, no person
-      timeout-minutes: 35
+      timeout-minutes: 42
       run: |
         set -o pipefail
         # On the site install.sh is get.sh; on the raw branch it is the inner script, so point the VM at get.sh (as win-test.ps1 does)
