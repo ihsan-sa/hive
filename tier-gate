@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""tier-gate UNIT: the ExecCondition= in front of each placed timer job (hive tier install). Exit 0: run. Exit 1: skip this firing
+(systemd logs "condition failed"; the timer stays armed and fires again at its next time, so the job comes back by itself when
+its tier runs again). A job not placed in a tier always runs. Fails closed: when ~/.hive/tiers.json can't be read, a placed job is
+skipped and ~/.hive/tier-gate.err says why (the watchdog reports it). Prints no usage figure."""
+import sys, time
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tiers
+
+def main(argv):
+    if len(argv) != 1: print("usage: tier-gate UNIT", file=sys.stderr); return 0
+    job = argv[0]
+    try:
+        d = tiers.load(strict=True)
+    except Exception as e:
+        try: (tiers.STATE / "tier-gate.err").write_text(f"{time.ctime()} {job}: tiers.json unreadable ({type(e).__name__}); placed jobs skipped\n")
+        except OSError: pass
+        return 1   # the gate is only installed in front of placed jobs, and placement is in the file we can't read
+    try: (tiers.STATE / "tier-gate.err").unlink()
+    except OSError: pass
+    t = tiers.tier_of_job(d, job)
+    if t is None: return 0
+    why = tiers.held(d, t)
+    if why:
+        print(f"tier-gate: {job} skipped, tier {t} is {why if not why.startswith('paused until') else 'paused'}", file=sys.stderr)
+        return 1
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

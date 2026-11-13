@@ -180,6 +180,10 @@ def goals(t=None):
         built = [d for d in (days(st.get(k, {}).get("build_at"), t) for k in cands) if d is not None]
         if not row["running"] and built and min(built) <= BUILD_D:   # built within a day and no ladder: idle now, and the round writes it a ladder
             row.update(idle=True, needs_ladder=True, ladder=False, goals_path=g["path"], rung=None, last_agent_d=min(built))
+        if g["ladder"] and g["ladder"]["left"] and g["project"] not in taken and not row.get("needs_ladder"):
+            # a `## Ladder` whose heading names no thread lives in the project's own thread: without this the row had no ladder, so the floor
+            # never started it (the voice board and its film sat unstarted after the person's resume, 2026-11-12, post 11121012cbf5)
+            with_ladder(row, g)
         rows.append(row)
     covered = {r["thread"] for r in rows} | {th for r in rows for th in (r.get("threads") or [])}
     loose = [e for e in open_asks if e.get("thread") not in covered]

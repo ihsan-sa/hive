@@ -1139,7 +1139,7 @@ body[data-pv-full] :is(#top,#main){margin-right:0}
 .pv-img[data-fit]{display:grid;place-items:center;grid-template:minmax(0,1fr)/minmax(0,1fr)}   /* the row is the panel's height, so max-height:100% on the picture can hold: the whole picture shows (R108) */
 .pv-img[data-fit]>img{max-width:100%;max-height:100%;object-fit:contain;cursor:zoom-in}
 /* audio, video */
-.pv-av{flex:1;min-height:0;display:grid;place-items:center;background:#000}
+.pv-av{flex:1;min-height:0;display:grid;place-items:center;grid-template:minmax(0,1fr)/minmax(0,1fr);background:#000}   /* as .pv-img[data-fit]: the row is the panel's height, so max-height:100% holds and a tall video shows whole instead of running off the bottom (the person, 2026-11-12) */
 .pv-av>video{max-width:100%;max-height:100%}
 .pv-av[data-a]{background:var(--sunken);padding:var(--s4)}
 .pv-av>audio{width:min(100%,520px)}
@@ -1215,7 +1215,7 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 
 /* ---- composer: one box with its tools inside. Popups (@ names, To) open above it. ---- */
 .cp{position:relative;display:grid;gap:6px;padding:8px var(--s4) 12px;background:var(--surface)}
-.cp-box{position:relative;display:grid;border:1px solid var(--line-2);border-radius:var(--r-l);background:var(--surface)}
+.cp-box{position:relative;display:grid;grid-template-columns:minmax(0,1fr);border:1px solid var(--line-2);border-radius:var(--r-l);background:var(--surface)}
 .cp-box:focus-within{border-color:var(--focus);box-shadow:0 0 0 3px color-mix(in oklch,var(--focus) 16%,transparent)}
 .cp-t{display:block;width:100%;min-height:44px;max-height:40vh;padding:11px 12px 4px;border:0;background:none;color:var(--ink);resize:none;field-sizing:content;line-height:1.45}
 .cp-t:focus-visible{outline:none}
@@ -3427,3 +3427,16 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .tm-sec-more{display:block;width:100%;text-align:left;padding:6px 10px;background:none;border:0;cursor:pointer;color:var(--ink-3)}
 .tm-sec-more:hover{color:var(--ink);background:var(--hover)}
 @media (max-width:640px){.tm-sec-more{min-height:40px}}
+/* Work tiers (Settings, ui/worktiers.js): a tier's rarely used controls fold under it; the chip on a focus card or thread bar links to Settings. */
+.tier-items{margin:0}
+.tier-it-n{min-width:0;overflow-wrap:anywhere}
+.tier-it select.input{width:160px;max-width:100%}
+.tier-more{margin-top:var(--s2)}
+.tier-more>summary{cursor:pointer;color:var(--ink-2);font-size:var(--fs-meta);width:max-content}
+.tier-more[open]>summary{margin-bottom:var(--s2)}
+.tier-log{margin:0;padding:0;list-style:none;display:grid;gap:var(--s1);font-size:var(--fs-meta)}
+.tier-chip a{color:inherit;text-decoration:none}
+.tier-chip a:hover{text-decoration:underline}
+.tier-chip-s{font-weight:var(--w-reg,400)}
+.tier-intro { margin: 0 0 12px; }
+@media (max-width:640px){.tier-it .lr-in{flex-direction:column;align-items:stretch;gap:var(--s1)}.tier-it .frow-end{width:100%}.tier-it select.input{width:100%}}

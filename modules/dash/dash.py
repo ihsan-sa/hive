@@ -367,6 +367,10 @@ def set_paused(name, on):
     v = [x for x in paused_logins() if x != hit[0]] + ([hit[0]] if on else [])
     t = STATE / f".paused.json.{os.getpid()}.{threading.get_ident()}"
     t.write_text(json.dumps(v, indent=1)); t.replace(STATE / "paused.json")
+    try:  # every login paused at once is a hive pause (core/pauses.py), so checks over that window read inconclusive
+        sys.path.insert(0, str(HOME / "core")); import pauses
+        pauses.note({l["path"] for l in logins()} <= set(v), "dashboard " + ("pause" if on else "resume"), by="dash", path=STATE / "pauses.jsonl")
+    except Exception: pass
     return True
 
 
@@ -954,7 +958,7 @@ def drafts_in(thread):
         r = jload(f, {}) or {}
         if not alive(r.get("pid")): continue
         d = activity(r.get("out"))["draft"]
-        if d and (d["thread"] or r.get("thread")) == thread: got.append({"name": r.get("name", f.stem), "draft": {**d, "thread": thread}})
+        if d and d["thread"] == thread: got.append({"name": r.get("name", f.stem), "draft": {**d, "thread": thread}})   # a post with no --thread opens a new conversation: it is not a reply in the one the agent runs in (person 111311262b35)
     return got
 
 def live():
@@ -967,7 +971,7 @@ def live():
             "name": r.get("name", f.stem), "pid": r.get("pid"), "alive": alive(r.get("pid")),
             "since": ts(r.get("at")), "thread": r.get("thread"), "from": r.get("from"), "post": r.get("post"),
             "last": a["last"], "doing": a["doing"], "said": a["said"], "out": r.get("out"),
-            "draft": a["draft"] and {**a["draft"], "thread": a["draft"]["thread"] or r.get("thread")}, "effort": run_effort(r.get("pid")),
+            "draft": a["draft"], "effort": run_effort(r.get("pid")),
             "jobs": jobs.get(r.get("name", f.stem)), "shells": bg_shells(r.get("pid")),
         })
     keep = {str(a["out"]) for a in agents}
@@ -1044,6 +1048,69 @@ def set_tier(thread, tier, who="the person"):
         t.write_text("\n".join(out).rstrip("\n") + "\n"); t.replace(PRIORITIES)
     return True
 
+
+
+# ---- Work tiers (core/tiers.py; Settings > Work tiers). The person's own changes: tiers.py runs with no HIVE_NAME, so it logs "person".
+WT_KEY = re.compile(r"(focus|thread|job):[a-z0-9][a-z0-9._*?\[\]-]{0,80}")
+WT_TIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}")
+WT_OPS = {"set": ("what", "tier"), "unset": ("what",), "stop": ("tier", "pct"), "pause": ("tier",), "resume": ("tier",),
+          "new": ("name",), "rename": ("tier", "name"), "drop": ("tier",), "default": ("tier",)}
+
+
+def _wt_run(args):
+    env = {**{k: v for k, v in os.environ.items() if k not in ("HIVE_NAME", "HIVE_DOOR")}, "HIVE_STATE": str(STATE)}
+    return subprocess.run(["nice", "-n", "15", sys.executable, "-I", str(HOME / "core" / "tiers.py")] + args, capture_output=True, text=True, timeout=60, env=env)
+
+
+def _wt_say(e, names):
+    """A tiers-log line in plain words: no epochs, tier names instead of ids."""
+    w, nm = str(e.get("what") or ""), lambda i: names.get(str(i), f"tier {i}")
+    when = lambda u: datetime.fromtimestamp(float(u)).strftime("%a %d %b %H:%M")
+    if m := re.fullmatch(r"set (focus|thread|job):(\S+) (\S+) -> (\S+)", w): return f"Moved {m[1]} {m[2]} to {nm(m[4])}"
+    if m := re.fullmatch(r"unset (focus|thread|job):(\S+) \(was (\S+)\)", w): return f"Took {m[1]} {m[2]} out of {nm(m[3])}" + (" (it follows its focus now)" if m[1] == "thread" else "")
+    if m := re.fullmatch(r"stop (\S+) (\S+) -> (\S+)", w): return f"{nm(m[1])}: " + ("runs to the accounts' own limits" if m[3] == "None" else f"stops at {float(m[3]):g}% of the week")
+    if m := re.fullmatch(r"pause (.+?) until (\S+) \((.*)\)", w):
+        return "Paused " + ", ".join(nm(x) for x in m[1].split()) + (f" until {when(m[2])}" if m[2] != "None" else " until resumed") + (f": {m[3]}" if m[3] not in ("None", "", "from Settings") else "")
+    if m := re.fullmatch(r"resume (.+)", w): return "Resumed " + ", ".join(nm(x) for x in m[1].split())
+    if m := re.fullmatch(r"rename (\S+) (.+) -> (.+)", w): return f"Renamed {m[2]} to {m[3]}"
+    if m := re.fullmatch(r"default (\S+) -> (\S+)", w): return f"New work with no tier now goes to {nm(m[2])}"
+    if m := re.fullmatch(r"drop (\S+); moved .* to (\S+)", w): return f"Removed tier {m[1]}; what it held went to {nm(m[2])}"
+    if w.startswith("new "): return "Added a tier"
+    return re.sub(r" ?\((brief|post) [0-9a-f]{12}\)", "", re.sub(r"\b1[0-9]{9}(\.[0-9]+)?\b", lambda m: when(m[0]), w))
+
+
+def work_tiers():
+    """Settings > Work tiers: each tier as tiers.py lists it, and the last 10 changes, newest first, in plain words."""
+    r = _wt_run(["list", "--json"])
+    if r.returncode: raise ValueError((r.stderr or r.stdout).strip()[-300:] or "tiers.py failed")
+    tiers = json.loads(r.stdout)
+    for t in tiers: (t.get("paused") or {}).pop("by", None)
+    names = {str(t["id"]): t["name"] for t in tiers}
+    log = []
+    for l in plain_file(STATE / "tiers-log.jsonl", tail=True, size=32768).splitlines()[-10:]:
+        try: log.append(json.loads(l))
+        except ValueError: pass   # a line cut by the tail read
+    return {"tiers": tiers, "log": [{"at": e.get("at"), "who": "you" if e.get("who") == "person" else e.get("who"), "text": _wt_say(e, names)} for e in reversed(log)]}
+
+
+def work_tier_change(d):
+    """One change from the page ({op, ...}), then the whole state again. ValueError carries tiers.py's own words."""
+    op = d.get("op")
+    if op not in WT_OPS: raise ValueError("unknown change")
+    a = {k: d.get(k) for k in WT_OPS[op]}
+    for k, v in a.items():
+        if not isinstance(v, str) or not (WT_KEY if k == "what" else WT_TIER if k in ("tier", "name") else re.compile(r"none|[0-9]{1,3}(\.[0-9]+)?")).fullmatch(v): raise ValueError(f"bad {k}")
+    args = [op] + [a[k] for k in WT_OPS[op]]
+    if op == "pause":
+        u = d.get("until")
+        if u is not None:
+            if not isinstance(u, (int, float)) or isinstance(u, bool) or not time.time() < u < time.time() + 366 * 86400: raise ValueError("bad until")
+            args += ["--until", str(int(u))]
+        args += ["--why", "from Settings"]
+    if op == "new" and isinstance(d.get("pct"), str) and re.fullmatch(r"[0-9]{1,3}", d["pct"]): args += ["--stop", d["pct"]]
+    r = _wt_run(args)
+    if r.returncode: raise ValueError(((r.stderr or r.stdout).strip().splitlines() or ["that didn't work"])[-1].removeprefix("hive tier: "))
+    return work_tiers()
 
 def plain_file(path, tail=False, size=8192):
     """Part of a file agents wrote, or "": never through a link at its end, never waiting on a pipe, only a regular file."""
@@ -2035,18 +2102,81 @@ WEB = STATE / "web.json"
 INSTALLED = HOME / ".hive-installed"
 FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcountry", "cf-visitor", "cdn-loop", "x-forwarded-for",
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
-GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
+GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/work-tiers": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
-POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
+POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
+            "/api/post": "post", "/api/side-ask": "post", "/api/door": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
 
 
+
+
+DOOR_ROUTE = re.compile(r"/api/[a-z][a-z-]{0,30}")
+
+
+def doors():
+    """config.json "doors": local services a project page in the preview may reach, each {port, page, secret, get, post, people}.
+    "people" (optional) is a file of emails, one a line, written by the service: an outside sign-in must be one of them, so a second full person here doesn't get the first one's service.
+    A door is one page (a project path) and a fixed list of that service's routes on 127.0.0.1; anything malformed is no door.
+    The page itself stays in the sandboxed frame: it asks this page by postMessage, and this page calls POST /api/door."""
+    out = {}
+    v = (jload(HOME / "core" / "config.json", {}) or {}).get("doors")
+    for name, x in (v.items() if isinstance(v, dict) else ()):
+        if not (isinstance(name, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,30}", name) and isinstance(x, dict)): continue
+        port, page, sec, ppl = x.get("port"), x.get("page"), x.get("secret"), x.get("people")
+        routes = {k: [r for r in x.get(k) or () if isinstance(r, str) and DOOR_ROUTE.fullmatch(r)] if isinstance(x.get(k), list) else [] for k in ("get", "post")}
+        if not (isinstance(port, int) and not isinstance(port, bool) and 1024 <= port <= 65535 and isinstance(page, str) and re.fullmatch(r"[A-Za-z0-9_./-]{1,200}\.html", page) and ".." not in page
+                and isinstance(sec, str) and sec.startswith("~/") and ".." not in sec and (ppl is None or (isinstance(ppl, str) and ppl.startswith("~/") and ".." not in ppl))): continue
+        out[name] = {"port": port, "page": page, "secret": HOME / sec[2:], "people": HOME / ppl[2:] if ppl else None, **routes}
+    return out
+
+
+def door_people(door):
+    """The emails a door is for (lower case), or None when the door doesn't name any. An unreadable file is nobody."""
+    if not door.get("people"): return None
+    try: return {ln.strip().lower() for ln in door["people"].read_text().splitlines() if ln.strip()}
+    except OSError: return set()
+
+
+def door_for(name, route, email):
+    """May this sign-in use (and be told about) this door? A local session always; an outside one only if the door's people file, when it has one, lists its email."""
+    door = doors().get(name) if isinstance(name, str) else None
+    if not door: return False
+    ppl = door_people(door)
+    return route == "local" or ppl is None or (bool(email) and email in ppl)
+
+
+def door_call(name, path, body=None, timeout=45):
+    """One call through a door: GET path, or POST it with body (a dict). Returns the service's JSON bytes. KeyError: no such door or route.
+    The secret is read from a file only this user can read (mode 600), and sent only to this user's own listener on 127.0.0.1."""
+    import http.client, urllib.request, urllib.error
+    door = doors().get(name) if isinstance(name, str) else None
+    if not door or not isinstance(path, str) or path not in door["get" if body is None else "post"]: raise KeyError(name)
+    if body is not None and not isinstance(body, dict): raise ValueError("a door takes a JSON object")
+    f = door["secret"]
+    try: st = f.stat()
+    except OSError: raise ValueError("the door's secret file is missing")
+    if f.is_symlink() or st.st_uid != os.getuid() or st.st_mode & 0o077: raise ValueError("the door's secret file must be this user's own, mode 600")
+    want = "0100007F:%04X" % door["port"]
+    rows = [ln.split() for ln in Path("/proc/net/tcp").read_text().splitlines()[1:]]
+    if not any(r[1] == want and r[3] == "0A" and int(r[7]) == os.getuid() for r in rows): raise ValueError("the service behind this door isn't running")
+    hd = {"X-Hive-Door": f.read_text().strip()}
+    data = None
+    if body is not None: data = json.dumps(body).encode(); hd["Content-Type"] = "application/json"
+    req = urllib.request.Request(f"http://127.0.0.1:{door['port']}{path}", data=data, headers=hd, method="GET" if body is None else "POST")
+    class Stay(urllib.request.HTTPRedirectHandler):   # never follow a redirect: urllib would carry the secret header to wherever it points
+        def redirect_request(self, *a, **k): return None
+    try:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({}), Stay).open(req, timeout=timeout) as r: out = r.read(4 * 2**20)
+    except urllib.error.HTTPError as e: raise ValueError(f"the service answered {e.code}")
+    except (http.client.HTTPException, OSError): raise ValueError("the service behind this door didn't answer")
+    json.loads(out)   # only JSON goes back to the page
+    return out
 
 
 def web_cfg():
@@ -4918,6 +5048,7 @@ def serve(port):
             with f.open("rb") as src: shutil.copyfileobj(src, self.wfile)
 
         route, can, signed, signer, mode, full_left, secrets_on, simple = "open", OPEN_CAN, False, None, None, 0, False, False
+        email = ""   # the signed claim's email on the outside route: a door's people file is checked against it
 
         def deny(self, code, why):
             self.send(json.dumps({"error": why}).encode(), "application/json", status=code)
@@ -4926,7 +5057,7 @@ def serve(port):
             """Sets route, can and signed for this request, or answers it and returns False. Checked on every request."""
             web = web_cfg()
             if web is None: return True  # the open dash: no web.json here, as on a site that hasn't set one up
-            self.route, self.can, self.signed, self.signer, self.simple = "refused", (), False, None, False
+            self.route, self.can, self.signed, self.signer, self.simple, self.email = "refused", (), False, None, False, ""
             if web.get("broken"): self.deny(500, "web.json is missing or can't be read, so nothing is served. Fix or delete it, then run hive web --setup"); return False
             hd = {k.lower(): v for k, v in self.headers.items()}
             route = route_of(hd, self.client_address[0], port, web)
@@ -4941,7 +5072,7 @@ def serve(port):
                 # the person's own input keeps full going: the page says so on the requests it makes just after a click or key, and any POST is one
                 allowed = person_can(claims, out, active=self.command == "POST" or hd.get("x-hive-active") == "1")
                 if not allowed: self.deny(403, "this sign-in isn't on this app's list"); return False
-                self.signer = signer_of(claims, out)
+                self.signer = signer_of(claims, out); self.email = str(claims.get("email") or "").strip().lower()
                 if out is not (web.get("outside") or {}): self.signer = f"{self.signer} at {site_key(hd.get('host'))}"[:80]  # a site's own profile: the post says which name it came in on
                 # web.json "simple": sign-ins that open in simple mode until their browser says otherwise. Presentation only, so a bad value just means no.
                 names = web.get("simple")
@@ -4973,6 +5104,9 @@ def serve(port):
             if self.route != "open" and "modules" in self.can: info["features"] = ["slack-door"]; info["slack_door"] = slack_door_view()  # Settings > Modules > slack-door "Set up" (POST /api/slack-door)
             if self.route != "open" and install_id(): info["install"] = install_id()   # the report module's install code, shown at the foot of Settings so the owner can match this Hive to its reports
             if self.route != "open": info["default_model"] = default_model(); info["voice"] = voice_ready(); info["phone"] = phone_ready() and "post" in self.can
+            if self.route != "open" and "post" in self.can and "files" in self.can and (self.route != "outside" or self.mode == "full"):
+                ds = {x["page"]: n for n, x in doors().items() if door_for(n, self.route, self.email)}
+                if ds: info["doors"] = ds   # project page -> door name: the preview relays that page's calls (preview/render.js)
             if self.mode: info.update(mode=self.mode, full_left=self.full_left)
             if self.signer: info["signer"] = self.signer
             if self.simple: info["simple"] = True
@@ -5111,6 +5245,9 @@ def serve(port):
                 self.send(json.dumps(deliv_c.get()).encode(), J)
             elif u.path == "/api/usage":
                 self.send(json.dumps(usage_since(usage_c.get(), q)).encode(), J)
+            elif u.path == "/api/work-tiers":
+                try: self.send(json.dumps(work_tiers()).encode(), J)
+                except (ValueError, OSError, subprocess.SubprocessError) as e: self.deny(502, str(e))
             elif u.path == "/api/agent-costs":
                 self.send(json.dumps(agent_costs.view()).encode(), J)
             elif u.path == "/api/share-preview":
@@ -5187,12 +5324,22 @@ def serve(port):
                 if not 0 < n <= LOGO_MAX: return self.deny(413, "a logo can be up to 2 MB")
                 try: return self.send(json.dumps(set_logo(self.rfile.read(n))).encode(), "application/json")
                 except (ValueError, OSError) as e: return self.deny(400, str(e))
-            if not 0 < n < ({"/api/post": 2**20, "/api/feedback": 2**20, "/api/issue-link": 2**16, "/api/plan": 2**19, "/api/secret": 2**18}.get(u.path) or (4096 if self.route != "open" else 1024)): return self.send_error(403)
+            if not 0 < n < ({"/api/post": 2**20, "/api/feedback": 2**20, "/api/issue-link": 2**16, "/api/plan": 2**19, "/api/secret": 2**18, "/api/door": 2**18}.get(u.path) or (4096 if self.route != "open" else 1024)): return self.send_error(403)
             try: d = json.loads(self.rfile.read(n))
             except ValueError: return self.send_error(400)
             if not isinstance(d, dict): return self.send_error(400)
             num = lambda v: v is None or (isinstance(v, (int, float)) and not isinstance(v, bool))
             J = "application/json"
+            if u.path == "/api/door":   # a page in the preview's locked frame reaching its own local service; the owner's full sign-in only
+                if not ((self.route == "outside" and self.mode == "full") or (self.route == "local" and self.signed)): return self.deny(403, "a door is for a full sign-in")
+                if isinstance(d.get("door"), str) and d["door"] in doors() and not door_for(d["door"], self.route, self.email): return self.deny(403, "this door is for its owner's sign-in")
+                try: return self.send(door_call(d.get("door"), d.get("path"), d.get("body")), J)
+                except KeyError: return self.send_error(404)
+                except (ValueError, OSError) as e: return self.deny(502, str(e))
+            if u.path == "/api/work-tiers":
+                try: return self.send(json.dumps(work_tier_change(d)).encode(), J)
+                except ValueError as e: return self.deny(400, str(e))
+                except (OSError, subprocess.SubprocessError) as e: return self.deny(502, str(e))
             if u.path == "/api/share-build":
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)

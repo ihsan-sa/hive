@@ -62,7 +62,10 @@ export function focusOf(th) {
   return null;
 }
 /** Whether the person would list this thread at all: not a helper's side thread, not the hive's own, not marked away. */
-export const listed = th => { const d = S.threads.get(th); return !!d && !btwParent(th) && !isSystemThread(d) && !faded(th) && !archived(th); };
+// An agent at work in it right now keeps a "likely not needed" thread on its focus (the interaction round, 2026-11-13): the rule pass greys a
+// thread with nothing for the person in a day, and its focus page then said "no agent running" with two agents at work on the focus's own loop.
+export const workingIn = th => ((S.live && S.live.agents) || []).some(a => a.thread === th && a.alive !== false);   // the live list is short; the sessions are thousands
+export const listed = th => { const d = S.threads.get(th); return !!d && !btwParent(th) && !isSystemThread(d) && (!faded(th) || workingIn(th)) && !archived(th); };
 const lastAt = th => { const d = S.threads.get(th), p = d && d.posts.at(-1); return p ? p.t : 0; };
 /** The threads of a focus (id, or null for Misc), newest activity first: {th, t, active} where active is a post in the last week. */
 export function threadsOf(id) {

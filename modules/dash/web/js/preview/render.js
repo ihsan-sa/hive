@@ -3,7 +3,7 @@
 // Rules, as everywhere in the chat: a file's contents only ever become text nodes, or go to the browser through an element
 // pointed at /files/ (served sandboxed by dash.py). HTML runs only in a sandboxed frame. Nothing is fetched from elsewhere.
 import { h } from "../core/dom.js";
-import { said } from "../core/store.js";
+import { said, S, post } from "../core/store.js";
 import { kindOf, typeOf, fileHref, viewHref } from "../ui/preview.js";
 import { parse } from "../core/router.js";
 import { markdown } from "../ui/markdown.js";
@@ -63,11 +63,37 @@ function image(it, src) {
 }
 
 // ---- html: the page runs in a sandboxed frame with an opaque origin (no cookie, no API), from the server's ?view=1 ----
-function page(it) {
-  const fr = h("iframe", { class: "pv-frame", src: viewHref(it), title: it.name, sandbox: "allow-scripts allow-modals allow-pointer-lock", referrerpolicy: "no-referrer", loading: "lazy" });
+// A door (config.json "doors", listed in /api/app): one project page may reach its own local service, e.g. the Python course and
+// its sandbox. The page still can't touch this dashboard. It sends { hive: 1, type: "door", id, path, body } and this page makes
+// the one call POST /api/door, which the server allows only for that door's fixed routes. Only that frame's own window is believed.
+const DOOR_MAX = 250000;
+function doorOf(it) { const d = it.kb && S.app.doors; return (d && Object.prototype.hasOwnProperty.call(d, it.kb) && d[it.kb]) || null; }
+// The frame's address carries a random key (#door=...) that only the page loaded there can read; a call without it is ignored,
+// so a document the frame later navigates to gets no door. The listener ends with the preview (signal).
+function relay(fr, door, key, signal) {
+  let t = 0, n = 0;
+  const on = async e => {
+    const d = e.data;
+    if (e.source !== fr.contentWindow || e.origin !== "null" || !d || typeof d !== "object" || d.hive !== 1 || d.type !== "door") return;
+    if (typeof d.id !== "number" || typeof d.path !== "string" || d.path.length > 60 || d.key !== key) return;
+    const now = performance.now(); if (now - t > 1000) { t = now; n = 0; } if (++n > 8) return;
+    const back = m => { try { e.source.postMessage(Object.assign({ hive: 1, type: "door", id: d.id }, m), "*"); } catch { /* the frame went away */ } };
+    const body = d.body && typeof d.body === "object" && !Array.isArray(d.body) ? d.body : null;
+    try {
+      if (body && JSON.stringify(body).length > DOOR_MAX) throw Error("too much to send");
+      back({ ok: true, res: await post("/api/door", { door, path: d.path, body }) });
+    } catch (err) { back({ ok: false, error: String((err && err.message) || "failed").slice(0, 200) }); }
+  };
+  addEventListener("message", on, signal ? { signal } : undefined);
+}
+function page(it, signal) {
+  const door = doorOf(it), key = door ? Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("") : "";
+  const src = () => viewHref(it) + (door ? "#door=" + key : "");
+  const fr = h("iframe", { class: "pv-frame", src: src(), title: it.name, sandbox: "allow-scripts allow-modals allow-pointer-lock", referrerpolicy: "no-referrer", loading: "lazy" });
+  if (door) relay(fr, door, key, signal);
   return h("div", { class: "pv-page" },
-    h("div", { class: "pv-note meta" }, h("span", null, "Interactive page, sandboxed: it can't reach this dashboard or the network."),
-      h("button", { type: "button", class: "pv-zb", onclick: () => { fr.src = viewHref(it); } }, "Reload")),
+    h("div", { class: "pv-note meta" }, h("span", null, door ? "Interactive page, sandboxed: it can't reach this dashboard, only its own practice service." : "Interactive page, sandboxed: it can't reach this dashboard or the network."),
+      h("button", { type: "button", class: "pv-zb", onclick: () => { fr.src = "about:blank"; setTimeout(() => { fr.src = src(); }); } }, "Reload")),
     fr);
 }
 
@@ -165,7 +191,7 @@ export async function render(it, { source, signal } = {}) {
     return { node: wrap(await office[k](buf, it.name)) };
   }
   if (k === "svg" && !source) return { node: image(it, viewHref(it)), source: true };
-  if (k === "html" && !source) return { node: page(it), source: true };
+  if (k === "html" && !source) return { node: page(it, signal), source: true };
 
   const tx = await textOf(it, signal);
   if (tx.bin || (k === "other" && /[\0-\x08\x0e-\x1a]/.test(tx.t.slice(0, 4096)))) return noPreview(it, "There's no preview for this kind of file.");

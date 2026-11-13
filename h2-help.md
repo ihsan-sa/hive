@@ -150,6 +150,10 @@ hive asks list | check | own ID | done ID --evidence POST | hold|person|drop ID 
 
 hive focus list | tag THREAD FOCUS [--off] | new ID "name" | link A B | set FOCUS <<'X' | show FOCUS | keeper FOCUS | aim FOCUS "text" | check add|list|done|untick | lint | order ID ID...: foci, the person's view of the work. A thread carries a focus label; each focus has a hand-written summary (## Now, ## Lately bullets, plain words, no ids or paths) that the home shows as a card. The agent posting a result in a focus's thread updates its summary in the same run (core/focus.py)
 
+## hive tier
+
+hive tier [list|set X N|unset X|stop N PCT|pause N... --until WHEN|resume N...|new|rename|drop|default|jobs|why X|install]: work tiers, the person's settings for which work runs: each focus, thread and timer sits in a tier with a usage stop point and an optional pause that lifts by itself; the starter and a gate before each placed timer hold a tier's new work (core/tiers.py). An agent changes them only with --post (the person's post asking)
+
 ## hive away
 
 hive away [--since 12h] [--full] [--json]: while you were away: a 15-line brief of what was made, decided, needs you and broke; --full for all of it

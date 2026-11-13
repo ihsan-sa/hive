@@ -29,6 +29,7 @@ import { chatView } from "../rich/artifact.js";
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
 import { openQuick, quickOpen, closeQuick, quickPanel, laterButtons } from "../ui/quick.js";
 import { when } from "../ui/when.js";
+import { loadTiers, focusTierChip, threadTierChip } from "../ui/worktiers.js";
 import { downloadMarkdown, printScript } from "../ui/export.js";
 import { shareDialog } from "../ui/share.js";
 import { pinned, important, faded, meta as tmeta, archived, setMeta, renameDialog, openCard, openFor, doneFor, markSeen, threadCrumb, titleExtras } from "../ui/threadmeta.js";
@@ -343,7 +344,8 @@ function fastDrafts(th) {
     L.fastTimer = null;
     if (L.fastTh !== th) return;
     if (!L.box || !L.box.isConnected) { L.fastTh = null; return; }
-    try { const ds = await jget("/api/drafts?thread=" + encodeURIComponent(th)); if (L.fastTh === th) { L.fast = { th, ds: Array.isArray(ds) ? ds : [] }; syncDrafts({ thread: th }, L.box); } } catch (e) { /* the 1.5 s poll still carries drafts */ }
+    if (L.th !== th) { L.fast = null; L.fastTh = null; return; }   // the person opened another conversation: this one's reply must not be typed out there (person 11131127c75f)
+    try { const ds = await jget("/api/drafts?thread=" + encodeURIComponent(th)); if (L.fastTh === th && L.th === th) { L.fast = { th, ds: Array.isArray(ds) ? ds : [] }; syncDrafts({ thread: th }, L.box); } } catch (e) { /* the 1.5 s poll still carries drafts */ }
     if (L.fastTh !== th) return;   // another thread opened: its own loop runs
     if (waitingReply(th)) L.fastTimer = setTimeout(tick, 100);   // E11d: 0.1 s, not 0.3: only while a chat waits for its first reply (a few seconds), and the read is cached per out file
     else { L.fast = null; L.fastTh = null; }
@@ -737,11 +739,15 @@ function statusBar(th) {
   const [a, ...rest] = r.text.split("\n");
   // Nov 8 §8.4: one muted line in the head beside the title; clicking it opens the whole summary as a popover under the head.
   const open = stOpen.has(th);
+  if (can("tier") && !simpleOn()) loadTiers(L.ctx && L.ctx.update);
+  const tierChip = can("tier") && !simpleOn() ? threadTierChip(th, focusOf(th)) : null;
   return h("div", { class: "cm-status cm-strip", "data-key": "status", "data-fold": "", "data-open": open ? "" : null, role: "note", "aria-label": "Thread status" },
     h("b", { class: "cm-strip-a", role: "button", tabindex: "0", "aria-expanded": String(open), title: open ? "Hide the summary" : "Show the whole summary",
       onclick: e => { e.stopPropagation(); open ? stOpen.delete(th) : stOpen.add(th); L.ctx && L.ctx.update(); },
       onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } } }, a), rest.length ? h("span", { class: "cm-strip-b" }, rest[0]) : null,
     rest.length > 1 ? h("details", { class: "cm-status-more", open: moreOpen.has(th) || null, ontoggle: (e, n) => { if (e.target === n) n.open ? moreOpen.add(th) : moreOpen.delete(th); } }, h("summary", null, "More"), h("p", null, rest.slice(1).join(" "))) : null,
+    // The work tier, only when it isn't its focus's (a9179, rung WT-1): the focus card already says the focus's.
+    tierChip,
     // One agent named per conversation (R6 review): the strip names who is on it; the summary's author is on hover.
     h("span", { class: "meta cm-status-m cm-strip-m", title: "Summary by " + r.from }, `updated ${ago(r.at * 1e3)}${lastAt(th) ? " · last post " + ago(lastAt(th)) : ""}`,
       can("post") ? h("button", { type: "button", class: "cm-status-r", title: "Reply about this summary", onclick: () => quoteRef(th, { who: r.from, where: "summary", text: r.text }) }, "Reply") : null));
@@ -1109,7 +1115,7 @@ function focusCard(f, ctx) {
       // + and … sit where the time was and show on hover or focus (the Nov 8 handoff §1.4); the time ends the lead line.
       h("span", { class: "fc-tools" }, can("post") ? button("New conversation in " + focusName(f), () => newIn(id), { kind: "icon", size: "s", icon: "plus", cls: "fc-new" }) : null,
         can("post") ? cardMenu(f, id, ctx) : null),
-      h("div", { class: "fc-lead" }, statusWord(st.tone, st.word),
+      h("div", { class: "fc-lead" }, statusWord(st.tone, st.word), simpleOn() || !can("tier") ? null : focusTierChip(id),
         pillsOf.length ? h("span", { class: "fc-ag" }, pillsOf.slice(0, HOME_AGENTS).map(a => simpleOn() ? null : agentRef(a, { pill: true })),
           !simpleOn() && pillsOf.length > HOME_AGENTS ? h("span", { class: "pill pill-more", title: pillsOf.slice(HOME_AGENTS).join(", ") }, "+" + (pillsOf.length - HOME_AGENTS)) : null) : null,
         when(up, "t", "updated"))),
@@ -1237,7 +1243,7 @@ function archivedPane(c, ctx) {
 }
 function homePane(ctx) {
   const w = can("post"), n = needsN(), local = outFor(null), room = hasRoom(), digest = app();   // n: the one count (core/needs.js), the same as the Chat badge
-  if (digest) { loadFoci(); loadNeedsYou(); loadFinished(ctx); }   // the one needs-you load (core/needs.js): the line, the badge and the cards read S.needsYou
+  if (digest) { loadFoci(); loadNeedsYou(); loadFinished(ctx); if (can("tier")) loadTiers(ctx.update); }   // work tiers: the chip on each focus card   // the one needs-you load (core/needs.js): the line, the badge and the cards read S.needsYou
   // Only on arriving: taking focus on every render pulled the page back to the box after any real click elsewhere on it.
   const arrived = C.arrived; C.arrived = false;
   // The line counts the last three days and names the rest as older, so new things don't hide behind stale ones (the person, 110812234faa); the Chat badge and Yours keep the whole count.
