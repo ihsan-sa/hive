@@ -395,7 +395,7 @@ table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
   .tbl.tg,.tbl.tg>.tb{display:block}
   .tbl.tg>.th{display:none}
   .tbl.tg>.tb>.tr{display:grid;grid-template-columns:minmax(0,1fr);row-gap:2px;padding:10px 0}
-  .tbl.tg>.tb>.tr>*{display:block;white-space:normal;overflow-wrap:anywhere;text-align:left}
+  .tbl.tg>.tb>.tr>*{display:block;white-space:normal;overflow-wrap:break-word;text-align:left}
   .tbl.tg>.tb>.tr>.lead{order:-1;font-weight:var(--w-med)}
   /* R10 6: the value starts at one left edge under the row's title, its label in a column before it, so a long command wraps under itself, not under the label */
   .tbl.tg>.tb>.tr>[data-label]{position:relative;padding-left:7.5rem}
@@ -867,6 +867,10 @@ rc-lazy[data-mode=inline]{display:inline}
 .rc-tbl th button{display:block;width:100%;height:28px;padding:0 10px;border:0;background:none;color:inherit;font:inherit;text-align:inherit;cursor:pointer;white-space:nowrap}
 .rc-tbl th button:hover{color:var(--ink);background:var(--hover)}
 .rc-tbl tbody tr:hover{background:var(--hover)}
+.rc-wrapcells{max-height:none}
+.rc-wrapcells .rc-tbl{table-layout:fixed;width:auto;max-width:100%}
+.rc-wrapcells .rc-tbl td,.rc-wrapcells .rc-tbl th button{white-space:normal;overflow-wrap:break-word;text-align:left;vertical-align:top}
+.rc-wrapcells .rc-tbl th button{height:auto;min-height:28px;padding:4px 10px}
 .rc-tbl td:last-child,.rc-tbl th:last-child{width:1%;padding:0 4px}
 .rc-tbl [data-t]{text-align:left}
 .rc-tbl td{vertical-align:middle}
@@ -1139,7 +1143,7 @@ body[data-pv-full] :is(#top,#main){margin-right:0}
 .pv-img[data-fit]{display:grid;place-items:center;grid-template:minmax(0,1fr)/minmax(0,1fr)}   /* the row is the panel's height, so max-height:100% on the picture can hold: the whole picture shows (R108) */
 .pv-img[data-fit]>img{max-width:100%;max-height:100%;object-fit:contain;cursor:zoom-in}
 /* audio, video */
-.pv-av{flex:1;min-height:0;display:grid;place-items:center;background:#000}
+.pv-av{flex:1;min-height:0;display:grid;place-items:center;grid-template:minmax(0,1fr)/minmax(0,1fr);background:#000}   /* as .pv-img[data-fit]: the row is the panel's height, so max-height:100% holds and a tall video shows whole instead of running off the bottom (the person, 2026-11-12) */
 .pv-av>video{max-width:100%;max-height:100%}
 .pv-av[data-a]{background:var(--sunken);padding:var(--s4)}
 .pv-av>audio{width:min(100%,520px)}
@@ -1215,7 +1219,7 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 
 /* ---- composer: one box with its tools inside. Popups (@ names, To) open above it. ---- */
 .cp{position:relative;display:grid;gap:6px;padding:8px var(--s4) 12px;background:var(--surface)}
-.cp-box{position:relative;display:grid;border:1px solid var(--line-2);border-radius:var(--r-l);background:var(--surface)}
+.cp-box{position:relative;display:grid;grid-template-columns:minmax(0,1fr);border:1px solid var(--line-2);border-radius:var(--r-l);background:var(--surface)}
 .cp-box:focus-within{border-color:var(--focus);box-shadow:0 0 0 3px color-mix(in oklch,var(--focus) 16%,transparent)}
 .cp-t{display:block;width:100%;min-height:44px;max-height:40vh;padding:11px 12px 4px;border:0;background:none;color:var(--ink);resize:none;field-sizing:content;line-height:1.45}
 .cp-t:focus-visible{outline:none}
@@ -1400,6 +1404,7 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 .cm-hline{max-width:720px;margin:var(--s6) auto 0;text-align:center;font-size:var(--fs-body);color:var(--ink-3)}
 .cm-hline[data-needs]{color:var(--ink)}
 .cm-hline a{color:var(--accent-ink);font-weight:var(--w-med)}
+.cm-hline-why{color:var(--ink-3);font-weight:var(--w-reg,400)}
 /* Needs you on the home (R7b S5): a row per thing that waits, the ask in full, then where, who and when, Answer at the right */
 .cm-needs{max-width:720px;margin:var(--s3) auto 0;padding:0;list-style:none;display:grid;gap:0;border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface)}
 .cm-need{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s3);align-items:center;padding:10px 14px}
@@ -2020,7 +2025,7 @@ html:not([data-dev]) .av>.st[data-tone=ended]{display:none}   /* design 1110g: i
 .ag-stack .tbl.ag>.th{display:none}
 .tblw.ag-stack{margin:0}   /* stacked rows don't scroll sideways: they keep the title's left edge */
 .ag-stack .tbl.ag>.tb>.tr{display:flex;flex-wrap:wrap;gap:2px 12px;padding:10px 0;align-items:center}   /* R48: the labelled facts run on together, a row is about four lines, not seven */
-.ag-stack .ag .tb>.tr>*{white-space:normal;overflow-wrap:anywhere;text-align:left}
+.ag-stack .ag .tb>.tr>*{white-space:normal;overflow-wrap:break-word;text-align:left}
 .ag-stack .ag .tr>:first-child,.ag-stack .ag .tr:not(.th):hover>:first-child{position:static;background:none;box-shadow:none}
 .ag .tb>.tr>.ag-n{display:flex;align-items:center;gap:8px}
 .tblw:not(.ag-stack) .ag .tb>.tr>.ag-n{min-width:0}.tblw:not(.ag-stack) .ag .tb>.tr>.ag-n>.av{flex:none}.tblw:not(.ag-stack) .ag .tb>.tr>:is(.ag-n,.ag-tm)>.ref{max-width:100%}.tblw:not(.ag-stack) .ag .tb>.tr>.ag-n .ref-n{overflow:hidden}   /* 1110h: a long agent or conversation name ends in "…", not cut mid-letter at the column edge */
@@ -3427,3 +3432,16 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .tm-sec-more{display:block;width:100%;text-align:left;padding:6px 10px;background:none;border:0;cursor:pointer;color:var(--ink-3)}
 .tm-sec-more:hover{color:var(--ink);background:var(--hover)}
 @media (max-width:640px){.tm-sec-more{min-height:40px}}
+/* Work tiers (Settings, ui/worktiers.js): a tier's rarely used controls fold under it; the chip on a focus card or thread bar links to Settings. */
+.tier-items{margin:0}
+.tier-it-n{min-width:0;overflow-wrap:anywhere}
+.tier-it select.input{width:160px;max-width:100%}
+.tier-more{margin-top:var(--s2)}
+.tier-more>summary{cursor:pointer;color:var(--ink-2);font-size:var(--fs-meta);width:max-content}
+.tier-more[open]>summary{margin-bottom:var(--s2)}
+.tier-log{margin:0;padding:0;list-style:none;display:grid;gap:var(--s1);font-size:var(--fs-meta)}
+.tier-chip a{color:inherit;text-decoration:none}
+.tier-chip a:hover{text-decoration:underline}
+.tier-chip-s{font-weight:var(--w-reg,400)}
+.tier-intro { margin: 0 0 12px; }
+@media (max-width:640px){.tier-it .lr-in{flex-direction:column;align-items:stretch;gap:var(--s1)}.tier-it .frow-end{width:100%}.tier-it select.input{width:100%}}

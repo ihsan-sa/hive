@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""PreToolUse hook on Bash: a board post that answers from the web must cite the pages it used.
+
+If the agent read outside web pages (WebFetch, WebSearch, or curl/wget to a non-local http(s) URL) since its last post,
+and the post it is about to send has no footnote (`[^`) and no http link, the post is refused once with a note saying
+how to cite. The same post sent again goes through, so this can never block an agent for good (a post that rightly
+has nothing to cite just repeats). Anything it can't read lets the call through."""
+import hashlib, json, os, re, sys
+from pathlib import Path
+
+POST = re.compile(r"\b(hive|hive)\s+post\b")
+WEB = re.compile(r"\b(curl|wget)\b[^|;&]*?https?://(?!(localhost|127\.[\d.]+|\[::1\]|0\.0\.0\.0)(?![\w.-]))", re.S)
+
+
+def web_reads(transcript):
+    """Tool uses since the agent's last post that read the outside web."""
+    reads = []
+    for line in Path(transcript).read_text(errors="replace").splitlines():
+        try: m = json.loads(line)
+        except ValueError: continue
+        if m.get("type") != "assistant": continue
+        for b in (m.get("message") or {}).get("content") or []:
+            if not isinstance(b, dict) or b.get("type") != "tool_use": continue
+            name, inp = b.get("name"), b.get("input") or {}
+            if name == "Bash" and POST.search(inp.get("command") or ""): reads = []
+            elif name in ("WebFetch", "WebSearch") or (name == "Bash" and WEB.search(inp.get("command") or "")): reads.append(name)
+    return reads
+
+
+def main():
+    try:
+        d = json.load(sys.stdin)
+        if d.get("tool_name") != "Bash": return 0
+        cmd = (d.get("tool_input") or {}).get("command") or ""
+        if not POST.search(cmd) or "--done-quiet" in cmd: return 0
+        if "[^" in cmd or re.search(r"https?://", cmd): return 0
+        if not web_reads(d["transcript_path"]): return 0
+    except Exception:
+        return 0
+    seen = Path(os.environ.get("TMPDIR") or "/tmp") / "cc-cite-hook"
+    key = hashlib.sha256(cmd.encode()).hexdigest()[:16]
+    try:
+        seen.mkdir(parents=True, exist_ok=True)
+        if (seen / key).exists(): return 0
+        (seen / key).touch()
+    except OSError:
+        return 0
+    print("This post has no sources, but you read web pages for it. Cite each fact from a page with a footnote: "
+          "`...fact.[^1]` in the text and `[^1]: [Page title](https://...)` at the end, one link per note, for the pages you "
+          "actually opened. If nothing in it came from the web, send the same post again and it goes through.", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

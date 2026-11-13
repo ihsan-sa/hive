@@ -180,6 +180,10 @@ def goals(t=None):
         built = [d for d in (days(st.get(k, {}).get("build_at"), t) for k in cands) if d is not None]
         if not row["running"] and built and min(built) <= BUILD_D:   # built within a day and no ladder: idle now, and the round writes it a ladder
             row.update(idle=True, needs_ladder=True, ladder=False, goals_path=g["path"], rung=None, last_agent_d=min(built))
+        if g["ladder"] and g["ladder"]["left"] and g["project"] not in taken and not row.get("needs_ladder"):
+            # a `## Ladder` whose heading names no thread lives in the project's own thread: without this the row had no ladder, so the floor
+            # never started it (the voice board and its film sat unstarted after the person's resume, 2026-11-12, post 11121012cbf5)
+            with_ladder(row, g)
         rows.append(row)
     covered = {r["thread"] for r in rows} | {th for r in rows for th in (r.get("threads") or [])}
     loose = [e for e in open_asks if e.get("thread") not in covered]
@@ -220,7 +224,8 @@ Rules for the round:
 - A rung that cannot pass before a date or time (a full day's reading, a window that ends later) carries `after:YYYY-MM-DD` or `after:YYYY-MM-DDTHH:MMZ` in its text: the keeper skips it until then. Without the tag it wakes an agent every hour to find nothing to do.
 - When what is left waits on the person or a date, ask whether the goal or its Measure is still right; then either write a step that moves the Measure, with a `check:`, or end with the wait.
 - Park only when the measure is at target, or every way left to move it needs the person (name which): add a line `Parked until YYYY-MM-DD: why` to the section (at most 3 days out, later dates are ignored) and say so. The keeper skips it until then. Waiting on a date or a later reading is no reason to park: write a rung that moves the measure today, or if the measure has stopped saying anything, rewrite it and keep the old one and the reason beside it.
-- Your last post says: the rung, the check's output, the measure now, and ends with the line `Next: <the next rung, with its check>` (the starter carries it on), or a `Blocked:` or `Needs the person:` line if nothing is left you can do, or `Waiting:` naming who or when (`Waiting: a1b2c's review`, `Waiting: the sim, about 04:20 UTC`). The next agent comes within minutes unless your wait names a running agent or a time. If the work turns hard, `hive model opus "why"`."""
+- Your last post says: the rung, the check's output, the measure now, and ends with the line `Next: <the next rung, with its check>` (the starter carries it on), or a `Blocked:` or `Needs the person:` line if nothing is left you can do, or `Waiting:` naming who or when (`Waiting: a1b2c's review`, `Waiting: the sim, about 04:20 UTC`). The next agent comes within minutes unless your wait names a running agent or a time. If the work turns hard, `hive model opus "why"`.
+- When that post is your last act (status bar and focus already set), send it with `hive post --end`: the run stops there with no further model call."""
 
 def state_row(s, threads, open_asks, t, idle_d=IDLE_D):
     threads = [threads] if isinstance(threads, str) else list(threads)

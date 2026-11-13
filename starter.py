@@ -6,6 +6,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests load this file
 import spend
 try: import continuation as cont
 except ImportError: cont = None  # a pilot: the starter runs without it
+try: import tiers as worktiers
+except ImportError: worktiers = None  # no work tiers: everything runs, as before them
 
 HOME = Path.home()
 CORE, BOARD, LOG, RUN, STATE = HOME / "core", HOME / "board.jsonl", HOME / "log.jsonl", HOME / "run", HOME / ".hive"
@@ -750,6 +752,10 @@ def running(st=None, by_hand=False):
     grace, quiet = cfg().get("done_grace_s", 900), cfg().get("stall_s", 1800)
     for f in RUN.glob("*.json"):
         r = json.loads(f.read_text())
+        if r.get("by") == "phone":   # a call's front-desk agent (modules/phone, IM-2): the phone service starts and ends it; only a leftover is cleared here
+            if run_gone(r):
+                f.unlink(missing_ok=True); log(event="end", name=r["name"], session=r["session"], pid=r["pid"], exit=None, why="phone run gone")
+            continue
         c = children.get(r["name"])
         g = grace_for(r["name"], grace)
         gone = not c and run_gone(r)  # checked first: nothing below may signal a pid that isn't this run's
@@ -917,7 +923,7 @@ def drop_killed(st):
         try:
             if json.loads((RUN / f"{n}.json").read_text()).get("pid") == pid: continue
         except (OSError, ValueError, AttributeError): pass
-        posts = [p.get("id") for p in st["pending"].pop(n, [])]
+        posts = [p.get("id") for p in st["pending"].pop(n, []) + st.get("held", {}).pop(n, [])]
         resume = st.get("resume", {}).pop(n, None)
         log(event="kill_dropped", name=n, posts=posts, resume=bool(resume))
         mark_done(n, "the person killed its last run")
@@ -977,6 +983,7 @@ def usage(c, u):
             resets[str(d)] = {k: epoch((r.get(src) or {}).get("resets_at")) for k, src in (("weekly", "seven_day"), ("five_hour", "five_hour"))}
             resets[str(d)]["has_five_hour"] = r.get("five_hour") is not None  # some plans have no 5-hour limit at all
             scoped[str(d)] = scoped_shares(r)
+            fresh_reads[str(d)] = (u[str(d)], five[str(d)], scoped[str(d)])
             extra_usage_notice(d, r.get("extra_usage"))
         except Exception:  # a failed read isn't news: 429s (the dash polls the same API) read as "room" and flapped, 2026-11-02
             u[str(d)], five[str(d)], resets[str(d)] = carried(str(d), prev, prev5, prevr)
@@ -986,6 +993,34 @@ def usage(c, u):
                 u[str(d)] = max(seen[0], u[str(d)] or 0); resets[str(d)] = {"five_hour": None, "has_five_hour": False, **resets[str(d)], "weekly": seen[1]}
     save("usage.json", u); save("usage_5h.json", five); save("usage_resets.json", resets); save("usage_scoped.json", scoped)
     return u
+
+fresh_reads = {}  # {login: (weekly pct, 5-hour pct, scoped shares)} from usage()'s last good reads, taken (and cleared) by limits_reset
+LIFT_PCT = 90  # a hold is lifted early only on a read this far under 100, so a read lagging just behind a real hit can't flap it
+
+def limits_reset(st, reads=None):
+    """Lift the holds a run's limit set (st["limits"], until the reset it named) when a fresh usage read shows the limit gone before
+    then: the person reset it early in Claude, or bought more (a friend's Hive sat stopped until the next day's reset, 2026-11-13, with
+    the account showing room, through restarts and signing in again). A login's own hold goes when its weekly and 5-hour reads are both
+    under LIFT_PCT; a model's ("login#fable") when that model's share is too. Its waiting runs carry on at once. Returns the lifted keys."""
+    reads = fresh_reads if reads is None else reads
+    limits, lifted = st.get("limits", {}), []
+    for login, (w, f, sh) in list(reads.items()):
+        for key, t in list(limits.items()):
+            if not isinstance(t, (int, float)) or time.time() >= t: continue
+            k, _, fam = str(key).partition("#")
+            if k != login: continue
+            pcts = [((sh or {}).get(fam) or {}).get("percent")] if fam else [w] + ([f] if f is not None else [])
+            if all(isinstance(v, (int, float)) and v < LIFT_PCT for v in pcts):
+                limits.pop(key); lifted.append(key)
+        if any(str(key).partition("#")[0] == login for key in lifted):
+            back = [n for n, r in st.get("resume", {}).items() if r.get("login") == login and r.get("why") != "login" and not r.get("wait")]
+            for n in back: st["resume"][n]["reset"] = 0
+            log(event="limit_reset_early", login=login, keys=[k for k in lifted if str(k).partition("#")[0] == login], agents=back)
+            more = len(cfg().get("logins", [])) > 1
+            post(f"The usage limit{f' on account {account_name(login)}' if more else ''} was reset early, so agents start again"
+                 f"{f' and {len(back)} waiting carry on' if back else ''}.", [])
+    reads.clear()
+    return lifted
 
 def scoped_shares(r):
     """{family: {"percent", "resets"}} from a usage reply's limits[] rows of kind weekly_scoped (in 2026-11 only Fable's,
@@ -1655,6 +1690,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     hook_inbox(c)  # a login can be added to config.json while the starter runs
     wire_deny(c)
     wire_precompact(c)
+    wire_cite(c)
     sid = w["sid"] if w else resume or str(uuid.uuid4())  # the claude session id, so `claude --resume <session>` works
     first = posts[0]
     model = w["model"] if w else start_model(c, posts)
@@ -1796,6 +1832,86 @@ def floor_gap(c, st, r):
     if not seen or seen.get("sig") != [r.get("rungs_done"), r.get("rungs_left"), r.get("rung")]: return base
     return min(base * 2 ** seen.get("n", 0), max(top, base))
 
+# Work tiers (`hive tier`, core/tiers.py; the person, post 111311199053): each focus and thread sits in a tier with a stop
+# point, and a tier can be paused. A held tier starts no new run: its agents' posts wait in st["held"] and go back to
+# pending, oldest first, when it runs again. The person's own posts always start, and resumes never wait here. Agents see
+# only tiers.HELD_LINE, never a number. Timers are gated by core/tier-gate instead.
+_tiers = {"at": 0}
+
+def tiers_now(t=None):
+    """(settings, focus state), read at most once a minute."""
+    t = time.time() if t is None else t
+    if t - _tiers["at"] > 60:
+        try:
+            import focus
+            fst = focus.state(posts=[])
+        except Exception: fst = {"foci": [], "tags": {}}
+        try: fof = focus.focus_of
+        except Exception: fof = lambda st, th, posts=None: None
+        _tiers.update(at=t, d=worktiers.load(), fst=fst, fof=fof, posts=None)
+    return _tiers["d"], _tiers["fst"]
+
+def thread_tier(thread, t=None):
+    """The thread's tier id, or None with no tiers."""
+    if not worktiers: return None
+    d, fst = tiers_now(t)
+    fid = None
+    try:
+        fid = _tiers["fof"](fst, thread)
+        if fid is None:
+            if _tiers.get("posts") is None: _tiers["posts"] = recent_posts(2000)
+            fid = _tiers["fof"](fst, thread, _tiers["posts"])
+    except Exception: pass
+    return worktiers.tier_of(d, thread, fid)
+
+def tier_held(c, thread=None, fid=None, t=None):
+    """Why the work tier of this thread (or of focus fid) starts no new run now, else None. Any error is no hold."""
+    if not worktiers: return None
+    try:
+        d, _ = tiers_now(t)
+        tid = worktiers.tier_of_focus(d, fid) if fid else thread_tier(thread, t)
+        return worktiers.held(d, tid, t, base=c.get("usage_stop_pct", 100))
+    except Exception as e:
+        log(event="tier_error", why=f"{type(e).__name__}: {e}"[:300]); return None
+
+def tier_room(c, thread, room, t=None):
+    """room without the logins at or past the thread's tier stop point (one more weekly line, beside each login's own)."""
+    if not worktiers: return room
+    try:
+        d, _ = tiers_now(t)
+        stop = worktiers.stop_of(d, thread_tier(thread, t))
+    except Exception: return room
+    return room if stop is None else {k: v for k, v in room.items() if k != "_checked" and (v is None or v < stop)}
+
+def hold_posts(c, st, n, t=None):
+    """Move n's queued posts to st["held"] if their thread's tier is held and none is from the person. True if it did.
+    A floor brief (from the starter) is dropped instead: the floor writes a fresh one when the tier runs."""
+    ps = st["pending"].get(n) or []
+    if not ps or any(p.get("from") == "person" for p in ps): return False
+    th = ps[0].get("thread")
+    if not (why := tier_held(c, th, t=t)): return False
+    st["pending"].pop(n)
+    keep = [p for p in ps if p.get("from") != "starter" or p.get("continue")]
+    if keep: st.setdefault("held", {}).setdefault(n, []).extend(keep)
+    log(event="tier_held", name=n, thread=th, why=why, posts=[p.get("id") for p in ps], dropped=len(ps) - len(keep))
+    noted = st.setdefault("held_noted", [])
+    if keep and th and th not in noted:
+        noted.append(th)
+        with BOARD.open("a") as f:
+            f.write(json.dumps({"id": dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now(), "from": "starter", "to": [], "thread": th, "text": worktiers.HELD_LINE}) + "\n")
+    return True
+
+def release_held(c, st, t=None):
+    """Held posts whose tier runs again go back to pending, ahead of anything queued since for the same name."""
+    for n in list(st.get("held", {})):
+        ps = st["held"][n]
+        th = ps[0].get("thread") if ps else None
+        if ps and tier_held(c, th, t=t): continue
+        st["held"].pop(n)
+        if ps: st["pending"][n] = ps + st["pending"].get(n, [])
+        if th in st.get("held_noted", []) and not any((q or [{}])[0].get("thread") == th for q in st["held"].values()): st["held_noted"].remove(th)
+        log(event="tier_released", name=n, thread=th, posts=[p.get("id") for p in ps])
+
 def floor_off(c, t):
     """config floor_off: ["YYYY-MM-DDTHH:MM:SSZ", "...Z"], the floor paused from the first time up to the second. Dated both ends so it lapses by itself with nobody remembering it; anything else leaves the floor on."""
     try: a, b = (dt.datetime.strptime(x, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp() for x in c.get("floor_off"))
@@ -1831,7 +1947,7 @@ def floor(c, st, alive, login):
     if not rows: return
     held = cont.waits({r["thread"] for r in rows}, set(alive) | {n for n, ps in st["pending"].items() if ps}, t, c.get("floor_wait_max_s", 7200))
     for r in sorted(rows, key=lambda r: (not first(r), -(r["quiet_s"] if r["quiet_s"] is not None else float("inf")))):
-        if held.get(r["thread"], 0) > t or cont.stopped_thread(r["thread"]): continue
+        if held.get(r["thread"], 0) > t or cont.stopped_thread(r["thread"]) or tier_held(c, r["thread"]): continue
         started[r["thread"]] = t
         sig, seen = [r.get("rungs_done"), r.get("rungs_left"), r.get("rung")], st.setdefault("floor_seen", {}).get(r["thread"]) or {}
         st["floor_seen"][r["thread"]] = {"sig": sig, "n": seen.get("n", 0) + 1 if seen.get("sig") == sig else 1}
@@ -1936,6 +2052,21 @@ def wire_precompact(c):
         except ValueError: continue
         if cmd in json.dumps(s.get("hooks", {}).get("PreCompact", [])): continue
         s.setdefault("hooks", {}).setdefault("PreCompact", []).append({"hooks": [{"type": "command", "command": cmd, "timeout": 10}]})
+        f.write_text(json.dumps(s, indent=2) + "\n")
+
+def wire_cite(c):
+    """Make sure each login's settings.json runs bin/cc-cite-hook before a Bash call: a post that answers from web pages it
+    read is sent back once to add footnotes (a second identical send goes through). Everyday E14b: the Sources rule alone
+    left about one search answer in three uncited."""
+    cmd = str(CORE / "bin/cc-cite-hook")
+    if not (CORE / "bin/cc-cite-hook").exists(): return
+    for login in c.get("logins", []) + [pc["config_dir"] for pc in c.get("providers", {}).values() if pc.get("config_dir")]:
+        f = Path(login).expanduser() / "settings.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        try: s = json.loads(f.read_text()) if f.exists() else {}
+        except ValueError: continue
+        if "cc-cite-hook" in json.dumps(s.get("hooks", {})): continue
+        s.setdefault("hooks", {}).setdefault("PreToolUse", []).append({"matcher": "Bash", "hooks": [{"type": "command", "command": cmd, "timeout": 10}]})
         f.write_text(json.dumps(s, indent=2) + "\n")
 
 DENY_SEEN = None
@@ -2096,6 +2227,7 @@ def main():
     hook_inbox(cfg())
     wire_deny(cfg())
     wire_precompact(cfg())
+    wire_cite(cfg())
     st = load("starter.json", {"offset": 0, "pending": {}})
     efforts[0] = st.setdefault("efforts", {})
     u, paused, pcache = {}, False, {}
@@ -2115,6 +2247,8 @@ def main():
                 called, unknown = callable_names(p, c)
                 note_seen(p)
                 guarded("note_post", p, is_stop(p))
+                if is_stop(p):
+                    for hn in [hn for hn, hps in st.get("held", {}).items() if hn[:1] in SPAWN.values() and hps and hps[0].get("thread") == p.get("thread")]: st["held"].pop(hn)
                 if is_stop(p) and (gone := drop_spawns(st, p.get("thread"))):
                     log(event="stop_dropped", names=gone, post=p.get("id"), thread=p.get("thread"))
                 src_free = is_free_now(st, str(p.get("from", "")).lower())
@@ -2186,7 +2320,7 @@ def main():
         if pick_login(c, unpaused(u), st.get("limits")) is None and time.time() - u.get("_checked", 0) > 30 \
                 and any(p.get("from") == "person" for ps in st["pending"].values() for p in ps):
             u["_checked"] = 0
-        u = usage(c, u); room = unpaused(u)
+        u = usage(c, u); room = unpaused(u); limits_reset(st)
         if (off := sorted(set(u) - set(room))) != st.get("paused_logins", []):
             st["paused_logins"] = off; log(event="logins_paused", logins=off)
         if (pick_login(c, room) is None) != paused:
@@ -2228,8 +2362,10 @@ def main():
                   resume=r["session"], reaped=r.get("reaped"), extra=[p["id"] for p in waiting], moved=r.get("move", False), lost=r.get("lost", False),
                   woken={"shells": r["shells"], "posts": waiting, "step": r.get("step")} if "shells" in r else None, all_since=r.get("all_since") or r.get("at"), why=r.get("why"))
             alive[n] = {"name": n, "thread": r.get("thread")}  # a dict, so keeper() sees a resumed keeper (two rounds at once, 2026-11-02)
+        release_held(c, st)
         for n in ([] if hold else list(st["pending"])):
             if n in alive or n in st.get("resume", {}): continue
+            if hold_posts(c, st, n): continue
             got = STATE / "delivered" / n  # posts the inbox hook already handed this agent mid-run
             if got.exists():
                 # Read it, don't remove it: the dash's read marks come from this file, and with it gone a post the agent had used
@@ -2249,7 +2385,9 @@ def main():
                 log(event="fallback_back_to_claude", name=n); pv = None
             if pv: to = None if provider_hold(c, st, n, pv, pcache, st["pending"][n][0].get("thread")) else "provider"
             else:
-                to = login_for(c, room, st.get("limits"), st["pending"][n], login)
+                if (troom := tier_room(c, st["pending"][n][0].get("thread"), room)) is not room and not any(p.get("from") == "person" for p in st["pending"][n]):
+                    to = login_for(c, troom, st.get("limits"), st["pending"][n], pick_login(c, troom, st.get("limits")))
+                else: to = login_for(c, room, st.get("limits"), st["pending"][n], login)
                 if not to and not any(p.get("claude") for p in st["pending"][n]) and fallback(c, st, n, st["pending"][n], False, pcache):
                     to = None if provider_hold(c, st, n, provider_of(c, st["pending"][n][0]["model"]), pcache, st["pending"][n][0].get("thread")) else "provider"
             if to and len(alive) < (c.get("max_sessions") or float("inf")) and not paced(c, st, n, st["pending"][n]):
@@ -2263,12 +2401,14 @@ def main():
                     if any(p.get("continue") for p in ps): guarded("launched", who, ps)
         if not hold:
             work = login or ("fallback" if fallback_model(c, st, agents_chain(c), pcache) else None)  # the hive's own rounds run on whichever has room
-            keeper(c, st, alive, work)
+            rounds = not tier_held(c, fid="hive")  # the keeper, improver, dreamer and tidier are the hive's own work: its tier
+            if rounds: keeper(c, st, alive, work)
             try: floor(c, st, alive, work)
             except Exception as e: log(event="floor_error", why=f"{type(e).__name__}: {e}"[:300])
-            improver(c, st, alive, work)
-            dreamer(c, st, alive, login)
-            tidier(c, st, alive, login)
+            if rounds:
+                improver(c, st, alive, work)
+                dreamer(c, st, alive, login)
+                tidier(c, st, alive, login)
             warm_boot(c, st, login)
         save("starter.json", st)
         backup(c, st)

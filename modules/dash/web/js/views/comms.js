@@ -11,7 +11,7 @@ import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../cor
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
 import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
 import { workBar, workBarHeld } from "../ui/workbar.js";
-import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci } from "../core/foci.js";
+import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci, workingIn } from "../core/foci.js";
 import { newIn } from "./focus.js";
 import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
@@ -29,6 +29,7 @@ import { chatView } from "../rich/artifact.js";
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
 import { openQuick, quickOpen, closeQuick, quickPanel, laterButtons } from "../ui/quick.js";
 import { when } from "../ui/when.js";
+import { loadTiers, focusTierChip, threadTierChip } from "../ui/worktiers.js";
 import { downloadMarkdown, printScript } from "../ui/export.js";
 import { shareDialog } from "../ui/share.js";
 import { pinned, important, faded, meta as tmeta, archived, setMeta, renameDialog, openCard, openFor, doneFor, markSeen, threadCrumb, titleExtras } from "../ui/threadmeta.js";
@@ -343,7 +344,8 @@ function fastDrafts(th) {
     L.fastTimer = null;
     if (L.fastTh !== th) return;
     if (!L.box || !L.box.isConnected) { L.fastTh = null; return; }
-    try { const ds = await jget("/api/drafts?thread=" + encodeURIComponent(th)); if (L.fastTh === th) { L.fast = { th, ds: Array.isArray(ds) ? ds : [] }; syncDrafts({ thread: th }, L.box); } } catch (e) { /* the 1.5 s poll still carries drafts */ }
+    if (L.th !== th) { L.fast = null; L.fastTh = null; return; }   // the person opened another conversation: this one's reply must not be typed out there (person 11131127c75f)
+    try { const ds = await jget("/api/drafts?thread=" + encodeURIComponent(th)); if (L.fastTh === th && L.th === th) { L.fast = { th, ds: Array.isArray(ds) ? ds : [] }; syncDrafts({ thread: th }, L.box); } } catch (e) { /* the 1.5 s poll still carries drafts */ }
     if (L.fastTh !== th) return;   // another thread opened: its own loop runs
     if (waitingReply(th)) L.fastTimer = setTimeout(tick, 100);   // E11d: 0.1 s, not 0.3: only while a chat waits for its first reply (a few seconds), and the read is cached per out file
     else { L.fast = null; L.fastTh = null; }
@@ -540,7 +542,7 @@ function threadRows(c, ctx) {
   let ds = [...S.threads.values()].filter(d => pinned(d.name) || important(d.name) || ((threadKinds(d) & mask) && theirs(d)) || d.name === c.thread);
   if (C.scope === "recent" && !simpleOn()) ds = ds.filter(d => pinned(d.name) || important(d.name) || archived(d.name) || d.last > t - (app() ? 7 : 1) * DAY || ran.has(d.name) || d.name === c.thread || (app() && threadState(d.name, seen).key === "asks"));
   if (C.imp) ds = ds.filter(d => important(d.name));
-  if (C.hideFaded && app()) ds = ds.filter(d => !faded(d.name) || d.name === c.thread);
+  if (C.hideFaded && app()) ds = ds.filter(d => !faded(d.name) || workingIn(d.name) || d.name === c.thread);   // live work stays in sight (IM-1b)
   const flat = !app() || C.imp || C.view === "recent";
   // A thread an agent started from a listed conversation folds under it (the person, 110601450d55: one chat made eight side entries
   // and the original got lost). A root is the top of its chain among the listed ones; its row sorts by the latest activity in the family.
@@ -737,11 +739,15 @@ function statusBar(th) {
   const [a, ...rest] = r.text.split("\n");
   // Nov 8 §8.4: one muted line in the head beside the title; clicking it opens the whole summary as a popover under the head.
   const open = stOpen.has(th);
+  if (can("tier") && !simpleOn()) loadTiers(L.ctx && L.ctx.update);
+  const tierChip = can("tier") && !simpleOn() ? threadTierChip(th, focusOf(th)) : null;
   return h("div", { class: "cm-status cm-strip", "data-key": "status", "data-fold": "", "data-open": open ? "" : null, role: "note", "aria-label": "Thread status" },
     h("b", { class: "cm-strip-a", role: "button", tabindex: "0", "aria-expanded": String(open), title: open ? "Hide the summary" : "Show the whole summary",
       onclick: e => { e.stopPropagation(); open ? stOpen.delete(th) : stOpen.add(th); L.ctx && L.ctx.update(); },
       onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } } }, a), rest.length ? h("span", { class: "cm-strip-b" }, rest[0]) : null,
     rest.length > 1 ? h("details", { class: "cm-status-more", open: moreOpen.has(th) || null, ontoggle: (e, n) => { if (e.target === n) n.open ? moreOpen.add(th) : moreOpen.delete(th); } }, h("summary", null, "More"), h("p", null, rest.slice(1).join(" "))) : null,
+    // The work tier, only when it isn't its focus's (a9179, rung WT-1): the focus card already says the focus's.
+    tierChip,
     // One agent named per conversation (R6 review): the strip names who is on it; the summary's author is on hover.
     h("span", { class: "meta cm-status-m cm-strip-m", title: "Summary by " + r.from }, `updated ${ago(r.at * 1e3)}${lastAt(th) ? " · last post " + ago(lastAt(th)) : ""}`,
       can("post") ? h("button", { type: "button", class: "cm-status-r", title: "Reply about this summary", onclick: () => quoteRef(th, { who: r.from, where: "summary", text: r.text }) }, "Reply") : null));
@@ -895,7 +901,7 @@ function places() {
     h("nav", { class: "subnav", "aria-label": "Chat's pages" },   // the same sub-bar as Agents' and Usage's rows (R49)
     // Needs me merged into Yours (Nov 9 handoff §A.2): its count, and its list when something waits
     can("post") && needsN() ? link("Yours", "yours", href("yours", "waits"), needsN(), "What waits on you, newest first; every exchange you had is under it", "waiting on you") : link("Yours", "yours", href("yours"), 0, "Every exchange you had, newest first"),
-    can("read") ? link("Inbox", "inbox", href("inbox"), IB.unread || 0, "Every message agents sent you") : null,
+    can("read") ? link("Inbox", "inbox", href("inbox"), IB.unread || 0, "Every message agents sent you; the count is unread messages, not what waits on you", "unread") : null,
     can("files") ? link("Mail", "mail", href("mail"), MN.n, MN.n ? "Mail since you last opened it" : "Your mail") : null,
     link("Files", "file", href("made"), 0, "Files and links from your conversations")));
 }
@@ -929,7 +935,7 @@ const importantStar = ctx => h("button", { type: "button", class: "tm-chip tm-ch
   onclick: () => { C.imp = !C.imp; ctx.update(); } }, icon("star"));
 // In the Show menu: By focus or By recency, and whether the conversations marked Likely not needed are listed at all.
 function viewBar(ctx) {
-  const nFaded = [...S.threads.keys()].filter(th => faded(th) && !archived(th)).length;
+  const nFaded = [...S.threads.keys()].filter(th => faded(th) && !archived(th) && !workingIn(th)).length;
   return h("div", { class: "cm-views", "data-key": "views" },
     seg([["focus", "Focus", "Each conversation under its focus, in the order of the home cards, the rest under Other last; helper conversations folded under the one they came from"],
       ["recent", "Recent", "Every conversation in one list, newest activity first, helper conversations included, each naming the one it came from"]], C.view,
@@ -1109,7 +1115,7 @@ function focusCard(f, ctx) {
       // + and … sit where the time was and show on hover or focus (the Nov 8 handoff §1.4); the time ends the lead line.
       h("span", { class: "fc-tools" }, can("post") ? button("New conversation in " + focusName(f), () => newIn(id), { kind: "icon", size: "s", icon: "plus", cls: "fc-new" }) : null,
         can("post") ? cardMenu(f, id, ctx) : null),
-      h("div", { class: "fc-lead" }, statusWord(st.tone, st.word),
+      h("div", { class: "fc-lead" }, statusWord(st.tone, st.word), simpleOn() || !can("tier") ? null : focusTierChip(id),
         pillsOf.length ? h("span", { class: "fc-ag" }, pillsOf.slice(0, HOME_AGENTS).map(a => simpleOn() ? null : agentRef(a, { pill: true })),
           !simpleOn() && pillsOf.length > HOME_AGENTS ? h("span", { class: "pill pill-more", title: pillsOf.slice(HOME_AGENTS).join(", ") }, "+" + (pillsOf.length - HOME_AGENTS)) : null) : null,
         when(up, "t", "updated"))),
@@ -1237,7 +1243,7 @@ function archivedPane(c, ctx) {
 }
 function homePane(ctx) {
   const w = can("post"), n = needsN(), local = outFor(null), room = hasRoom(), digest = app();   // n: the one count (core/needs.js), the same as the Chat badge
-  if (digest) { loadFoci(); loadNeedsYou(); loadFinished(ctx); }   // the one needs-you load (core/needs.js): the line, the badge and the cards read S.needsYou
+  if (digest) { loadFoci(); loadNeedsYou(); loadFinished(ctx); if (can("tier")) loadTiers(ctx.update); }   // work tiers: the chip on each focus card   // the one needs-you load (core/needs.js): the line, the badge and the cards read S.needsYou
   // Only on arriving: taking focus on every render pulled the page back to the box after any real click elsewhere on it.
   const arrived = C.arrived; C.arrived = false;
   // The line counts the last three days and names the rest as older, so new things don't hide behind stale ones (the person, 110812234faa); the Chat badge and Yours keep the whole count.
@@ -1249,7 +1255,9 @@ function homePane(ctx) {
   // The waits head (the Nov 8 handoff §1.2): the count as plain words, and All to the full list on the right when there is more than the rows show.
   const waits = n ? `${n} ${n === 1 ? "waits" : "wait"} on you` : "Nothing new waits on you";
   const all = (n > HOME_WAITS || sp.older) && needsHref() ? h("a", { class: "cm-hline-all", href: needsHref(), title: sp.older ? `${plural(sp.older, "older one")} in Stuff to address` : "What waits on you, newest first, each in its conversation" }, "All") : null;
-  const line = n || sp.older ? [h("span", null, waits), all] : simpleOn() || S.live.signin?.length ? null : IB.unread ? "No agent is waiting on you" : "Nothing needs you";
+  // Why the other counts differ, said beside this one rather than in a hover title, so it reads at 390 too (IM-3): older ones fold below, and the Inbox counts unread messages, not things waiting on you.
+  const why = [sp.older ? `${plural(sp.older, "older one")} below` : null, IB.unread && IB.unread !== n ? `Inbox: ${plural(IB.unread, "unread message")}` : null].filter(Boolean).join(" · ");
+  const line = n || sp.older ? [h("span", null, waits), why ? h("span", { class: "cm-hline-why", "data-key": "why" }, why) : null, all] : simpleOn() || S.live.signin?.length ? null : IB.unread ? "No agent is waiting on you" : "Nothing needs you";
   return h("div", { class: "cm-home", "data-key": "home" },
     w ? h("div", { class: "cm-new", "data-key": "new" },
       h("h1", { class: "cm-home-t" }, "What do you want done?"),

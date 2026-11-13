@@ -27,6 +27,25 @@ VERDICTS = ("held", "reverted", "inconclusive", "reverted-candidate", "unjudgeab
 MEASURE = re.compile(r"measure|metric|score|yardstick|benchmark|passes|pass rate|p&l|sharpe", re.I)
 
 CHECK_TIMEOUT_S = 120
+PAUSED_MAX = 0.25  # a pause over more than this share of a check's before or after window: the number reads the pause, not the change
+
+def paused_windows(e, t):
+    """(before, after) paused shares of row e's windows: after is landing to the read at t; before is the same planned
+    length ahead of landing, which the baseline read. ~/.hive/pauses.jsonl (core/pauses.py)."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent)); import pauses
+        at, due = dt.datetime.fromisoformat(e["at"]), dt.datetime.fromisoformat(e.get("due_at") or e["at"])
+        sp = pauses.spans(STATE / "pauses.jsonl", until=t)
+        return pauses.share(at - max(due - at, dt.timedelta(hours=24)), at, sp=sp), pauses.share(at, t, sp=sp)
+    except (ImportError, KeyError, ValueError, TypeError): return 0.0, 0.0
+
+
+def paused_share(t0, t1):
+    """The paused share of [t0, t1] (aware datetimes), 0..1; 0 when there is no record."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent)); import pauses
+        return round(pauses.share(t0, t1, path=STATE / "pauses.jsonl"), 3)
+    except (ImportError, ValueError, TypeError): return 0.0
 
 
 def woke_thread():
@@ -173,7 +192,7 @@ def score(base, after, want, band=None):
 
 def check_fields(a):
     if a.want not in ("up", "down"): sys.exit("hive improve: --check needs --want up|down, the way the number should move.")
-    return {"check": a.check, "want": a.want, **({"band": a.band} if a.band is not None else {})}
+    return {"check": a.check, "want": a.want, **({"band": a.band} if a.band is not None else {}), **({"rate": True} if getattr(a, "rate", False) else {})}
 
 def autojudge(post=True, t=None):
     """Judge every landed change whose check is due, with no model and no agent. Runs hourly after hive outcomes grade and at
@@ -198,10 +217,14 @@ def autojudge(post=True, t=None):
             if sized: why += f"; sized at {e['gain']:g} before landing, came to {seen:g}" + (" net of the control" if e.get("control") else "")
             if not e.get("late"): why += "".join(f"; {label}: {str(e[k])[:100]}" for k, label in (("needs", "rests on"), ("beats", "to beat")) if e.get(k))
             w, v = judged_with(items, e), reading
+            pb, pa = paused_windows(e, t)
+            if max(pb, pa) > PAUSED_MAX:  # a count reads the pause; a rate or paired comparison loses sample, not meaning (ae868, 11131132a3fd): noted, kept
+                why += f"; window {round(100 * max(pb, pa))}% paused ({'before' if pb >= pa else 'after'} landing)" + (", a rate, so the reading stands on a smaller sample" if e.get("rate") else ", so the number reads the pause")
+                if not e.get("rate"): v = "inconclusive"
             if e.get("late"): v, why = "inconclusive", why + f"; the check was written after landing, so this read {reading} is not a verdict"
             if w: v, why = "inconclusive", why + f"; shares its number with {', '.join(w)}, so this cannot credit one change"
             append(LEDGER, {"judge": e["id"], "at": iso(t), "by": "late-check" if e.get("late") else "check", "verdict": v, "reading": reading, "why": why, "before": e.get("before"), "after": after,
-                            **({"gain_expected": e["gain"], "gain_seen": round(seen, 6)} if sized else {}), **({"with": w} if w else {})})
+                            **({"gain_expected": e["gain"], "gain_seen": round(seen, 6)} if sized else {}), **({"with": w} if w else {}), **({"paused": [round(pb, 3), round(pa, 3)]} if max(pb, pa) > 0 else {})})
             out.append((e, v, why))
     bad = [(e, why) for e, v, why in out if v == "reverted-candidate"]
     if bad and post:
@@ -232,6 +255,21 @@ def cmd_num(a):
     v = [s[a.field] for s in jsonl(SNAPS) if s.get("since") == "1d" and isinstance(s.get(a.field), (int, float)) and (a.frm or "") <= s.get("at", "") and (not a.to or s.get("at", "") <= a.to)]
     if not v: sys.exit(f"hive improve num: no snapshot has {a.field} in that window")
     print(f"{sum(v) / len(v):.4g}" if a.frm or a.to else v[-1])
+
+NAMES_FILE = re.compile(r"(?<![\w/.~-])((?:~/|/|[\w.-]+/)?[\w./-]*\w\.(?:jsonl|json|csv|md|txt|log|py|sh))\b")
+READ_CMDS = r"hive (?:progress|read|search|who|asks|improve|outcomes|stalled|summary|waits|focus|goals|show)|kb (?:find|stats|due|recall|miss)"  # real read-only subcommands: "the kb has it" or "hive is paused" is prose, not a command
+NAMES_CMD = re.compile(r"\b((?:" + READ_CMDS + r")(?: [a-z][\w-]*)?(?: --?[\w-]+(?: \S+)?)*|(?:jq|grep|wc|sqlite3) [^,;()`]*[\w'\"])")
+
+def check_hint(why):
+    """A --check that could read what a --no-check reason names (a command or a file), or None. A hint, never a refusal
+    (ae868, 11131125b13a): a refusal keyed on wording blocks honest cases and teaches people to word around it."""
+    code = next((c for c in re.findall(r"`([^`\n]+)`", why or "") if " " in c.strip()), None)  # backtick pairs in order: the text between `a` and `b` is prose
+    if code: return code.strip().rstrip(",.;:")
+    m = NAMES_CMD.search(why or "")
+    if m: return m.group(1).strip().rstrip(",.;:")
+    f = NAMES_FILE.search(why or "")
+    if f: return f"wc -l < {f.group(1)}" if f.group(1).endswith((".jsonl", ".csv", ".log", ".txt")) else f"grep -c PATTERN {f.group(1)}"
+    return None
 
 def cmd_log(a):
     items = ledger()
@@ -265,7 +303,10 @@ def cmd_log(a):
            "hypothesis": a.hypothesis or "", "measure": a.measure, "baseline": a.baseline or "", "revisit": rev, "status": "landed",
            "commit": a.commit or "", "thread": a.thread or woke_thread(), **fields}
     if also: rec["also"] = also
-    if a.no_check and not a.check: rec["no_check"] = a.no_check
+    if a.no_check and not a.check:
+        rec["no_check"] = a.no_check
+        hint = None if a.expect else check_hint(a.no_check)
+        if hint: print(f"note: a check could read this: `--check '{hint}' --want up|down`. Logged without one, as asked.")
     if a.expect: rec["expect"] = a.expect
     if a.reviewed_by: rec["reviewed_by"] = a.reviewed_by.lstrip("@").lower(); rec["review_model"] = (a.model or "").lower()
     ov = overlaps(items, a.measure, skip=set(also))
@@ -589,6 +630,7 @@ def scoreboard(since):
     d = span(since); t1 = now(); t0 = t1 - d; tp = t0 - d
     cur = window(iso(t0), iso(t1), log, posts, items)
     prev = window(iso(tp), iso(t0), log, posts, items)
+    cur["paused_share"], prev["paused_share"] = paused_share(t0, t1), paused_share(tp, t0)  # a window the hive sat paused in reads the pause
     both, cur_cost = cost_since(iso(tp)), cost_since(iso(t0))
     cur["spend_usd"] = None if cur_cost is None else round(cur_cost, 2)
     prev["spend_usd"] = None if both is None or cur_cost is None else round(both - cur_cost, 2)
@@ -652,6 +694,8 @@ def text(cur, prev):
             better = (a < b) if k in LOWER_IS_BETTER else (a > b)
             mark = "better" if better else "worse"
         lines.append(f"| {k} | {'-' if b is None else b} | {'-' if a is None else a} | {mark} |")
+    ps = [(n, w.get("paused_share") or 0) for n, w in (("this", cur), ("the one before", prev))]
+    if any(v for _, v in ps): lines.append("\nPaused: " + ", ".join(f"{n} window {round(100 * v)}%" for n, v in ps if v) + " (~/.hive/pauses.jsonl), so its moves read the pause, not a change.")
     if cur.get("overdue_ids"): lines.append(f"\nOverdue for judgement: {', '.join(cur['overdue_ids'])} (`hive improve list --due`)")
     if cur.get("asks_orphaned"): lines.append(f"Asks of the person nobody is moving: {cur['asks_orphaned']} (`hive asks check`)")
     if cur.get("leftovers_orphaned"): lines.append(f"Work agents left undone that nobody is moving: {cur['leftovers_orphaned']} (`hive asks check`, kind leftover)")
@@ -691,6 +735,7 @@ def main(argv=None):
     p = sp.add_parser("log", help="log a landed change: --what, --measure (required), --check CMD --want up|down [--band N] [--kind fix|behaviour] [--control CMD] [--gain N --needs TEXT --beats TEXT: the size, written before landing] (written at landing, a command printing the number: a script judges it; a fix is due in 48h, a behaviour change in 7d against a --control it didn't touch), --revisit 7d|YYYY-MM-DD, --where, --hypothesis, --baseline, --commit, --thread, --also IDS (warns when the measure names a number an open landing, revisit still ahead, names)")
     for f in ("what", "measure", "revisit", "where", "hypothesis", "baseline", "commit", "thread", "check", "want", "kind", "control"): p.add_argument("--" + f)
     p.add_argument("--band", type=float, help="the move that counts as noise (default 5%% of the baseline)")
+    p.add_argument("--rate", action="store_true", help="the check prints a rate or a paired comparison, not a count: a hive pause over its window is noted, not made inconclusive")
     p.add_argument("--gain", type=float, help="the size: the move you expect in the check's number by the cut-off (--revisit), in its own units and above 0 (--want gives the direction). The check reads at landing and once more at the cut-off, not between, and the verdict prints this beside what came. A --check row without --gain, --needs and --beats is logged all the same and marked unsized")
     p.add_argument("--needs", metavar="TEXT", help="what the number will rest on by the cut-off, e.g. '40 graded runs' or '12 days of readings'")
     p.add_argument("--beats", metavar="TEXT", help="the strongest cheap alternative the change must beat, e.g. 'last week's number' or 'the one-line version' (--control CMD is the do-nothing comparison and does not stand in for it). The verdict names it, for whoever reads the number")

@@ -10,6 +10,7 @@ import { form } from "../templates.js";
 import { pageHeader, section, block, blocks, button, field, infoButton, input, empty, meter, statusLabel, staleNote, statusDot, waiting } from "../ui/kit.js";
 import { act, isBusy } from "../ui/activity.js";
 import { confirm } from "../ui/dialog.js";
+import { tiersSection, loadTiers, pausedTiers } from "../ui/worktiers.js";
 import { startSignin, signinBox, clearSignin } from "../ui/signin.js";
 import { ago, dur, now, plural } from "../core/format.js";
 import { accountUse } from "../core/model.js";
@@ -25,7 +26,7 @@ const flash = (k, update) => { F.flash[k] = Date.now(); setTimeout(() => { if (D
 const savedMark = k => F.flash[k] ? h("span", { class: "blk-saved field-ok", role: "status" }, "✓ Saved") : null;
 const say = (k, text, tone) => { F.say[k] = text ? { text, tone } : null; };
 const msg = k => F.say[k] ? h("p", { class: "fmsg", "data-tone": F.say[k].tone || null, role: "status" }, F.say[k].text) : null;
-const CAPTEXT = { read: "Read everything", files: "Read files: notes, modules, scripts, projects", post: "Post as you, which starts agents", stop: "Kill agents", tier: "Change a thread's tier", limits: "Pause logins and change stop lines", logins: "Sign in and add logins", config: "Change settings", modules: "Add and remove modules", plans: "Edit project plans", secrets: "Store secrets" };
+const CAPTEXT = { read: "Read everything", files: "Read files: notes, modules, scripts, projects", post: "Post as you, which starts agents", stop: "Kill agents", tier: "Change work tiers: pause, move, stop points", limits: "Pause logins and change stop lines", logins: "Sign in and add logins", config: "Change settings", modules: "Add and remove modules", plans: "Edit project plans", secrets: "Store secrets" };
 
 async function loadCfg(ctx) {
   if (!can("config")) return;
@@ -551,21 +552,22 @@ function navDots(ctx) {
     const c = pg.sandbox_check.state, bare = pg.settings.sandbox === "bare";
     dot("Power and sandbox", bare ? "limited" : c === "works" ? "working" : c === "broken" ? "failed" : "ended", "sandbox " + (bare ? "off" : c === "works" ? "on" : c === "broken" ? "not working" : "unknown"));
   }
+  if (can("tier")) { const p = pausedTiers(); if (p) dot("Work tiers", "paused", p); }
   if (o) { const n = Object.keys(o.sites || {}).length + o.hosts.length; dot("Access from outside", n ? "working" : "off", n ? "set up" : "off"); }
   return d;
 }
 
 export default {
   id: "settings", label: "Settings", about: "accounts, modules, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update);
+  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
   },
-  back(ctx) { loadCfg(ctx); loadPhone(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update); },   // what enter reads, without enter's clearing: what the person is typing stays
+  back(ctx) { loadCfg(ctx); loadPhone(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update); },   // what enter reads, without enter's clearing: what the person is typing stays
   leave() { clearInterval(upTimer); upTimer = null; forget(); forgetSecrets(); },
   render(ctx) {
     if (S.app.can == null) return h("div", { class: "page", "data-width": "narrow" }, waiting(S.failed));   // /api/app hasn't answered: don't say "only in the app" yet
     if (!S.app.app) return h("div", { class: "page", "data-width": "narrow" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));
     const hive = hiveSection(ctx), [everyday, setOnce] = Array.isArray(hive) ? hive : [hive, null];
-    const secs = [everyday, loginsSection(ctx), useSection(), ...setupSections(ctx), secretsSection(ctx), viewSection(ctx), setOnce, modulesSection(ctx), accessSection(ctx)].filter(Boolean);
+    const secs = [everyday, loginsSection(ctx), useSection(), tiersSection(ctx), ...setupSections(ctx), secretsSection(ctx), viewSection(ctx), setOnce, modulesSection(ctx), accessSection(ctx)].filter(Boolean);
     const header = pageHeader({ title: "Settings" });
     if (!secs.length) return form({ header, sections: [empty("This connection can't change any settings.")] });
     const nav = secs.map(n => n.getAttribute("aria-label")), dots = navDots(ctx);

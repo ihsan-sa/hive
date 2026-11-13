@@ -4,6 +4,10 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Tall videos show whole in the preview
+
+A video taller than the preview panel, such as a phone clip or a 9:16 story, ran off the bottom of the panel, so its lower part was cut off. It now fits the height of the panel, the way a picture does.
+
 ## Modules update by themselves
 
 A module you added from the catalog now takes new releases on its own, the same way the Hive does and at the same pace. Each release is signed and passed its checks first. A module with your own changes in it is left alone, and one that fails to start after an update goes back to the version it was running.

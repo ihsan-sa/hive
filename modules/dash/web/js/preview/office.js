@@ -60,8 +60,16 @@ export async function xlsx(buf) {
   if (!sheets.length) throw new Error("it has no sheets");
   async function rowsOf(path) {
     const d = await read(z, path), rows = []; let width = 0;
+    const colInfo = [];   // per column: { w: width in characters, hide }
+    for (const c of all(d, "col")) {
+      const lo = (+c.getAttribute("min") || 1) - 1, hi = Math.min((+c.getAttribute("max") || lo + 1) - 1, COLS_MAX - 1);
+      const w = parseFloat(c.getAttribute("width")), hide = /^(1|true)$/.test(c.getAttribute("hidden") || "");
+      for (let i = lo; i <= hi; i++) colInfo[i] = { w: isNaN(w) ? 0 : w, hide };
+    }
+    const hiddenRows = new Set();
     for (const r of all(d, "row")) {
       const at = (+r.getAttribute("r") || rows.length + 1) - 1; if (at >= ROWS_MAX) break;
+      if (/^(1|true)$/.test(r.getAttribute("hidden") || "")) { hiddenRows.add(at); continue; }
       const row = rows[at] = [];
       for (const c of kids(r, "c")) {
         const ci = c.getAttribute("r") ? colNum(c.getAttribute("r")) : row.length; if (ci >= COLS_MAX) continue;
@@ -70,8 +78,12 @@ export async function xlsx(buf) {
         width = Math.max(width, ci + 1);
       }
     }
-    const filled = Array.from(rows, r => Array.from({ length: width }, (_, i) => (r && r[i] != null ? String(r[i]) : "")));
+    // hidden columns go, and so do columns with nothing in them at all (a sheet's styled-but-empty tail)
+    const keep = [...Array(width).keys()].filter(i => !colInfo[i]?.hide && rows.some(r => r && r[i] != null && String(r[i]) !== ""));
+    const filled = [];
+    for (let at = 0; at < rows.length; at++) if (!hiddenRows.has(at)) { const r = rows[at]; filled.push(keep.map(i => (r && r[i] != null ? String(r[i]) : ""))); }
     while (filled.length && filled[filled.length - 1].every(x => x === "")) filled.pop();
+    filled.widths = keep.map(i => colInfo[i]?.w || 0); filled.letters = keep.map(colName);
     return filled;
   }
   const box = h("div", { class: "pv-sheet" }), tabs = h("div", { class: "pv-tabs", role: "tablist", "aria-label": "Sheets" });
@@ -79,8 +91,9 @@ export async function xlsx(buf) {
     for (const [j, b] of [...tabs.children].entries()) b.setAttribute("aria-selected", String(j === i));
     const rows = await rowsOf(sheets[i].path);
     if (!rows.length) return box.replaceChildren(h("p", { class: "meta" }, "This sheet is empty."));
-    const head = rows[0].every(x => x !== "") ? rows : [rows[0].map((_, c) => colName(c)), ...rows];
-    box.replaceChildren(h("div", { class: "rc-block" }, drawTable(head, sheets[i].name, {}, { col: -1, dir: 1, q: "", shown: 500 })));
+    const head = rows[0].every(x => x !== "") ? rows : [rows.letters, ...rows];
+    head.widths = rows.widths;
+    box.replaceChildren(h("div", { class: "rc-block rc-sheet" }, drawTable(head, sheets[i].name, {}, { col: -1, dir: 1, q: "", shown: 500 })));
   }
   sheets.forEach((s, i) => tabs.append(h("button", { type: "button", role: "tab", class: "pv-tab", onclick: () => pick(i) }, s.name)));
   await pick(0);
