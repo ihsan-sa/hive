@@ -54,7 +54,7 @@ const finished = c => c.done && (c.ok || c.ok === undefined);   // ok undefined:
 const todoNote = c => c.done && !finished(c) ? h("span", { class: "fp-tnote" }, "ticked by you · an agent will check it")
   : !c.done && c.why ? h("span", { class: "fp-tnote" }, "reopened: " + c.why) : null;
 const todoList = (rows, id, ctx) => h("ul", { class: "fp-todo" }, rows.map(c => h("li", { "data-key": "c:" + (c.id || c.text), "data-done": finished(c) ? "" : null, "data-ticked": c.done && !finished(c) ? "" : null }, box(c, ctx),
-  h("span", null, say(c.done ? c.text.replace(/^For you:\s*/i, "") : c.text), c.focus && c.focus !== id ? h("span", { class: "meta" }, " · ", focusName(c.focus)) : null, todoNote(c)), c.done ? when(c.done * 1e3, "t", "ticked") : h("span"))));
+  h("span", null, say(scrub(c.done ? c.text.replace(/^For you:\s*/i, "") : c.text)), c.focus && c.focus !== id ? h("span", { class: "meta" }, " · ", focusName(c.focus)) : null, todoNote(c)), c.done ? when(c.done * 1e3, "t", "ticked") : h("span"))));
 const todoSec = (checks, id, ctx) => {
   const open = checks.filter(c => !finished(c)), fin = checks.filter(finished).sort((a, b) => b.done - a.done);
   return [open.length ? null : h("p", { class: "fp-calm" }, "Everything on the list is done."), todoList([...open, ...fin], id, ctx)];   // done ones inline, struck through, last

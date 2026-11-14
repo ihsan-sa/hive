@@ -134,10 +134,15 @@ export const isCode = w => isAgent(w) || CODE.test(w);
 export const noAskIds = text => String(text || "")
   .replace(/\s*\(\s*k\d{4}(?:\s*(?:,|;|\/|&|and)\s*k\d{4})*\s*\)/g, m => (m.match(/k\d{4}/g).some(isAgent) ? m : ""))
   .replace(/\bk\d{4}'s\s+/g, m => (isAgent(m.slice(0, 5)) ? m : "the ")).replace(/\bk\d{4}\b/g, w => (isAgent(w) ? w : "an ask"));
-/** The text with post ids, ask ids and a leading step word taken out, and the punctuation they leave tidied. */
+// A ladder step's id: R14, R107b, R-1110f-b, R-1111-r18a, and the two-letter kinds (IM-1b, WT-1, SU-1b). A leading one ("R-1110f-b: the stop…")
+// or a bracket of nothing but them ("… on thread open (R107)") goes; one inside a sentence stays, since taking it out would break the sentence.
+const STEP = String.raw`(?:R-?\d+(?:[a-z]|-[a-z0-9]+)*|[A-Z]{2}-\d+[a-z]?)`;
+const STEP_LEAD = new RegExp(String.raw`^\s*(?:rung\s+)?${STEP}(?:\s*(?:,|and|\+|&|\/)\s*${STEP})*\s*[:.–-]\s+(\S)`, "i");
+const STEP_BRACKET = new RegExp(String.raw`\s*\(\s*(?:rung\s+)?${STEP}(?:\s*(?:,|;|and|\+|&|\/)\s*${STEP})*\s*\)`, "g");
+/** The text with post ids, ask ids and a leading or bracketed step id taken out, and the punctuation they leave tidied. */
 export function scrub(text) {
   return noAskIds(String(text || "")
-    .replace(/^\s*(?:rung\s+)?R\d+[a-z]?(?:\s*(?:,|and|\+|&|-|–|\/)\s*R\d+[a-z]?)*\s*[:.–-]\s+(\S)/i, (m, c) => c.toUpperCase())
+    .replace(STEP_LEAD, (m, c) => c.toUpperCase()).replace(STEP_BRACKET, "")
     .replace(/\s*\((?:post\s+)?[0-9a-f]{12}\)/g, "")
     .replace(/(?:\b(?:in|from|see|at)\s+)?\bpost\s+[0-9a-f]{12}\b/gi, "")
     .replace(/(^|[\s(:,])(?:(?:on|in|from|at|see|by)\s+)?[0-9a-f]{12}\b/g, "$1"))

@@ -12,9 +12,13 @@ function set(e, props) {
     else if (k === "class") e.setAttribute("class", Array.isArray(v) ? v.filter(Boolean).join(" ") : v);
     else if (k === "value") { e._v = String(v); e.value = String(v); }
     else if (k === "checked") { e._c = !!v; e.checked = !!v; if (v) e.setAttribute("checked", ""); }
-    else e.setAttribute(k, v === true ? "" : v);
+    else e.setAttribute(k, v === true ? "" : lang && typeof v === "string" && LANG_ATTRS.has(k) ? lang(v) : v);
   }
 }
+// The interface language (core/lang.js): a lookup for the app's own words, applied as elements are built, so a re-render never flips them back.
+let lang = null;
+const LANG_ATTRS = new Set(["placeholder", "title", "aria-label"]);
+export const setLang = f => { lang = f; };
 let textMap = null;
 /** Optional display rewrite for every text node (the names easter egg). */
 export const setTextMap = f => { textMap = f; };
@@ -22,7 +26,7 @@ function add(e, kids) {
   for (const c of kids) {
     if (c == null || c === false || c === true) continue;
     if (Array.isArray(c)) add(e, c);
-    else e.append(c.nodeType ? c : document.createTextNode(textMap ? textMap(String(c)) : String(c)));
+    else e.append(c.nodeType ? c : document.createTextNode(textMap ? textMap(lang ? lang(String(c)) : String(c)) : lang ? lang(String(c)) : String(c)));
   }
 }
 

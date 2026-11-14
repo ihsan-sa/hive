@@ -1303,6 +1303,7 @@ function showSays(mask) {
 let opened = "";   // the thread the beacon last went out for; leaving the page forgets it
 export default {
   id: "comms", label: () => (app() ? "Chat" : "Comms"),
+  title: a => (a === "~list" ? (app() ? "Conversations" : "Threads") : a === "~new" ? (app() ? "New conversation" : "New thread") : null),   // the tab's title (app.js where): a thread is named by its h1
   tab: true,
   badge: () => { if (!app() || !S.live) return null; if (!simpleOn()) { loadFoci(); loadNeedsYou(); } if (!needsKnown()) return null; const n = needsN(); return n ? String(n) : null; },
   poll: { every: 3000, run: async ctx => { if (await pollDelivered()) ctx.update(); } },

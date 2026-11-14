@@ -351,7 +351,7 @@ def end_decision(name, rec, post):
     (these checks are once-only, so what they say can't wait for a Stop that would no longer repeat it). A post handed over by a tool call beside this
     one holds it first: ending would throw it away unread, and the starter counts it as delivered. The reply call this saves is 1.46% of run money."""
     if delivered_since(name, post_time(post) - END_FRESH_S): why = "A post reached you around this one, so read it first."
-    else: why = "\n\n".join(x for x in (unanswered(name, rec) or owns_open(name, rec), stop_gate(name, rec), focus_nudge(name, rec)) if x)
+    else: why = "\n\n".join(x for x in (unanswered(name, rec) or owns_open(name, rec), stop_gate(name, rec), rungs_owed(name, rec), focus_nudge(name, rec)) if x)
     if why:
         d = STATE / "end-held"; d.mkdir(parents=True, exist_ok=True); (d / name).write_text(post["id"])
         return "Not ended on that post, because:\n\n" + why
@@ -448,6 +448,36 @@ def stop_gate(name, rec, t=None):
             f"hive status {thread} <<'X'\n{line1}\nBlocked: on what, and who has it\nX\n"
             "If none holds (a step is finished but the goal has a next one you can take, or the work got hard or long), don't stop: "
             "take the next step, and give the reason when one is true.")
+
+def rungs_owed(name, rec):
+    """Once per run, at Stop: a keeper brief that said "The ladder has no rung you can take" asks the run to write the next 3 to 5
+    rungs; a run whose goals file was not touched since it woke is sent back once to write them (hive-meta R11e: such runs graded
+    "nothing" stopped without a rung). The file's path is read from the brief itself; a missing file counts as untouched."""
+    if os.environ.get("HIVE_DOOR") or not rec.get("at") or WARDEN.fullmatch(name): return None
+    f = STATE / "rungs-asked" / name
+    try:
+        if f.read_text().strip() == rec["at"]: return None
+    except OSError: pass
+    try:
+        import focus
+        ids = {rec.get("post")} | {s.get("id") for s in rec.get("slept") or [] if isinstance(s, dict)}
+        brief = next((p.get("text") or "" for p in focus.board_posts() if p.get("id") in ids - {None}
+                      and "The ladder has no rung you can take" in (p.get("text") or "")), None)
+        if not brief: return None
+        m = re.search(r"section of (\S+?): read that whole file", brief)
+        if not m: return None
+        path = Path(os.path.expanduser(m.group(1)))
+        if not path.is_absolute(): path = HOME / path
+        at = dt.datetime.fromisoformat(rec["at"]); since = (at if at.tzinfo else at.replace(tzinfo=dt.timezone.utc)).timestamp()
+        try:
+            if path.stat().st_mtime > since and "- [ ]" in path.read_text(): return None
+        except OSError: pass
+        f.parent.mkdir(parents=True, exist_ok=True); f.write_text(rec["at"])
+        with (STATE / "rungs-asked.jsonl").open("a") as lg: lg.write(json.dumps({"at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "name": name, "run": rec["at"], "goals": str(path)}) + "\n")
+    except Exception: return None
+    return (f"Your keeper brief said the ladder had no rung you could take, and {path} has no new open rung since you woke. "
+            "Before you stop, write the next 3 to 5 rungs there (`- [ ] ... check: ...`, from the measure in that file), do the first one, "
+            "and post the result. If the ladder is truly finished, say so in the thread and why. Asked once; the next stop goes on.")
 
 def focus_nudge(name, rec):
     """A reminder at Stop when the run posted a result in a thread that is in a focus whose summary is older than that result
@@ -617,7 +647,7 @@ def main():
             why = end_decision(name, rec, end)
             print(json.dumps({"continue": False, "stopReason": "ended on its post (hive post --end)"} if why is None else {"hookSpecificOutput": {"hookEventName": event, "additionalContext": why}}))
             return
-        if event == "Stop" and (why := "\n\n".join(x for x in (unanswered(name, rec) or open_at_stop(name, rec), stop_gate(name, rec)) if x)):
+        if event == "Stop" and (why := "\n\n".join(x for x in (unanswered(name, rec) or open_at_stop(name, rec), stop_gate(name, rec), rungs_owed(name, rec)) if x)):
             print(json.dumps({"decision": "block", "reason": "\n\n".join(x for x in (why, focus_nudge(name, rec)) if x)}))
         elif event == "Stop" and (fn := focus_nudge(name, rec)):
             print(json.dumps({"decision": "block", "reason": fn}))

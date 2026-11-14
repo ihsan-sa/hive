@@ -1,5 +1,6 @@
 // App: mounts the shell, routes, and re-renders the current view when data or the route changes.
 // Rendering is a morph of a freshly built tree onto the live one: only changed nodes are touched.
+import "./core/lang.js";   // first: the interface language has to be set before anything is built
 import { brandIcon, brandName } from "./core/brand.js";
 import { dropFiles } from "./ui/dropfiles.js";
 import { S, can, needsAccount, onOwnFail, setupDone, start, subscribe } from "./core/store.js";
@@ -31,7 +32,6 @@ let cur = home(), arg = null, raf = 0, timer = 0, entered = false;   // entered:
 const ctx = { update: () => schedule(true), get arg() { return arg; } };
 
 function render(force) {
-  if (S.live) document.title = brandName() ? `${brandName()} · ${S.live.agents.length} running` : `Hive · ${S.live.agents.length} running`;
   brandIcon();
   mount(top, topBar({ views, current: cur.id, update: ctx.update, nav: simpleOn() ? SIMPLE_NAV : APP_NAV }));
   setView(cur.id, arg);   // body[data-view]: css/phone.css hides the bars in a conversation or a file
@@ -40,11 +40,34 @@ function render(force) {
   let page;
   try { page = cur.render(ctx); } catch (e) { console.error("view " + cur.id + " failed:", e); page = crashPage(cur, e); }
   mount(main, page);
+  where();
   // On a phone the page head's row (.subnav) scrolls sideways: bring the page you are on into view once, when you arrive. Sideways only, so it never moves the page.
   const here = main.querySelector(".subnav a[aria-current=page]"), row = here && here.parentNode;
   if (row && (centred !== cur.id || row !== centredRow)) { centred = cur.id; centredRow = row; centreTab(here, row); }
   else if (!row) centred = centredRow = null;
 }
+// Every screen says where you are (WCAG 2.4.2, 2.4.6, 1.3.1): the tab's title names this screen, then its page, then the brand; a screen with no h1 of its own
+// (a chart page, or a phone layout that hides the page head) gets a screen-reader-only one before main, so each screen has exactly one.
+const line = e => (e && (e.innerText || e.textContent) || "").split("\n")[0].replace(/\s+/g, " ").trim();
+const clip = s => (s.length > 60 ? s.slice(0, 59).trimEnd() + "…" : s);
+const shown = e => e.getClientRects().length > 0;
+const h1 = document.body.insertBefore(Object.assign(document.createElement("h1"), { id: "screen-h1", className: "vh" }), main);
+function screenName() {
+  const page = typeof cur.label === "function" ? cur.label() : cur.label;
+  let inner = cur.title ? cur.title(arg) : null;
+  if (inner == null) {
+    const head = [...main.querySelectorAll("h1")].find(shown), sub = main.querySelector(".subnav a[aria-current=page]") || main.querySelector("nav a[aria-current=page] > span");   // a section menu (Settings) keeps its name in the link's first span, a status note after it
+    inner = arg ? [line(head), line(sub)].find(x => x && x !== page) || decodeURIComponent(arg).split("/").pop() : line(sub);
+  }
+  return [clip(inner || ""), page].filter((x, i, a) => x && a.indexOf(x) === i).join(" · ");
+}
+function where() {
+  const name = screenName(), brand = brandName() || "Hive";
+  document.title = `${name} · ${brand}` + (S.live ? ` · ${S.live.agents.length} running` : "");
+  const own = [...main.querySelectorAll("h1")].some(shown);
+  h1.hidden = own; if (!own && h1.textContent !== name) h1.textContent = name;
+}
+addEventListener("resize", () => where());   // a phone layout can hide or show the page's own head
 const centreTab = (here, row) => { const a = here.getBoundingClientRect(), r = row.getBoundingClientRect(); row.scrollLeft += a.left - r.left - (r.width - a.width) / 2; };
 // Turning a phone or narrowing the window makes the row scroll where it fitted before, so the page you are on is brought into view again. Width only: a phone's keyboard changes the height.
 let tabW = innerWidth, tabT = 0;

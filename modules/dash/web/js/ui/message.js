@@ -17,6 +17,7 @@ import { button, icon, statusDot, copyPress, scrim } from "./kit.js";
 import { replyTo, draft, quoteRef } from "./composer.js";
 import { wordButton } from "./rootword.js";
 import { voiceMemo, VOICE } from "./voicememo.js";
+import { readAloud, stopReading, reading } from "./speak.js";
 import { openPreview, previewKey, kindOf, badgeOf, remember } from "./preview.js";
 
 // ---- read marks ----
@@ -570,6 +571,9 @@ function toolsMenu(p, ws) {
     can("post") ? item("Quote", () => { closeMenu(); quoteRef(p.th, { who: who(p.from), where: clock(p.t), text: quoteText(p) }); }, "Selected words, or the first lines", "msg-quote") : null,
     item("Copy link", (e, b) => { copyText(linkOf(p)); closeMenu(); }, null, "msg-link"),
     item("Copy as Markdown", () => { copyText(displayText(p)); closeMenu(); }),
+    p.from !== "person" && (window.speechSynthesis || (S.app && S.app.phone)) ? (reading(p.id)
+      ? item("Stop reading", () => { stopReading(); closeMenu(); }, null, "msg-read")
+      : item("Read aloud", () => { readAloud(p.id, displayText(p)); closeMenu(); }, null, "msg-read")) : null,
     item("Open in Yours", () => { closeMenu(); location.hash = "#yours"; }, null, "msg-yours"),
     item(SOURCE.has(p.id) ? "Back to the post" : "View source", (e, b) => {
       const was = b.closest(".msg")?.querySelector(".msg-b"); closeMenu();

@@ -729,7 +729,7 @@ export default {
     syncReplay();
     const showEmpty = !M.lanes.length && (M.active || !M.more.length);
     if (!showEmpty) syncGraph(D);
-    const chart = h("main", { class: "map-chart" }, showEmpty ? emptyEl(D) : keep(stage), M.tile ? null : replayEl);
+    const chart = h("div", { class: "map-chart" }, showEmpty ? emptyEl(D) : keep(stage), M.tile ? null : replayEl);
     const root = h("div", { class: "map", "data-key": "mesh", "data-tile": M.tile ? "" : null, "aria-label": "Map: " + M.count },
       M.tile ? null : navBox(), M.tile ? null : toolbar(), h("div", { class: "map-bd" }, chart, M.tile ? null : sidePane(D)));
     // the live element is found after the page puts it in place

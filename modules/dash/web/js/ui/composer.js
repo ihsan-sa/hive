@@ -413,7 +413,7 @@ function recBar(th) {
     h("span", { class: "cp-wavebox", "data-key": "wave", "data-own": "", "data-sig": "w", "data-state": REC.state }, h("canvas", { class: "cp-wave", "aria-label": "Live recording level" })),
     h("span", { class: "meta cp-rtime", "data-key": "rtime", "aria-live": "off" }, recTime()),
     keyed("rec", button("Send the voice memo", guard(() => recStop(true)), { kind: "icon", size: "s", icon: "stop", cls: "cp-rec", title: "Stop and send the voice memo with what you've typed." }))];
-  const b = keyed("mic", button("Record a voice memo", guard(() => recStart(th)), { kind: "icon", size: "s", icon: "mic", cls: "cp-mic", title: "Record a voice memo: press to start, press again to send, or hold to talk and let go. It is transcribed and summarized on the machine's GPU." }));
+  const b = keyed("mic", button("Record a voice memo", guard(() => recStart(th)), { kind: "icon", size: "s", icon: "mic", cls: "cp-mic", title: "Record a voice memo: press to start, press again to send, or hold to talk and let go. It is transcribed and summarized on the machine your Hive runs on." }));
   b._on = { ...b._on, pointerdown: e => micDown(th, e) };
   return b;
 }
@@ -819,14 +819,16 @@ const secretsOn = () => can("secrets") || !!(S.app && S.app.secrets_on && S.app.
 /** +: files, a voice memo, a secret, a call; at home, Name it…; on a phone, Text size (Aa is hidden there). */
 function addPop(th, d) {
   const open = CP.menu === "add", then = f => (e, b) => { const cp = b.closest(".cp"); CP.menu = false; refresh(); f(cp); };
-  const voice = !!(S.app && S.app.voice), call = phoneReady() && !inCall();
+  // Off items say why (everyday E18f): the browser lends a microphone only to https or localhost, and voice may still be building or not on this install.
+  const mic = !!(window.isSecureContext && navigator.mediaDevices), voice = !!(S.app && S.app.voice) && mic, call = phoneReady() && !inCall();
+  const why = ready => !mic ? "The microphone needs https, or this computer" : ready ? null : "Not set up yet: see Settings › This device";
   return h("div", { class: "pop cp-addpop", "data-key": "add" },
     h("button", { type: "button", class: "btn cp-attach", "data-kind": "icon", "data-size": "s", "aria-label": "Attach", title: "Attach files, a voice memo or a secret", "aria-haspopup": "menu", "aria-expanded": String(open), onclick: toggleRoom("add") }, icon("plus")),
     open ? h("div", { class: "menu cp-addmenu", role: "menu", "aria-label": "Add to the message", "data-side": sideFor("add"), "data-key": "am" },
       menuItem("Files from this device", "Or paste or drop them in the box", then(cp => cp.querySelector(".cp-pick").click()), { ic: "file", key: "files" }),
-      menuItem("Voice memo", "Transcribed on this computer", then(() => recStart(th)), { ic: "mic", key: "voice", off: !voice }),
+      menuItem("Voice memo", voice ? "Transcribed on this computer" : why(S.app && S.app.voice), then(() => recStart(th)), { ic: "mic", key: "voice", off: !voice }),
       menuItem("A secret", "Saved on this computer; only its name is posted", then(() => secretClick(th)), { ic: "lock", key: "secret", off: !secretsOn() }),
-      menuItem("Voice call", th ? "A new agent picks up, reads this conversation and talks with you" : "Talk with the Hive", then(() => startCall(th ? { thread: th } : {})), { ic: "phone", key: "call", cls: "cp-call", off: !call }),
+      menuItem("Voice call", !call && !inCall() ? why(false) : th ? "A new agent picks up, reads this conversation and talks with you" : "Talk with the Hive", then(() => startCall(th ? { thread: th } : {})), { ic: "phone", key: "call", cls: "cp-call", off: !call }),
       !th && !simpleOn() ? [menuSep("sep-n"), menuItem("Name it…", "Otherwise it is called by its first words", then(() => { d.naming = true; refresh(); queueMicrotask(() => document.querySelector(".cp-name")?.focus()); }), { ic: "edit", key: "name" })] : null,
       h("div", { class: "only-phone", "data-key": "ph", role: "presentation" }, menuSep("sep-t"),
         menuItem("Text size", null, () => { const i = SIZES.findIndex(s => s[0] === readScale()); setRead(SIZES[(i + 1) % SIZES.length][0]); }, { key: "size", right: sizeWord(), title: "Text size in conversations; press again for the next size" }))) : null);

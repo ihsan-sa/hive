@@ -234,7 +234,7 @@ export default {
         seg(LINKS, K.show, v => { K.show = v; K.update(); }, { label: "Links" }),
         h("span", { class: "map-sum", role: "status" }, `${plural(D.notes.length, "note")} ever · ${plural(D.commits, "backup commit")} touched ~/kb`)),
       h("div", { class: "map-bd" },
-        h("main", { class: "map-chart" },
+        h("div", { class: "map-chart" },
           h("div", { class: "map-stage kbt-stage" }, h("div", { class: "map-cap", "data-cut": K.cut != null ? "" : null }, K.cut == null ? "Now" : "As recorded at " + stamp(t)), h("div", { class: "kbt-sc" }, graph(t))),
           slider()),
         h("aside", { class: "map-side" }, sn ? noteSide(sn, t) : sl ? linkSide(sl, t) : overview(t))));

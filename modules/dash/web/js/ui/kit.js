@@ -59,7 +59,7 @@ export function section({ title, note, info, actions, id, key, level, fold, summ
   const fk = fold && (key || id || title);
   if (fold) return h("details", { class: "fold-row", id: id || null, "data-key": key || null, open: FOLDS.get(fk) ? "" : null, ontoggle: e => { FOLDS.set(fk, e.target.open); } },
     h("summary", null, icon("chevron-right"), title, summary ? h("small", null, summary) : null), h("div", { class: "fold-in" }, body));
-  return h("section", { class: "sec", id: id || null, "data-key": key || null, "data-level": level || null, "aria-label": title || null },
+  return h("section", { class: "sec", id: id || null, "data-key": key || null, "data-level": level || null, "aria-label": title || null, "data-name": title || null },
     title ? h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, title), info ? infoButton("About " + title, info) : null, note ? h("span", { class: "sec-n", title: typeof note === "string" ? note : null }, note) : null, actions ? h("div", { class: "sec-a" }, actions) : null) : null,
     body);
 }

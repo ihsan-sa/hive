@@ -43,9 +43,9 @@
 .cm-msgs .msg-b{font-size:var(--fs-read);line-height:var(--lh-read)}
 .cm-msgs .md[data-rich]{line-height:var(--lh-read)}
 .cm-msgs .md[data-rich] p{margin:.7em 0}
-.cm-msgs .md[data-rich] h1{font-size:1.2em;margin:1.4em 0 .45em}
-.cm-msgs .md[data-rich] h2{font-size:1.067em;margin:1.5em 0 .4em}
-.cm-msgs .md[data-rich] h3,.cm-msgs .md[data-rich] h4{font-size:1em;margin:1.3em 0 .3em}
+.cm-msgs .md[data-rich] .md-h1{font-size:1.2em;margin:1.4em 0 .45em}
+.cm-msgs .md[data-rich] .md-h2{font-size:1.067em;margin:1.5em 0 .4em}
+.cm-msgs .md[data-rich] .md-h3,.cm-msgs .md[data-rich] .md-h4{font-size:1em;margin:1.3em 0 .3em}
 .cm-msgs .md[data-rich]>:first-child{margin-top:0}
 .cm-msgs .md[data-rich] ul,.cm-msgs .md[data-rich] ol{margin:.6em 0;padding-left:1.4em}
 .cm-msgs .md[data-rich] li{margin:.3em 0}

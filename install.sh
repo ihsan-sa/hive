@@ -215,18 +215,33 @@ if [ "$SERVICE" = 1 ]; then
 fi
 # Voice calls and memos come with a new Hive (Linux, first install only), built in the background once the app is up: CPU by default, the NVIDIA GPU where there is one.
 # Never fatal and never waited on. Too little disk or memory, HIVE_VOICE=0, or a Hive in a folder of someone's account (the multi-GB build is theirs to ask for), skips it; ~/.hive-voice-added makes a later removal stick. The Call button shows once it is built.
-if [ ! -e "$HOME/.hive-installed" ] && [ ! -e "$HOME/.hive-account" ] && [ ! -e "$HOME/.hive-voice-added" ] && [ "${HIVE_VOICE:-1}" != 0 ] && [ "$SERVICE" = 1 ] && [ "$(uname -s)" = Linux ] && ! grep -qi microsoft /proc/version 2>/dev/null; then
+# Settings > This device > Voice calls tells the person where it stands (modules/dash voice_view, projects/everyday/VOICE.md): a skip leaves its reason in ~/.hive/voice-skipped,
+# and the build leaves voice-setup.pid while it runs and voice-setup.rc (its exit code) when it ends. HIVE_VOICE=test with HIVE_VOICE_CMD runs the block without a service
+# and with that command in place of the real setup (the everyday harness: no download, no unit).
+vskip=""
+if [ -e "$HOME/.hive-installed" ] || [ -e "$HOME/.hive-voice-added" ]; then vskip=-   # not a first install: nothing to say here
+elif [ -e "$HOME/.hive-account" ]; then vskip=own-account
+elif [ "${HIVE_VOICE:-1}" = 0 ]; then vskip=off
+elif [ "$(uname -s)" != Linux ]; then vskip=not-linux
+elif grep -qi microsoft /proc/version 2>/dev/null; then vskip=wsl
+elif [ "$SERVICE" != 1 ] && [ "${HIVE_VOICE:-1}" != test ]; then vskip=no-service
+fi
+if [ -z "$vskip" ]; then
   if command -v nvidia-smi >/dev/null && timeout 10 nvidia-smi -L >/dev/null 2>&1; then need_gb=9; else need_gb=4; fi
   free_gb=$(df -Pk "$HOME" | awk 'NR==2{print int($4/1048576)}'); mem_gb=$(awk '/MemTotal/{print int($2/1048576)}' /proc/meminfo)
   if [ "${free_gb:-0}" -lt "$need_gb" ] || [ "${mem_gb:-0}" -lt 3 ]; then
+    vskip="small $need_gb ${free_gb:-?} ${mem_gb:-?}"
     echo "NOTE: skipping voice calls: they need ${need_gb} GB of free disk and 3 GB of memory (this has ${free_gb:-?} GB and ${mem_gb:-?} GB). Turn them on later: hive module add phone && phone setup."
   elif "$CORE/hive" module add phone >/dev/null && "$CORE/hive" module add voice >/dev/null; then
-    touch "$HOME/.hive-voice-added"; mkdir -p "$HOME/.hive"
-    ( export PATH="$HOME/.local/bin:$PATH"; nohup setsid sh -c 'phone setup; voice setup' >"$HOME/.hive/voice-setup.log" 2>&1 </dev/null & )
+    touch "$HOME/.hive-voice-added"; mkdir -p "$HOME/.hive"; rm -f "$HOME/.hive/voice-skipped" "$HOME/.hive/voice-setup.rc"
+    vcmd='phone setup; p=$?; voice setup; v=$?; [ $p = 0 ] && exit $v; exit $p'
+    [ "${HIVE_VOICE:-1}" = test ] && [ -n "${HIVE_VOICE_CMD:-}" ] && vcmd=$HIVE_VOICE_CMD
+    ( export PATH="$HOME/.local/bin:$PATH" VCMD="$vcmd"; nohup setsid sh -c 'echo $$ >"$HOME/.hive/voice-setup.pid"; sh -c "$VCMD"; echo $? >"$HOME/.hive/voice-setup.rc"' >"$HOME/.hive/voice-setup.log" 2>&1 </dev/null & )
     echo "NOTE: voice calls are installing in the background (a few minutes; log: ~/.hive/voice-setup.log). Remove: hive module remove phone voice."
     command -v ffmpeg >/dev/null || echo "NOTE: voice memos need ffmpeg, which isn't here: install it, then run: voice setup."
-  else echo "NOTE: the voice modules didn't install. Try again with: hive module add phone && phone setup."; fi
+  else vskip=failed-add; echo "NOTE: the voice modules didn't install. Try again with: hive module add phone && phone setup."; fi
 fi
+case "$vskip" in ""|-) ;; *) mkdir -p "$HOME/.hive" && echo "$vskip" >"$HOME/.hive/voice-skipped" ;; esac
 touch "$HOME/.hive-installed"  # only now: a failure above can be rerun
 
 # get.sh is around this, and says all of this itself.

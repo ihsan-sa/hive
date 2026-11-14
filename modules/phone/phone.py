@@ -961,6 +961,13 @@ class H(BaseHTTPRequestHandler):
                 try: import telnyx; telnyx.dial(r["id"]); r = {**r, "phone": True}
                 except Exception as e: r = {**r, "phone": False, "phone_error": str(e)[:200]}
             return self.out(r)
+        if p == "/say":   # text -> wav in the call voice, for Read aloud on a reply (VOICE.md V2)
+            text = str(self.jbody().get("text") or "").strip()[:4000]
+            if not text: return self.out({"error": "text: what to say"}, 400)
+            try: b = tts_wav(text)
+            except Exception as e: return self.out({"error": str(e)[:200]}, 503)
+            self.send_response(200); self.send_header("Content-Type", "audio/wav"); self.send_header("Content-Length", str(len(b)))
+            self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(b); return
         m = re.fullmatch(r"/ring/(\w+)/decline", p)
         if m: RINGS.pop(m[1], None); return self.out({"ok": True})
         m = re.fullmatch(r"/call/(\w+)/(turn|partial|text|transfer|end|interrupt|answer|say|hangup|mute|playback)", p)

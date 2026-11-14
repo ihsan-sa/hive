@@ -719,8 +719,8 @@ button.lr-in{width:calc(100% + 16px);border:0;background:none;text-align:left;fo
 .md{white-space:pre-wrap;overflow-wrap:anywhere}
 .md p{margin:.45em 0}
 .md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}
-.md h1,.md h2,.md h3,.md h4,.md h5,.md h6{margin:.7em 0 .25em;line-height:var(--lh-tight);font-weight:var(--w-bold)}
-.md h1{font-size:var(--fs-lead)}.md h2{font-size:var(--fs-title)}.md h3,.md h4{font-size:var(--fs-body)}.md h5,.md h6{font-size:var(--fs-body);color:var(--ink-2)}
+.md .md-h1,.md .md-h2,.md .md-h3,.md .md-h4,.md .md-h5,.md .md-h6{margin:.7em 0 .25em;line-height:var(--lh-tight);font-weight:var(--w-bold)}
+.md .md-h1{font-size:var(--fs-lead)}.md .md-h2{font-size:var(--fs-title)}.md .md-h3,.md .md-h4{font-size:var(--fs-body)}.md .md-h5,.md .md-h6{font-size:var(--fs-body);color:var(--ink-2)}
 .md ul,.md ol{margin:.35em 0;padding-left:1.5em}
 .md li{margin:.12em 0}.md li>p{margin:0}.md li>p+*{margin-top:.25em}
 .md code{font-family:var(--mono);font-size:.9em;padding:.05em .3em;border-radius:var(--r-s);background:var(--sunken)}
@@ -738,9 +738,9 @@ button.lr-in{width:calc(100% + 16px);border:0;background:none;text-align:left;fo
 .md[data-rich]{line-height:1.55;max-width:none}
 .md[data-rich]>p,.md[data-rich] section>p,.md[data-rich] li,.md[data-rich] blockquote{max-width:var(--measure);text-wrap:pretty}
 .md[data-rich] p{margin:.65em 0}
-.md[data-rich] h1{font-size:var(--fs-lead);margin:.2em 0 .35em}
-.md[data-rich] h2,.md[data-rich] summary{font-size:var(--fs-title);font-weight:var(--w-bold);line-height:var(--lh-tight)}
-.md[data-rich] h3{font-size:var(--fs-body);margin:1em 0 .25em}
+.md[data-rich] .md-h1{font-size:var(--fs-lead);margin:.2em 0 .35em}
+.md[data-rich] .md-h2,.md[data-rich] summary{font-size:var(--fs-title);font-weight:var(--w-bold);line-height:var(--lh-tight)}
+.md[data-rich] .md-h3{font-size:var(--fs-body);margin:1em 0 .25em}
 .md[data-rich] ul,.md[data-rich] ol{margin:.5em 0}
 .md[data-rich] li{margin:.22em 0}
 .md[data-rich] li>ul,.md[data-rich] li>ol{margin:.15em 0}
@@ -2586,9 +2586,9 @@ text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--in
 .pv-save .pv-menu{left:auto;right:0;top:calc(100% + 4px);min-width:11em}
 .pv-save:not([open]) .pv-menu{display:none}
 .pv-md>.md{max-width:72ch;font-size:var(--fs-read);line-height:1.65}
-.pv-md>.md h1{font-size:1.7em;margin:.2em 0 .5em;letter-spacing:-.01em}
-.pv-md>.md h2{font-size:1.3em;margin:1.5em 0 .4em;padding-bottom:.2em;border-bottom:1px solid var(--line)}
-.pv-md>.md h3{font-size:1.08em;margin:1.2em 0 .3em}
+.pv-md>.md .md-h1{font-size:1.7em;margin:.2em 0 .5em;letter-spacing:-.01em}
+.pv-md>.md .md-h2{font-size:1.3em;margin:1.5em 0 .4em;padding-bottom:.2em;border-bottom:1px solid var(--line)}
+.pv-md>.md .md-h3{font-size:1.08em;margin:1.2em 0 .3em}
 .pv-md>.md p,.pv-md>.md li{margin:.6em 0}
 .pv-md>.md table{display:block;overflow-x:auto;margin:1em 0;font-size:.92em}
 .pv-md>.md th,.pv-md>.md td{border:0;border-bottom:1px solid var(--line);padding:6px 12px}
@@ -2596,7 +2596,7 @@ text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--in
 .pv-md>.md tr:nth-child(even) td{background:color-mix(in srgb,var(--sunken) 45%,transparent)}
 /* library-style reading details: quotes with a bar, quiet rules, roomy lists, soft inline code, links that read as links */
 .pv-md>.md>:first-child{margin-top:0}
-.pv-md>.md h4{font-size:1em;margin:1.1em 0 .25em;color:var(--ink-2)}
+.pv-md>.md .md-h4{font-size:1em;margin:1.1em 0 .25em;color:var(--ink-2)}
 .pv-md>.md :is(ul,ol){margin:.6em 0;padding-left:1.6em}
 .pv-md>.md li>:is(ul,ol){margin:.2em 0}
 .pv-md>.md li::marker{color:var(--ink-3)}
@@ -2620,9 +2620,9 @@ text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--in
 .brought-w{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Chat messages read like a document (the person, 5 Nov: the library's markdown looks better): the reading look the preview panel uses (.pv-md), at chat size. */
 .msg-b>.md[data-rich]{line-height:1.65}
-.msg-b>.md[data-rich] h1{font-size:1.45em;margin:.2em 0 .5em;letter-spacing:-.01em}
-.msg-b>.md[data-rich] h2{font-size:1.2em;margin:1.3em 0 .4em;padding-bottom:.2em;border-bottom:1px solid var(--line)}
-.msg-b>.md[data-rich] h3{font-size:1.05em;margin:1.1em 0 .3em}
+.msg-b>.md[data-rich] .md-h1{font-size:1.45em;margin:.2em 0 .5em;letter-spacing:-.01em}
+.msg-b>.md[data-rich] .md-h2{font-size:1.2em;margin:1.3em 0 .4em;padding-bottom:.2em;border-bottom:1px solid var(--line)}
+.msg-b>.md[data-rich] .md-h3{font-size:1.05em;margin:1.1em 0 .3em}
 .msg-b>.md[data-rich] :is(h1,h2,h3):first-child{margin-top:0}
 .msg-b>.md[data-rich] .md-tw table{margin:.4em 0}
 .msg-b>.md[data-rich] .md-tw :is(th,td){border:0;border-bottom:1px solid var(--line);padding:6px 12px}
@@ -3448,3 +3448,4 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .tier-chip-s{font-weight:var(--w-reg,400)}
 .tier-intro { margin: 0 0 12px; }
 @media (max-width:640px){.tier-it .lr-in{flex-direction:column;align-items:stretch;gap:var(--s1)}.tier-it .frow-end{width:100%}.tier-it select.input{width:100%}}
+.voice-log{max-height:9rem;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--fs-meta);color:var(--ink-2);background:var(--sunken);border-radius:var(--r-s,6px);padding:var(--s2,8px);margin:var(--s2,8px) 0 0}

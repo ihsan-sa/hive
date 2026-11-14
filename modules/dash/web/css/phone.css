@@ -187,6 +187,7 @@
   .btn{min-height:40px}
   .btn.cm-need-a{min-height:44px;min-width:44px}   /* an Answer that opens the quick-answer panel: 44 px on a phone (r23) */
   .btn.nd-later,.btn.nd-moot,.yr-wb .btn,.fp-later-i .btn{min-height:44px}   /* Later, Not needed, Bring back: 44 px on a phone like Answer */
+  .tier-chip a{min-height:44px;margin-block:-14px}   /* a focus card's work-tier chip: a 44 px finger target, the chip itself stays its size */
   .btn[data-kind=icon]{position:relative}
   .btn[data-kind=icon]::before{content:"";position:absolute;inset:-4px}
   a,button{touch-action:manipulation}

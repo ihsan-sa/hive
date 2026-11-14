@@ -371,6 +371,7 @@ addEventListener("keydown", e => {
   if (box) { e.preventDefault(); box.focus(); box.select(); }
 });
 export default {
+  title: a => { const { path } = parse(a); if (!path) return null; let p = path; try { p = decodeURIComponent(path); } catch (e) {} return p.replace(/\/+$/, "").split("/").pop(); },   // the tab's title (app.js where): the file or folder open, by its path
   id: "knowledge", label: "Knowledge", about: "notes, modules, scripts and files", tab: () => !!S.app.app && can("files"),
   enter(ctx) { if (can("files")) refresh(ctx); },
   poll: { every: 30000, run(ctx) { if (can("files")) refresh(ctx); } },
