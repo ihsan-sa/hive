@@ -103,7 +103,9 @@ function waitingOnNow() {
   const st = S.threadStatus || {}, v = S.needsYou && !S.needsYou.absent ? S.needsYou : null;
   const drop = (v && v.brief && v.brief.dropped) || {};
   const open = th => { const l = live.get(th); return !(l && l.busy) && shownHere(th) && !(drop[th] && drop[th] >= ((st[th] && st[th].at) || 0)); };
-  for (const [th, l] of live) if (!l.busy) take({ th, text: liveText(l), t: l.st.post ? l.st.post.t : l.d.last, src: "live", st: l.st, post: l.st.post ? l.st.post.id : null });
+  // An agent can withdraw its own live question with a summary drop: a drop newer than the question settles it (a fade doesn't: the Haiku pass fades often and a person's mark only greys).
+  const withdrawn = (th, l) => !!(drop[th] && l.st.post && drop[th] * 1e3 >= l.st.post.t);
+  for (const [th, l] of live) if (!l.busy && !withdrawn(th, l)) take({ th, text: liveText(l), t: l.st.post ? l.st.post.t : l.d.last, src: "live", st: l.st, post: l.st.post ? l.st.post.id : null });
   // The summary's bullets are the agents' own words for what they put to the person (the person, 11071606f4d4: the card shows these), so they count as long as the summary keeps them.
   for (const f of (S.foci && S.foci.foci) || []) for (const [i, b] of ((f.summary && f.summary.needs) || []).entries()) if (b) take({ th: f.thread || f.id, text: b, t: ((((f.summary.needs_at || [])[i] || f.summary.at) || 0) * 1e3) || now(), src: "summary", focus: f.id, key: `sum:${f.id}:${i}` });
   if (!simpleOn()) {

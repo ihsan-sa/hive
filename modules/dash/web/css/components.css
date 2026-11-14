@@ -3210,6 +3210,7 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .fc:hover .fc-tools .btn,.fc:focus-within .fc-tools .btn{opacity:1}
 @media (hover:none){.fc-tools .btn{opacity:1}}
 .fc-ev{grid-template-columns:48px minmax(0,1fr)}
+.fc-ev .t{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}   /* the time is the only copy on the row: with wider text spacing it wraps, never cuts to "32m a…" (WCAG 1.4.12, drive_app_spacing) */
 .fc-ev-x .pill.ref,.fc-ev-x .ref{background:none;padding:0;border:0;height:auto;font-family:var(--mono);font-weight:var(--w-bold);color:var(--ink)}
 .fc-sub{display:none}                            /* "Now", "Lately", "Conversations" labels: the ink step and the rule say it */
 .fc-rows{border-top:1px solid var(--line);padding-top:6px}
