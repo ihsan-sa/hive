@@ -968,6 +968,14 @@ class H(BaseHTTPRequestHandler):
             except Exception as e: return self.out({"error": str(e)[:200]}, 503)
             self.send_response(200); self.send_header("Content-Type", "audio/wav"); self.send_header("Content-Length", str(len(b)))
             self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(b); return
+        if p == "/transcribe":   # dictation (VOICE.md V3): 16 kHz mono int16 from the composer -> its words, to edit before Send; nothing is posted
+            pcm = self.body()
+            if len(pcm) > 32000 * 600: return self.out({"error": "too long: up to 10 minutes"}, 413)
+            info = {}
+            try: text = stt(pcm, info=info)
+            except Exception as e: return self.out({"error": str(e)[:200]}, 503)
+            print(f"phone: dictation {len(pcm) / 32000:.1f}s, {len(text or '')} chars", flush=True)
+            return self.out({"text": text or "", "seconds": round(len(pcm) / 32000, 1), **({"why": "not the enrolled voice"} if info.get("not_person") else {})})
         m = re.fullmatch(r"/ring/(\w+)/decline", p)
         if m: RINGS.pop(m[1], None); return self.out({"ok": True})
         m = re.fullmatch(r"/call/(\w+)/(turn|partial|text|transfer|end|interrupt|answer|say|hangup|mute|playback)", p)

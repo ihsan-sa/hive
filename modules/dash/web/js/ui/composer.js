@@ -327,12 +327,15 @@ export const actions = {
 // Seamless (the person, 11042046fbe8): the bar switches to recording on pointerdown, before the mic opens; pressing the
 // mic again (or letting go after holding it) sends the memo with whatever is typed; × throws it away; Esc too.
 // The waveform canvas sits in a data-own span so re-renders never reset it, and the timer is written straight to the DOM.
-const REC = { gen: 0, state: null, rec: null, stream: null, chunks: [], t0: 0, th: undefined, sendOnStop: true, down: 0, ctx: null };
-function recStart(th) {
-  if (REC.state) return;
+// Dictation (VOICE.md V3, everyday E18i): with the phone service ready the same mic is in "text" mode: the recording goes to
+// the phone's Whisper on the machine (/api/phone/transcribe, 16 kHz mono PCM) and its words land in the box to edit before Send.
+const REC = { gen: 0, state: null, rec: null, stream: null, chunks: [], t0: 0, th: undefined, sendOnStop: true, down: 0, ctx: null, mode: "memo", busy: null };
+const micMode = () => phoneReady() ? "text" : "memo";
+function recStart(th, mode = micMode()) {
+  if (REC.state || REC.busy) return;
   const d = draft(th);
   if (!navigator.mediaDevices || !window.MediaRecorder) { d.err = "This browser can't record audio."; refresh(); return; }
-  Object.assign(REC, { state: "starting", th, chunks: [], t0: 0, sendOnStop: true });
+  Object.assign(REC, { state: "starting", th, chunks: [], t0: 0, sendOnStop: true, mode });
   const AC = window.AudioContext || window.webkitAudioContext;
   try { REC.ctx = AC ? new AC() : null; } catch (e) { REC.ctx = null; }   // made inside the gesture, so it isn't born suspended
   refresh(); startWave();
@@ -345,9 +348,10 @@ function recStart(th) {
       stream.getTracks().forEach(t => t.stop());
       const type = rec.mimeType || "audio/webm", ext = /mp4/.test(type) ? "m4a" : /ogg/.test(type) ? "ogg" : "webm", t = new Date(), p = n => String(n).padStart(2, "0");
       const f = new File(REC.chunks, `voice-${p(t.getHours())}${p(t.getMinutes())}${p(t.getSeconds())}.${ext}`, { type });
-      const th = REC.th, go = REC.sendOnStop && f.size > 0;
+      const th = REC.th, go = REC.sendOnStop && f.size > 0, text = REC.mode === "text";
       recReset();
-      if (go) { addFiles(th, [f]); if (draft(th).files.some(x => x.file === f)) send(th); } else refresh();
+      if (go && text) dictate(th, f);
+      else if (go) { addFiles(th, [f]); if (draft(th).files.some(x => x.file === f)) send(th); } else refresh();
     };
     if (REC.ctx) { try { REC.ctx.createMediaStreamSource(stream).connect(REC.an); } catch (e) {} }
     rec.start(); REC.t0 = Date.now(); REC.state = "rec"; refresh();
@@ -363,10 +367,35 @@ function recReset() {
   if (REC.ctx) REC.ctx.close().catch(() => {});
   Object.assign(REC, { state: null, rec: null, stream: null, chunks: [], ctx: null, an: null, down: 0 });
 }
+// The recording -> 16 kHz mono int16 (the browser decodes and resamples it) -> the machine's Whisper -> words at the end of the box.
+async function dictate(th, blob) {
+  const d = draft(th); d.err = ""; REC.busy = th || null; refresh();
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext, ac = new AC();
+    let buf; try { buf = await ac.decodeAudioData(await blob.arrayBuffer()); } finally { ac.close().catch(() => {}); }
+    const n = Math.max(1, Math.ceil(buf.duration * 16000)), off = new OfflineAudioContext(1, n, 16000), src = off.createBufferSource();
+    src.buffer = buf; src.connect(off.destination); src.start();
+    const f = (await off.startRendering()).getChannelData(0), pcm = new Int16Array(f.length);
+    for (let i = 0; i < f.length; i++) pcm[i] = Math.max(-1, Math.min(1, f[i])) * 32767;
+    const r = await fetch("/api/phone/transcribe", { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Hive-Dash": "1" }, body: pcm.buffer });
+    const j = await r.json().catch(() => ({}));
+    // A phone service started before E18i has no /transcribe until it restarts: keep the recording, attached and unsent.
+    if (r.status === 404) { REC.busy = null; addFiles(th, [blob]); if (!d.err) d.err = "This computer's phone service needs a restart before it can turn speech into text, so the recording is attached as a voice memo instead. Send it, or remove it."; refresh(); return; }
+    if (!r.ok || j.error) throw new Error(j.error || `the phone service answered ${r.status}`);
+    const words = (j.text || "").trim();
+    if (!words) d.err = j.why === "not the enrolled voice" ? "That didn't sound like your enrolled voice, so no words were added." : "No words were heard in that recording.";
+    else {
+      d.text = d.text.trim() ? d.text.replace(/\s*$/, " ") + words : words; keep(d);
+      const el = field(th); if (el) el.value = d.text;
+      CP.focus = true;
+    }
+  } catch (e) { d.err = `The words couldn't be made: ${e.message || e}`; }
+  REC.busy = null; refresh();
+}
 // Press on the mic: start at once. Held past 450 ms and let go: that was push-to-talk, so send.
 function micDown(th, e) {
   if (e.button !== 0 || REC.state) return;
-  REC.down = Date.now(); recStart(th);
+  REC.down = Date.now(); recStart(th, micMode());
   window.addEventListener("pointerup", () => { REC.upAt = Date.now(); if (REC.down && Date.now() - REC.down > 450 && REC.th === th) recStop(true); }, { once: true });
 }
 // Live waveform, drawn every frame: the mic level (fast attack, slower fall) adds a bar every 45 ms and the bars glide left between.
@@ -405,15 +434,19 @@ function startWave() {
 }
 const recTime = () => { const s = REC.t0 ? Math.floor((Date.now() - REC.t0) / 1000) : 0; return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 function recBar(th) {
-  if (!(S.app && S.app.voice)) return null;
+  if (!(S.app && S.app.voice) && !phoneReady()) return null;
+  if (REC.busy !== null && REC.busy === (th || null)) return h("span", { class: "meta cp-dictating", "data-key": "dict", role: "status" }, "Turning your words into text…");
+  const txt = (REC.state && REC.th === th ? REC.mode : micMode()) === "text";
   // Keyed, so the mic's node isn't morphed into × under the pointer; and the click that ends a press is ignored.
   const keyed = (k, b) => { b.setAttribute("data-key", k); return b; }, guard = f => () => { if (Date.now() - (REC.upAt || 0) >= 500) f(); };
   if (REC.state && REC.th === th) return [
     keyed("rx", button("Discard the voice memo", guard(() => recStop(false)), { kind: "icon", size: "s", icon: "close", cls: "cp-rx", title: "Throw this recording away (Esc)." })),
     h("span", { class: "cp-wavebox", "data-key": "wave", "data-own": "", "data-sig": "w", "data-state": REC.state }, h("canvas", { class: "cp-wave", "aria-label": "Live recording level" })),
     h("span", { class: "meta cp-rtime", "data-key": "rtime", "aria-live": "off" }, recTime()),
-    keyed("rec", button("Send the voice memo", guard(() => recStop(true)), { kind: "icon", size: "s", icon: "stop", cls: "cp-rec", title: "Stop and send the voice memo with what you've typed." }))];
-  const b = keyed("mic", button("Record a voice memo", guard(() => recStart(th)), { kind: "icon", size: "s", icon: "mic", cls: "cp-mic", title: "Record a voice memo: press to start, press again to send, or hold to talk and let go. It is transcribed and summarized on the machine your Hive runs on." }));
+    txt ? keyed("rec", button("Put the words in the box", guard(() => recStop(true)), { kind: "icon", size: "s", icon: "stop", cls: "cp-rec cp-dict", title: "Stop: the words go in the box for you to edit before you send." }))
+      : keyed("rec", button("Send the voice memo", guard(() => recStop(true)), { kind: "icon", size: "s", icon: "stop", cls: "cp-rec", title: "Stop and send the voice memo with what you've typed." }))];
+  const b = txt ? keyed("mic", button("Dictate", guard(() => recStart(th, "text")), { kind: "icon", size: "s", icon: "mic", cls: "cp-mic", title: "Dictate: press to start and again to stop, or hold to talk and let go. Your words go in the box to edit before you send; they are turned into text on the machine your Hive runs on." }))
+    : keyed("mic", button("Record a voice memo", guard(() => recStart(th, "memo")), { kind: "icon", size: "s", icon: "mic", cls: "cp-mic", title: "Record a voice memo: press to start, press again to send, or hold to talk and let go. It is transcribed and summarized on the machine your Hive runs on." }));
   b._on = { ...b._on, pointerdown: e => micDown(th, e) };
   return b;
 }
@@ -609,9 +642,10 @@ function histStep(th, n, up) {
   if (w.i < 0) CP.hist = null;
   return true;
 }
-/** Tab: the newest past message that starts with what's typed; Tab again, the one before. False with nothing to offer, so Tab still leaves the box. */
+/** Tab: the newest past message that starts with what's typed; Tab again, the one before. False with nothing to offer, and false past the
+ *  oldest match (the walk ends there, the text stays), so Tab always leaves the box in the end: no keyboard trap (WCAG 2.1.2, drive_app_keys). */
 function histTab(th, n) {
-  if (walking(n) && CP.hist.tab) { const w = CP.hist; w.i = (w.i + 1) % w.list.length; recallTo(th, n, w.list[w.i]); return true; }
+  if (walking(n) && CP.hist.tab) { const w = CP.hist; if (w.i + 1 >= w.list.length) { CP.hist = null; return false; } w.i++; recallTo(th, n, w.list[w.i]); return true; }
   const typed = n.value, low = typed.toLowerCase();
   if (!typed.trim() || n.selectionStart !== typed.length || n.selectionEnd !== typed.length) return false;
   const list = pastSent().filter(t => t.length > typed.length && t.toLowerCase().startsWith(low));
@@ -820,13 +854,14 @@ const secretsOn = () => can("secrets") || !!(S.app && S.app.secrets_on && S.app.
 function addPop(th, d) {
   const open = CP.menu === "add", then = f => (e, b) => { const cp = b.closest(".cp"); CP.menu = false; refresh(); f(cp); };
   // Off items say why (everyday E18f): the browser lends a microphone only to https or localhost, and voice may still be building or not on this install.
-  const mic = !!(window.isSecureContext && navigator.mediaDevices), voice = !!(S.app && S.app.voice) && mic, call = phoneReady() && !inCall();
+  const mic = !!(window.isSecureContext && navigator.mediaDevices), voice = !!(S.app && S.app.voice) && mic, call = phoneReady() && !inCall(), dict = phoneReady() && mic;
   const why = ready => !mic ? "The microphone needs https, or this computer" : ready ? null : "Not set up yet: see Settings › This device";
   return h("div", { class: "pop cp-addpop", "data-key": "add" },
     h("button", { type: "button", class: "btn cp-attach", "data-kind": "icon", "data-size": "s", "aria-label": "Attach", title: "Attach files, a voice memo or a secret", "aria-haspopup": "menu", "aria-expanded": String(open), onclick: toggleRoom("add") }, icon("plus")),
     open ? h("div", { class: "menu cp-addmenu", role: "menu", "aria-label": "Add to the message", "data-side": sideFor("add"), "data-key": "am" },
       menuItem("Files from this device", "Or paste or drop them in the box", then(cp => cp.querySelector(".cp-pick").click()), { ic: "file", key: "files" }),
-      menuItem("Voice memo", voice ? "Transcribed on this computer" : why(S.app && S.app.voice), then(() => recStart(th)), { ic: "mic", key: "voice", off: !voice }),
+      menuItem("Dictate", dict ? "Your words go in the box to edit" : why(false), then(() => recStart(th, "text")), { ic: "mic", key: "dictate", off: !dict }),
+      menuItem("Voice memo", voice ? "Transcribed on this computer" : why(S.app && S.app.voice), then(() => recStart(th, "memo")), { ic: "mic", key: "voice", off: !voice }),
       menuItem("A secret", "Saved on this computer; only its name is posted", then(() => secretClick(th)), { ic: "lock", key: "secret", off: !secretsOn() }),
       menuItem("Voice call", !call && !inCall() ? why(false) : th ? "A new agent picks up, reads this conversation and talks with you" : "Talk with the Hive", then(() => startCall(th ? { thread: th } : {})), { ic: "phone", key: "call", cls: "cp-call", off: !call }),
       !th && !simpleOn() ? [menuSep("sep-n"), menuItem("Name it…", "Otherwise it is called by its first words", then(() => { d.naming = true; refresh(); queueMicrotask(() => document.querySelector(".cp-name")?.focus()); }), { ic: "edit", key: "name" })] : null,
@@ -958,7 +993,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
         },
         onkeydown: (e, n) => {
           const a = CP.ac;
-          if (a && a.none && e.key === "Tab") { e.preventDefault(); return; }
+          if (a && a.none && e.key === "Tab" && !a.tabbed) { a.tabbed = true; e.preventDefault(); return; }   // held once, so a slip doesn't leave the box; the second Tab goes on (no keyboard trap)
           if (a && a.items.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); a.i = (a.i + (e.key === "ArrowDown" ? 1 : a.items.length - 1)) % a.items.length; refresh(); document.querySelector(".cp-ac [aria-selected=true]")?.scrollIntoView({ block: "nearest" }); return; }
           if (a && a.items.length && (e.key === "Enter" || e.key === "Tab") && !e.shiftKey) { e.preventDefault(); acPick(th, a.items[a.i].word); return; }
           if (!e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing) {
