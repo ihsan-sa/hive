@@ -248,6 +248,9 @@ def wrap(argv, env, name, box_home=None, sockets=None):
     for f in ("board.jsonl", "log.jsonl"):
         try: (HOME / f).touch()
         except OSError: pass
+    # The same for ~/files: the first upload makes it, after the warm box is up, so the person's first attachment was never seen (E25, t25).
+    try: (HOME / "files").mkdir(exist_ok=True)
+    except OSError: pass
     for r in READ_ONLY + WRITABLE + (".cache/hive-tmp",): _unlink_links(box_home, r)  # a link left in the shared home would send a mount somewhere else
     size = ["--size", str(2 << 30)] if FLAGS["size"] else []
     bpf = _filter()

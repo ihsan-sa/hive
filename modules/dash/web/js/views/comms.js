@@ -1051,10 +1051,12 @@ const FIN = { asks: null, at: 0, open: true };   // open: shut, the reader saw "
 function loadFinished(ctx) { if (now() - FIN.at < 5 * MIN) return; FIN.at = now(); jget("/api/progress").then(v => { FIN.asks = (v && v.asks) || []; ctx.update(); }).catch(() => { FIN.at = 0; }); }
 /** What came of a closed ask: the first line of its evidence post, one line; the ask's own words read as an order under a "Finished" heading (reading 20261110-2009). No post found: no words. */
 function outcome(ev) { const id = (String(ev || "").match(/\b\d{12}\b/) || [])[0], p = id && S.posts.find(q => q.id === id); return p ? firstLine(displayText(p)) : ""; }
+/** Another ask still open in a finished thread: say whose move it is. "Still open" alone read as a wait on the person (reading 20261113-1736: three of four readers of an all-answered copy listed two such threads as waiting). */
+const moreAsk = a => { const o = (FIN.asks || []).filter(b => b.thread === a.thread && b.id !== a.id); return o.some(b => b.status === "person") ? "person" : o.some(b => b.status === "open" || b.status === "owned") ? "hive" : null; };
 function finishedItems() {
   const out = [], seenTh = new Set(), waits = new Set(waitingOn().map(w => w.th)), live = th => !waits.has(th) && S.threads.has(th) && !isSystemThread(S.threads.get(th)) && !btwParent(th);
   for (const a of (FIN.asks || []).filter(a => a.status === "done" && a.done_at && Date.parse(a.done_at) > SEEN_BEFORE && live(a.thread)).sort((a, b) => (a.done_at < b.done_at ? 1 : -1))) {
-    if (seenTh.has(a.thread)) continue; seenTh.add(a.thread); out.push({ th: a.thread, t: Date.parse(a.done_at), what: outcome(a.evidence), more: (FIN.asks || []).some(b => b.thread === a.thread && b.id !== a.id && (b.status === "open" || b.status === "owned" || b.status === "person")) });
+    if (seenTh.has(a.thread)) continue; seenTh.add(a.thread); out.push({ th: a.thread, t: Date.parse(a.done_at), what: outcome(a.evidence), more: moreAsk(a) });
   }
   const rest = [...S.threads.values()].filter(d => !seenTh.has(d.name) && live(d.name) && d.last > SEEN_BEFORE && startedByPerson(d.name) && /(^|\n)Done:/.test(String((S.threadStatus && S.threadStatus[d.name] || {}).text || "").trim().split("\n").pop() || "") && !waitingOn().some(w => w.th === d.name))
     .sort((a, b) => b.last - a.last);
@@ -1063,7 +1065,7 @@ function finishedItems() {
 }
 function homeFinished() {
   const it = finishedItems(); if (!it.length) return null;
-  const row = x => h("li", { class: "cm-fin-r", "data-key": "fin:" + x.th }, h("a", { href: threadHref(x.th) }, threadTitle(x.th)), x.what ? h("span", { class: "cm-old-q" }, " \u2014 ", x.what) : null, h("span", { class: "meta" }, " \u00b7 ", when(x.t)), x.more ? h("span", { class: "meta cm-fin-more" }, " \u00b7 another ask here is still open") : null);
+  const row = x => h("li", { class: "cm-fin-r", "data-key": "fin:" + x.th }, h("a", { href: threadHref(x.th) }, threadTitle(x.th)), x.what ? h("span", { class: "cm-old-q" }, " \u2014 ", x.what) : null, h("span", { class: "meta" }, " \u00b7 ", when(x.t)), x.more ? h("span", { class: "meta cm-fin-more" }, x.more === "person" ? " \u00b7 another ask here waits on you" : " \u00b7 the Hive is still on another ask here") : null);
   return h("section", { class: "cm-older cm-fin", "data-key": "fin", "aria-label": "Finished since your last visit" },
     h("details", { class: "cm-older-d", open: FIN.open ? "" : null, ontoggle: (e, d) => { if (e.target === d) FIN.open = d.open; } },
       h("summary", null, h("b", null, "Finished since your last visit"), h("span", { class: "meta" }, ` \u00b7 ${plural(it.length, "conversation")}`)),

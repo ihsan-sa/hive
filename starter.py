@@ -172,7 +172,7 @@ def asked_model(p, c):
     return None
 
 def step_clause(model):
-    """Said at each start and wake, the natural point to weigh the model (the person, 2026-11-05, thread model-stepping). Self-judged switches were 0 of 12."""
+    """Said at a fresh start (not on a sleeper's wake: inbox.model_check asks again at call 40), the natural point to weigh the model (the person, 2026-11-05, thread model-stepping). Self-judged switches were 0 of 12."""
     if model in ("haiku", "sonnet"): return f' You\'re on {model}: if this turns into design or debugging you\'re stuck on, run `hive model opus "why"` and end your turn.'
     if model in ("opus", "fable"): return f' You\'re on {model}: if this is routine with a good stretch to do, run `hive model sonnet "why"` and end your turn. A short job, just do it.'
     return ""
@@ -1760,7 +1760,8 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
         prompt += guarded("wake_note", k, first.get("thread"), bool(heir_of)) or ""
     fb = next((p["fallback"] for p in posts if p.get("fallback")), None)
     if fb: prompt += "\n\n" + FALLBACK_NOTE["codex" if fb == "fallback" and tier_of(model).startswith("codex") else fb].format(model=model, tier=tier_of(model))
-    elif kind != "warden" and not prov and not asked and (not resume or slept): prompt += step_clause(model)
+    # Said once per session (a5234, 2026-11-13, load P4): a woken sleeper got it at its start; inbox.model_check asks again at call 40.
+    elif kind != "warden" and not prov and not asked and not resume: prompt += step_clause(model)
     path = HOME / "sessions" / f"{name}-{dt.datetime.now():%m%d-%H%M%S}.jsonl"
     last_start[0] = time.time(); recent_starts.append(last_start[0])
     def record():

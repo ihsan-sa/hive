@@ -40,6 +40,16 @@ def paused_windows(e, t):
     except (ImportError, KeyError, ValueError, TypeError): return 0.0, 0.0
 
 
+def recent_paused(t):
+    """The larger paused share of the 24 h before t and of the last full UTC day before t. Over PAUSED_MAX, autojudge
+    waits: many checks print yesterday's number, and a paused day's number is the pause, not the change."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent)); import pauses
+        sp, d = pauses.spans(STATE / "pauses.jsonl", until=t), t.replace(hour=0, minute=0, second=0, microsecond=0)
+        return max(pauses.share(t - dt.timedelta(days=1), t, sp=sp), pauses.share(d - dt.timedelta(days=1), d, sp=sp))
+    except (ImportError, KeyError, ValueError, TypeError): return 0.0
+
+
 def paused_share(t0, t1):
     """The paused share of [t0, t1] (aware datetimes), 0..1; 0 when there is no record."""
     try:
@@ -204,6 +214,7 @@ def autojudge(post=True, t=None):
         t, items, out = t or now(), ledger(), []
         for e in sorted(items.values(), key=lambda e: e.get("at", "")):
             if e.get("status") != "landed" or not e.get("check") or e.get("due_at", "") > iso(t) or str(e.get("revisit") or "") > iso(t)[:10]: continue
+            if recent_paused(t) > PAUSED_MAX: continue  # a check that reads "the last day" would read the pause itself (i0243 read 11-12, paused all day): wait for a full day
             base, (after, err) = e.get("before"), read_check(e)
             try: retries_over = t - dt.datetime.fromisoformat(e["due_at"]) >= dt.timedelta(days=1)
             except (KeyError, ValueError): retries_over = True

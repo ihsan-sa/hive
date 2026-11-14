@@ -290,7 +290,7 @@
 .cm-helper>summary>.ic{flex:none;width:12px;height:12px;color:var(--ink-3);transition:transform var(--dur,.15s) var(--ease,ease)}
 .cm-helper[open]>summary>.ic{transform:rotate(90deg)}
 .cm-helper .avs{display:inline-flex;flex:none}
-.cm-helper .avs .av{width:20px;height:20px;font-size:9px}
+.cm-helper .avs .av{width:24px;height:24px;font-size:9px}   /* 24 px: big enough to tap (WCAG 2.5.8, drive_app_target) */
 .cm-helper .avs .av+.av{margin-left:-6px;box-shadow:0 0 0 2px var(--bg)}
 .cm-helper-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cm-helper-t b{font-weight:var(--w-med,500);color:var(--ink)}

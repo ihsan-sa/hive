@@ -1837,7 +1837,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cm-home-l{display:none}
 @container (max-width:640px){
   .cm-tools .avs{gap:0;margin-right:4px}   /* R7b L2: the design keeps the agents in a phone head, as a small overlapped stack before Find and Files */
-  .cm-tools .avs .av{width:22px;height:22px;font-size:9px;border-radius:6px}
+  .cm-tools .avs .av{width:24px;height:24px;font-size:9px;border-radius:6px}   /* 24 px: big enough to tap (WCAG 2.5.8) */
   .cm-tools .avs .av+.av{margin-left:-6px;box-shadow:0 0 0 2px var(--bg)}
   .cm-tools .avs .av:nth-child(n+3){display:none}                  /* two faces; a tap on the stack lists them all */
   .cm{grid-template-columns:minmax(0,1fr)}                 /* one pane: the list, or the open conversation */
@@ -3440,7 +3440,7 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .tier-more>summary{cursor:pointer;color:var(--ink-2);font-size:var(--fs-meta);width:max-content}
 .tier-more[open]>summary{margin-bottom:var(--s2)}
 .tier-log{margin:0;padding:0;list-style:none;display:grid;gap:var(--s1);font-size:var(--fs-meta)}
-.tier-chip a{color:inherit;text-decoration:none}
+.tier-chip a{color:inherit;text-decoration:none;display:inline-flex;align-items:center;min-height:24px;margin-block:-4px}   /* a 24 px tap target (WCAG 2.5.8) in the same chip height */
 .tier-chip a:hover{text-decoration:underline}
 .tier-chip-s{font-weight:var(--w-reg,400)}
 .tier-intro { margin: 0 0 12px; }
