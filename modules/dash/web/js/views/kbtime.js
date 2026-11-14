@@ -204,8 +204,8 @@ function linkSide(l, t) {
   const kind = l.kind === "doc" ? "Documented: the note writes this note's path." : "Inferred: the note only names it (a [[name]] or a bare file name), and the name was matched to this note.";
   return [
     h("div", { class: "map-sh" }, h("div", null, h("h2", null, "Link"), h("small", null, l.sup ? "says it supersedes or replaces" : l.kind === "doc" ? "documented" : "inferred")), button("Close", () => select(null), { kind: "icon", icon: "close", size: "s" })),
-    sec("From", row("a", noteName(l.a), null, () => select({ kind: "note", id: l.a }))),
-    sec("To", row("b", noteName(l.b), null, () => select({ kind: "note", id: l.b }))),
+    sec("Linking note", row("a", noteName(l.a), null, () => select({ kind: "note", id: l.a }))),
+    sec("Linked note", row("b", noteName(l.b), null, () => select({ kind: "note", id: l.b }))),
     sec("Evidence", h("p", { class: "kbt-p" }, kind),
       l.sup ? h("p", { class: "kbt-p" }, "The line that holds the link also says supersedes, replaces or replaced by.") : null,
       l.spans.map(([a, b], i) => ev("sp" + i, `${stamp(a)}${i ? "" : " · commit " + l.first} → ${b == null ? "still there" : stamp(b)}`, i ? "In the note again" : "First in the note", "recorded")),

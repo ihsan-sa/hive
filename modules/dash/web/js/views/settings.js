@@ -470,6 +470,13 @@ function modulesSection(ctx) {
       end(x, inBrowse)));
   const list = (rows, inBrowse) => h("ul", { class: "list" }, rows.map(x => row(x, inBrowse)));
   const group = (key, title, note, ...body) => h("div", { class: "mod-group", "data-group": key }, h("h3", { class: "mod-gt" }, title, note ? h("span", { class: "mod-gn" }, note) : null), body);
+  // A link to one module's row (#settings/modules/<name>, F.goRow from render): once the list is read, open the full list if the row
+  // is only there, and scroll the row into view, so a link to the Slack row shows its "Set up" with no press.
+  if (F.goRow && F.mods) {
+    const name = F.goRow; F.goRow = null;
+    if (F.mods.some(x => x.name === name && x.source !== "own" && x.state !== "installed" && !x.recommended)) F.browse = true;
+    setTimeout(() => { const el = document.querySelector(`.set-s li[data-key="${CSS.escape(name)}"]`); if (el) el.scrollIntoView({ block: "center" }); }, 0);
+  }
   const shelves = () => {
     const pub = F.mods.filter(x => x.source !== "own"), own = F.mods.filter(x => x.source === "own");
     const have = pub.filter(x => x.state === "installed"), rec = pub.filter(x => x.recommended && x.state !== "installed");
@@ -629,10 +636,12 @@ export default {
   enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
   },
   back(ctx) { loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update); },   // what enter reads, without enter's clearing: what the person is typing stays
-  leave() { clearInterval(upTimer); upTimer = null; clearTimeout(voiceTimer); voiceTimer = null; forget(); forgetSecrets(); },
+  leave() { F.goTo = null; clearInterval(upTimer); upTimer = null; clearTimeout(voiceTimer); voiceTimer = null; forget(); forgetSecrets(); },
   render(ctx) {
     if (S.app.can == null) return h("div", { class: "page", "data-width": "narrow" }, waiting(S.failed));   // /api/app hasn't answered: don't say "only in the app" yet
     if (!S.app.app) return h("div", { class: "page", "data-width": "narrow" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));
+    const [slug, row] = (ctx.arg || "").split("/");   // #settings/modules/slack-door: the section, then a row to open on (modulesSection's F.goRow)
+    if (row && slug === "modules" && F.goTo !== ctx.arg) { F.goTo = ctx.arg; F.goRow = row; }   // once per link, so "Hide the full list" stays hidden
     const hive = hiveSection(ctx), [everyday, setOnce] = Array.isArray(hive) ? hive : [hive, null];
     const secs = [everyday, loginsSection(ctx), useSection(), tiersSection(ctx), ...setupSections(ctx), secretsSection(ctx), viewSection(ctx), setOnce, modulesSection(ctx), accessSection(ctx)].filter(Boolean);
     const header = pageHeader({ title: "Settings" });
@@ -641,7 +650,7 @@ export default {
     dots = navDots(ctx);
     // One section at a time (#settings/<slug>); #settings, or a slug nobody can see, shows the first. The nav is real links, so Back works.
     const slugOf = t => t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-    const now = nav.find(t => slugOf(t) === ctx.arg) || nav[0];
+    const now = nav.find(t => slugOf(t) === slug) || nav[0];
     const item = t => h("a", { href: href("settings", slugOf(t)), "data-key": t, "aria-current": t === now ? "page" : null, title: dots[t] ? dots[t][1] : null }, h("span", null, t), dots[t] ? statusDot(dots[t][0]) : null, dots[t] ? h("span", { class: "vh" }, dots[t][1]) : null);
     return h("div", { class: "page set", "data-width": "narrow", "data-key": "settings" }, header,
       h("div", { class: "set-b" },
