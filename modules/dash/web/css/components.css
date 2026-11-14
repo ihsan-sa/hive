@@ -2385,6 +2385,8 @@ dialog.rc-rail[open]{display:flex;flex-direction:column;gap:var(--s2)}
 .ph-call,.ph-rings{position:fixed;right:16px;bottom:16px;z-index:60;width:min(360px,calc(100vw - 32px));background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:var(--e2);padding:14px 16px;font-size:var(--fs-body)}
 .ph-rings{bottom:auto;top:calc(var(--bar-h,56px) + 12px);padding:0;border:0;background:none;box-shadow:none;display:grid;gap:8px}
 .ph-call[hidden],.ph-rings[hidden]{display:none}
+/* an open menu or popover sits in the top bar's or bottom nav's stacking context (z 30/50), below the card's 60: step the card and rings under it while one is open (UI test round 18) */
+body:has(.menu,.pv-menu,.cm-menu,.lr-menu) :is(.ph-call,.ph-rings){z-index:1}
 .ph-top,.ph-ring{display:flex;align-items:center;gap:12px}
 .ph-ring{background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--e2);padding:12px 14px}
 .ph-ring>div{flex:1;min-width:0}
