@@ -355,7 +355,14 @@ def cmd_judge(a):
     today = iso()[:10]
     if str(e.get("revisit") or "") > today: sys.exit(f"hive improve judge: {a.id}'s revisit is {e['revisit']}. No verdict before it.")
     w = [i for i in w if str(items[i].get("revisit") or "") <= today]
-    if a.verdict == "held" and judged_with(items, e):
+    if a.apart:  # R25 (meta-reflect): a window after e landed and before any row it shares a number with: only e was live, so the number is e's own
+        fr, _, to = a.apart.partition("..")
+        early = [i for i in judged_with(items, e) if str(items[i].get("at", ""))[:19] < to[:19]]
+        if not to or fr[:19] < str(e.get("at", ""))[:19] or early:
+            sys.exit(f"hive improve judge: --apart FROM..TO must start at or after {a.id} landed ({str(e.get('at'))[:19]}) and end before every row it shares a number with lands"
+                     + (f" ({', '.join(f'{i} landed {str(items[i].get("at"))[:19]}' for i in early)})" if early else "") + ".")
+        a.why, w = a.why + f"; read apart over {fr}..{to}, before {', '.join(judged_with(items, e))} landed", []
+    elif a.verdict == "held" and judged_with(items, e):
         a.verdict, a.why = "inconclusive", a.why + "; shares its number, so it cannot credit one change"
         print(f"{a.id} shares its number with {', '.join(judged_with(items, e))}: recorded as inconclusive, not held. Give it a number of its own to judge it apart.")
     for i in [a.id] + w:
@@ -757,7 +764,7 @@ def main(argv=None):
     p.add_argument("--also", action="append", help="ids of open landings on the same number, judged together with this one at the revisit (silences the overlap warning)")
     p.set_defaults(f=cmd_log)
     p = sp.add_parser("judge", help="judge a landed change on its revisit date: ID held|reverted|inconclusive --why 'the number vs baseline'")
-    p.add_argument("id"); p.add_argument("verdict", choices=VERDICTS); p.add_argument("--why", default=""); p.add_argument("--self", action="store_true"); p.set_defaults(f=cmd_judge)
+    p.add_argument("id"); p.add_argument("verdict", choices=VERDICTS); p.add_argument("--why", default=""); p.add_argument("--self", action="store_true"); p.add_argument("--apart", help="FROM..TO (ISO): the number was read over a window when only this row was live, after it landed and before every row it shares a number with; a held then stays held"); p.set_defaults(f=cmd_judge)
     p = sp.add_parser("list", help="the ledger; --due for revisits past their date"); p.add_argument("--due", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_list)
     p = sp.add_parser("attach", help="give a logged change a check after the fact, on or after its revisit date; the number is kept but never counts as held (late-check): ID --check CMD --want up|down [--band N] [--before N: the number from before the change; without it, measured now and read in 48 h]")
     p.add_argument("id"); p.add_argument("--check", required=True); p.add_argument("--want"); p.add_argument("--band", type=float); p.add_argument("--before", type=float); p.set_defaults(f=cmd_attach)

@@ -50,13 +50,25 @@ let sideW = (() => { try { return Math.min(SIDE_MAX, Math.max(SIDE_MIN, +localSt
 try { document.documentElement.style.setProperty("--rail-now", sideW + "px"); } catch (e) {}   // the New cell in Chat's bar follows the stored rail width (Nov 9 handoff §A.3)
 // The list never takes the conversation's room: a width saved in a wide window waits for the window to grow again (the same limit is in .cm's columns, components.css).
 const sideRoom = box => Math.max(SIDE_MIN, box.clientWidth - CHAT_MIN), sideNow = box => Math.min(sideW, sideRoom(box));
-const setSide = (box, w) => { sideW = Math.round(Math.min(SIDE_MAX, sideRoom(box), Math.max(SIDE_MIN, w))); box.style.setProperty("--cm-w", sideW + "px"); document.documentElement.style.setProperty("--rail-now", sideW + "px"); try { localStorage.setItem("cm.side", sideW); } catch (e) {} };
+const setSide = (box, w) => { sideW = Math.round(Math.min(SIDE_MAX, sideRoom(box), Math.max(SIDE_MIN, w))); box.style.setProperty("--cm-w", sideW + "px"); railNow(); try { localStorage.setItem("cm.side", sideW); } catch (e) {} };
 // A conversation head narrower than 600 px (a list pane dragged wide in a 1100 window) drops the crumb and says "All" for "Show every message",
 // so the title keeps its room (round 16: it was cut to one letter). #main is the CSS container, so a container query can't see the column;
 // a container on the head would pull in every phone rule written for #main. The render carries the mark, since morph() drops attributes it didn't set.
 let headTight = false, headSeen = null;
 const headRO = typeof ResizeObserver === "function" ? new ResizeObserver(es => { for (const e of es) { headTight = e.contentRect.width < 600; e.target.toggleAttribute("data-tight", headTight); } }) : null;
 const watchHead = () => { const n = document.querySelector(".cm-head"); if (headRO && n && n !== headSeen) { if (headSeen) headRO.unobserve(headSeen); headRO.observe(headSeen = n); } };
+// Hide the whole list so the conversation and the side panel get the full width (the person, 111412344c7d). Kept on this device; desktop only
+// (the phone's list is its own page). Ctrl+\ or the head's first button toggles it; the New cell in the bar then drops its rail width.
+let sideHid = (() => { try { return localStorage.getItem("cm.sidehid") === "1"; } catch (e) { return false; } })();
+const railNow = () => document.documentElement.style.setProperty("--rail-now", sideHid ? "auto" : sideW + "px");
+railNow();
+function toggleSide() { sideHid = !sideHid; try { localStorage.setItem("cm.sidehid", sideHid ? "1" : "0"); } catch (e) {} railNow(); L.ctx && L.ctx.update(); }
+if (typeof document !== "undefined") document.addEventListener("keydown", e => {
+  if (e.key !== "\\" || !(e.ctrlKey || e.metaKey) || e.altKey || e.defaultPrevented || !document.querySelector(".cm .cm-side")) return;
+  e.preventDefault(); toggleSide();
+});
+const sideBtn = () => h("button", { type: "button", class: "btn cm-sidebtn", "data-kind": "icon", "data-key": "sidebtn", "aria-pressed": String(!sideHid), "aria-label": sideHid ? "Show the conversation list" : "Hide the conversation list",
+  title: (sideHid ? "Show" : "Hide") + " the conversation list (Ctrl+\\)", onclick: toggleSide }, icon("sidebar"));
 const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize the conversation list", tabindex: "0", "data-key": "grip", title: "Drag to resize",
   onpointerdown: e => { e.preventDefault(); const box = e.target.closest(".cm"), x0 = e.clientX, w0 = sideNow(box); e.target.setPointerCapture(e.pointerId); e.target.dataset.on = "1";
     e.target.onpointermove = m => setSide(box, w0 + m.clientX - x0);
@@ -954,6 +966,7 @@ function head(c, ctx) {
   requestAnimationFrame(watchHead);
   return h("header", { class: "cm-head", "data-key": "head", "data-find": find ? "" : null, "data-tight": headTight ? "" : null },
     h("div", { class: "cm-tt", "data-dev": app() ? null : "" },
+      sideBtn(),
       h("a", { class: "btn cm-back", href: href("comms"), "data-kind": "icon", "aria-label": app() ? "Chats" : "Threads", title: app() ? "Chats" : "Threads" }, icon("chevron-left")),
       c.thread && app() && !simpleOn() ? threadCrumb(c.thread) : null,
       h("button", { type: "button", class: "cm-title-b", "data-hid": off > 0 && !simpleOn() ? "" : null, title: off > 0 && !simpleOn() ? `${off} hidden: open for the way to show them` : null, "aria-haspopup": "true", "aria-expanded": String(C.menu === "title"), onclick: e => { e.stopPropagation(); C.menu = C.menu === "title" ? null : "title"; ctx.update(); } },
@@ -1369,7 +1382,7 @@ function frame(ctx, c, pane) {
         c.thread && !can("post") ? readOnly(c.thread) : null,   // §5b: where this address can't post, say so in the composer's place
         post && c.thread ? composer({ thread: c.thread, update: ctx.update, top: app() ? strip(c.thread) : null }) : null,
         post && c.all ? h("p", { class: "cm-hint meta", "data-key": "hint" }, "To start something new, use New conversation.") : null]);
-    return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home && !c.list ? "" : null, "data-list": c.list ? "" : null, style: `--cm-w:${sideW}px` },
+    return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home && !c.list ? "" : null, "data-list": c.list ? "" : null, "data-side": sideHid && c.arg ? "hidden" : null, style: `--cm-w:${sideW}px` },
       h("nav", { class: "cm-side", "aria-label": app() ? "Conversations" : "Threads" }, grip(),
         h("div", { class: "cm-filters" },
           // R14: the phone's way to the rail. Home has one row that opens it as a page; that page has a way back (css/phone.css shows these only there).

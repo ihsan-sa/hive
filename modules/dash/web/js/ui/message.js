@@ -19,6 +19,7 @@ import { wordButton } from "./rootword.js";
 import { voiceMemo, VOICE } from "./voicememo.js";
 import { readAloud, stopReading, reading } from "./speak.js";
 import { openPreview, previewKey, kindOf, badgeOf, remember } from "./preview.js";
+import { boxIds, boxEmbed, boxesOn, dropBoxLines } from "./pybox.js";
 
 // ---- read marks ----
 // Has this post reached the agent it names? Read: handed to it mid-run (the inbox hook's record, /api/delivered),
@@ -433,7 +434,9 @@ function appMessage(p, opts) {
   const call = phoneCall(p); if (call) return call;
   const kind = SYS.has(p.from) || isScript(p.from) ? "sys" : p.from === "person" ? "me" : OUTSIDE.has(p.from) ? "out" : "agent";
   const asks = kind === "agent" && !simpleOn() && asksYou(p), split = kind === "agent" && !SOURCE.has(p.id) ? didSplit(p) : null;
-  const q = split ? { ...p, disp: split.text } : p;
+  let q = split ? { ...p, disp: split.text } : p;
+  const boxes = boxesOn() && EDIT.id !== p.id ? boxIds(p.text) : [];   // a Python box inline (ui/pybox.js): the frame stands in for its line
+  if (boxes.length) q = { ...q, disp: dropBoxLines(displayText(q)) };
   return h("article", { class: "msg", tabindex: "-1", "data-key": p.id, "data-who": kind, "data-cont": opts.cont ? "" : null, "data-report": displayText(p).length > LONG ? "" : null,
     "data-state": kind === "me" && p.interrupt ? "interrupt" : null, "data-asks": asks ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
     msgAvatar(p, kind),
@@ -442,7 +445,8 @@ function appMessage(p, opts) {
       messageHead(p, { ...opts, asks }),
       relayLine(p),
       p.reply_to ? quote(p) : null,
-      EDIT.id === p.id ? editBox(p, opts) : body(q, ws),
+      EDIT.id === p.id ? editBox(p, opts) : boxes.length && !q.disp ? null : body(q, ws),
+      boxes.length ? h("div", { class: "msg-boxes" }, boxes.map(id => boxEmbed(p.id, id))) : null,
       files.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f))) : null,
       tagChips(p),
       split ? didFold(p, split) : null,

@@ -8,6 +8,8 @@ Every run the starter logs (~/log.jsonl start/end) gets a grade in ~/outcomes.js
   partial    some of it, or a handover with a plan
   nothing    it posted, but no delivery and no handover: status only, questions back, the wrong thing
   not_asked  the post asked this agent nothing concrete
+  not_run    it hit a provider's usage limit and exited non-zero within a minute, posting nothing (no model): it never ran, so it is no bad work
+             either (R30, 2026-11-14: Codex at its limit read as 29.6% delivered when the runs that did run delivered 70%, i0203)
 A model or effort switch (`hive model X`) splits one piece of work over two runs: the run that only switched is not_asked by rule (marked `switch`), and the
 run that resumed on the switch post is graded against the post that woke the first one (`origin`), so the work is counted once, against what was asked.
 Every run woken by the person is graded; of the rest, whole chains: a fixed share of roots (ROOT_PCT) has every run handed on from it graded, so a chain's rate means a chain.
@@ -37,6 +39,7 @@ SETTLE_S = 180             # a run's end must be this old: its last post may sti
 TAIL_S = 90                # posts this long after the end still count as the run's
 BAD = ("silent", "nothing")
 GOOD = ("delivered",)
+LIMIT_S = 60               # a limited run that ended this soon after its start, posting nothing, is not_run
 GRADED = ("delivered", "partial", "nothing", "silent")   # the denominator of outcome_delivered_pct; quiet and not_asked are neither
 SHORT = ("partial", "nothing")   # graded runs that fell short of what was asked
 CHEAP = (None, "", "sonnet", "haiku")   # models the step-up moves off
@@ -141,6 +144,25 @@ def origin(run, post, log, by_id, hops=5):
         post = by_id.get(prev[-1]["post"]) if prev else None
     if not said or not post or switch_post(post, run["name"]): return first   # not a switch, or the ask can't be found: graded on the waking post, as before
     return {**post, "text": str(post.get("text", "")) + "".join(f"\n(the agent then switched model or effort and carried on in this run; its switch line: {clip(t, 300)})" for t in reversed(said))}
+
+def limit_times(log):
+    """session, and ("name", agent) -> times of the starter's `limited` events: a run stopped on a usage limit, to be resumed at the reset.
+    By name too: a Codex run's ledger session is not the thread id the starter logs (7 of 13 Codex limit exits on 11-07..11-10 missed by session alone)."""
+    out = {}
+    for e in log:
+        if e.get("event") != "limited": continue
+        for k in (e.get("session"), e.get("name") and ("name", e["name"])):
+            if k: out.setdefault(k, []).append(e.get("at", ""))
+    return out
+
+def not_run(run, mine, limits):
+    """The run hit a provider's limit and exited non-zero within LIMIT_S of its start, posting nothing: it never got to the ask."""
+    if mine or not run.get("exit"): return False
+    try: t0, t1 = (dt.datetime.fromisoformat(run[k]) for k in ("started", "ended"))
+    except (KeyError, TypeError, ValueError): return False
+    if (t1 - t0).total_seconds() >= LIMIT_S: return False
+    ats = limits.get(run.get("session"), []) + limits.get(("name", run.get("name")), [])   # an agent runs one run at a time, so its name in the window is this run
+    return any(run["started"] <= at <= iso(t1 + dt.timedelta(seconds=LIMIT_S)) for at in ats)
 
 def mechanical(run, post, mine):
     if mine: return "not_asked" if contentless(post) else None   # "???" answered with where things stand was graded nothing on 2026-11-04
@@ -305,16 +327,17 @@ def cmd_grade(a):
     todo = [r for r in runs(log, since, until) if r["key"] not in done and (not other or provider(r) != "claude")]
     if a.limit: todo = todo[:a.limit]
     graded, model_runs, cost, ticks, drafts, limited = 0, [], 0.0, ticked_rungs(), 0, False
-    root = roots(log, by_id)
+    root, lims = roots(log, by_id), limit_times(log)
     for r in todo:
         post, mine, after = posts_of(r, posts, by_id)
         ask = origin(r, post, log, by_id) if post and switch_post(post, r["name"]) else post   # resumed after a switch: graded on the ask the switch carried over
         r = {**r, **({"root": root[r["key"]]} if root.get(r["key"], r["key"]) != r["key"] else {}), **({"completion_wake": True} if completion_wake(r, by_id, mine, ticks) else {}), **({"self_wake": True} if post and self_wake(r, post) else {}), **({"round": True} if ask and ROUND.search(str(ask.get("text", ""))[:80]) else {})}   # marks for the spot-check and the step-up; the grade doesn't look at them
         sw = switch_only(r, mine, log)
         post = ask
-        g = "not_asked" if sw else mechanical(r, post, mine)
+        g = "not_asked" if sw else "not_run" if not_run(r, mine, lims) else mechanical(r, post, mine)
         if g:
-            why = "only switched model or effort; the run it resumed as carries the ask" if sw else "the post asked nothing" if g == "not_asked" else "posted nothing" + (" though named" if g == "silent" else "")
+            why = "only switched model or effort; the run it resumed as carries the ask" if sw else "hit a usage limit and exited within a minute; resumed at the reset" if g == "not_run" \
+                else "the post asked nothing" if g == "not_asked" else "posted nothing" + (" though named" if g == "silent" else "")
             if not a.dry: append(LEDGER, {**r, **({"switch": True} if sw else {}), "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
             graded += 1
         else: model_runs.append((r, post, mine, after))
@@ -384,7 +407,7 @@ def intent_only(r):
     return r.get("grade") in ("nothing", "partial", "silent") and bool(INTENT.search(str(r.get("why", ""))))
 
 def stats(rows):
-    n = {g: sum(1 for r in rows if r.get("grade") == g) for g in ("delivered", "partial", "nothing", "silent", "quiet", "not_asked")}
+    n = {g: sum(1 for r in rows if r.get("grade") == g) for g in ("delivered", "partial", "nothing", "silent", "quiet", "not_asked", "not_run")}
     den = sum(n[g] for g in GRADED)
     return {"outcomes_graded": len(rows), "outcome_delivered_pct": round(100.0 * n["delivered"] / den, 1) if den else None,
             "outcomes_silent": n["silent"], "outcomes_nothing": n["nothing"], "outcomes_intent_only": sum(1 for r in rows if intent_only(r)), **{f"outcomes_{g}": v for g, v in n.items()}}
@@ -404,13 +427,13 @@ def cmd_stats(a):
     if getattr(a, "by", "") == "provider":
         rows = by_provider(recent(a.since))
         if a.json: print(json.dumps(rows)); return
-        for k, s in rows.items(): print(f"{k:<20} delivered {s['outcome_delivered_pct']}% of {sum(s['outcomes_' + g] for g in GRADED)} asked (delivered {s['outcomes_delivered']}, partial {s['outcomes_partial']}, nothing {s['outcomes_nothing']}, silent {s['outcomes_silent']}); quiet {s['outcomes_quiet']}, not asked {s['outcomes_not_asked']}")
+        for k, s in rows.items(): print(f"{k:<20} delivered {s['outcome_delivered_pct']}% of {sum(s['outcomes_' + g] for g in GRADED)} asked (delivered {s['outcomes_delivered']}, partial {s['outcomes_partial']}, nothing {s['outcomes_nothing']}, silent {s['outcomes_silent']}); quiet {s['outcomes_quiet']}, not asked {s['outcomes_not_asked']}, not run {s['outcomes_not_run']}")
         return
     s = stats(recent(a.since)); done, own, wakes = completion_share(a.since)
     share, own_share = (round(100.0 * done / wakes, 1), round(100.0 * own / wakes, 1)) if wakes else (None, None)
     if a.json: print(json.dumps({**s, "completion_wakes": done, "self_wakes": own, "agent_code_wakes": wakes, "completion_wake_pct": share, "self_wake_pct": own_share})); return
     print(f"{s['outcomes_graded']} runs graded in the last {a.since}: delivered {s['outcome_delivered_pct']}% of the {sum(s['outcomes_' + g] for g in GRADED)} that were asked something "
-          f"(delivered {s['outcomes_delivered']}, partial {s['outcomes_partial']}, nothing {s['outcomes_nothing']}, silent {s['outcomes_silent']}); quiet {s['outcomes_quiet']}, not asked {s['outcomes_not_asked']}")
+          f"(delivered {s['outcomes_delivered']}, partial {s['outcomes_partial']}, nothing {s['outcomes_nothing']}, silent {s['outcomes_silent']}); quiet {s['outcomes_quiet']}, not asked {s['outcomes_not_asked']}, not run (limit) {s['outcomes_not_run']}")
     print(f"completion wakes: {done} of {wakes} agent-code wakes ended in the span ({share}%); self-wakes: {own} ({own_share}%). Counts only, no grade follows from them")
 
 def main(argv=None):

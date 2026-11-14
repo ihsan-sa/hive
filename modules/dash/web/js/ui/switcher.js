@@ -59,7 +59,7 @@ export function openSwitcher() {
 export function openShortcuts() {
   const rows = [
     [MOD + "K", WHAT()], ["?", "This list"], [FEEDBACK_KEY, "Send feedback"],
-    ["F", "Full screen"], simpleOn() ? ["↑", "Edit your last message, from the empty box"] : ["Tab, ↑", "Complete an @name in the box; ↑ edits your last message"],
+    ["F", "Full screen"], [MOD + "\\", "Hide or show the conversation list in Chat"], simpleOn() ? ["↑", "Edit your last message, from the empty box"] : ["Tab, ↑", "Complete an @name in the box; ↑ edits your last message"],
     [MOD + "B / I / E / K", "In the message box: bold, italic, code, link"], ["Esc", "Close what is open"],
   ];
   const dlg = dialog("Keyboard shortcuts", h("h2", null, "Keyboard shortcuts"),

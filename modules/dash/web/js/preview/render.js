@@ -70,11 +70,15 @@ const DOOR_MAX = 250000;
 function doorOf(it) { const d = it.kb && S.app.doors; return (d && Object.prototype.hasOwnProperty.call(d, it.kb) && d[it.kb]) || null; }
 // The frame's address carries a random key (#door=...) that only the page loaded there can read; a call without it is ignored,
 // so a document the frame later navigates to gets no door. The listener ends with the preview (signal).
-function relay(fr, door, key, signal) {
+// onSize (a Python box inline in a chat, ui/pybox.js): the page may also say { hive: 1, type: "size", key, h }; only a finite number is read,
+// clamped, and it sets the frame's height and nothing else (warden 111413221f61).
+export function relay(fr, door, key, signal, onSize) {
   let t = 0, n = 0;
   const on = async e => {
     const d = e.data;
-    if (e.source !== fr.contentWindow || e.origin !== "null" || !d || typeof d !== "object" || d.hive !== 1 || d.type !== "door") return;
+    if (e.source !== fr.contentWindow || e.origin !== "null" || !d || typeof d !== "object" || d.hive !== 1) return;
+    if (d.type === "size") { if (onSize && d.key === key && typeof d.h === "number" && Number.isFinite(d.h)) onSize(Math.round(Math.min(640, Math.max(32, d.h)))); return; }
+    if (d.type !== "door") return;
     if (typeof d.id !== "number" || typeof d.path !== "string" || d.path.length > 60 || d.key !== key) return;
     const now = performance.now(); if (now - t > 1000) { t = now; n = 0; } if (++n > 8) return;
     const back = m => { try { e.source.postMessage(Object.assign({ hive: 1, type: "door", id: d.id }, m), "*"); } catch { /* the frame went away */ } };

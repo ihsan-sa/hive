@@ -62,7 +62,9 @@ def events(): return jsonl(DIR / "log.jsonl")
 def record(event, **e):
     DIR.mkdir(parents=True, exist_ok=True)
     with (DIR / "log.jsonl").open("a") as f: f.write(json.dumps({"at": iso(), "event": event, **e}) + "\n")
+_dropped = []  # post ids dropped during the current on_run_end, so the other-thread pass logs each post once
 def drop(intent, reason):
+    _dropped.append(intent.get("post"))
     record("drop", reason=reason, **{k: intent.get(k) for k in ("chain", "hop", "thread", "post", "name", "line")})
 
 def tail_posts(word):
@@ -287,7 +289,29 @@ def stated_next(r):
     mine = [p for p in tail_posts(name) if str(p.get("from", "")).lower() == name and (epoch(p.get("at")) or 0) >= since]
     return mine[-1] if mine and (post_line(mine[-1]) or ("",))[0] == "next" else None
 
+def elsewhere_nexts(r):
+    """The run's newest post in each thread other than its own (system threads aside), where that post ends on a Next line, oldest first."""
+    name, since, own = str(r.get("name", "")).lower(), epoch(r.get("at", "")) or 0, r.get("thread")
+    newest = {}
+    for p in tail_posts(name):
+        th = p.get("thread") or p.get("id")
+        if str(p.get("from", "")).lower() == name and (epoch(p.get("at")) or 0) >= since and th != own and th not in SYSTEM_THREADS: newest[th] = p
+    return [p for p in newest.values() if (post_line(p) or ("",))[0] == "next"]
+
 def on_run_end(r, c, st, alive):
+    """One intent at most, from the run's own thread (_on_run_end). A Next the run left in another thread gets no intent: it is logged as an
+    other_thread drop, so the floor or keeper that carries it on is not the only trace (R28, 2026-11-14: a9179 ran in product-test and posted
+    its ui-redesign Next there, which left no record at all, since only the run's newest post anywhere was read)."""
+    _dropped.clear()
+    out = _on_run_end(r, c, st, alive)
+    done = set(_dropped) | {(out or {}).get("post")}
+    if r.get("thread") not in SYSTEM_THREADS:
+        for p in elsewhere_nexts(r):
+            if p["id"] not in done and not (DIR / "done" / safe(p["id"])).exists():
+                drop({"thread": p.get("thread") or p.get("id"), "post": p["id"], "name": r.get("name"), "line": post_line(p)[1]}, "other_thread")
+    return out
+
+def _on_run_end(r, c, st, alive):
     """A run ended cleanly: write its intent if it ended on a Next line in a thread that takes part, or `Done:` or no line with a rung still open (carry_on). One run gives one at most, however many times it said so.
     A Next line that gets no intent is logged as a drop with the reason, so a lost step shows in the log."""
     on = enabled(r.get("thread"))
