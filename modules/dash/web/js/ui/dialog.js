@@ -1,5 +1,5 @@
 // Confirm dialog: the one window for every action that changes something. Built once per open, never morphed.
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { button } from "./kit.js";
 
 /**
@@ -35,7 +35,7 @@ export function confirm({ title, body = [], ok = "OK", kind = "primary", typed, 
     if (busyText) { err.textContent = busyText; err.setAttribute("data-ok", ""); } else err.textContent = "";
     try {
       const msg = await onOk(code ? code.value : undefined);
-      if (typeof msg === "string" && msg) { err.textContent = msg; err.setAttribute("data-ok", ""); yes.remove(); no.textContent = "Close"; if (code) code.disabled = true; }
+      if (typeof msg === "string" && msg) { err.textContent = msg; err.setAttribute("data-ok", ""); yes.remove(); no.textContent = tr("Close"); if (code) code.disabled = true; }
       else dlg.close();
     } catch (x) { err.textContent = `${failText}: ${x.message}.`; }
     finally { delete yes.dataset.busy; yes.removeAttribute("aria-busy"); ready(); }

@@ -2,6 +2,7 @@
 // stop point. Settings > Work tiers changes them through /api/work-tiers; a focus card and a thread's bar show a chip from the same read.
 // State is in plain words and never a usage figure (a9179's review, rung WT-1): Running, Paused until Thu 9:00, Off, Stopped: …
 import { h } from "../core/dom.js";
+import { LOC } from "../core/format.js";
 import { status as st } from "../core/status.js";
 import { S, can, jget, post } from "../core/store.js";
 import { focusById, focusName } from "../core/foci.js";
@@ -22,7 +23,7 @@ export function loadTiers(done, force) {
 
 const tiers = () => (T.data && T.data.tiers) || [];
 const OFF = "off";
-const whenText = u => { const d = new Date(u * 1e3), days = (d - Date.now()) / 864e5; return days < 6 ? d.toLocaleDateString(undefined, { weekday: "short" }) + " " + clock(d) : dayName(d) + " " + clock(d); };
+const whenText = u => { const d = new Date(u * 1e3), days = (d - Date.now()) / 864e5; return days < 6 ? d.toLocaleDateString(LOC, { weekday: "short" }) + " " + clock(d) : dayName(d) + " " + clock(d); };
 /** [status key, words]: a tier's state in plain words, no figures. */
 export function tierState(t) {
   if (!t) return ["none", ""];

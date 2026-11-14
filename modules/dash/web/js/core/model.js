@@ -1,7 +1,7 @@
 // What the data means: statuses, the agent card, hive stats, usage pace. Pure reads of the store.
 import { S, OUTSIDE, SYS } from "./store.js";
 import { simpleOn, plainName } from "./simple.js";
-import { now, ago, dur, median, short, mdPlain, bareLinks, firstSentence, onWords, namesNoWork, MIN, HOUR, DAY } from "./format.js";
+import { LOC, money, now, ago, dur, median, short, mdPlain, bareLinks, firstSentence, onWords, namesNoWork, MIN, HOUR, DAY } from "./format.js";
 
 export const isAgent = n => S.agents.has(n);
 /** A warden judges whether work crosses the hard limits. The starter names them w + 4 hex (core/starter.py is_warden); `warden` and `rootwarden` are the fixed names. */
@@ -79,7 +79,7 @@ function apart(base, th) {
   }
   const ths = BASES.get(base); if (!ths || ths.length < 2 || !ths.includes(th)) return "";
   const rest = t => { const x = threadTitle(t) || "", i = x.indexOf(":"); return i > 0 && i < 40 ? titleName(x.slice(i + 1).trim().replace(/^(?:(?:a|an|the|of|in|on|to|for|and|or|with|at|by|from)\s+)+/i, "")) : ""; };
-  const d = t => { const f = S.sessions.find(x => x.thread === t); return f && f.start ? new Date(f.start).toLocaleDateString([], { month: "short", day: "numeric" }) : ""; };
+  const d = t => { const f = S.sessions.find(x => x.thread === t); return f && f.start ? new Date(f.start).toLocaleDateString(LOC, { month: "short", day: "numeric" }) : ""; };
   const lab = t => { const m = rest(t); return ths.some(o => o !== t && rest(o) === m) ? [m, d(t)].filter(Boolean).join(", ") : m || d(t); };
   const mine = lab(th), twins = ths.filter(t => lab(t) === mine);   // the same words on the same day: told apart by number
   return twins.length > 1 ? mine + (mine ? ", " : "") + "no. " + (twins.indexOf(th) + 1) : mine;
@@ -246,7 +246,7 @@ export function agentBrief(n) {
   if (key.some((k, i) => k !== briefFor[i])) { briefFor = key; briefs = new Map(); }
   if (!briefs.has(n)) {
     const m = (agentCard(n)[0] || {}).short, c = agentCost(n);
-    briefs.set(n, [m, c != null ? (c >= 100 ? "$" + Math.round(c).toLocaleString() : "$" + c.toFixed(c < 10 ? 2 : 1)) : null].filter(Boolean).join(" · "));
+    briefs.set(n, [m, c != null ? money(c) : null].filter(Boolean).join(" · "));
   }
   return briefs.get(n);
 }

@@ -1,6 +1,14 @@
 // Formatting. Plain words, short units, tabular numbers.
 export const MIN = 6e4, HOUR = 36e5, DAY = 864e5;
 export const now = () => Date.now();
+// E18l: dates and times are written in the Language setting's language when one is chosen, else the browser's own ([]).
+// Read here, not from lang.js, so this file still loads without a page (the node tests).
+export const LOC = (() => { let v = null; try { v = localStorage.getItem("lang"); } catch {} return v === "es" ? "es" : []; })();
+
+// E18m: numbers too ("7,6 GB", "12.345" in Spanish). fix(x, d) has d decimals; int(n) is a whole number with grouping.
+const NF = {};
+export const fix = (x, d = 0) => (NF[d] ||= new Intl.NumberFormat(LOC, { minimumFractionDigits: d, maximumFractionDigits: d })).format(x);
+export const int = n => fix(Math.round(n), 0);
 
 export function ago(t) {
   if (t == null) return "?";
@@ -8,7 +16,7 @@ export function ago(t) {
   if (d < 5) return "just now";
   if (d < 60) return Math.round(d) + "s ago";
   if (d < 3600) return Math.round(d / 60) + "m ago";
-  if (d < 86400) { const h = d / 3600; return (h < 10 ? h.toFixed(1) : Math.round(h)) + "h ago"; }
+  if (d < 86400) { const h = d / 3600; return (h < 10 ? fix(h, 1) : Math.round(h)) + "h ago"; }
   return Math.round(d / 86400) + "d ago";
 }
 export function dur(ms) {
@@ -16,23 +24,23 @@ export function dur(ms) {
   if (m < 1) return "under a minute";
   if (m < 60) return m + "m";
   const h = m / 60;
-  if (h < 48) return (h < 10 ? h.toFixed(1) : Math.round(h)) + "h";
+  if (h < 48) return (h < 10 ? fix(h, 1) : Math.round(h)) + "h";
   return Math.round(h / 24) + "d";
 }
 export const secs = s => (s < 60 ? Math.round(s) + "s" : dur(s * 1e3));
 export const untilText = ms => (ms <= 0 ? "now" : dur(ms));
 // One formatter each: toLocale*String builds a new one per call, about a millisecond on a loaded machine, and a long list calls these once per row. A bad date still reads "Invalid Date", where format() would throw.
-const fmt = o => { const f = new Intl.DateTimeFormat([], o); return t => { const d = new Date(t); return isNaN(d) ? "Invalid Date" : f.format(d); }; };
+const fmt = o => { const f = new Intl.DateTimeFormat(LOC, o); return t => { const d = new Date(t); return isNaN(d) ? "Invalid Date" : f.format(d); }; };
 export const clock = fmt({ hour: "numeric", minute: "2-digit" });
 export const dayName = fmt({ weekday: "short", month: "short", day: "numeric" });
 export const stamp = t => dayName(t) + " " + clock(t);
 export const hourLabel = fmt({ hour: "numeric" });
 export function short(s, n) { s = String(s || "").replace(/\s+/g, " ").trim(); return s.length <= n ? s : s.slice(0, n - 1) + "…"; }
-export const money = c => (c == null ? "–" : c >= 100 ? "$" + Math.round(c).toLocaleString() : "$" + c.toFixed(c < 10 ? 2 : 1));
-export const money$ = v => (v == null ? "?" : v > 0 && v < 0.01 ? "<$0.01" : "$" + (v < 10 ? v.toFixed(2) : v.toFixed(0)));
-export const toks = n => (n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n));
+export const money = c => (c == null ? "–" : c >= 100 ? "$" + int(c) : "$" + fix(c, c < 10 ? 2 : 1));
+export const money$ = v => (v == null ? "?" : v > 0 && v < 0.01 ? "<$0.01" : "$" + (v < 10 ? fix(v, 2) : fix(v, 0)));
+export const toks = n => (n >= 1e9 ? fix((n / 1e9), 1) + "B" : n >= 1e6 ? fix((n / 1e6), 1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n));
 export const pct = (a, b) => (b ? Math.round((100 * a) / b) + "%" : "–");
-export const gb = mb => (mb >= 1024 ? (mb / 1024).toFixed(mb >= 10240 ? 0 : 1) + " GB" : Math.round(mb) + " MB");
+export const gb = mb => (mb >= 1024 ? fix(mb / 1024, mb >= 10240 ? 0 : 1) + " GB" : Math.round(mb) + " MB");
 export const plural = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 export function median(a) { if (!a.length) return null; a = [...a].sort((x, y) => x - y); return a[a.length >> 1]; }
 

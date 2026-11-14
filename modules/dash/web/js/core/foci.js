@@ -5,7 +5,7 @@
 import { h } from "./dom.js";
 import { S, jget, emit, post } from "./store.js";
 import { threadParent, isSystemThread, btwParent, isAgent, isRunning, threadTitle, agentLabel, inScope } from "./model.js";
-import { now, DAY, short } from "./format.js";
+import { now, DAY, short, fix } from "./format.js";
 import { faded, archived } from "../ui/threadmeta.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 import { waitingNow , laterOf } from "./needs.js";
@@ -116,7 +116,7 @@ export function fractionWords(x) {
   return x >= 0.9 ? "nearly all" : x >= 0.6 ? "most" : x >= 0.4 ? "about half" : x >= 0.28 ? "a third" : x >= 0.18 ? "a quarter" : x >= 0.12 ? "a sixth" : x >= 0.07 ? "a tenth" : x > 0 ? "a little" : "none";
 }
 export const pct = x => `${Math.round(x * 100)}%`;
-export const usd = c => (c >= 100 ? `$${Math.round(c)}` : `$${c.toFixed(2)}`);   // one money format under $100 (R6 review: "$6.40 … $30.1" read as two)
+export const usd = c => (c >= 100 ? `$${Math.round(c)}` : `$${fix(c, 2)}`);   // one money format under $100 (R6 review: "$6.40 … $30.1" read as two)
 
 export function stateOf(id) {
   // Both at once (the person, 110812313986: a focus can need them and still be working): the needs part first, then "moving".

@@ -1,7 +1,7 @@
 // Jobs: the machine and the heavy queue. /api/jobs is polled only while this view is open.
 import { h, selecting } from "../core/dom.js";
 import { S, jget } from "../core/store.js";
-import { ago, clock, gb, now, plural, secs } from "../core/format.js";
+import { ago, clock, gb, now, plural, secs, fix } from "../core/format.js";
 import { metrics } from "../templates.js";
 import { empty, pageHeader, section, share, skeleton, stats, statusLabel, pageNav } from "../ui/kit.js";
 import { agentRef } from "../ui/refs.js";
@@ -32,7 +32,7 @@ function tiles(T) {
   return [
     tile("CPU", cpu + "%", `${T.busy.user}% programs, ${T.busy.system}% system`, cpu),
     tile("Waiting on disk", T.busy.iowait + "%", `${T.blocked} tasks blocked now, ${Math.round(P.io_full || 0)}% fully stalled`, T.busy.iowait, T.busy.iowait >= 30),
-    tile("Load", T.load.toFixed(0), `on ${T.cpus} ${S.app.app ? "cores" : "threads"}`, (T.load * 100) / T.cpus, T.load >= T.cpus),
+    tile("Load", fix(T.load, 0), `on ${T.cpus} ${S.app.app ? "cores" : "threads"}`, (T.load * 100) / T.cpus, T.load >= T.cpus),
     tile("Memory available", gb(M.MemAvailable), `of ${gb(M.MemTotal)}, ${Math.round(P.memory_full || 0)}% fully stalled`, ((M.MemTotal - M.MemAvailable) * 100) / M.MemTotal, M.MemAvailable < 5000),
     tile("Swap used", gb(swap), `of ${gb(M.SwapTotal)}`, M.SwapTotal ? (swap * 100) / M.SwapTotal : 0, M.SwapTotal && swap / M.SwapTotal >= 0.9),
     T.slice_high ? tile("Queue jobs' memory", gb(T.slice_used), `soft limit ${gb(T.slice_high)}`, (T.slice_used * 100) / T.slice_high, T.slice_used >= T.slice_high - 3000) : null,
@@ -50,8 +50,8 @@ function split(V) {
   };
   const memTotal = Math.max(V.machine.mem.MemTotal || 0, V.held, OWNERS.reduce((a, [k]) => a + V.split[k].mem, 0)) || 1;
   const own = OWNERS.filter(([k]) => !(S.app.app && k === "jobs" && !hasQueue(V))).map(([k, l, tone]) => [k, S.app.app ? APP_OWNERS[k] : l, tone]);
-  return [bar("CPU", "cores", V.machine.cpus, S.app.app ? " cores" : " threads", v => v.toFixed(1)), bar("Memory in use", "mem", memTotal, "", gb),
-    h("div", { class: "legend" }, own.map(([k, l, tone]) => h("span", { "data-tone": tone }, h("i", { class: "lg-sw" }), `${l}: ${V.split[k].cores.toFixed(1)} ${S.app.app ? "cores" : "threads"}, ${gb(V.split[k].mem)}`)))];
+  return [bar("CPU", "cores", V.machine.cpus, S.app.app ? " cores" : " threads", v => fix(v, 1)), bar("Memory in use", "mem", memTotal, "", gb),
+    h("div", { class: "legend" }, own.map(([k, l, tone]) => h("span", { "data-tone": tone }, h("i", { class: "lg-sw" }), `${l}: ${fix(V.split[k].cores, 1)} ${S.app.app ? "cores" : "threads"}, ${gb(V.split[k].mem)}`)))];
 }
 
 /** The queue tool is installed: it has slots, or something has used it. The app's install doesn't include it. */
@@ -86,7 +86,7 @@ export default {
         section({ fold: innerWidth < 640, title: "Who's using it", note: app ? "Memory counts what's in use, including swap." : "Memory is what's in use, RAM plus swap. The unfilled part of its bar is the kernel, shared memory and tmpfs." }, split(V)),
         ...(app && !q ? [] : [section({ fold: innerWidth < 640, title: "Running", note: `${V.running.length} of ${V.slots} slots, longest first` }, table({
           rows: V.running, key: r => r.lane + r.since, fold: { n: 10, id: "jobs-running" }, empty: "Nothing running in the queue.",
-          columns: [agentCol("Agent", r => who(r.agent)), col("Lane", r => r.lane), col("Running", r => secs(t - r.since)), num(app ? "Cores" : "Threads", r => r.cores.toFixed(1)), num("Memory", r => gb(r.mem)), cmd],
+          columns: [agentCol("Agent", r => who(r.agent)), col("Lane", r => r.lane), col("Running", r => secs(t - r.since)), num(app ? "Cores" : "Threads", r => fix(r.cores, 1)), num("Memory", r => gb(r.mem)), cmd],
         })),
         section({ fold: innerWidth < 640, title: "Queued", note: "in the order they'll start" }, table({
           rows: V.queued, key: q => q.agent + q.since + q.cmd, fold: { n: 10, id: "jobs-queued" }, empty: "The queue is empty.",
@@ -94,7 +94,7 @@ export default {
         }))]),
         section({ fold: innerWidth < 640, title: app ? "Big work the agents are running" : "Outside the queue", note: app ? null : "the queue's limits don't apply to these" }, table({
           rows: V.outside, key: o => o.who, empty: "Nothing big outside the queue.",
-          columns: [agentCol("Who", o => (o.agent ? who(o.who) : o.who)), num(app ? "Cores" : "Threads", o => o.cores.toFixed(1)), num("Memory", o => gb(o.mem)), num("Processes", o => o.procs), { ...cmd, label: "Biggest command" }],
+          columns: [agentCol("Who", o => (o.agent ? who(o.who) : o.who)), num(app ? "Cores" : "Threads", o => fix(o.cores, 1)), num("Memory", o => gb(o.mem)), num("Processes", o => o.procs), { ...cmd, label: "Biggest command" }],
         })),
         ...(app && !q ? [] : [section({ fold: innerWidth < 640, title: "Just finished", note: "last 10 queue jobs" }, table({
           rows: V.done, key: d => d.end + d.cmd, empty: "None yet.",

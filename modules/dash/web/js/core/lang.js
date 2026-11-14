@@ -3,9 +3,14 @@
 // Only whole strings in the table change, so what agents and the person write is left alone; a word missing from the table shows in English.
 // Design: projects/everyday/LANGUAGES.md. To add a language, add a table to TABLES (and its name to LANGS); words from new screens go in as they're found.
 import { setLang } from "./dom.js";
-import ES from "./lang-es.js";
+import ES1 from "./lang-es.js";
+import ES2 from "./lang-es-2.js";
+import ES3 from "./lang-es-3.js";
+import ES4 from "./lang-es-4.js";
 
 export const LANGS = [["en", "English"], ["es", "Español"]];
+// Spanish comes in two files (the main screens, then the rest); the first wins on a shared key, and its patterns are tried first.
+const ES = { ...ES4, ...ES3, ...ES2, ...ES1, __patterns: [...ES1.__patterns, ...ES2.__patterns, ...ES3.__patterns, ...ES4.__patterns] };
 const TABLES = { es: ES };
 
 export function getLang() {

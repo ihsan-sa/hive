@@ -1606,7 +1606,7 @@ class Steps:
     from where the last look stopped, so after the first pass a look costs only what was written since. Kept in memory as short
     rows (a few tens of MB for tens of thousands of steps); filtered and paged here, so the page only ever gets one page.
     Codex logs carry no times, so they're left out. Each log's agent and thread come from its start event in ~/log.jsonl."""
-    EVERY = 5
+    EVERY, STALE = 5, 60
 
     def __init__(self):
         self.rows, self.off, self.owner, self.log_off, self.at, self.sorted = [], {}, {}, 0, 0, True
@@ -1690,7 +1690,9 @@ class Steps:
                 if not all(w in hay for w in words): continue
             total += 1
             if len(out) < limit: out.append(list(r[:7]) if full else [*r[:5], "", ""])
-        return {"rows": out, "total": total, "ready": self.ready}
+        # rows last read over a minute ago (nobody had the page open) are not ready: the page says it is reading and asks again,
+        # rather than showing hours-old steps that the fresh events then push out of its newest 300
+        return {"rows": out, "total": total, "ready": self.ready and time.time() - self.at < self.STALE}
 
 
 # ---------- web ----------

@@ -2,7 +2,7 @@
 import { h } from "../core/dom.js";
 import { S, SYS, can, getPref, setPref } from "../core/store.js";
 import { spendSince, totalUse, activeUse, weekNow, planWeight, fresh7, sessionNewer, inUse, runway, runOut, nextBack, weeklyStop, fileInfo, threadTitle, tierOf, agentStatus, sEnd, hasTiers, agentLabel } from "../core/model.js";
-import { now, ago, dur, clock, dayName, untilText, money, money$, toks, pct, plural, HOUR, DAY, MIN } from "../core/format.js";
+import { now, ago, dur, clock, dayName, untilText, money, money$, toks, pct, plural, HOUR, DAY, MIN, fix } from "../core/format.js";
 import { TIERS, tier, status } from "../core/status.js";
 import { threadHref, agentHref, href } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
@@ -321,7 +321,7 @@ export default {
       stats([
         { label: R.key === "all" ? "In range" : "Last " + R.key, value: money(d1), note: `${money(h1)} an hour lately` },
         { label: "All of it", value: money(all), note: `since ${S.posts[0] ? dayName(S.posts[0].t) : "?"}` },
-        { label: "Per agent-hour", value: hours ? money(d1 / hours) : "–", note: `${hours.toFixed(0)} agent-hours, ${R.name}` },
+        { label: "Per agent-hour", value: hours ? money(d1 / hours) : "–", note: `${fix(hours, 0)} agent-hours, ${R.name}` },
         { label: app ? "Per message" : "Per board post", value: posts ? money(d1 / posts) : "–", note: `${posts} posts, ${R.name}` },
         { label: "Tokens written", value: toks(tk[1]), note: `output, all of it; ${toks(tk[0])} plain input` },
         app ? { label: "Read from memory instead of again", value: pct(tk[2], tk[0] + tk[2] + tk[3]), note: "of what agents read (cheaper)" }

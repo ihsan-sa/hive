@@ -10,6 +10,7 @@
 import { S, start, subscribe } from "../core/store.js";
 import { brandIcon, brandMark } from "../core/brand.js";
 import { h, mount, delegate } from "../core/dom.js";
+import { LOC } from "../core/format.js";
 import { agentState, inUse, runway, threadTitle, limitStop } from "../core/model.js";
 import { clock, dur, now } from "../core/format.js";
 import { statusDot } from "../ui/kit.js";
@@ -132,7 +133,7 @@ function lost() {
   const has = S.fresh > 1e12;   // a real time in ms; anything else means nothing has ever arrived
   return h("div", { class: "dt-lost", role: "alert", "data-key": "lost" }, statusDot("stuck"),
     h("b", null, has ? "No new data for " + dur(now() - S.fresh) + "." : "Can't reach the data."),
-    h("span", null, has ? "Everything below is from " + new Date(S.fresh).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + "." : "It keeps trying."));
+    h("span", null, has ? "Everything below is from " + new Date(S.fresh).toLocaleTimeString(LOC, { hour: "numeric", minute: "2-digit" }) + "." : "It keeps trying."));
 }
 function trouble() {
   const out = [], Lv = S.live, U = S.usage, t = now();
@@ -157,7 +158,7 @@ function render() {
   mount(top, h("div", null,
     h("div", { class: "dt-top-row" }, h("b", { class: "dt-brand" }, brandMark()), counts(), room(),
       sizeNote ? h("span", { class: "dt-size" }, `Size ${sizeNote}% · Ctrl 0 resets`) : null,
-      fullscreenButton(), h("time", { class: "dt-clock" }, new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))),
+      fullscreenButton(), h("time", { class: "dt-clock" }, new Date().toLocaleTimeString(LOC, { hour: "numeric", minute: "2-digit" }))),
     lost(), trouble()));
   for (const p of parts) {
     try {       // one tile's bug must not blank a screen nobody is watching closely

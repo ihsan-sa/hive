@@ -3,7 +3,7 @@ import { h } from "../core/dom.js";
 import { S, SYS } from "../core/store.js";
 import { threadTitle, agentLabel, labelCodes, agentOn, agentSay, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse, limitStop } from "../core/model.js";
 import { needsKnown, needsN } from "../core/needs.js";
-import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, DAY, MIN } from "../core/format.js";
+import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, DAY, MIN, fix } from "../core/format.js";
 import { TIERS, status } from "../core/status.js";
 import { threadHref, agentHref, href } from "../core/router.js";
 import { overview, cols } from "../templates.js";
@@ -135,7 +135,7 @@ function todayCard(t) {
   const read = act && act.parts.length, left = read ? Math.max(0, 100 - Math.round(act.pct)) + "%" : "–";   // an account with no reading yet is not 100% left
   return section({ title: "Today", note: "last 24 hours" }, h("div", { class: "card now-today" }, stats([
     { label: "Finished", value: String(done), note: plural(done, "run") + " ended cleanly" },
-    { label: "Hours of work", value: (ms / HOUR).toFixed(1) + "h", note: "agent time, all agents" },
+    { label: "Hours of work", value: fix((ms / HOUR), 1) + "h", note: "agent time, all agents" },
     { label: "Week left", value: read ? h("a", { href: href("usage") }, left) : left, note: read ? "of your weekly use" : "not read yet" },
   ])));
 }
@@ -174,7 +174,7 @@ export default {
         section({ title: "How it's working as a hive", note: "last 24 hours" }, stats(hiveFigures(t))),
         cols(...activityCharts(t)),   // "Agents at work" would draw the same line as "running at once": one chart, not two
         hasTiers() ? section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
-          share(TIERS.map(x => ({ key: x.key, label: S.app.app ? APP_TIER[x.key] || x.label : x.label, tone: x.tone, value: hrs[x.key], text: `${(hrs[x.key] / HOUR).toFixed(1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` })))) : null);
+          share(TIERS.map(x => ({ key: x.key, label: S.app.app ? APP_TIER[x.key] || x.label : x.label, tone: x.tone, value: hrs[x.key], text: `${fix((hrs[x.key] / HOUR), 1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` })))) : null);
       return overview({ header, main: [main], after: [todayCard(t), more] });
     }
 
@@ -196,7 +196,7 @@ export default {
 
     const hrs = tierHours(t - DAY, t), tot = Object.values(hrs).reduce((a, b) => a + b, 0) || 1;
     const tiers = section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
-      share(TIERS.map(x => ({ key: x.key, label: S.app.app ? APP_TIER[x.key] || x.label : x.label, tone: x.tone, value: hrs[x.key], text: `${(hrs[x.key] / HOUR).toFixed(1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` }))));
+      share(TIERS.map(x => ({ key: x.key, label: S.app.app ? APP_TIER[x.key] || x.label : x.label, tone: x.tone, value: hrs[x.key], text: `${fix((hrs[x.key] / HOUR), 1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` }))));
 
     return overview({ header, main: [needsYou(run, states, queuedPosts, L), run.length ? devTables(run, states, t, ctx) : null].filter(Boolean), after: [hive, charts, hasTiers() ? tiers : null] });
   },

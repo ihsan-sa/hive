@@ -1,6 +1,7 @@
 // Timeline: a row per thread, a bar per session, a tick per post. Fit (the default) shows the current run of activity,
 // so recent work doesn't sit in a sliver at the right. A bar's name shows only if it fits; hover or focus shows it always.
 import { h, s, morph } from "../core/dom.js";
+import { LOC } from "../core/format.js";
 import { S, SYS, getPref, setPref } from "../core/store.js";
 import { HOUSE_THREADS, agentStatus, isRunning, sEnd, threadTitle, tierOf } from "../core/model.js";
 import { clock, dayName, dur, mdPlain, now, short, stamp, DAY, HOUR, MIN } from "../core/format.js";
@@ -173,7 +174,7 @@ function draw() {
   if (follows && fits(x(t), textW("now", T.F.bar))) ticks.push(s("text", { class: "tl-nowt", x: x(t), y: 16, "text-anchor": "middle" }, "now"));
   for (let m = Math.ceil((t0 - off) / step) * step + off; m <= t1; m += step) {
     grid.push(s("line", { class: "tl-grid", x1: x(m), x2: x(m), y1: 0, y2: H }));
-    const d = new Date(m), tx = step >= DAY ? dayName(m) : d.toLocaleTimeString([], step < HOUR ? { hour: "numeric", minute: "2-digit" } : { hour: "numeric" }) + (d.getHours() === 0 && d.getMinutes() === 0 ? " " + dayName(m) : "");
+    const d = new Date(m), tx = step >= DAY ? dayName(m) : d.toLocaleTimeString(LOC, step < HOUR ? { hour: "numeric", minute: "2-digit" } : { hour: "numeric" }) + (d.getHours() === 0 && d.getMinutes() === 0 ? " " + dayName(m) : "");
     if (fits(x(m), textW(tx, T.F.bar))) ticks.push(s("text", { x: x(m), y: 16, "text-anchor": "middle" }, tx));
   }
   const body = s("svg", { class: "tl-body", width: W, height: H }, s("g", null, grid), s("g", { "data-rows": "" }, rows),

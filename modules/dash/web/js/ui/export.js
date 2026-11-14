@@ -2,13 +2,14 @@
 // PDF laid out as a clean transcript (a short header with the dates and who speaks, a line per day, speakers in a column
 // on the left; the person, 110413284527, wanted the script layout but not the play trimmings), through the browser's print dialog, so it works on every install with no PDF tool on the server.
 import { h } from "../core/dom.js";
+import { LOC } from "../core/format.js";
 import { S, SYS } from "../core/store.js";
 import { hiveName } from "../core/simple.js";
 import { displayText, threadTitle, btwParent, btwText } from "../core/model.js";
 import { clock, short } from "../core/format.js";
 import { markdown } from "./markdown.js";
 
-const day = t => new Date(t).toLocaleDateString([], { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+const day = t => new Date(t).toLocaleDateString(LOC, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 const dayKey = t => new Date(t).toDateString();
 const posts = th => (S.threads.get(th) || { posts: [] }).posts.filter(p => p.text || (p.files || []).length);
 // Who said it, as the script names them: you, the Hive (system notes and a side question's opener), or the agent.

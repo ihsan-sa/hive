@@ -3,7 +3,7 @@
 // The server caches the scoreboard for a few minutes and answers stale while it re-reads, so this page never waits on it.
 import { h } from "../core/dom.js";
 import { S, can, jget } from "../core/store.js";
-import { ago, pct, plural, short } from "../core/format.js";
+import { ago, pct, plural, short, fix } from "../core/format.js";
 import { labelCodes } from "../core/model.js";
 import { metrics } from "../templates.js";
 import { heldRoom } from "../core/room.js";
@@ -34,7 +34,7 @@ const APP_LINE = { person_noticed_first: "Problems you saw first", person_reply_
 
 const tone = (t, text, title) => statusWord(t, text, title, "pg-t");
 const when = iso => { const t = Date.parse(iso || ""); return Number.isFinite(t) ? h("span", { title: iso }, ago(t)) : "?"; };
-const num = v => (v == null ? "–" : typeof v === "number" && !Number.isInteger(v) ? v.toFixed(1) : String(v));
+const num = v => (v == null ? "–" : typeof v === "number" && !Number.isInteger(v) ? fix(v, 1) : String(v));
 
 function lead(V) {
   const B = V.scoreboard && V.scoreboard.now, owed = V.asks.filter(a => OWED.has(a.status)), orphan = owed.filter(a => a.orphaned).length;

@@ -1,6 +1,7 @@
 // What the setup pages are doing, in words: every click gets a row at once, and the row says how it went. Rows are written by the code that
 // acts, from fixed text and the server's answer. Keys, sign-in codes and a sign-in's raw terminal output never go in one.
 import { h } from "../core/dom.js";
+import { LOC } from "../core/format.js";
 import { copyButton } from "./refs.js";
 
 const A = { rows: [], n: 0, timer: 0, update: null };
@@ -42,7 +43,7 @@ export async function act(id, text, fn, update, done) {
 }
 
 const long = ms => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? s + "s" : Math.floor(s / 60) + "m " + (s % 60) + "s"; };
-const clock = t => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const clock = t => new Date(t).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const when = r => r.state === "busy" ? long(Date.now() - r.at) : clock(r.end) + (r.end - r.at >= 1000 ? " · " + long(r.end - r.at) : "");
 const plain = () => A.rows.map(r => `${clock(r.at)} ${r.state} ${r.text}`).join("\n");
 

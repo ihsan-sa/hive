@@ -1,7 +1,7 @@
 // Chart frame: title, plot, y range, time axis, hover readout. SVG scales to the frame; text stays HTML
 // so it never stretches. Redraws only when its data changes (data-sig).
 import { h, s } from "../core/dom.js";
-import { hourLabel, stamp, HOUR } from "../core/format.js";
+import { hourLabel, stamp, HOUR, LOC } from "../core/format.js";
 import { showTip, hideTip } from "./tip.js";
 
 /**
@@ -45,7 +45,7 @@ export function chart(o) {
   const span = N * o.step, days = span > 3 * 24 * HOUR, tick = days ? 24 * HOUR : span > 24 * HOUR ? 12 * HOUR : span > 8 * HOUR ? 6 * HOUR : span > 2 * HOUR ? HOUR : HOUR / 4, ticks = [];
   // Over a few days: one tick a day, at local midnight, named by its weekday.
   const first = days ? new Date(o.start).setHours(24, 0, 0, 0) : Math.ceil(o.start / tick) * tick;
-  for (let t = first; t < o.start + span; t = days ? new Date(t).setHours(24, 0, 0, 0) : t + tick) ticks.push(h("span", { style: `left:${((t - o.start) / span) * 100}%` }, days ? new Date(t).toLocaleDateString([], { weekday: "short" }) : hourLabel(t)));
+  for (let t = first; t < o.start + span; t = days ? new Date(t).setHours(24, 0, 0, 0) : t + tick) ticks.push(h("span", { style: `left:${((t - o.start) / span) * 100}%` }, days ? new Date(t).toLocaleDateString(LOC, { weekday: "short" }) : hourLabel(t)));
   return h("figure", { class: "chart", style: "margin:0", "data-compact": o.compact ? "" : null, "data-own": "", "data-sig": sig, "data-tone": o.tone || null },
     o.title ? h("figcaption", { class: "chart-h" }, h("b", null, o.title), o.note ? h("span", null, o.note) : null) : null,
     plot,

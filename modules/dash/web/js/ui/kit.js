@@ -1,5 +1,5 @@
 // The component kit. Each factory takes plain data and returns DOM; styles live in components.css under the same name.
-import { h, copyText } from "../core/dom.js";
+import { h, copyText, tr } from "../core/dom.js";
 import { href } from "../core/router.js";
 import { status as st } from "../core/status.js";
 import { labelCodes } from "../core/model.js";
@@ -47,7 +47,7 @@ export function infoButton(name, text, { size } = {}) {
     const r = n.getBoundingClientRect(); saying = text; showTip(r.left, r.bottom - 8, text);
     addEventListener("pointerdown", onAway, true); addEventListener("keydown", onEsc, true); addEventListener("scroll", stopSaying, true);
   }, { kind: "icon", icon: "info", cls: "sec-info", title: text, size });
-  b.setAttribute("aria-label", name);
+  b.setAttribute("aria-label", tr(name));
   return b;
 }
 
@@ -262,7 +262,7 @@ export const blocks = (...kids) => h("div", { class: "blks" }, kids);
 /** Command: a line to copy, with a Copy button. */
 export function cmd(text) {
   return h("div", { class: "cmd" }, h("code", null, text),
-    button("Copy", (e, b) => { navigator.clipboard?.writeText(text).then(() => { b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1200); }); }, { size: "s" }));
+    button("Copy", (e, b) => { navigator.clipboard?.writeText(text).then(() => { b.textContent = tr("Copied"); setTimeout(() => (b.textContent = tr("Copy")), 1200); }); }, { size: "s" }));
 }
 
 /** Toolbar: a row of filters and controls above a list or a canvas. */

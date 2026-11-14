@@ -5,8 +5,8 @@
 // an <img>/<video>/<audio>/<iframe> pointed at /files/, which dash.py serves sandboxed: HTML runs in an iframe with an opaque
 // origin (sandbox="allow-scripts", plus the server's sandbox CSP), so it never touches this page, its cookie or the API.
 // openPreview(items, i): items are { id, name, size, from, t }; id is the post's 12-hex id, name the file name.
-import { h } from "../core/dom.js";
-import { stamp, ago } from "../core/format.js";
+import { h, tr } from "../core/dom.js";
+import { stamp, ago, fix } from "../core/format.js";
 import { button, icon, copyPress, scrim } from "./kit.js";
 
 /** A file's kind, from its name: picks the renderer and the badge. */
@@ -58,7 +58,7 @@ export function threadFiles() {
   }
   return out;
 }
-const fsize = n => (n == null ? "" : n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
+const fsize = n => (n == null ? "" : n >= 1048576 ? fix((n / 1048576), 1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
 
 // ---- the panel ----
 const WMIN = 340, KEY = "pv.w", MODE = new Map();   // MODE: file key -> "src" when the person asked for the source
@@ -102,7 +102,7 @@ export function openFiles(auto) {
   if (auto !== true) { try { localStorage.removeItem(AUTO); } catch (e) {} }   // opened by hand: it opens by itself again
   shell();
   P.list = true; P.seq++; clearTimeout(P.live); P.ctl && P.ctl.abort(); P.ctl = null;
-  P.root.setAttribute("aria-label", "Files"); P.root.dataset.kind = "files"; P.foot.hidden = true;
+  P.root.setAttribute("aria-label", tr("Files")); P.root.dataset.kind = "files"; P.foot.hidden = true;
   P.auto = auto === true; placeFiles();
   mark();
   import("../preview/files.js").then(m => { if (P.root && P.list) m.drawFiles(P.head, P.body, { open: openPreview, close: closePreview }); });
@@ -320,7 +320,7 @@ async function show(k) {
   const n = P.items.length; P.i = ((k % n) + n) % n;
   const it = P.items[P.i], my = ++P.seq;
   P.ctl && P.ctl.abort(); P.ctl = new AbortController(); clearTimeout(P.live);
-  P.root.setAttribute("aria-label", "Preview of " + it.name);
+  P.root.setAttribute("aria-label", tr("Preview of " + it.name));
   P.root.dataset.kind = kindOf(it.name);
   header(it, null);
   P.body.replaceChildren(h("div", { class: "pv-wait meta" }, "Loading…"));

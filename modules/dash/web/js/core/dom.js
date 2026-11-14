@@ -19,6 +19,8 @@ function set(e, props) {
 let lang = null;
 const LANG_ATTRS = new Set(["placeholder", "title", "aria-label"]);
 export const setLang = f => { lang = f; };
+/** The same lookup for words set outside h() (setAttribute, textContent, title =). */
+export const tr = t => lang && typeof t === "string" ? lang(t) : t;
 let textMap = null;
 /** Optional display rewrite for every text node (the names easter egg). */
 export const setTextMap = f => { textMap = f; };

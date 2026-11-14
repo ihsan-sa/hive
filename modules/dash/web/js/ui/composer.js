@@ -8,13 +8,13 @@
 // - OUT, messages on their way: they show at once as "Sending…", settle when the board has them, and a failed one keeps
 //   its text and offers Retry, Edit and Discard. The board is append-only, so nothing here suggests unsending a posted one.
 import { uploadFile } from "../core/upload.js";
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { S, can, jget, post, poll, loadApp } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { foci, focusById, focusOf, focusName, listed, threadLine } from "../core/foci.js";
 import { go } from "../core/router.js";
 import { isAgent, isRunning, agentCard, agentMono, agentLabel, capFirst, ownStep, inConversation, agentStatus, threadPeople, partner, displayText, typedText, threadTitle, threadState } from "../core/model.js";
-import { short, mdPlain, now } from "../core/format.js";
+import { short, mdPlain, now, fix } from "../core/format.js";
 import { button, icon, input, statusDot } from "./kit.js";
 import { openAside } from "./aside.js";
 import { sixSeven } from "../core/sixseven.js";
@@ -30,7 +30,7 @@ const CP = { update: null, th: undefined, focus: false, ac: null, menu: false, d
 const SB = { open: false, rows: [{ name: "", value: "" }], say: "", tone: null, busy: false };
 const refresh = () => CP.update && CP.update();
 const IMGNAME = /\.(png|jpe?g|gif|webp)$/i;
-const size = n => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
+const size = n => (n >= 1048576 ? fix((n / 1048576), 1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
 
 // ---- drafts ----
 const D = new Map();
@@ -1026,5 +1026,5 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
 // The hint lines under the box went into the send button's name and title (the Nov 8 handoff §8.1); the queued line under your bubble says the busy part.
 function sendButton(word, fn, empty, say, armed) {
   const b = button(word, fn, { kind: "primary", icon: armed ? "pause" : "arrow-up", disabled: empty, cls: "cp-send", title: say + (armed ? "" : " ↑ past messages · Tab completes") });
-  b.setAttribute("aria-label", armed ? `${word}. ${say}` : say); return b;   // the name starts with the visible word in every state
+  b.setAttribute("aria-label", tr(armed ? `${word}. ${say}` : say)); return b;   // the name starts with the visible word in every state
 }

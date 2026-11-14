@@ -6,7 +6,7 @@ import { dropFiles } from "./ui/dropfiles.js";
 import { S, can, needsAccount, onOwnFail, setupDone, start, subscribe } from "./core/store.js";
 import { loadFoci } from "./core/foci.js";
 import { loadNeedsYou } from "./core/needs.js";
-import { h, mount, delegate, selecting, copyText } from "./core/dom.js";
+import { h, mount, delegate, selecting, copyText, tr } from "./core/dom.js";
 import { button } from "./ui/kit.js";
 import { go, parse } from "./core/router.js";
 import { topBar } from "./ui/shell.js";
@@ -65,7 +65,7 @@ function where() {
   const name = screenName(), brand = brandName() || "Hive";
   document.title = `${name} · ${brand}` + (S.live ? ` · ${S.live.agents.length} running` : "");
   const own = [...main.querySelectorAll("h1")].some(shown);
-  h1.hidden = own; if (!own && h1.textContent !== name) h1.textContent = name;
+  h1.hidden = own; const shownName = tr(name); if (!own && h1.textContent !== shownName) h1.textContent = shownName;
 }
 addEventListener("resize", () => where());   // a phone layout can hide or show the page's own head
 const centreTab = (here, row) => { const a = here.getBoundingClientRect(), r = row.getBoundingClientRect(); row.scrollLeft += a.left - r.left - (r.width - a.width) / 2; };
@@ -79,7 +79,7 @@ function crashPage(v, e) {
   return h("div", { class: "view-crash", role: "alert", "data-key": "crash-" + v.id },
     h("h2", null, "This page hit a problem"),
     h("p", null, "The rest of the app still works. Reloading usually clears it."),
-    h("div", { class: "row" }, button("Reload", () => location.reload()), button("Copy details", (ev, b) => { copyText(detail).then(() => { b.textContent = "Copied"; }, () => { b.textContent = "Couldn't copy"; }); }, { kind: "quiet" })));
+    h("div", { class: "row" }, button("Reload", () => location.reload()), button("Copy details", (ev, b) => { copyText(detail).then(() => { b.textContent = tr("Copied"); }, () => { b.textContent = tr("Couldn't copy"); }); }, { kind: "quiet" })));
 }
 function schedule(force) { if (raf) { raf.force ||= force; return; } raf = { force }; queueMicrotask(() => { const f = raf.force; raf = 0; render(f); }); }
 

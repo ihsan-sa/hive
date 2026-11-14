@@ -13,7 +13,7 @@ import { act, isBusy } from "../ui/activity.js";
 import { confirm } from "../ui/dialog.js";
 import { tiersSection, loadTiers, pausedTiers } from "../ui/worktiers.js";
 import { startSignin, signinBox, clearSignin } from "../ui/signin.js";
-import { ago, dur, now, plural } from "../core/format.js";
+import { ago, dur, now, plural, fix } from "../core/format.js";
 import { accountUse } from "../core/model.js";
 import { href } from "../core/router.js";
 import { copyButton } from "../ui/refs.js";
@@ -330,7 +330,7 @@ function hiveSection(ctx) {
     F.saved.day = v;
     save({ max_daily_usd: v === "" ? null : +v }, () => { E.day = F.saved.day = was; }, "Daily cap");
   };
-  const spent = `Spent today: $${(+(F.cfg.spend_today || 0)).toFixed(2)} at API prices (UTC day). `;
+  const spent = `Spent today: $${fix((+(F.cfg.spend_today || 0)), 2)} at API prices (UTC day). `;
   const starter = async () => {
     say("starter", up ? "Stopping…" : "Starting…");
     try {

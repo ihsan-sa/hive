@@ -3,7 +3,7 @@
 // redacts all text; this view only reads, except a project's goals.md, saved through /api/plan with the plans right. On a phone the list and a file take turns.
 import { h } from "../core/dom.js";
 import { S, can, getPref, jget, post, setPref } from "../core/store.js";
-import { ago, plural, stamp } from "../core/format.js";
+import { ago, plural, stamp, fix, int } from "../core/format.js";
 import { href, threadHref } from "../core/router.js";
 import { labelCodes, threadTitle } from "../core/model.js";
 import { button, empty, skeleton, waiting, field, input, list, needFull, copyPress } from "../ui/kit.js";
@@ -16,7 +16,7 @@ const K = { map: null, mapAt: 0, topics: new Set(), home: null, seen: new Map(),
 const open = (path, line) => href("knowledge", line ? `${path}::${line}` : path);
 const parse = arg => { const m = /^(.*)::(\d+)$/.exec(arg || ""); return m ? { path: m[1], line: +m[2] } : { path: arg || "", line: 0 }; };
 const parent = p => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
-const bytes = n => (n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? Math.round(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB");
+const bytes = n => (n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? Math.round(n / 1024) + " KB" : fix((n / 1048576), 1) + " MB");
 
 async function fetchPath(path, ctx) {
   try { const r = await jget("/api/kb/open?path=" + encodeURIComponent(path)); if (!r.path) throw Error("404"); K.seen.set(path, r); K.failed.delete(path); }
@@ -281,7 +281,7 @@ const SOURCE = { kb: "Your notes", board: "Board posts", projects: "Projects", m
 function sourcesView() {
   const ss = (K.map && K.map.sources) || [];
   if (!ss.length) return null;
-  return h("ul", { class: "kb-cover" }, ss.map(s => h("li", { "data-key": s.source }, h("b", null, s.files.toLocaleString()), h("span", null, SOURCE[s.source] || s.source))));
+  return h("ul", { class: "kb-cover" }, ss.map(s => h("li", { "data-key": s.source }, h("b", null, int(s.files)), h("span", null, SOURCE[s.source] || s.source))));
 }
 // A card names its place in words, not as a folder path (punch list item 4): kb/ is "Your notes", kb/history/ is "History of the hives".
 const placeName = p => { const d = parent(p), t = d.split("/").pop(); if (!d || d === "kb") return "Your notes"; return TOPIC[t] || (t[0].toUpperCase() + t.slice(1)).replace(/[-_]+/g, " "); };

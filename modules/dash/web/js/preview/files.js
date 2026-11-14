@@ -6,13 +6,14 @@ import { h } from "../core/dom.js";
 import { can, said } from "../core/store.js";
 import { button, icon } from "../ui/kit.js";
 import { threadFiles, kindOf, badgeOf, filesClosedByHand } from "../ui/preview.js";
+import { fix } from "../core/format.js";
 
 const KEY = "pv.dir", ROOT = "projects";
 let dir = null;   // the folder shown, kept between openings
 try { dir = localStorage.getItem(KEY); } catch (e) {}
 if (!dir || !(dir === ROOT || dir.startsWith(ROOT + "/"))) dir = ROOT;
 
-const fsize = n => (n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(n < 10240 ? 1 : 0) + " kB" : (n / 1048576).toFixed(1) + " MB");
+const fsize = n => (n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(n < 10240 ? 1 : 0) + " kB" : fix((n / 1048576), 1) + " MB");
 const who = f => (f.from ? (f.from === "person" ? "you" : f.from) : "");
 
 function row(name, sub, badge, kind, onclick, cls) {

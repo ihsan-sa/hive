@@ -164,7 +164,7 @@ export default {
     [/^Off\. Turn it on to get a line on your phone when your Hive asks you something or finishes a job, even with this page closed\. It uses ntfy\.sh, a free public service with no account: your Hive sends it one line(.*) and nothing else\.$/, "Desactivados. Actívalos para recibir una línea en el móvil cuando tu Hive te pregunte algo o termine un trabajo, aunque esta página esté cerrada. Usa ntfy.sh, un servicio público y gratuito sin cuenta: tu Hive le envía una línea$1 y nada más."],
     [/^This browser signs what you send with a key only it holds, so an agent can't simply write a message in your name\. Its fingerprint is (\S+)\. It counts once root has pinned it\.$/, "Este navegador firma lo que envías con una clave que solo él tiene, para que un agente no pueda escribir un mensaje en tu nombre sin más. Su huella es $1. Cuenta en cuanto root la haya fijado."],
     [/^updated (\S+) ago$/, "actualizado hace $1"],
-    [/^(\d+[smhd]) ago$/, "hace $1"],
+    [/^(\d+(?:[.,]\d)?[smhd]) ago$/, "hace $1"],
     [/^1 message and (.+)$/, "1 mensaje y $1"],
     [/^1 message$/, "1 mensaje"],
     [/^([\d,]+) messages and (.+)$/, "$1 mensajes y $2"],

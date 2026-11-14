@@ -4,6 +4,7 @@
 // Stats hide in simple mode. Misc is the unfiled conversations: a plain list, no summary, no to-do.
 // It shows in the chat's layout (comms.js inChat), where a conversation would: the rail beside it, its focus marked there.
 import { h } from "../core/dom.js";
+import { LOC } from "../core/format.js";
 import { S, can, post } from "../core/store.js";
 import { threadTitle, agentOn } from "../core/model.js";
 import { plural, dur, ago } from "../core/format.js";
@@ -160,7 +161,7 @@ function page(ctx) {
   // Agents as the chat's pills, each with how long it has been on and its own one line (the me command), never bare codes.
   const pill = n => (simpleOn() ? h("b", null, plainName(n)) : agentRef(n, { pill: true }));
   const agRow = n => { const o = agentOn(n), t = o && scrub(o.text), s = S.lastSess[n];
-    return h("li", { "data-key": "ag:" + n }, h("span", null, pill(n), s && s.start && !s.end ? h("span", { class: "meta t", title: "Started " + new Date(s.start).toLocaleString() }, " for " + dur(Date.now() - s.start)) : null),
+    return h("li", { "data-key": "ag:" + n }, h("span", null, pill(n), s && s.start && !s.end ? h("span", { class: "meta t", title: "Started " + new Date(s.start).toLocaleString(LOC) }, " for " + dur(Date.now() - s.start)) : null),
       t ? h("span", { class: "fp-ag-x" }, say(t)) : null); };
   const agents = ag.now.length || ag.day.length ? h("section", { class: "fp-sec", "data-key": "fp-ag", "aria-label": "Agents" },
     head("Agents", [ag.now.length ? `${ag.now.length} now` : null, ag.day.length ? `${ag.day.length} in the last day` : null].filter(Boolean).join(", ")),

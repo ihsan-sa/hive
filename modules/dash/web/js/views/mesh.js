@@ -2,7 +2,7 @@
 // bands; each agent is drawn once, fanned out right of its main thread with a spoke whose width says how much it posted, and a
 // faint "ghost" beside any other thread it posted in. The layout is fixed by the data (mesh-layout.js), never random. Hand-off
 // lines appear only for the selection. The window picks who appears; replay shows the graph as it was at the cut.
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { S, OUTSIDE, SYS, subscribe, getPref, setPref } from "../core/store.js";
 import { agentLabel, agentStatus, isAgent, isRunning, isWarden, modelName, sEnd, threadTitle, tierOf, fileInfo, spendSince } from "../core/model.js";
 import { ago, clock, dur, firstSentence, money, now, short, toks, plural, DAY, HOUR, MIN } from "../core/format.js";
@@ -512,9 +512,9 @@ function syncReplay() {
   const a = winStart(), b = now(), v = M.cut == null ? 1 : (M.cut - a) / (b - a || 1), p = (Math.max(0, Math.min(1, v)) * 100).toFixed(2) + "%";
   rpFill.style.width = p; rpHandle.style.left = p; rpHandle.setAttribute("aria-valuenow", Math.round(v * 100)); rpHandle.setAttribute("aria-valuetext", M.cut == null ? "live" : clock(M.cut));
   rpHandle.toggleAttribute("data-cut", M.cut != null);
-  rpChip.textContent = M.cut == null ? "Live" : "At " + clock(M.cut); rpChip.toggleAttribute("data-cut", M.cut != null);
+  rpChip.textContent = tr(M.cut == null ? "Live" : "At " + clock(M.cut)); rpChip.toggleAttribute("data-cut", M.cut != null);
   rpBack.hidden = M.cut == null;
-  rpPlay.lastChild.textContent = M.playing ? "Pause" : "Replay";
+  rpPlay.lastChild.textContent = tr(M.playing ? "Pause" : "Replay");
 }
 let lastAdv = 0, lastDraw = 0;
 function startPlay() { if (M.cut == null) M.cut = winStart(); M.playing = true; lastAdv = 0; syncReplay(); requestAnimationFrame(advance); }

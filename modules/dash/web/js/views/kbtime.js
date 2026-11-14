@@ -6,7 +6,7 @@
 // happened in them is not known, and nothing is drawn in their place.
 import { h, s } from "../core/dom.js";
 import { can, jget } from "../core/store.js";
-import { plural, stamp } from "../core/format.js";
+import { plural, stamp, int } from "../core/format.js";
 import { href } from "../core/router.js";
 import { button, empty, icon, seg, needFull, waiting } from "../ui/kit.js";
 
@@ -86,7 +86,7 @@ function graph(t) {
     if (!b.ns.some(n => born(n, t))) continue;
     g.push(s("g", { class: "kbt-box", "data-key": "b:" + b.topic },
       s("rect", { x: b.x, y: b.y, width: b.w, height: b.h, rx: 8 }),
-      s("text", { x: b.x + 8, y: b.y + 16, class: "kbt-bl" }, b.topic + " · " + b.ns.filter(n => inSpan(n.spans, t)).length)));
+      s("text", { x: b.x + 8, y: b.y + 16, class: "kbt-bl" }, b.topic + " · " + int(b.ns.filter(n => inSpan(n.spans, t)).length))));
   }
   for (const l of K.show === "none" && !sn ? [] : shown) {
     const on = sl ? sl === l : sn ? l.a === sn.path || l.b === sn.path : false, d = curve(L.pos.get(l.a), L.pos.get(l.b));
@@ -160,7 +160,7 @@ function overview(t) {
   const recent = D.notes.map(n => [n, n.v.filter(v => v[0] <= t).pop()]).filter(([n, v]) => v && inSpan(n.spans, t)).sort((a, b) => b[1][0] - a[1][0]).slice(0, 8);
   return [
     h("div", { class: "map-sh" }, h("div", null, h("h2", null, "Knowledge over time"), h("small", null, K.cut == null ? "now" : "as recorded at " + stamp(t)))),
-    h("div", { class: "figs" }, fig("Notes", String(alive.length)), fig("Documented links", String(ls.filter(l => l.kind === "doc").length)),
+    h("div", { class: "figs" }, fig("Notes", int(alive.length)), fig("Documented links", int(ls.filter(l => l.kind === "doc").length)),
       fig("Inferred links", String(ls.filter(l => l.kind === "inf").length)), fig("Not recorded", plural(gaps.length, "stretch", "stretches"), "before this time")),
     sec("Changed last", recent.map(([n, v]) => row("r:" + n.path, n.title, stamp(v[0]), () => select({ kind: "note", id: n.path })))),
     h("section", { class: "map-sec" }, button("How to read this", () => { K.how = !K.how; K.update(); }, { kind: "quiet", size: "s", icon: K.how ? "chevron-down" : "chevron-right", cls: "kbt-how-t" })),
@@ -232,7 +232,7 @@ export default {
       h("div", { class: "map-tb" },
         h("a", { href: href("knowledge"), class: "kbt-back" }, icon("chevron-left"), "Knowledge"),
         seg(LINKS, K.show, v => { K.show = v; K.update(); }, { label: "Links" }),
-        h("span", { class: "map-sum", role: "status" }, `${plural(D.notes.length, "note")} ever · ${plural(D.commits, "backup commit")} touched ~/kb`)),
+        h("span", { class: "map-sum", role: "status" }, `${int(D.notes.length)} ${D.notes.length === 1 ? "note" : "notes"} ever · ${int(D.commits)} ${D.commits === 1 ? "backup commit" : "backup commits"} touched ~/kb`)),
       h("div", { class: "map-bd" },
         h("div", { class: "map-chart" },
           h("div", { class: "map-stage kbt-stage" }, h("div", { class: "map-cap", "data-cut": K.cut != null ? "" : null }, K.cut == null ? "Now" : "As recorded at " + stamp(t)), h("div", { class: "kbt-sc" }, graph(t))),
