@@ -25,14 +25,19 @@ jobs:
         set -o pipefail
         # On the site install.sh is get.sh; on the raw branch it is the inner script, so point the VM at get.sh (as win-test.ps1 does)
         sed 's|"$SITE/install.sh"|"$SITE/get.sh"|' get-mac.sh > line.sh; ! cmp -s get-mac.sh line.sh
-        HIVE_CHECK_LINE=line.sh sh mac-check.sh 2>&1 | tee install.log | tail -n 80
+        # To a file, not a pipe: a VM program the script leaves behind would hold the pipe open and the step would run to its 42 minutes with no verdict.
+        HIVE_CHECK_LINE=line.sh sh mac-check.sh > install.log 2>&1 < /dev/null || true
+        tail -n 80 install.log
         grep -q '^done, 0 failed\.' install.log && ! grep -q '^done, [1-9][0-9]* failed' install.log
     - name: The report
       if: always()
       run: cat "$HOME/hive-mac-report.txt" || true
     - name: Lima's log
       if: failure()
-      run: tail -n 40 "$HOME/.hive/lima/hive/ha.stderr.log" 2>/dev/null || true
+      run: |
+        for f in ha.stderr.log serial.log serialv.log serialp.log; do echo "=== $f"; tail -n 60 "$HOME/.hive/lima/hive/$f" 2>/dev/null || true; done
+        ls -la "$HOME/.hive/lima/hive" 2>/dev/null || true
+        ps -axo pid,etime,command | grep -i -E 'lima|hive' | grep -v grep | cut -c1-200 || true
     - name: Uninstall, for real
       if: always()
       timeout-minutes: 5
