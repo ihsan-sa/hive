@@ -442,8 +442,11 @@ def working(r, grace):
     t, w = time.time(), work.setdefault(r["name"], [0, 0.0, 0])
     if queued_heavy(r["name"]):
         w[0], w[1], w[2] = t, cpu_of(r["name"], r["pid"]), t; return True
-    if not w[0]:  # first look: take a sample and decide after a minute of it. Until that minute is
-        # measured it counts as working (w[2] = t); with w[2] = 0 the next poll, seconds later, reaped it
+    if not w[0] or t - w[0] > 180:  # first look: take a sample and decide after a minute of it. Until that minute is
+        # measured it counts as working (w[2] = t); with w[2] = 0 the next poll, seconds later, reaped it.
+        # A sample over 3 min old is a first look too: the run talked in between (a task woke a new turn, which ended
+        # in a new result) or an earlier run of this name left it. Kept, its old w[2] reaped the run at the first poll of its
+        # next quiet stretch with no CPU measured: 25 of 32 reaps on 2026-11-13/14, heavy jobs running in 9 (R35).
         w[0], w[1], w[2] = t, cpu_of(r["name"], r["pid"]), t; return True
     if t - w[0] >= min(60, grace):
         c = cpu_of(r["name"], r["pid"])

@@ -443,7 +443,7 @@ function modulesSection(ctx) {
   };
   const about = x => x.about.replace(/`/g, "") + (x.needs ? ` Needs ${x.needs}.` : "");
   const WHERE = { github: "On GitHub", git: "In a Git repository elsewhere", local: "Only on this machine" };
-  const slackBtn = () => button(F.slack ? "Close" : "Set up", () => { F.slack = F.slack ? null : { step: 1, bot: "", app: "", channel: "#hive" }; ctx.update(); }, { size: "s", kind: F.slack ? "quiet" : null });
+  const slackBtn = () => button(F.slack ? "Close" : "Set up", () => { F.slack = F.slack ? null : { step: 1, bot: "", app: "", channel: "" }; ctx.update(); }, { size: "s", kind: F.slack ? "quiet" : null });
   const end = (x, inBrowse) => {
     if (x.name === "dash") return h("span", { class: "meta" }, "this app");
     if (x.name === "slack-door" && built("slack-door") && !(S.app.slack_door || {}).connected) return slackBtn();
@@ -507,6 +507,9 @@ const MANIFEST = `display_information:
 features:
   bot_user:
     display_name: Hive
+  app_home:
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
 oauth_config:
   scopes:
     bot: [chat:write, reactions:write, channels:history, groups:history, im:history, channels:read, groups:read, im:read, im:write, users:read, files:read, files:write]
@@ -519,13 +522,13 @@ function slackSetup(ctx) {
     h("b", null, title), Z.step === n ? body : Z.step > n ? h("span", { class: "meta" }, "done") : null);
   const connect = async () => {
     if (Z.busy) return; Z.busy = true; ctx.update();
-    try { const r = await post("/api/slack-door", { bot_token: Z.bot.trim(), app_token: Z.app.trim(), channel: Z.channel.trim() }); say("slack", `${r.said} Post in ${r.channel || Z.channel} to test it: an agent answers there.`, "good"); Z.step = 4; Z.bot = Z.app = ""; loadApp().catch(() => {}); }
+    try { const r = await post("/api/slack-door", { bot_token: Z.bot.trim(), app_token: Z.app.trim(), channel: Z.channel.trim() }); say("slack", r.channel && r.channel[0] === "#" ? `${r.said} Post in ${r.channel} to test it: an agent answers there.` : r.said, "good"); Z.step = 4; Z.bot = Z.app = ""; loadApp().catch(() => {}); }
     catch (e) { say("slack", e.message, "bad"); }
     Z.busy = false; ctx.update();
   };
   return h("div", { class: "signin slk", "data-key": "slack" },
     h("p", null, h("b", null, "Reach the Hive from Slack")),
-    h("p", { class: "field-h" }, "One channel is one conversation. You make a small Slack app of your own, so messages go only between your Slack and this computer."),
+    h("p", { class: "field-h" }, "You make a small Slack app of your own, so messages go only between your Slack and this computer. You write to it in its Messages tab, or in a channel."),
     h("ol", { class: "sl-steps" },
       step(1, "Make the Slack app", h("p", { class: "field-h" }, "Slack's page opens with this app text filled in: pick your workspace, then Next and Create. If the box is empty, choose From a manifest and paste this:"),
         h("div", { class: "sl-man" }, h("pre", null, MANIFEST), copyButton(MANIFEST)),
@@ -535,7 +538,7 @@ function slackSetup(ctx) {
           field("Bot token", input({ placeholder: "xoxb-…", autocomplete: "off", spellcheck: "false", value: Z.bot, oninput: (e, n) => { Z.bot = n.value; } })),
           field("App token", input({ placeholder: "xapp-…", autocomplete: "off", spellcheck: "false", value: Z.app, oninput: (e, n) => { Z.app = n.value; } }))),
         h("div", { class: "frow" }, button("Next", () => { if (/^xoxb-/.test(Z.bot.trim()) && /^xapp-/.test(Z.app.trim())) { say("slack", ""); Z.step = 3; } else say("slack", "The bot token starts xoxb- and the app token xapp-.", "bad"); ctx.update(); }, { kind: "primary" }))),
-      step(3, "Pick the channel", field("Channel", input({ value: Z.channel, oninput: (e, n) => { Z.channel = n.value; } }), "Invite the app to it in Slack first: /invite @Hive. Everyone in the channel can direct this Hive, so use a small one."),
+      step(3, "Pick the channel", field("Channel (optional)", input({ value: Z.channel, placeholder: "empty: talk to the app directly", oninput: (e, n) => { Z.channel = n.value; } }), "Leave it empty to write to the app in Slack's Messages tab. If others share your Slack, type your name as Slack shows it. For a #channel, /invite @Hive in it first: everyone there can direct this Hive."),
         h("div", { class: "frow" }, button("Connect", connect, { kind: "primary", busy: Z.busy }), button("Back", () => { Z.step = 2; ctx.update(); }, { kind: "quiet" })))),
     msg("slack"));
 }

@@ -4003,9 +4003,15 @@ def slack_door_connect(d, signer=None):
     bot, app, ch = (str(d.get(k) or "").strip() for k in ("bot_token", "app_token", "channel"))
     if not re.fullmatch(r"xoxb-[A-Za-z0-9-]{8,250}", bot) or not re.fullmatch(r"xapp-[A-Za-z0-9-]{8,250}", app): raise ValueError("The bot token starts xoxb- and the app token xapp-.")
     name = ch.lstrip("#").strip().lower()
-    if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,79}", name): raise ValueError("Give the channel's name, like #hive.")
+    chan_ok = bool(re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,79}", name))
+    if ch.startswith("#") and not chan_ok: raise ValueError("Give the channel's name, like #hive.")
+    if len(ch) > 80: raise ValueError("That name is too long: give your name as Slack shows it, or a #channel.")
     me = slack_call("auth.test", bot, "bot token (xoxb-)")
     slack_call("apps.connections.open", app, "app token (xapp-)")
+    if not ch.startswith("#"):   # empty, or a person's name: direct messages with the app (its Messages tab), no channel to make
+        try: return slack_door_connect_dm(bot, app, ch, signer)
+        except LookupError as e:   # a bare word that names nobody may be a channel written without its #
+            if not chan_ok: raise ValueError(str(e))
     found, cursor = None, ""
     for _ in range(50):
         r = slack_call("conversations.list", bot, "bot token (xoxb-)", types="public_channel,private_channel", exclude_archived="true", limit="200", **({"cursor": cursor} if cursor else {}))
@@ -4018,6 +4024,38 @@ def slack_door_connect(d, signer=None):
     if len(mem) > SLACK_MAX_PEOPLE: raise ValueError(f"#{name} has {len(mem)} members. Everyone in the channel can direct this Hive with this computer's full rights, so pick one with {SLACK_MAX_PEOPLE} or fewer.")
     people = [u for u in mem if u != "USLACKBOT" and not (lambda x: x.get("is_bot") or x.get("deleted"))(slack_call("users.info", bot, "bot token (xoxb-)", user=u).get("user") or {})]
     if not people: raise ValueError(f"Nobody but the app is in #{name}. Join it yourself, then Connect again.")
+    started = slack_door_save(bot, app, people, [found["id"]], "#" + name)
+    dash_note(f"The Slack door was connected to #{name} by {signer or 'this machine'}, in the web app; {len(people)} owner(s). Tokens are in `~/.config/hive/slack-door-*-token`, mode 600. Don't print them.", "slack-door")
+    return {"said": f"Connected to #{name}. {len(people)} {'person' if len(people) == 1 else 'people'} there can use it{started}.", **slack_door_view()}
+
+
+def slack_door_connect_dm(bot, app, who, signer=None):
+    """Connect with no channel: the owner talks to the app in its Messages tab. Who that is comes from the workspace's people: the only
+    person in it, or the one whose Slack name matches what was typed. Nobody else is let in (the door answers listed people only)."""
+    people, cursor = [], ""
+    for _ in range(50):
+        r = slack_call("users.list", bot, "bot token (xoxb-)", limit="200", **({"cursor": cursor} if cursor else {}))
+        people += [u for u in r.get("members") or [] if u.get("id") != "USLACKBOT" and not u.get("is_bot") and not u.get("deleted") and not u.get("is_app_user")]
+        cursor = (r.get("response_metadata") or {}).get("next_cursor") or ""
+        if not cursor: break
+    key = lambda x: re.sub(r"\s+", " ", str(x or "")).strip().lstrip("@").lower()
+    if who.strip():
+        want = key(who)
+        hit = [u for u in people if want in {key(u.get("name")), key(u.get("real_name")), key((u.get("profile") or {}).get("display_name")), key((u.get("profile") or {}).get("real_name"))} - {""}]
+        if not hit: raise LookupError(f"Nobody in this Slack is called {who.strip()}. Give your name as Slack shows it, or a #channel.")
+        if len(hit) > 1: raise ValueError(f"{len(hit)} people in this Slack are called {who.strip()}. Use a #channel with just you in it instead.")
+    else:
+        if not people: raise ValueError("The app can't see anyone in this Slack. Check that the app has the users:read scope (step 1's link adds it).")
+        if len(people) > 1: raise ValueError(f"This Slack has {len(people)} people. Type your name as Slack shows it in the box, or a #channel, so only you can use the Hive.")
+        hit = people
+    owner = hit[0]["id"]
+    started = slack_door_save(bot, app, [owner], [], "direct messages")
+    dash_note(f"The Slack door was connected to direct messages with the app by {signer or 'this machine'}, in the web app; one owner. Tokens are in `~/.config/hive/slack-door-*-token`, mode 600. Don't print them.", "slack-door")
+    return {"said": f"Connected to your direct messages with the app. Open the app in Slack and write to it there{started}.", **slack_door_view()}
+
+
+def slack_door_save(bot, app, owners, channels, label):
+    """Install and start the door with these tokens, owners and channels (an empty list: direct messages only). Returns a note for a test Hive."""
     door = HOME / "modules" / "slack-door" / "door.py"
     if not door.is_file(): module_do("add", "slack-door")
     r = subprocess.run([sys.executable, "-I", str(door), "install"], capture_output=True, text=True, env=child_env(), cwd=str(HOME), timeout=60)
@@ -4028,7 +4066,7 @@ def slack_door_connect(d, signer=None):
     door_refusal_file().unlink(missing_ok=True)   # Slack just took both tokens: an old refusal no longer holds
     c = jload(sd / "slack-door.json", {}) or {}
     c = c if isinstance(c, dict) else {}
-    c.update(owners=people, members=[u for u in c.get("members") or [] if u not in people], channels=[found["id"]], channel_name="#" + name)
+    c.update(owners=owners, members=[u for u in c.get("members") or [] if u not in owners], channels=channels, channel_name=label)
     write_text_private(sd / "slack-door.json", json.dumps(c, indent=1) + "\n")
     # Start it only when systemd's units are this Hive's: a test Hive under another HOME must not restart the machine's real door.
     if HOME.resolve() == Path(pwd.getpwuid(os.getuid()).pw_dir).resolve():
@@ -4037,8 +4075,7 @@ def slack_door_connect(d, signer=None):
             if q.returncode: raise ValueError(f"saved, but the door didn't start: {short(q.stderr, 200)}")
         started = ""
     else: started = " (a test Hive: the door's service wasn't started)"
-    dash_note(f"The Slack door was connected to #{name} by {signer or 'this machine'}, in the web app; {len(people)} owner(s). Tokens are in `~/.config/hive/slack-door-*-token`, mode 600. Don't print them.", "slack-door")
-    return {"said": f"Connected to #{name}. {len(people)} {'person' if len(people) == 1 else 'people'} there can use it{started}.", **slack_door_view()}
+    return started
 
 
 def slack_door_disconnect(signer=None):

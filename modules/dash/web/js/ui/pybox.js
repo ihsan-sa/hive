@@ -17,6 +17,9 @@ export const boxesOn = () => !!coursePage();
 
 // One live frame per post and box, kept across the chat's redraws: morph meets a bare copy (data-own, same sig) and leaves the real one alone.
 const LIVE = new Map();
+// The frame can't see this page, so the dash's theme goes in its address (light or dark, nothing else) and follows a switch.
+const DARK = matchMedia("(prefers-color-scheme: dark)");
+const theme = () => { const t = document.documentElement.dataset.theme; return t === "light" || t === "dark" ? t : DARK.matches ? "dark" : "light"; };
 const hex = n => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => b.toString(16).padStart(2, "0")).join("");
 export function boxEmbed(pid, id) {
   const k = pid + ":" + id, had = LIVE.get(k);
@@ -29,7 +32,9 @@ export function boxEmbed(pid, id) {
   LIVE.set(k, { el, ac });
   import("../preview/render.js").then(m => {   // the listener is on before the page can ask anything
     m.relay(fr, DOOR, key, ac.signal, px => { fr.style.height = px + "px"; });
-    fr.src = viewHref({ kb: page, name: page.split("/").pop() }) + "#door=" + key + "&box=" + id;
+    const at = viewHref({ kb: page, name: page.split("/").pop() }) + "#door=" + key + "&box=" + id + "&theme=";
+    const paint = () => { fr.src = at + theme(); };   // only the fragment changes, so the page keeps its state and just recolours
+    paint(); addEventListener("themechange", paint, { signal: ac.signal }); DARK.addEventListener("change", paint, { signal: ac.signal });
   });
   return el;
 }

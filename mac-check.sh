@@ -127,8 +127,10 @@ main() {
   say; say "--- the install line"
   t0=$(date +%s)
   # A runner VM can hang the install (Lima VM clone/boot) until the CI step's 42 minutes run out with no verdict. Cap each try at 18 minutes (no timeout command on a Mac), and on a hang clear the half-made VM and try once more.
+  # A killed start leaves the instance dir without its ha.sock, and "limactl delete" can fail on it; stop the VM programs and remove the dir by hand.
+  clear_vm() { pkill -f "$HOME/.hive/lima" 2>/dev/null; pkill -f limactl 2>/dev/null; sleep 2; "$L" delete -f hive >/dev/null 2>&1; rm -rf "$HOME/.hive/lima/hive"; }
   try_line() { the_line & p_=$!; ( sleep "${HIVE_CHECK_LINE_SECS:-1080}"; kill "$p_" 2>/dev/null; sleep 5; kill -9 "$p_" 2>/dev/null ) & w_=$!; wait "$p_"; rc_=$?; kill "$w_" 2>/dev/null; wait "$w_" 2>/dev/null; return $rc_; }
-  if try_line || { say "      the line didn't finish: clearing the VM and trying once more"; "$L" delete -f hive >/dev/null 2>&1; try_line; }; then pass "the line finished in $(( ($(date +%s) - t0) / 60 )) min"; else bad "the line failed"; no_virtualization; say "See above in your Terminal; please paste what it said."; exit 1; fi
+  if try_line || { say "      the line didn't finish: clearing the VM and trying once more"; clear_vm; try_line; }; then pass "the line finished in $(( ($(date +%s) - t0) / 60 )) min"; else bad "the line failed"; no_virtualization; say "See above in your Terminal; please paste what it said."; exit 1; fi
   check "the VM is running" sh -c "[ \"\$('$L' list hive --format '{{.Status}}')\" = Running ]"
   say "VM: $(vm uname -m | tr -d '\r') $(vm sh -c '. /etc/os-release; echo $PRETTY_NAME' | tr -d '\r'), Lima $("$L" --version 2>/dev/null | cut -d' ' -f3), Claude Code $(as_hive 'claude --version' 2>/dev/null | head -n 1 | tr -d '\r')"
   check "the VM uses Apple's framework" sh -c "'$L' list hive --format '{{.VMType}}' | grep -qx vz"

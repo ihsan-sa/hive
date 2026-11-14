@@ -167,8 +167,10 @@ export function pills(text) {
 }
 /** An agent code as a pill that is not a link, for text that already sits inside one (a rail row, a Yours entry); anything else as it is. */
 export const codePill = n => (n && isCode(n) ? h("span", { class: "ref pill", "data-kind": "agent", title: inScope() ? agentLabel(n) : n }, agentLabel(n)) : n || "an agent");
+/** A Python box line in a post (`pytutor:box/<16 hex>`, ui/pybox.js) reads as "Python box" in a preview. */
+const BOXLINE = /(^|\n)[ \t]*`?pytutor:box\/[0-9a-f]{16}`?[ \t]*(?=\n|$)/g;
 /** A one-line preview said for the person (R21): ids scrubbed, a leading "Rung:"/"Next:" word and any step word gone, agent codes as codePill. */
-export const sayPlain = (text, max = 70) => short(scrub(String(text || "").replace(/(^|[\s(\[,;:"'])#([\w.-]*\w)/g, (m, a, w) => (S.threads.has(w) ? a + threadTitle(w) : m)).replace(/`/g, "").replace(/\s+/g, " ").replace(/^\s*(?:rung(?:\s+done)?|next|step)\s*:\s*/i, "")).replace(/\b(?:(?:the|rung)\s+)?R\d+[a-z]?\b/g, "the step").replace(/\b(?:[Ll]eftovers\s+)?rung(?:\s+\d+[a-z]?(?:\s+part\s+\w+)?)?(?=\s*[:(" ]|$)/g, "step").replace(/\bstep\s*:\s*/g, ""), max);
+export const sayPlain = (text, max = 70) => short(scrub(String(text || "").replace(BOXLINE, "$1Python box").replace(/(^|[\s(\[,;:"'])#([\w.-]*\w)/g, (m, a, w) => (S.threads.has(w) ? a + threadTitle(w) : m)).replace(/`/g, "").replace(/\s+/g, " ").replace(/^\s*(?:rung(?:\s+done)?|next|step)\s*:\s*/i, "")).replace(/\b(?:(?:the|rung)\s+)?R\d+[a-z]?\b/g, "the step").replace(/\b(?:[Ll]eftovers\s+)?rung(?:\s+\d+[a-z]?(?:\s+part\s+\w+)?)?(?=\s*[:(" ]|$)/g, "step").replace(/\bstep\s*:\s*/g, ""), max);
 /** A thread's title for a list row: a 12-hex post id in it is dropped. */
 export const railTitle = t => { const x = scrub(threadTitle(t)); return x && x !== "Untitled" ? x : threadTitle(t); };
 export function railSay(text, max = 70) {

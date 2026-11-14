@@ -264,7 +264,7 @@
   .fl-list li{padding-block:var(--s1) 0}
   .fl-list li>a{display:block;padding-block:10px}
   .ag-stack .ag .tb>.tr>[data-label]{overflow:clip visible}
-  .ag-stack .ag .tb>.tr .ref{position:relative}
+  .ag-stack .ag .tb>.tr .ref{position:relative;max-width:100%;min-width:0}   /* a long name stops at the row edge, cut with … by .ref-n, instead of running 1000 px past it */
   .ag-stack .ag .tb>.tr .ref::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
 }
 
