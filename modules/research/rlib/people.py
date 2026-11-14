@@ -289,6 +289,8 @@ def title_slot(text, name, title, org=""):
     def role(candidate, appt=False):
         candidate = long_form(fold(candidate)).strip(" .")
         candidate = re.sub(r"^(?:the|a|an)\s+", "", candidate)
+        # "Founder, CEO" or "Co-founder and CEO": the founding is said first, the post after it.
+        if not re.search(r"found", title, re.I): candidate = re.sub(r"^(?:co-?)?founder\s*(?:,|and|&)\s*", "", candidate)
         for part in re.split(r"\s*[;/]\s*", title):
             words = _title_words(part)
             if not words: continue
@@ -463,6 +465,8 @@ def employer_after(text, name, org, window=120):
         tail = re.split(r"[.;:!?\n“”\"]", tail)[0]
         at = re.search(r"\bat\s+(?:the\s+)?([A-Z][\w&-]*(?:\s+[A-Z][\w&-]*)*)", tail)
         if not at: continue
+        # "Ilya Sutskever at the Mathematics Genealogy Project" (a reference title) gives no post, so no employer.
+        if not _ROLE_RE.search(tail[:at.start()]): continue
         words = [fold(w) for w in at.group(1).split()]
         if at.group(1).lower() == initials or set(words) & (own - ORG_NOISE): continue
         # "at the College", "at Downtown Campus": a place within, not another employer.

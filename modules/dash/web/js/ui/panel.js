@@ -3,7 +3,7 @@
 // as on a phone). Escape or a click on empty space closes it; "Full page" is a real link, and refs open in a new tab as usual.
 // A thread opens in Comms, as it always has, so openPanel("thread", name) goes there. openSheet() puts any view's piece in
 // the same panel (Flow's lane opens its project card there): a draw function, drawn again on every store change, and its full page.
-import { h, mount, selecting } from "../core/dom.js";
+import { h, mount, selecting, tr } from "../core/dom.js";
 import { S, subscribe } from "../core/store.js";
 import { agentHref, go, parse, threadHref } from "../core/router.js";
 import { agentPage, loadFeed, pollAgent } from "../views/agent.js";
@@ -45,7 +45,7 @@ function ensure() {
 }
 function show(kind, name, label, draw, href) {
   ensure();
-  P.root.setAttribute("aria-label", label);
+  P.root.setAttribute("aria-label", tr(label));
   const changed = P.kind !== kind || P.name !== name, newKind = P.kind !== kind;
   Object.assign(P, { kind, name, draw, href });
   if (newKind) applyW();

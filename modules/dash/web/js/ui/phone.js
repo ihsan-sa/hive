@@ -8,6 +8,7 @@
 // the comms view), as "On a call" on the agent, and as a card here, where any of them can hang it up.
 import { S, jget, post, emit } from "../core/store.js";
 import { fix } from "../core/format.js";
+import { tr } from "../core/dom.js";
 
 const API = "/api/phone";
 const C = { id: null, n: 0, ctx: null, mic: null, proc: null, src: null, playing: [], cur: null, hold: null, muted: false,
@@ -244,7 +245,7 @@ function fill(html) {
   const box = C.el.querySelector(".ph-lines"); box.scrollTop = back == null ? box.scrollHeight : back;
 }
 function draw() {
-  if (!C.el) { C.el = document.createElement("div"); C.el.className = "ph-call"; C.el.setAttribute("role", "dialog"); C.el.setAttribute("aria-label", "Voice call"); document.body.append(C.el); C.el.addEventListener("click", onClick); }
+  if (!C.el) { C.el = document.createElement("div"); C.el.className = "ph-call"; C.el.setAttribute("role", "dialog"); C.el.setAttribute("aria-label", tr("Voice call")); document.body.append(C.el); C.el.addEventListener("click", onClick); }
   const show = !C.ended || C.id || C.err;
   const other = !show && LIVE.calls.find(c => c.id !== C.id && !LIVE.hidden.has(c.id));
   C.el.hidden = !show && !other; if (other) return drawOther(other); if (!show) return;

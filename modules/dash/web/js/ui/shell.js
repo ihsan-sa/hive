@@ -4,7 +4,7 @@ import { logoClick } from "../core/alias.js";
 import { HELP, startTour } from "./tour.js";
 import { openShortcuts } from "./switcher.js";
 import { canFeedback, openFeedback, FEEDBACK_KEY } from "./feedback.js";
-import { h, s } from "../core/dom.js";
+import { h, s, tr } from "../core/dom.js";
 import { S, can, needsAccount, poll } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
 import { accountUse, activeUse, fresh7, inUse, runOut, runway, totalUse, limitStop } from "../core/model.js";
@@ -43,7 +43,7 @@ export function fullscreenButton() {
   if (!fsDoc.fullscreenEnabled) return null;
   return h("button", { type: "button", class: "btn fs", "data-kind": "icon", title: fsSay(), "aria-label": fsSay(), onclick: fsToggle }, fsIcon());
 }
-fsDoc.addEventListener("fullscreenchange", () => { for (const b of document.querySelectorAll(".fs")) { b.replaceChildren(fsIcon()); b.title = fsSay(); b.setAttribute("aria-label", fsSay()); } });
+fsDoc.addEventListener("fullscreenchange", () => { for (const b of document.querySelectorAll(".fs")) { b.replaceChildren(fsIcon()); b.title = tr(fsSay()); b.setAttribute("aria-label", b.title); } });
 addEventListener("keydown", e => {
   if ((e.key !== "f" && e.key !== "F") || e.ctrlKey || e.metaKey || e.altKey || !fsDoc.fullscreenEnabled) return;
   if (e.target.closest && e.target.closest("input,textarea,select,[contenteditable]")) return;

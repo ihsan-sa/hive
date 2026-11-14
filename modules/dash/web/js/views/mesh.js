@@ -387,7 +387,7 @@ function syncGraph(D) {
   scroller.toggleAttribute("data-free", isFree); zoomEl.hidden = !isFree;
   if (isFree) { if (!GS.view.user) fitView(L); applyView(); } else { cv.style.transform = ""; cv.removeAttribute("data-lod"); }
   syncCap(D);
-  stage.setAttribute("aria-label", `Graph of the hive: ${M.count}. Tab walks ${S.app.app ? "conversations" : "threads"} and agents; Enter selects, Escape clears.`);
+  stage.setAttribute("aria-label", `${tr("Graph of the hive")}: ${tr(M.count)}. ${tr(`Tab walks ${S.app.app ? "conversations" : "threads"} and agents; Enter selects, Escape clears.`)}`);
   if (M.q !== GS.q) { GS.q = M.q; if (S2.hits[0] && !isFree) scroller.scrollTo({ top: Math.max(0, S2.hits[0].y - 60), behavior: reduced() ? "auto" : "smooth" }); }
   legend(L);
 }
@@ -730,7 +730,7 @@ export default {
     const showEmpty = !M.lanes.length && (M.active || !M.more.length);
     if (!showEmpty) syncGraph(D);
     const chart = h("div", { class: "map-chart" }, showEmpty ? emptyEl(D) : keep(stage), M.tile ? null : replayEl);
-    const root = h("div", { class: "map", "data-key": "mesh", "data-tile": M.tile ? "" : null, "aria-label": "Map: " + M.count },
+    const root = h("div", { class: "map", "data-key": "mesh", "data-tile": M.tile ? "" : null, "aria-label": tr("Map") + ": " + tr(M.count) },
       M.tile ? null : navBox(), M.tile ? null : toolbar(), h("div", { class: "map-bd" }, chart, M.tile ? null : sidePane(D)));
     // the live element is found after the page puts it in place
     requestAnimationFrame(() => {

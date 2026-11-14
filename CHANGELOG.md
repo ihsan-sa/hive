@@ -4,6 +4,12 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Web search puts the page you meant first
+
+The research module's merged search ranked a page that repeats the words of your query above the page those words name: a paper's own page or a project's repository often came second or third, behind posts about it. The order the search engines give now stands once a result speaks to the query at all, and word overlap only sinks results that barely fit. On 24 fresh lookups the right page came first in 22, up from 11.
+
+Checking a person's post against a page also reads "Founder, CEO" as CEO, and no longer takes "Name at the Mathematics Genealogy Project" as an employer.
+
 ## Tall videos show whole in the preview
 
 A video taller than the preview panel, such as a phone clip or a 9:16 story, ran off the bottom of the panel, so its lower part was cut off. It now fits the height of the panel, the way a picture does.

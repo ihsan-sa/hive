@@ -1,6 +1,6 @@
 // Timeline: a row per thread, a bar per session, a tick per post. Fit (the default) shows the current run of activity,
 // so recent work doesn't sit in a sliver at the right. A bar's name shows only if it fits; hover or focus shows it always.
-import { h, s, morph } from "../core/dom.js";
+import { h, s, morph, tr } from "../core/dom.js";
 import { LOC } from "../core/format.js";
 import { S, SYS, getPref, setPref } from "../core/store.js";
 import { HOUSE_THREADS, agentStatus, isRunning, sEnd, threadTitle, tierOf } from "../core/model.js";
@@ -222,7 +222,7 @@ function tipAt(e) { const n = e.pointerType === "touch" ? null : tipNode(e.targe
 
 // ---- toolbar ----
 const presetValue = () => { if (T.fit) return "fit"; if (T.end != null) return null; return Object.keys(WIN).find(k => WIN[k] === T.win) || null; };
-function small(l, say, f) { const b = button(l, f, { size: "s", title: say }); b.setAttribute("aria-label", say); return b; }
+function small(l, say, f) { const b = button(l, f, { size: "s", title: say }); b.setAttribute("aria-label", tr(say)); return b; }
 function toolbar() {
   const r = range(now());
   return [h("div", { class: "cvp-ctl" },

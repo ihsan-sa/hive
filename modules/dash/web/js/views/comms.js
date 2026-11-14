@@ -6,7 +6,7 @@
 // The thread list and the message list are data-own: morph leaves them alone and sync() below writes them, once the
 // render has been mounted. A poll with nothing new touches nothing in them; a new post is appended, not redrawn, before
 // the messages still on their way (.cm-out), which sync() keeps apart.
-import { h, morph } from "../core/dom.js";
+import { h, morph, tr } from "../core/dom.js";
 import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
 import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
@@ -211,7 +211,7 @@ function lineRow(p, sh, ctx) {
   const line = labelCodes(String(sh.line || "").replace(/^(\d\d:\d\d (@?[\w-]+): )@?\2\b[:,]?\s*/, "$1"));
   const open = () => { OPENED.add(p.id); L.rebuild = true; L.keep = true; L.ctx && L.ctx.update(); };
   return h("div", { class: "cm-oneline", "data-key": p.id, "data-show": KIND_NAME[postKind(p)] || "" },
-    h("button", { type: "button", class: "cm-one-b", "aria-label": "Open the whole message: " + line, title: "Open the whole message", onclick: open }, h("span", { class: "cm-one-t" }, line)),
+    h("button", { type: "button", class: "cm-one-b", "aria-label": tr("Open the whole message") + ": " + tr(line), title: "Open the whole message", onclick: open }, h("span", { class: "cm-one-t" }, line)),
     (sh.also || []).map(a => h("p", { class: "cm-one-also meta" }, labelCodes(a))));
 }
 function evRow(e) {

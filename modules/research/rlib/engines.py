@@ -265,10 +265,18 @@ def merge(lists, n=30, rrf=60, q=""):
             if h.source not in e["sources"]: e["sources"].append(h.source)
             if len(h.snippet) > len(e["snippet"]): e["snippet"] = h.snippet
             e["date"] = e["date"] or h.date
+    phrases = parse_query(q)[0]
     for e in best.values():
-        e["relevance"] = round(relevance(q, e["title"], e["snippet"], e["url"]), 2)
-        e["score"] = round(e["score"] * (0.15 + e["relevance"]), 5)
+        rel = relevance(q, e["title"], e["snippet"], e["url"])
+        e["relevance"] = round(rel, 2)
+        # Word overlap only sinks results that barely speak to the query. Above FULL_FIT the engines' own order stands:
+        # a canonical page (a repo, a paper's home) has a short title and says fewer of the query's words than a page written to echo them.
+        held = phrases and not all(p in fold(f"{e['title']} {e['snippet']} {urllib.parse.unquote(e['url']).replace('-', ' ').replace('_', ' ')}") for p in phrases)
+        e["score"] = round(e["score"] * (0.15 + (rel if held else 0.85 * min(1.0, rel / FULL_FIT))), 5)
     return sorted(best.values(), key=lambda e: -e["score"])[:n]
+
+
+FULL_FIT = 0.25  # the share of the query's words a result needs before its engines' rank alone decides
 
 
 def search(q, sources, n=10, case=None):

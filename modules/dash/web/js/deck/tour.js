@@ -2,6 +2,7 @@
 // While it runs, only the control it asks for reaches the page. So a stray press does nothing, and the practice Kill window can only be cancelled.
 import { go, parse } from "../core/router.js";
 import { can } from "../core/store.js";
+import { tr } from "../core/dom.js";
 import { closePanel, panelOpen } from "../ui/panel.js";
 import { canChange, D, disarm, runningAgents, setTour, tabs, watch } from "./control.js";
 import { LED } from "./flx4.js";
@@ -45,7 +46,7 @@ const leftPad = i => e => e.c === "pad" && e.deck === 1 && !e.shift && e.i === i
 const press = (c, deck) => e => e.c === c && (deck == null || e.deck === deck) && e.on;
 const jog = deck => e => e.c === "jog" && e.deck === deck;
 const count = n => { let k = 0; return { reset() { k = 0; }, hit: () => ++k >= n }; };
-const viewPad = (id, title, text) => ({ title, text: () => `Press left pad ${padIndex(id) + 1}. ${text}`, show: () => [`padL${padIndex(id)}`], wantFn: () => leftPad(padIndex(id)), skip: () => padIndex(id) < 0 || padIndex(id) > 7 });
+const viewPad = (id, title, text) => ({ title, text: () => tr(`Press left pad ${padIndex(id) + 1}.`) + " " + tr(text), show: () => [`padL${padIndex(id)}`], wantFn: () => leftPad(padIndex(id)), skip: () => padIndex(id) < 0 || padIndex(id) > 7 });
 const STEPS = [
   { title: "A tour of the deck", text: "It tells you what to press and waits for you. Only the control it asks for works while it runs, so nothing can go wrong. Press PLAY on the left deck to start, or CUE to skip it.", show: ["playL", "cueL"], want: e => e.on && (e.c === "play" || e.c === "cue"), own: e => { if (e.c === "cue") end(); else next(); } },
   { at: "now", ...viewPad("now", "The left pads are your views", "That's Now: every agent running and what it's doing. The lit pad is the view you're on.") },
@@ -100,15 +101,16 @@ const ledsFor = k => {
 let win = null, at = -1, hits = 0, moving = 0, hintTimer = 0, unwatch = null, placer = 0, armedByTour = false;
 const step = () => STEPS[at];
 const val = x => (typeof x === "function" ? x() : x);
+const say = x => tr(val(x));   // E18x: a step's words in the chosen language
 const wantOf = s => (s.wantFn ? s.wantFn() : s.want);
 export const touring = () => !!win;
 
 function paint() {
   const s = step(); if (!win || !s) return;
   const shown = STEPS.filter(x => !x.skip || x === s || !x.skip()), n = shown.indexOf(s) + 1;
-  win.querySelector(".dt-n").textContent = `${Math.max(1, n)} of ${shown.length}`;
-  win.querySelector(".dt-t").textContent = s.title;
-  win.querySelector(".dt-p").textContent = val(s.text);
+  win.querySelector(".dt-n").textContent = tr(`${Math.max(1, n)} of ${shown.length}`);
+  win.querySelector(".dt-t").textContent = tr(s.title);
+  win.querySelector(".dt-p").textContent = say(s.text);
   hint("");
   const show = new Set(val(s.show));
   for (const g of win.querySelectorAll(".dt-c")) g.toggleAttribute("data-want", show.has(g.dataset.k));
@@ -143,8 +145,8 @@ function before(e) {
   const s = step(); if (!s) return true;
   if (moving) return false;
   if (!wantOf(s)(e)) {
-    if (e.c === "pad" && e.mode !== "hotcue") hint("The pads are on another mode. Press HOT CUE above them.");
-    else hint(`That was ${NAME[e.c] || e.c}. The lit control is the one to use.`);
+    if (e.c === "pad" && e.mode !== "hotcue") hint(tr("The pads are on another mode. Press HOT CUE above them."));
+    else hint(tr(`That was ${NAME[e.c] || e.c}.`) + " " + tr("The lit control is the one to use."));
     return false;
   }
   if (s.own) { s.own(e); return false; }
@@ -176,9 +178,10 @@ const place = () => { if (!win) return; const home = document.querySelector("dia
 export function start() {
   if (win || D.state !== "on") return;
   try { localStorage.setItem(SEEN, "1"); } catch (e) { /* private window: the tour may offer itself again */ }
-  win = document.createElement("div"); win.className = "deck-tour"; win.setAttribute("role", "dialog"); win.setAttribute("aria-label", "Deck tour");
-  win.innerHTML = `<div class="dt-top"><b>Deck tour</b><span class="dt-n meta"></span><span class="dt-btns"></span></div>${DRAWING}<h3 class="dt-t"></h3><p class="dt-p"></p><p class="dt-h" hidden></p>`;
-  win.querySelector(".dt-btns").append(button("Back", "quiet", () => goTo(Math.max(0, at - 1), -1)), button("Skip step", "quiet", next), button("End", "quiet", end));
+  win = document.createElement("div"); win.className = "deck-tour"; win.setAttribute("role", "dialog"); win.setAttribute("aria-label", tr("Deck tour"));
+  win.innerHTML = `<div class="dt-top"><b>${tr("Deck tour")}</b><span class="dt-n meta"></span><span class="dt-btns"></span></div>${DRAWING}<h3 class="dt-t"></h3><p class="dt-p"></p><p class="dt-h" hidden></p>`;
+  win.querySelector(".dt-btns").append(button(tr("Back"), "quiet", () => goTo(Math.max(0, at - 1), -1)), button(tr("Skip step"), "quiet", next), button(tr("End"), "quiet", end));
+  win.querySelector(".dt-deck").setAttribute("aria-label", tr("Drawing of the DDJ-FLX4 with the control to use lit"));
   drag(win.querySelector(".dt-top"));
   armedByTour = D.armed;
   setTour({ before, after });

@@ -344,7 +344,7 @@ export default {
 
   "The topic your phone follows stops working. You'd subscribe to the new one on your phone.": "El tema que sigue tu móvil deja de funcionar. Tendrías que suscribirte al nuevo en el móvil.",
   "New topic. Subscribe to it on your phone; the old one is dead.": "Tema nuevo. Suscríbete a él en el móvil; el antiguo ya no sirve.",
-  "Stop the Hive?": "¿Parar el Hive?",
+  "Stop the Hive?": "¿Detener el Hive?",
   "Agents finish their turn, and nothing new starts until you start it again here.": "Los agentes terminan su turno, y nada nuevo empieza hasta que lo vuelvas a iniciar aquí.",
   "The Hive stops answering in Slack and deletes its two Slack tokens from this computer. You can connect again from this row.": "El Hive deja de responder en Slack y borra sus dos tokens de Slack de este ordenador. Puedes volver a conectarlo desde esta fila.",
   "This ends the run right away. Type the code to enable the button.": "Esto termina la ejecución en el acto. Escribe el código para activar el botón.",
@@ -447,6 +447,7 @@ export default {
     [/^Type (\S+) to confirm$/, "Escribe $1 para confirmar"],
     [/^Kill (\S+)\?$/, "¿Parar $1?"],
     [/^Kill (\S+)$/, "Parar $1"],
+    [/^Stop (.+?)(?:'s|') agent now(\?)?$/, (_, x, q) => `${q ? "¿" : ""}Parar ya al agente de «${x}»${q || ""}`],   // E18u: askStop's "Stop X's agent now?"
     [/^Stop (.+)\?$/, "¿Parar $1?"],
     [/^Nothing was (stopped|killed)$/, "No se paró nada"],
     [/^Doing now: (.+)$/s, "Haciendo ahora: $1"],

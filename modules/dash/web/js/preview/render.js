@@ -90,11 +90,17 @@ export function relay(fr, door, key, signal, onSize) {
   };
   addEventListener("message", on, signal ? { signal } : undefined);
 }
+// A Python box pinned from the chat (ui/pybox.js) is the course page with its box id and the dash's theme in the fragment, as inline.
+const DARK = matchMedia("(prefers-color-scheme: dark)");
+const theme = () => { const t = document.documentElement.dataset.theme; return t === "light" || t === "dark" ? t : DARK.matches ? "dark" : "light"; };
 function page(it, signal) {
   const door = doorOf(it), key = door ? Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("") : "";
-  const src = () => viewHref(it) + (door ? "#door=" + key : "");
-  const fr = h("iframe", { class: "pv-frame", src: src(), title: it.name, sandbox: "allow-scripts allow-modals allow-pointer-lock", referrerpolicy: "no-referrer", loading: "lazy" });
+  const box = door && /^[0-9a-f]{16}$/.test(it.box || "") ? it.box : "";
+  const src = () => viewHref(it) + (door ? "#door=" + key : "") + (box ? "&box=" + box + "&theme=" + theme() : "");
+  // a pinned box gets the frame name pybox-pin (not in the address) so it fills the panel instead of sizing to its content
+  const fr = h("iframe", { class: "pv-frame", name: box ? "pybox-pin" : null, src: src(), title: it.label || it.name, sandbox: "allow-scripts allow-modals allow-pointer-lock", referrerpolicy: "no-referrer", loading: "lazy" });
   if (door) relay(fr, door, key, signal);
+  if (box && signal) { const paint = () => { fr.src = src(); }; addEventListener("themechange", paint, { signal }); DARK.addEventListener("change", paint, { signal }); }   // only the fragment changes: the box keeps its state
   return h("div", { class: "pv-page" },
     h("div", { class: "pv-note meta" }, h("span", null, door ? "Interactive page, sandboxed: it can't reach this dashboard, only its own practice service." : "Interactive page, sandboxed: it can't reach this dashboard or the network."),
       h("button", { type: "button", class: "pv-zb", onclick: () => { fr.src = "about:blank"; setTimeout(() => { fr.src = src(); }); } }, "Reload")),
@@ -195,7 +201,7 @@ export async function render(it, { source, signal } = {}) {
     return { node: wrap(await office[k](buf, it.name)) };
   }
   if (k === "svg" && !source) return { node: image(it, viewHref(it)), source: true };
-  if (k === "html" && !source) return { node: page(it, signal), source: true };
+  if (k === "html" && !source) return { node: page(it, signal), source: !it.box };
 
   const tx = await textOf(it, signal);
   if (tx.bin || (k === "other" && /[\0-\x08\x0e-\x1a]/.test(tx.t.slice(0, 4096)))) return noPreview(it, "There's no preview for this kind of file.");

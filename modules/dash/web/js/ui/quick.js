@@ -1,7 +1,7 @@
 // The quick-answer panel (the person, 11081242a38e): a waiting item on the home or a focus page opens here, on the right
 // (a bottom sheet on a phone), with the question, the last few messages above it, and a box that sends through the
 // chat's own path (composer.answer: same signing, outbox, sending/sent/failed and Retry). The page under it stays put.
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { S, post, emit } from "../core/store.js";
 import { threadHref } from "../core/router.js";
 import { displayText, isAgent, threadTitle } from "../core/model.js";
@@ -51,7 +51,7 @@ export function setLater(w, what) {
   return post("/api/focus", { later: { what, key, th: w.th, focus: fid, text: w.text || "", t: w.t || null } }).then(() => loadFoci(true), () => loadFoci(true));
 }
 /** The two quiet buttons beside Answer. Each has an icon and its name as aria-label: the home's waiting rows show the icon alone (css §1), the panel shows both. */
-const laterBtn = (label, ic, cls, title, fn) => { const b = button(label, e => { if (e) e.stopPropagation(); fn(); }, { size: "s", kind: "quiet", cls, title, icon: ic }); b.setAttribute("aria-label", label); return b; };
+const laterBtn = (label, ic, cls, title, fn) => { const b = button(label, e => { if (e) e.stopPropagation(); fn(); }, { size: "s", kind: "quiet", cls, title, icon: ic }); b.setAttribute("aria-label", tr(label)); return b; };
 export const laterButtons = w => [
   laterBtn("Later", "clock", "nd-later", "Later: not now, move it out of the count", () => setLater(w, "later")),
   laterBtn("Not needed", "close", "nd-moot", "Not needed: it's obsolete or done, drop it", () => setLater(w, "moot")),

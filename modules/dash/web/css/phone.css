@@ -26,7 +26,7 @@
   .top-in .top-status>span{height:32px;max-width:46vw;overflow:clip visible;text-overflow:ellipsis;white-space:nowrap}
   .top-in .btn[data-kind=icon]{min-width:40px;height:40px}
   /* a conversation, a file and the keyboard take the whole screen: no top bar, no bottom bar */
-  .app[data-view=thread] .top,.app[data-kb=open] .top,.top:has(~ #main .kb[data-in]){display:none}
+  .app[data-view=thread] .top:not(:has(.lost)),.app[data-kb=open] .top:not(:has(.lost)),.top:has(~ #main .kb[data-in]):not(:has(.lost)){display:none}   /* offline, the bar stays: its band is the only place that says so */
 
   /* ---- the bottom bar: Chat, Agents, Usage, Knowledge, More ---- */
   #mnav{display:block}

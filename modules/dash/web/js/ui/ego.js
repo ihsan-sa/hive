@@ -2,7 +2,7 @@
 // and the links among all of those. It draws on the Mesh's engine (ui/graph.js), so it behaves the same: live forces, drag a
 // node and the rest react, pan, zoom, hover brings out one node's links, and pulses when a post lands. A poll moves nothing
 // unless the data changed. The page scrolls around it: plain wheel scrolls, ctrl+wheel or pinch zooms.
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { S, OUTSIDE, SYS, subscribe } from "../core/store.js";
 import { agentStatus, isAgent, isRunning, isWarden, sEnd, threadTitle, tierOf } from "../core/model.js";
 import { agentHref, threadHref } from "../core/router.js";
@@ -73,7 +73,7 @@ function hostFor(host) {
     onOpen: n => { if (n.id !== H.name && now() - H.opened > 600) open(n.id); },   // a double click's second half opens nothing new
   });
   G.el.addEventListener("wheel", e => { if (!e.ctrlKey) hideTip(); }, { passive: true });
-  const zoom = (l, title, f) => { const b = button(l, f, { size: "s", title }); b.setAttribute("aria-label", title); return b; };
+  const zoom = (l, title, f) => { const b = button(l, f, { size: "s", title }); b.setAttribute("aria-label", tr(title)); return b; };
   const bar = h("div", { class: "ego-bar" }, zoom("−", "Zoom out", () => G.zoom(1 / 1.3)), zoom("+", "Zoom in", () => G.zoom(1.3)), button("Fit", () => G.refit(), { size: "s", title: "Fit everything on the stage (or double-click empty space)" }));
   // a post landing between nodes: the same pulses as the Mesh
   subscribe(w => {
@@ -118,7 +118,7 @@ export function ego({ name: n, links, started, threads, parent, version, host = 
       weight: Math.max(1, e.n), age: e.last ? t - e.last : 0, faint: !mine || e.kind === "thread", dashed: e.spawn && !e.n, arrowTo: e.spawn ? e.spawnTo : null, hub: OUTSIDE.has(e.a) || OUTSIDE.has(e.b), floor: mine ? (e.kind === "msg" ? 0.5 : 0.28) : 0 }; });
     const added = G.set(nodes, list);
     if (fresh && added <= 8) G.nudge(1);   // a small graph settles in view; a big one was settled by set()
-    G.el.setAttribute("aria-label", `Who ${n} works with: ${plural(N, "node")}. Arrow keys walk them, Enter opens one, plus and minus zoom, 0 refits.`);
+    G.el.setAttribute("aria-label", `${tr(`Who ${n} works with: ${plural(N, "node")}.`)} ${tr("Arrow keys walk them, Enter opens one, plus and minus zoom, 0 refits.")}`);
   }
   queueMicrotask(() => {
     const stage = document.querySelector(`.ego-stage[data-host="${host}"]`);
