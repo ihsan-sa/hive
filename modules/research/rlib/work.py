@@ -228,6 +228,7 @@ class Hunt:
         self.workers = int(spec.get("workers", 4))
         for k, v in (("target", self.target), ("per_org", self.per_org), ("workers", self.workers)):
             if v < 1: raise ValueError(f"spec {k} must be at least 1, not {v}")
+        if "max_seconds" in spec and spec["max_seconds"] is not None and spec["max_seconds"] <= 0: raise ValueError(f"spec max_seconds must be above 0, not {spec['max_seconds']}")
         m = spec.get("must") or []
         if isinstance(m, str): m = [m]  # one word given bare: not a list of its letters
         if not isinstance(m, list) or not all(isinstance(x, str) for x in m): raise ValueError("spec must is a list of words (or one word)")

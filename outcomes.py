@@ -412,6 +412,45 @@ def stats(rows):
     return {"outcomes_graded": len(rows), "outcome_delivered_pct": round(100.0 * n["delivered"] / den, 1) if den else None,
             "outcomes_silent": n["silent"], "outcomes_nothing": n["nothing"], "outcomes_intent_only": sum(1 for r in rows if intent_only(r)), **{f"outcomes_{g}": v for g, v in n.items()}}
 
+# R39 (ae868, 2026-11-14; from projects/hive-meta/followups.py, R37): a run that hands work on, promises it or starts a long job
+# is short at the moment of grading, so the delivered share can't tell "came an hour later" from "never came". The cause is read
+# from the grader's why-line, first match wins (the same list as projects/hive-meta/misses.py; keep the two in step).
+MISS_CAUSES = [
+    ("wait", r"nothing due|date-?(gated|wait)|not runnable before|wait(s|ing)? for|reported a wait|all rungs dated|restated the wait|no rung is open"),
+    ("handed-on", r"hand(ed|s)?\b.{0,60}\b(to|over)\b|delegat|builder|re-handed|brief"),
+    ("promised", r"promised|said it will|only planned|deferred|not yet (built|installed)|no file delivered"),
+    ("rung-not-passed", r"not ticked|stays blocked|not passable|not passed|not yet reached|blocked on|check (still )?(red|failed)|split off|couldn't finish"),
+    ("long-job", r"render|build (unfinished|not finished|configured)|still running|in progress|not (yet )?finished|queued|rerun|pending|in local bar|not merged|nothing merged"),
+]
+FOLLOW = ("handed-on", "promised", "long-job")
+FOLLOW_H = 6
+
+def miss_cause(r):
+    if r.get("grade") in ("delivered", "silent") or r.get("grade") not in GRADED: return None
+    for name, rx in MISS_CAUSES:
+        if re.search(rx, r.get("why") or "", re.I): return name
+    return None
+
+def followups(rows, t0, t1, hours=FOLLOW_H, t=None):
+    """Of the handed-on, promised and long-job misses that started in [t0, t1) and whose `hours` have run out (or that closed sooner),
+    the share closed within `hours`: a later delivered run by the same agent in the same thread, or, for a handed-on miss, by the same
+    agent anywhere or by a run it woke. An upper bound (the later run may have answered another ask). Misses still inside their
+    `hours` are pending and left out, so the newest hours of a window don't read as never."""
+    t = t or now()
+    def ts(x): return dt.datetime.fromisoformat(x.replace("Z", "+00:00"))
+    done = sorted((r for r in rows if r.get("grade") == "delivered" and r.get("started")), key=lambda r: r["started"])
+    closed = judged = 0
+    for m in rows:
+        c = miss_cause(m)
+        if c not in FOLLOW or not (t0 <= (m.get("started") or "") < t1): continue
+        e0 = ts(m.get("ended") or m["started"]); lim = e0 + dt.timedelta(hours=hours)
+        hit = any(e0 <= ts(r["started"]) <= lim and r is not m and
+                  ((r.get("name") == m.get("name") and (r.get("thread") == m.get("thread") or c == "handed-on")) or (c == "handed-on" and r.get("from") == m.get("name")))
+                  for r in done)
+        if hit: closed += 1; judged += 1
+        elif t >= lim: judged += 1
+    return {"followup_misses": judged, "followup_closed_pct": round(100.0 * closed / judged, 1) if judged else None}
+
 def cmd_list(a):
     rows = [r for r in recent(a.since) if (not a.grade or r.get("grade") == a.grade) and (not a.name or r.get("name") == a.name)]
     for r in rows: print(f"{r.get('at', '')[:16]}  {r.get('name')}  {r.get('grade'):<10} woken by {r.get('from')} in {r.get('thread')} (post {r.get('post')}): {r.get('why', '')}")

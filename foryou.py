@@ -11,7 +11,7 @@ LONG_WORDS = 30
 FENCE, SPAN = re.compile(r"```.*?```", re.S), re.compile(r"`[^`\n]*`")
 PATH = re.compile(r"(?<!\S)[\w.~-]*/[\w.~/-]*(?=[\s,;:!?)]|$)")
 CHAIN = re.compile(r"\bthen\b|\bafter that\b|\bonce you\b|(?:^|\s)1[.)]\s.*(?:^|\s)2[.)]\s", re.I | re.S)
-OURS = re.compile(r"\b(?:reload|refresh|test (?:it|this|that|the|on|whether|if)|try it|confirm (?:that )?it works)\b|\bsay (?:if|whether) it looks right\b"
+OURS = re.compile(r"\b(?<![-\w])(?:reload|refresh(?![- ]tokens?)|test (?:it|this|that|the|on|whether|if)|try it|confirm (?:that )?it works)\b|\bsay (?:if|whether) it looks right\b"
                   r"|\breview (?:the |this |that |our |a |an )?(?:open )?(?:pr|pull request)\b"
                   r"|\bopen (?:the |your |a )?(?:\w+ )?(?:dashboard|app|page|card)\b.*\b(?:say|check|see)\b", re.S)
 WHY = {"long": "It is over 30 words.",

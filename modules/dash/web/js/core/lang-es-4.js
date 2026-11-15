@@ -38,6 +38,15 @@ export default {
   "Killed": "Detenido",
   "Stopped at a limit": "Parado en un límite",
   "Stopped": "Parado",   // E18z: the Agents header kicker
+  // E18za: simple mode (seen with SIMPLE=1 in lang_dump.mjs)
+  "Your Hive": "Tu Hive",
+  "Working on it": "Trabajando en ello",
+  "Stop this work": "Parar este trabajo",
+  "Your Hive is working on it.": "Tu Hive está trabajando en ello.",
+  "Your Hive has stopped for now. Send a message when you want more.": "Tu Hive ha parado por ahora. Envía un mensaje cuando quieras más.",
+  "No conversations yet. Start one with New conversation.": "Aún no hay conversaciones. Empieza una con Nueva conversación.",
+  "nearly all": "casi todo", "most": "la mayor parte", "about half": "cerca de la mitad", "a third": "un tercio", "a quarter": "un cuarto",
+  "a sixth": "un sexto", "a tenth": "un décimo", "a little": "un poco",
   "Any status": "Cualquier estado",
   "No agents have run yet. When one starts, it shows here.": "Aún no ha corrido ningún agente. Cuando empiece uno, aparece aquí.",
   "No agents match.": "Ningún agente coincide.",
@@ -663,8 +672,8 @@ export default {
     [/^Last step: (?:Running: )?([\s\S]+)$/, (m, x) => `Último paso: ${/^Last step: Running: /.test(m) ? "Ejecutando: " : ""}${x}`],
     [/^is working: ([\s\S]+)$/, "está trabajando: $1"],
     // E18z: any one-word name ("Open seeds", "Stop cd34e"); every fixed "Open …"/"Stop …" label is an exact key, which tr() tries first.
-    [/^Stop (\S+)$/, "Parar $1"],
-    [/^Open (\S+)$/, "Abrir $1"],
+    // E18za: any name, spaces included ("Stop Your Hive", "Open Garden beds"); simple mode's built-in names read as Spanish.
+    [/^(Stop|Open) (.+)$/, (_, v, n) => `${v === "Stop" ? "Parar" : "Abrir"} ${({ "Your Hive": "tu Hive", "the Hive": "el Hive", you: "ti" })[n] || n}`],
     // E18z: the box's live run (sign-in band, the Now meta line, the busy send hint, failed exits)
     [/^Sign in again to Claude: (?:1 agent is|(\d+) agents are) waiting\.( Settings > Accounts\.)?$/, (_, n, s) => `Vuelve a iniciar sesión en Claude: ${n ? n + " agentes esperan" : "1 agente espera"}.${s ? " Ajustes > Cuentas." : ""}`],
     [/^Sign in again to Claude\. New agents wait until you do\.( Settings > Accounts\.)?$/, (_, s) => `Vuelve a iniciar sesión en Claude. Los agentes nuevos esperan hasta que lo hagas.${s ? " Ajustes > Cuentas." : ""}`],
