@@ -153,7 +153,7 @@
 .kb-cover{list-style:none;display:flex;flex-wrap:wrap;gap:var(--s2)}
 .kb-cover li{display:flex;align-items:baseline;gap:6px;padding:4px 10px;background:var(--sunken);border-radius:var(--r-pill);font-size:var(--fs-meta);color:var(--ink-2)}
 .kb-cover b{color:var(--ink);font-weight:var(--w-bold);font-variant-numeric:tabular-nums}
-.kb-phone{display:none}
+.kb-phone,.kb-phone.kb-acts-p{display:none}
 
 /* ================= Ask the Hive ================= */
 /* One card: the thread (when there is one) on top, the composer at the bottom. Home page: full; a file page with an
@@ -288,6 +288,7 @@
   .kb-phone.kb-find{padding:0 var(--s4) var(--s3)}
   .kb:not([data-in]) .kb-phone.kb-find{top:var(--bar-h)}   /* sticks under the top bar, not behind it */
   .kb-phone.kb-ask-p{padding:0 var(--s4) var(--s4)}
+  .kb-phone.kb-acts-p{display:flex;padding:0 var(--s4) var(--s3)}   /* a folder's plan buttons; on a phone the folder shows only its list */
   .kb-list{padding:0 var(--s2) var(--s6)}
   .kb-list .lr-t{height:var(--row)}
   .kb-list .lr-t b{font-size:var(--fs-body)}

@@ -351,13 +351,17 @@ function fileView(d, line, ctx) {
     related(d));
   return box;
 }
+// A folder's plan buttons (Write a plan, New project): in the folder's header, and on a phone, where a folder shows only its list, above that list.
+function folderActs(d, ctx, cls) {
+  const name = projectOf(d.path);
+  return can("plans") && (name || d.path === "projects") ? h("div", { class: ["frow", cls], "data-key": "acts" },
+    name ? button(d.doc && d.doc.name === "goals.md" ? "Edit plan" : "Write a plan", () => startEdit(name, ctx), { size: "s" }) : null,
+    d.path === "projects" ? button("New project", () => { K.edit = { at: "projects", name: "", isNew: true, text: "", version: null }; ctx.update(); }, { size: "s" }) : null) : null;
+}
 function folderView(d, ctx) {
-  const name = projectOf(d.path), plans = can("plans");
   return h("article", { class: "kb-note", "data-key": "dir:" + d.path },
     h("header", { class: "kb-h" }, h("h1", { class: "kb-t" }, d.name), h("p", { class: "meta" }, h("code", null, "~/" + d.path), ` · ${plural((d.entries || []).length, "item")}`),
-      plans && (name || d.path === "projects") ? h("div", { class: "frow" },
-        name ? button(d.doc && d.doc.name === "goals.md" ? "Edit plan" : "Write a plan", () => startEdit(name, ctx), { size: "s" }) : null,
-        d.path === "projects" ? button("New project", () => { K.edit = { at: "projects", name: "", isNew: true, text: "", version: null }; ctx.update(); }, { size: "s" }) : null) : null),
+      folderActs(d, ctx)),
     d.doc ? h("section", { class: "kb-doc", "data-key": "doc:" + d.doc.path }, h("a", { class: "meta", href: open(d.doc.path) }, d.doc.name), docBody(d.doc, 0))
       : empty("This folder has no README. Pick a file from the list."));
 }
@@ -388,6 +392,7 @@ export default {
       h("div", { class: "kb-phone kb-find", "data-key": "pfind" }, find("")),
       !path && !searching && matchMedia("(max-width: 640px)").matches ? h("div", { class: "kb-phone kb-ask-p", "data-key": "pask" }, kbChat(ctx)) : null,
       searching ? h("div", { class: "kb-phone kb-phone-results", "data-key": "pres" }, resultsView()) : null,
+      d && !isFile && !searching ? folderActs(d, ctx, "kb-phone kb-acts-p") : null,
       h("div", { class: "kb-list", "data-hide-phone": searching ? "" : null }, sideBody(path, ctx)));
     const box = h("div", { class: "kb-find kb-wide", "data-key": "find" }, find());
     const main = h("div", { class: "kb-main", "data-key": "main" }, editing ? null : box,

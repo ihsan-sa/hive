@@ -15,7 +15,7 @@ import { foci, focusById, focusOf, focusName, listed, threadLine } from "../core
 import { go } from "../core/router.js";
 import { isAgent, isRunning, agentCard, agentMono, agentLabel, capFirst, ownStep, inConversation, agentStatus, threadPeople, partner, displayText, typedText, threadTitle, threadState } from "../core/model.js";
 import { short, mdPlain, now, fix } from "../core/format.js";
-import { button, icon, input, statusDot } from "./kit.js";
+import { button, fieldErr, icon, input, invalid, statusDot } from "./kit.js";
 import { openAside } from "./aside.js";
 import { sixSeven } from "../core/sixseven.js";
 import { startCall, phoneReady, inCall } from "./phone.js";
@@ -706,10 +706,13 @@ async function openSecrets(th) {
 const closeSecrets = () => { SB.open = false; SB.rows = [{ name: "", value: "" }]; refresh(); };
 const dropSecrets = () => { SB.say = ""; closeSecrets(); };   // the person closed it: an old complaint goes with it, unlike the "Saved" line a save leaves
 async function saveSecret() {
+  // What is missing is said beside the box it belongs to (WCAG 3.3.1, drive_app_errors), not only in the line above the rows.
   const rows = SB.rows.filter(r => r.name.trim() || r.value);
-  if (!rows.length || rows.some(r => !r.name.trim())) { SB.say = "Give it a name and a value."; SB.tone = "bad"; return refresh(); }
+  SB.rows.forEach(r => { r.bad = {}; });
+  const blank = rows.length ? rows.filter(r => !r.name.trim()) : SB.rows.slice(0, 1);
+  if (blank.length) { for (const r of blank) r.bad = { name: "Give it a name, like github-token.", value: r.value ? "" : "Paste its value here." }; SB.say = ""; return refresh(); }
   const todo = rows.filter(r => r.value);
-  if (!todo.length) { SB.say = "Paste a value first."; SB.tone = "bad"; return refresh(); }
+  if (!todo.length) { for (const r of rows) r.bad = { value: "Paste its value here, then save." }; SB.say = ""; return refresh(); }
   SB.busy = true; SB.say = ""; refresh();
   const done = [];
   try { for (const r of todo) { await post("/api/secret", { name: r.name.trim(), value: r.value }); done.push(r.name.trim()); r.value = ""; } }
@@ -728,10 +731,11 @@ function secretRow() {
       h("p", { class: "meta cp-sask" }, asked ? (one ? "The agent asked for this one. Paste its value:" : "The agent asked for these. Paste each value; empty ones are skipped:") : "Saved on the machine, never posted in chat."),
       button(one ? "Save secret" : "Save secrets", saveSecret, { kind: "primary", size: "s", busy: SB.busy, title: "Saved to ~/.config/h2/secrets/<name>, mode 600. Never posted; the board only gets its name." }),
       h("button", { type: "button", class: "cp-x", title: "Close", "aria-label": "Close the secret box", onclick: dropSecrets }, "×")),
-    SB.rows.map((r, i) => h("div", { class: "cp-srow", "data-key": "r" + i },
-      input({ class: "input cp-sname", placeholder: "Name, like github-token", "aria-label": "Secret name", autocomplete: "off", value: r.name, oninput: (e, n) => { r.name = n.value; } }),
-      input({ class: "input cp-sval", type: "password", placeholder: r.asked ? "Value for " + r.name : "Value", "aria-label": "Secret value" + (r.name ? " for " + r.name : ""), autocomplete: "new-password", value: r.value, oninput: (e, n) => { r.value = n.value; },
-        onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); saveSecret(); } else if (e.key === "Escape") dropSecrets(); } }))));
+    SB.rows.map((r, i) => { const b = r.bad || {}, fix = k => { if (b[k]) { b[k] = ""; refresh(); } };
+      return h("div", { class: "cp-srow", "data-key": "r" + i },
+      h("div", { class: "cp-scell", "data-key": "n" }, input({ class: "input cp-sname", placeholder: "Name, like github-token", "aria-label": "Secret name", autocomplete: "off", value: r.name, ...invalid("err-sn" + i, b.name), oninput: (e, n) => { r.name = n.value; if (n.value.trim()) fix("name"); } }), fieldErr("err-sn" + i, b.name)),
+      h("div", { class: "cp-scell", "data-key": "v" }, input({ class: "input cp-sval", type: "password", placeholder: r.asked ? "Value for " + r.name : "Value", "aria-label": "Secret value" + (r.name ? " for " + r.name : ""), autocomplete: "new-password", value: r.value, ...invalid("err-sv" + i, b.value), oninput: (e, n) => { r.value = n.value; if (n.value) fix("value"); },
+        onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); saveSecret(); } else if (e.key === "Escape") dropSecrets(); } }), fieldErr("err-sv" + i, b.value))); }));
 }
 
 // ---- pieces ----

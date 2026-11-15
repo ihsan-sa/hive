@@ -7,7 +7,7 @@ import { status as st } from "../core/status.js";
 import { S, can, jget, post } from "../core/store.js";
 import { focusById, focusName } from "../core/foci.js";
 import { clock, dayName, ago } from "../core/format.js";
-import { section, block, blocks, button, field, input, statusLabel, waiting } from "./kit.js";
+import { section, block, blocks, button, field, fieldErr, input, invalid, statusLabel, waiting } from "./kit.js";
 import { act, isBusy } from "./activity.js";
 import { confirm } from "./dialog.js";
 
@@ -137,8 +137,9 @@ export function tiersSection(ctx) {
     : [h("p", { class: "tier-intro" }, "Every focus, thread and timer sits in a tier. Pause a tier and nothing new in it starts; what is already running finishes. A pause with an end lifts by itself."),
       T.say ? h("p", { class: "fmsg", "data-tone": T.say.tone, role: "status" }, T.say.text) : null,
       blocks(...tiers().map(t => tierBlock(t, done)), logBlock()),
-      h("form", { class: "frow", "data-key": "tier-new", onsubmit: e => { e.preventDefault(); const v = T.name.trim(); if (!v) { T.say = { text: "Give the new tier a name first.", tone: "bad" }; return done(); } change("new", { name: v }, () => { T.name = ""; done(); }, `Added ${v}.`); } },
-        h("div", { class: "frow-grow", "data-size": "s" }, field("Add a tier", input({ placeholder: "a name, like Weekend", value: T.name, maxlength: 40, oninput: e => { T.name = e.target.value; } }))),
+      // An empty name is said beside the box (WCAG 3.3.1, drive_app_errors), and typing a name clears it.
+      h("form", { class: "frow", "data-key": "tier-new", onsubmit: e => { e.preventDefault(); const v = T.name.trim(); if (!v) { T.bad = "Give the new tier a name first, like Weekend."; return done(); } T.bad = ""; change("new", { name: v }, () => { T.name = ""; done(); }, `Added ${v}.`); } },
+        h("div", { class: "frow-grow", "data-size": "s" }, field("Add a tier", input({ placeholder: "a name, like Weekend", value: T.name, maxlength: 40, ...invalid("err-tname", T.bad), oninput: e => { T.name = e.target.value; if (T.bad && T.name.trim()) { T.bad = ""; done(); } } })), fieldErr("err-tname", T.bad)),
         button("Add", null, { type: "submit", busy: isBusy("tiers-new") })),
       h("p", { class: "field-h" }, "Upkeep (backups, guards, the watchdog) is never paused.")];
   return section({ title: "Work tiers", note: "what may start new work, and until when", level: 1 }, body);
