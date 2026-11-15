@@ -183,7 +183,7 @@ function voiceBlock(ctx) {
     if (V.can_retry) actions = again("Set up voice");
   }
   const chip = h("span", { class: "chip", "data-key": "voice-state", "data-state": V.state || "failed", "data-tone": { ready: "good", building: "warn", starting: "warn", failed: "bad", stopped: "bad" }[V.state] || null }, state);
-  return block({ title: "Voice calls", key: "voice", sub, ...(actions ? { actions: [chip, actions] } : { state: chip }) },   // the head grid has one column for both
+  return block({ title: "Voice calls", key: "voice", sub, live: !!V.failed, ...(actions ? { actions: [chip, actions] } : { state: chip }) },   // the head grid has one column for both
     ...body, mic, msg("voice"));
 }
 // The interface language (core/lang.js): the app's own words; agents already answer in whatever language you write.
@@ -214,7 +214,7 @@ async function phoneDo(ctx, what, ok) {
 function phoneBlock(ctx) {
   const P = F.phone;
   if (!can("config") || !P) return null;
-  if (P.failed) return block({ title: "Phone alerts", key: "phone", sub: `Couldn't read whether phone alerts are on: ${P.failed}.`, actions: button("Try again", () => loadPhone(ctx), { size: "s" }) });
+  if (P.failed) return block({ live: true, title: "Phone alerts", key: "phone", sub: `Couldn't read whether phone alerts are on: ${P.failed}.`, actions: button("Try again", () => loadPhone(ctx), { size: "s" }) });
   const sub = P.on
     ? `On. When something is waiting for you and you haven't seen it, your Hive sends one line to ntfy.sh${P.line ? `: "${P.line}"` : ""}. That is all it sends: no names, no words from your agents${P.link ? ", and a link back to this address" : ""}. Anyone who learns the topic below can read those lines, so keep it to yourself.`
     : `Off. Turn it on to get a line on your phone when your Hive asks you something or finishes a job, even with this page closed. It uses ntfy.sh, a free public service with no account: your Hive sends it one line${P.line ? ` ("${P.line}")` : ""} and nothing else.`;
@@ -255,7 +255,7 @@ async function pushDo(ctx, on) {
 function pushBlock(ctx) {
   const P = F.push;
   if (!can("config") || !P || !pushSupported()) return null;
-  if (P.failed) return block({ title: "Push notifications", key: "push", sub: `Couldn't read whether push is on for this browser: ${P.failed}.`, actions: button("Try again", () => loadPush(ctx), { size: "s" }) });
+  if (P.failed) return block({ live: true, title: "Push notifications", key: "push", sub: `Couldn't read whether push is on for this browser: ${P.failed}.`, actions: button("Try again", () => loadPush(ctx), { size: "s" }) });
   return block({ title: "Push notifications", key: "push",
     sub: P.on ? `On for this browser: it hears from your Hive even with this page closed. The push service only ever carries one fixed line and a link, never what was said.`
       : `Off for this browser. Turn it on to hear from your Hive with this page closed. It goes through your browser's push service (Google, Mozilla, Apple or Microsoft), which only ever carries one line and a link, never what was said.`,

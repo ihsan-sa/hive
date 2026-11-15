@@ -258,9 +258,9 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklab,var(--warn) 3
 .field{display:grid;gap:6px;min-width:0}
 .field-l{font-size:var(--fs-small);font-weight:var(--w-med)}
 .field-h{font-size:var(--fs-meta);color:var(--ink-3);line-height:1.45}
-.input{height:var(--ctl);width:100%;padding:0 10px;border:1px solid var(--line-2);border-radius:var(--r-m);background:var(--surface);color:var(--ink);font-size:var(--fs-small)}
+.input{height:var(--ctl);width:100%;padding:0 10px;border:1px solid var(--edge);border-radius:var(--r-m);background:var(--surface);color:var(--ink);font-size:var(--fs-small)}
 .input::placeholder{color:var(--ink-3)}
-.input:hover{border-color:color-mix(in oklch,var(--ink-3) 60%,var(--line-2))}
+.input:hover{border-color:var(--ink-3)}
 .input:focus-visible{outline:none;border-color:var(--focus);box-shadow:0 0 0 3px var(--accent-bg)}
 textarea.input{height:auto;min-height:72px;padding:8px 10px;resize:vertical;line-height:var(--lh)}
 select.input{padding-right:28px;appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--ink-3) 50%),linear-gradient(135deg,var(--ink-3) 50%,transparent 50%);background-size:5px 5px;background-position:right 14px center,right 9px center;background-repeat:no-repeat}
@@ -1230,7 +1230,7 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 
 /* ---- composer: one box with its tools inside. Popups (@ names, To) open above it. ---- */
 .cp{position:relative;display:grid;gap:6px;padding:8px var(--s4) 12px;background:var(--surface)}
-.cp-box{position:relative;display:grid;grid-template-columns:minmax(0,1fr);border:1px solid var(--line-2);border-radius:var(--r-l);background:var(--surface)}
+.cp-box{position:relative;display:grid;grid-template-columns:minmax(0,1fr);border:1px solid var(--edge);border-radius:var(--r-l);background:var(--surface)}
 .cp-box:focus-within{border-color:var(--focus);box-shadow:0 0 0 3px color-mix(in oklch,var(--focus) 16%,transparent)}
 .cp-t{display:block;width:100%;min-height:44px;max-height:40vh;padding:11px 12px 4px;border:0;background:none;color:var(--ink);resize:none;field-sizing:content;line-height:1.45}
 .cp-t:focus-visible{outline:none}
@@ -1672,13 +1672,13 @@ details.blk[open]>summary .blk-t::after{margin-bottom:-1px;transform:rotate(225d
 /* ==== redesign 2026-11-04: changed rules from the Claude Design handoff (~/designs/ui-redesign-pack/handoff). Same class names; later wins. ==== */
 /* ===== check + switch — replaces the .check / .checks rules ===== */
 .check{display:inline-flex;gap:8px;align-items:flex-start;cursor:pointer;font-size:var(--fs-small)}
-.check input[type=checkbox]:not(.switch){appearance:none;flex:none;margin:2px 0 0;width:16px;height:16px;border:1.5px solid var(--line-2);border-radius:4px;background:var(--surface);display:grid;place-content:center;cursor:pointer}
+.check input[type=checkbox]:not(.switch){appearance:none;flex:none;margin:2px 0 0;width:16px;height:16px;border:1.5px solid var(--edge);border-radius:4px;background:var(--surface);display:grid;place-content:center;cursor:pointer}
 .check input[type=checkbox]:not(.switch):checked{background:var(--ink);border-color:var(--ink)}
 .check input[type=checkbox]:not(.switch):checked::after{content:"";width:8px;height:4px;border-left:1.8px solid var(--on-ink);border-bottom:1.8px solid var(--on-ink);transform:translateY(-1px) rotate(-45deg)}
 .check .field-h{display:block}
 .checks{display:grid;gap:var(--s2);margin:var(--s3) 0}
 /* NEW: a switch is a checkbox with class="switch" role="switch"; it saves itself */
-.switch{appearance:none;margin:0;flex:none;position:relative;width:34px;height:20px;border-radius:var(--r-pill);background:var(--line-2);cursor:pointer;transition:background-color .15s}
+.switch{appearance:none;margin:0;flex:none;position:relative;width:34px;height:20px;border-radius:var(--r-pill);background:var(--edge);cursor:pointer;transition:background-color .15s}
 .switch::before{content:"";position:absolute;inset:-8px -5px}   /* a 44x36 target round the 34x20 switch */
 .switch::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:light-dark(#fff,oklch(96% 0 0));box-shadow:0 1px 2px oklch(0% 0 0 / .25);transition:transform .15s}
 .switch:checked{background:var(--ink)}
@@ -1860,7 +1860,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 
 /* ===== 6. composer — replaces the "---- viewer ----" .cp* rules (the viewer rules above them stay) ===== */
 .cp{position:relative;display:grid;grid-template-columns:minmax(0,1fr);gap:0;padding:0 var(--s5) var(--s4);background:none}
-.cp-box{position:relative;display:grid;max-width:var(--chat-col);width:100%;margin:0 auto;border:1px solid var(--line-2);border-radius:var(--r-xl);background:var(--surface);box-shadow:var(--e1)}
+.cp-box{position:relative;display:grid;max-width:var(--chat-col);width:100%;margin:0 auto;border:1px solid var(--edge);border-radius:var(--r-xl);background:var(--surface);box-shadow:var(--e1)}
 .cp-box:focus-within{border-color:var(--ink-3);box-shadow:var(--e1),0 0 0 3px var(--accent-bg)}
 .cp-t{min-height:52px;padding:14px 16px 4px;font-size:var(--fs-read);line-height:1.5}
 .cp-bar{display:flex;align-items:center;gap:4px;padding:6px 8px 8px}
@@ -2987,8 +2987,8 @@ button.fl-rn:hover{text-decoration:underline}
 .fp-share-n{font-size:var(--fs-meta);color:var(--ink-3);text-wrap:pretty}
 .fp-rel{display:flex;flex-wrap:wrap;gap:6px}
 /* the to-do box: a real checkbox drawn 16 px, with a 44 px hit area round it */
-.fp-box{flex:none;width:16px;height:16px;margin-top:3px;border:1.5px solid var(--line-2);border-radius:4px}
-.fp-todo li[data-done] .fp-box{background:var(--line-2)}
+.fp-box{flex:none;width:16px;height:16px;margin-top:3px;border:1.5px solid var(--edge);border-radius:4px}
+.fp-todo li[data-done] .fp-box{background:var(--edge)}
 input.fp-box{appearance:none;-webkit-appearance:none;cursor:pointer;display:grid;place-content:center;background:none;position:relative}
 input.fp-box::before{content:"";position:absolute;inset:-14px}   /* a 44 px hit area round the 16 px box */
 input.fp-box:checked{background:var(--accent,var(--line-2));border-color:transparent}
@@ -3254,7 +3254,7 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .fp-yr-mine{font-weight:400;display:inline-flex;align-items:center;gap:var(--s2)}
 /* the steer box becomes the composer card (HANDOFF §3.2 swaps the DOM); until then, make the old one look like it */
 .fp-steer{border-top:0;margin-top:0;padding-top:0}
-.fp-steer-in{resize:none;border:1px solid var(--line-2);border-radius:var(--r-xl);box-shadow:var(--e1);padding:14px 16px;min-height:88px;font-size:var(--fs-read);field-sizing:content;max-height:40vh}   /* grows with the message like the other composers, not a two-line slit */
+.fp-steer-in{resize:none;border:1px solid var(--edge);border-radius:var(--r-xl);box-shadow:var(--e1);padding:14px 16px;min-height:88px;font-size:var(--fs-read);field-sizing:content;max-height:40vh}   /* grows with the message like the other composers, not a two-line slit */
 .fp-steer-a .meta{display:none}
 
 /* ───────────── §4 Yours (views/yours.js; its .page gets data-view="yours", HANDOFF §4.1) ───────────── */

@@ -23,5 +23,8 @@ ul,ol{padding:0}
 .muted{color:var(--ink-2)}
 .clamp-1,.clamp-2,.clamp-3{display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .clamp-1{-webkit-line-clamp:1}.clamp-2{-webkit-line-clamp:2}.clamp-3{-webkit-line-clamp:3}
+.skip-link{position:absolute;left:var(--s2,8px);top:-100px;z-index:1000;padding:var(--s2,8px) var(--s3,12px);background:var(--surface,#fff);color:var(--ink,#000);border:2px solid currentColor;border-radius:var(--r-s,6px)}
+.skip-link:focus{top:var(--s2,8px)}
+#main:focus{outline:none}
 .vh{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 @container (max-width:640px){.desk-only{display:none!important}}

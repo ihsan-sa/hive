@@ -1547,9 +1547,12 @@ def system_for(name, kind, modules):
     orient, cut = cut_orientation(name, orient) if kind != "warden" else (orient, None)
     if cut == "holdout": trial = None  # a holdout agent is in no trial
     system = orient + ("\n\n" + (CORE / "warden.md").read_text() if kind == "warden" else "")
-    try: mine = (HOME / "user-instructions.md").read_text().strip()  # the person's own CLAUDE.md, copied at setup on their tick
+    try: mine = (HOME / "user-instructions.md").read_text(errors="replace").strip()  # the person's own CLAUDE.md, copied at setup on their tick
     except OSError: mine = ""
     if mine and kind != "warden": system += "\n\n# The person's own instructions (from their CLAUDE.md)\n" + mine
+    try: style = (HOME / "answer-style.md").read_text(errors="replace").strip()[:2000]  # E33: Settings › Everyday › How I want answers (dash set_config writes it)
+    except OSError: style = ""
+    if style and kind != "warden": system += "\n\n# How the person wants answers (their Settings › Everyday)\nFollow this in every reply to the person unless their message asks otherwise:\n" + style
     if kind != "warden": system += modules
     if (sb := box()): system += sb.NOTE + ("\n" + (CORE / "warden-step.md").read_text() if kind == "warden" else "")
     return system, trial, cut
@@ -1567,7 +1570,7 @@ def warm_key(c, login, model):
     def mt(f):
         try: return (str(f.resolve()), f.stat().st_mtime_ns)
         except OSError: return 0
-    files = [CORE / "orientation.md", CORE / "warden-step.md", HOME / "user-instructions.md", CORE / "config.json", HOME / "mcp.json", HOME / "settings.json",
+    files = [CORE / "orientation.md", CORE / "warden-step.md", HOME / "user-instructions.md", HOME / "answer-style.md", CORE / "config.json", HOME / "mcp.json", HOME / "settings.json",
              *(STATE / f for f in ("tool_drop.json", "cache_split.json", "cut.json", "holdout.json", "trial.json")), Path(login or "/").expanduser() / "settings.json"]
     return (login, model, *map(mt, files), mt(Path(shutil.which("claude") or "/")), modules_seen[1], json.dumps(c.get("model_ids") or {}, sort_keys=True),
             json.dumps(c.get("claude_args")), c.get("auto_compact_window"), c.get("max_budget_usd"))

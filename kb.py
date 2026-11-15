@@ -456,10 +456,17 @@ def snippet(c, h, words, width=130):
     body = r[1]; low = body.lower(); best, bi = -1, 0
     stems = [w[:max(4, len(w) - 2)] for w in words]
     first = len(body) if "\n" not in body else body.index("\n")   # the chunk's first line is its title: a later window with as many stems shows more
-    for i in range(0, max(1, len(low) - width), 40):
+    fm = re.search(r"(?:Filed \d{4}-\d\d-\d\d by \w+\.\s*)+", body[:400])   # K26: a kb note's 'Filed <date> by <agent>.' line says nothing; start after it
+    skip = fm.end() if fm else 0
+    for i in range(skip, max(skip + 1, len(low) - width), 40):
         s = sum(1 for w in stems if w in low[i:i + width]) - (0.5 if i < first and first < len(body) else 0)
         if s > best: best, bi = s, i
-    t = re.sub(r"\s+", " ", body[bi:bi + width]).strip()
+    end = bi + width
+    if True:   # K36: a window must not start inside a word: back up to the word's start (at most 20 chars)
+        j = bi   # the window keeps its end, so a fact it showed before is still shown
+        while j > skip and j > bi - 20 and not body[j - 1].isspace(): j -= 1
+        if j == bi or body[j - 1].isspace() or j == 0: bi = j
+    t = re.sub(r"\s+", " ", body[bi:end]).strip()
     line = h["line"] + body[:bi].count("\n")
     return t, line
 

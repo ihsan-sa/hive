@@ -209,19 +209,34 @@ def post_model_args(text, model):
     the worker's own `hive model` (review 110618506919)."""
     return ["--model", model] if model and text.startswith("@new ") else []
 
-def last_graded(worker, thread, path=None, tail=600_000):
-    """The newest run of `worker` in `thread` that hive outcomes graded on its work (delivered, partial, nothing, silent), or None.
-    Reads only the file's tail: the brief wants the last round, not the history."""
-    path = path or OUTCOMES
+def graded(worker, thread, n=1, path=None, tail=600_000):
+    """The newest `n` runs of `worker` in `thread` that hive outcomes graded on its work (delivered, partial, nothing, silent), newest first.
+    Reads only the file's tail: the brief wants the last rounds, not the history."""
+    path = path or OUTCOMES; out = []
     try:
         with open(path, "rb") as f:
             f.seek(0, 2); f.seek(max(0, f.tell() - tail)); lines = f.read().decode(errors="replace").splitlines()
-    except OSError: return None
+    except OSError: return out
     for l in reversed(lines):
         try: r = json.loads(l)
         except ValueError: continue
-        if r.get("name") == worker and r.get("thread") == thread and r.get("grade") in ("delivered", "partial", "nothing", "silent"): return r
-    return None
+        if r.get("name") == worker and r.get("thread") == thread and r.get("grade") in ("delivered", "partial", "nothing", "silent"):
+            out.append(r)
+            if len(out) >= n: break
+    return out
+
+def last_graded(worker, thread, path=None, tail=600_000):
+    """The newest graded run of `worker` in `thread`, or None."""
+    r = graded(worker, thread, 1, path, tail); return r[0] if r else None
+
+STREAK_NEW = 2   # R45 (hive-meta continuity.md R45): after this many nothing rounds in a row in a thread, the round goes to @new. 11-12..15: a worker
+                 # re-woken after a nothing there repeated it 4 of 11 times (all runs: 3 of 111); the R34 line did not stop a65da (07:12, 09:08 11-15)
+
+def stuck(worker, thread):
+    """True when `worker`'s last STREAK_NEW graded rounds in `thread` were all nothing: the next round goes to a fresh agent."""
+    if not worker or worker == "new" or not thread: return False
+    r = graded(worker, thread, STREAK_NEW)
+    return len(r) == STREAK_NEW and all(x.get("grade") == "nothing" for x in r)
 
 def last_nothing(to, thread):
     """A line for a worker woken back on a thread where its last graded round was `nothing` (R34, hive-meta continuity.md R33): in the 11-13/14
@@ -236,9 +251,13 @@ def last_nothing(to, thread):
 def brief(row):
     """The brief a keeper round posts for one focus. Every clause is here because a thin hand-written brief produced the 'nothing changed' rounds."""
     to = row["last_worker"] if row.get("last_worker") and resume_arm(row.get("thread")) else "new"
+    prev = to if to != "new" and stuck(to, row.get("thread")) else None
+    if prev: to = "new"
     head = f"@{to} Keeper round on {row['name']}. The ladder is the `## {row.get('section') or 'Ladder'}` section of {row.get('goals_path') or 'this focus project goals.md (create it, one line a rung)'}: read that whole file, and obey any notes in the section.\n\n"
     rung = f"**Your rung:** {row['rung']}\n\nDo this rung. Land real work, then run its check." if row.get("rung") else "**The ladder has no rung you can take.** Your work this round is to write the next 3 to 5 rungs from the measure in that file, then do the first one."
-    return head + rung + last_nothing(to, row.get("thread")) + """
+    fresh = (f"\n\n**You take this fresh:** `{prev}`'s last {STREAK_NEW} rounds here were graded nothing (they posted a wait instead of doing the rung)."
+             " Read the thread for context, then do the rung yourself; do not hand it back.") if prev else ""
+    return head + rung + fresh + last_nothing(to, row.get("thread")) + """
 
 Rules for the round:
 - Read the last 5 posts of this thread for context, not for a conclusion. Earlier posts here may say nothing is left: that was a check-in, not a finding. "Nothing changed" is not a result, and you are not here to re-check the state.
