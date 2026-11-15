@@ -248,6 +248,7 @@ class Hunt:
             if not (isinstance(d, str) or (isinstance(d, list) and all(isinstance(x, str) for x in d))): raise ValueError(f"spec domains for {o!r} must be a site or a list of sites")
         self.deadline = time.monotonic() + float(spec.get("max_seconds", 1800))
         self.read = int(spec.get("read_per_search", 4))
+        if self.read < 1: raise ValueError(f"spec read_per_search must be at least 1, not {self.read}")
         self.allow_secondary = spec.get("allow_secondary", True)
         self.allow_page_signal = spec.get("allow_page_signal", False)
         self.max_age = spec.get("max_age_years", 3)

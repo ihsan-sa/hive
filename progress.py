@@ -362,7 +362,7 @@ def cmd_judge(a):
         early = [i for i in judged_with(items, e) if str(items[i].get("at", ""))[:19] < to[:19]]
         if not to or fr[:19] < str(e.get("at", ""))[:19] or early:
             sys.exit(f"hive improve judge: --apart FROM..TO must start at or after {a.id} landed ({str(e.get('at'))[:19]}) and end before every row it shares a number with lands"
-                     + (f" ({', '.join(f'{i} landed {str(items[i].get("at"))[:19]}' for i in early)})" if early else "") + ".")
+                     + (" (" + ", ".join(i + " landed " + str(items[i].get("at"))[:19] for i in early) + ")" if early else "") + ".")
         a.why, w = a.why + f"; read apart over {fr}..{to}, before {', '.join(judged_with(items, e))} landed", []
     elif a.verdict == "held" and judged_with(items, e):
         a.verdict, a.why = "inconclusive", a.why + "; shares its number, so it cannot credit one change"
