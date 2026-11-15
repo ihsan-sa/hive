@@ -256,6 +256,7 @@ class Hunt:
         if self.max_age is not None and self.max_age < 0: raise ValueError(f"spec max_age_years must not be negative, not {self.max_age}")
         self.pattern = _pattern(spec, "org_pattern") or re.compile(r"\b(?:[A-Z][\w.&'-]+\s+){1,5}(?:College|University|Institute of Technology)\b(?:\s+of\s+(?:(?:New|North|South|West|San|Los|Las|Rhode|Puerto|Saint|St\.)\s+)?[A-Z][\w-]+)?")
         self.pages = {}  # org -> direct URLs to read: a known staff page fed in
+        if spec.get("pages") and not isinstance(spec["pages"], dict): raise ValueError("spec pages must be a map of organisation to URL (or list of URLs)")
         for o, urls in (spec.get("pages") or {}).items():
             if isinstance(urls, str): urls = [urls]
             if not isinstance(urls, list) or not all(isinstance(u, str) for u in urls): raise ValueError(f"spec pages for {o!r} must be a URL or a list of URLs")

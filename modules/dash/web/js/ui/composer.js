@@ -167,6 +167,18 @@ export const isBtw = t => /^\s*\/btw(\s|$)/i.test(t || "");
 // ---- messages on their way ----
 export const OUT = [];
 let lid = 0;
+// A message that wasn't sent (no network, the Hive down) stays through a reload (WCAG 2.2.5): its words, who it's to and what it answers are
+// kept in this browser until it is sent or discarded. A file not uploaded yet can't be kept, so it says to attach that again.
+const UNSENT = "hive.cp.unsent";
+function saveUnsent() {
+  try {
+    const v = OUT.filter(x => x.state === "failed" || (x.tried && x.state === "sending")).map(x => ({ th: x.th, text: x.text, wire: x.wire, reply: x.reply ? { id: x.reply.id, from: x.reply.from, text: x.reply.text, th: x.reply.th } : null,
+      quote: x.quote, to: x.to, name: x.name, model: x.model, effort: x.effort, focus: x.focus, t: x.t, err: x.err, refs: x.refs || null, lost: x.refs ? [] : x.files.map(f => f.name).concat(x.lost || []) }));
+    v.length ? localStorage.setItem(UNSENT, JSON.stringify(v)) : localStorage.removeItem(UNSENT);
+  } catch (e) {}
+}
+try { for (const x of JSON.parse(localStorage.getItem(UNSENT) || "[]")) OUT.push({ ...x, lid: ++lid, files: [], interrupt: false, uploading: false, state: "failed", tried: true,
+  err: String(x.err || "it didn't reach the Hive").replace(/\.+$/, "") + (x.lost && x.lost.length ? `. Attach ${x.lost.join(", ")} again` : "") }); } catch (e) {}
 function prune() {
   for (let i = OUT.length - 1; i >= 0; i--) if (OUT[i].id && S.byId[OUT[i].id]) { for (const f of OUT.splice(i, 1)[0].files) if (f.url) URL.revokeObjectURL(f.url); }
 }
@@ -183,8 +195,8 @@ async function deliver(it) {
     if (!it.th && res.thread) { it.th = res.thread; go("comms", res.thread); loadApp(); }   // the server files it under the focus picked in the box (and the agent gets that group's instructions, E37); a failure leaves it in Misc, where the title menu can file it
     else if (res.thread && res.thread !== it.th) { it.th = res.thread; it.aside = true; openAside(thr, res.thread, it.text.replace(/^\s*\/btw\s*/i, "")); loadApp(); }   // /btw: it lives in the side thread; stay here
     poll();
-  } catch (e) { it.state = "failed"; it.err = simpleOn() && !/sign in/.test(e.message) ? "Check your connection, then try again." : e.message; it.uploading = false; }
-  refresh();
+  } catch (e) { it.state = "failed"; it.tried = true; it.err = simpleOn() && !/sign in/.test(e.message) ? "Check your connection, then try again." : e.message; it.uploading = false; }
+  saveUnsent(); refresh();
 }
 function queue(th, d, r, interrupt = false) {
   const it = { lid: ++lid, th: th || null, text: d.text, files: d.files, reply: d.reply, quote: d.quote || null, interrupt, to: th ? r.who : null, name: th ? null : d.name.trim() || null, wire: wire(th, d, r), model: d.model || null, effort: d.effort || null, focus: th ? null : d.focus || null, state: "sending", err: "", t: now() };
@@ -314,13 +326,19 @@ export function answer(th, text, { reply = null, to = null, quote = null } = {})
   return it;
 }
 export const actions = {
-  retry: it => deliver(it),
+  // A file lost in a reload can't go again by itself: posting the words alone would leave out what they're about, so Try again
+  // puts the message back in its box with the file to attach (WCAG 3.3.4), and nothing is posted until Send.
+  retry: it => {
+    if (it.refs || !(it.lost && it.lost.length)) return deliver(it);
+    const lost = it.lost; actions.edit(it);
+    const d = draft(it.th); d.err = `Attach ${lost.join(", ")} again, then Send.`; refresh();
+  },
   edit: it => {
     const d = draft(it.th);
     d.text = d.text.trim() ? d.text + "\n\n" + it.text : it.text; d.files = d.files.concat(it.files); d.reply ||= it.reply; d.quote ||= it.quote; keep(d);
-    OUT.splice(OUT.indexOf(it), 1); CP.focus = true; const el = field(it.th); if (el) el.value = d.text; refresh();
+    OUT.splice(OUT.indexOf(it), 1); saveUnsent(); CP.focus = true; const el = field(it.th); if (el) el.value = d.text; refresh();
   },
-  discard: it => { OUT.splice(OUT.indexOf(it), 1); for (const f of it.files) if (f.url) URL.revokeObjectURL(f.url); refresh(); },
+  discard: it => { OUT.splice(OUT.indexOf(it), 1); saveUnsent(); for (const f of it.files) if (f.url) URL.revokeObjectURL(f.url); refresh(); },
 };
 
 // ---- voice memo: a record button, shown only while the voice module's service is proven working (S.app.voice) ----
