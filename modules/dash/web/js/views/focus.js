@@ -23,10 +23,11 @@ import { yoursPosts, yoursText } from "../core/yours.js";
 import { railSay } from "../core/foci.js";
 import { jump } from "../ui/message.js";
 import { openQuick } from "../ui/quick.js";
+import { uploadFile } from "../core/upload.js";
 
 const idOf = arg => (arg === "misc" ? null : arg);
 const say = t => (simpleOn() ? plainPills(t) : pills(t));
-const FP = { more: false, yours: 3, mine: false, sent: [] };   // sent: what the steer box sent from this page, with its state   // the Quiet and archived conversations, shown on asking (this page only)
+const FP = { more: false, yours: 3, mine: false, sent: [], brief: null };   // sent: what the steer box sent from this page, with its state   // the Quiet and archived conversations, shown on asking (this page only)
 
 /** Start a new conversation already tagged with this focus: the composer carries the tag and posts it with the first message. */
 export function newIn(id) { draft(null).focus = id || ""; go("comms", "~new"); }
@@ -133,6 +134,44 @@ function yoursSec(f, ctx) {
     steerBox(f, ctx));
 }
 
+// Instructions for chats here (E37): the group's own instructions and files, which every agent started in one of its
+// conversations is given (the focus brief command). Anyone can read them here; a full sign-in edits them.
+const fileName = p => String(p).split("/").pop();
+async function saveBrief(f, ctx) {
+  const B = FP.brief; if (!B || B.busy) return;
+  B.busy = true; B.err = ""; ctx.update();
+  try {
+    const refs = []; for (const x of B.add) refs.push(await uploadFile(x));
+    await post("/api/focus", { brief: { focus: f.id, text: B.text, files: refs, drop: B.drop } });
+    FP.brief = null; await loadFoci(true);
+  } catch (e) { B.busy = false; B.err = "Couldn't save: " + (e && e.message || "the server didn't answer") + "."; }
+  ctx.update();
+}
+function briefSec(f, ctx) {
+  if (f.misc) return null;
+  const b = f.brief || { text: "", files: [] }, mine = can("config");
+  const B = FP.brief && FP.brief.f === f.id ? FP.brief : null;
+  const SAYS = "Every new conversation in this focus is given these, and so is an agent that comes back to one.";
+  if (!B) {
+    if (!b.text && !(b.files || []).length && !mine) return null;
+    return h("section", { class: "fp-sec fp-brief", "data-key": "fp-brief", "aria-label": "Instructions for chats here" }, head("Instructions for chats here", null,
+        mine ? button(b.text || (b.files || []).length ? "Edit" : "Add", () => { FP.brief = { f: f.id, text: b.text || "", add: [], drop: [], err: "", busy: false }; ctx.update(); }, { kind: "quiet", size: "s", cls: "fp-brief-e" }) : null),
+      b.text ? h("p", { class: "fp-brief-x" }, b.text) : h("p", { class: "fp-calm" }, "None yet. " + SAYS),
+      (b.files || []).length ? h("ul", { class: "fp-brief-f" }, b.files.map(x => h("li", { "data-key": "bf:" + x }, fileName(x)))) : null);
+  }
+  const files = (b.files || []).filter(x => !B.drop.includes(fileName(x)));
+  return h("section", { class: "fp-sec fp-brief", "data-key": "fp-brief", "aria-label": "Instructions for chats here" }, head("Instructions for chats here"),
+    h("p", { class: "meta" }, SAYS),
+    h("textarea", { class: "input fp-brief-in", rows: 4, maxlength: 4000, placeholder: "For example: reply in Spanish; keep answers short.", "aria-label": "Instructions for chats in this focus",
+      value: B.text, oninput: (e, n) => { B.text = (n || e.target).value; } }),
+    h("ul", { class: "fp-brief-f" }, files.map(x => h("li", { "data-key": "bf:" + x }, fileName(x), " ", button("Remove", () => { B.drop.push(fileName(x)); ctx.update(); }, { kind: "quiet", size: "s" }))),
+      B.add.map((x, i) => h("li", { "data-key": "ba:" + i + x.name }, x.name, " (new) ", button("Remove", () => { B.add.splice(i, 1); ctx.update(); }, { kind: "quiet", size: "s" })))),
+    h("label", { class: "btn fp-brief-add", "data-size": "s", "data-kind": "quiet" }, "Add a file", h("input", { type: "file", multiple: true, hidden: true, class: "fp-brief-file", onchange: (e, n) => { B.add.push(...(n || e.target).files); ctx.update(); } })),
+    B.err ? h("p", { class: "fmsg", "data-tone": "warn", role: "status" }, B.err) : null,
+    h("div", { class: "fp-steer-a" }, button("Cancel", () => { FP.brief = null; ctx.update(); }, { kind: "quiet", size: "s" }),
+      button(B.busy ? "Saving…" : "Save", () => saveBrief(f, ctx), { kind: "primary", size: "s", cls: "fp-brief-s" })));
+}
+
 /** The focus's share of the hive's work and cost: a labelled bar per window, then the plain numbers. Simple view: words, no bars. */
 function shareSec(id) {
   const a = activityOf(id); if (!a) return null;
@@ -202,6 +241,7 @@ function page(ctx) {
               FP.more ? "Show only the active ones" : [quiet.length ? `Quiet (${quiet.length})` : null, quiet.length && arch.length ? " and " : null, arch.length ? `${quiet.length ? "archived" : "Archived"} (${arch.length})` : null]))] : null),
         f.misc || !lately.length ? null : sec("lately", null, "Lately", null, tl("lately", lately))),
       f.misc ? null : h("aside", { class: "fp-side", "aria-label": "Who and how much" },
+        briefSec(f, ctx),
         agents,
         shareSec(id),
         (f.links || []).length ? h("section", { class: "fp-sec", "data-key": "fp-rel", "aria-label": "Related" }, head("Related"), h("p", { class: "fp-rel" }, f.links.map(l => h("a", { href: href("focus", l) }, focusName(l))))) : null)));

@@ -13,7 +13,8 @@ export function confirm({ title, body = [], ok = "OK", kind = "primary", typed, 
   const code = typed ? h("input", { class: "input", autocomplete: "off", spellcheck: "false", placeholder: typed, "aria-label": `Type ${typed} to confirm` }) : null;
   const yes = button(ok, null, { kind, type: "submit" });
   const no = button("Cancel", () => dlg.close(), {});
-  const form = h("form", { method: "dialog" },
+  // novalidate: the browser's own bubble fades and marks nothing; onOk says what is wrong beside the box and in the line above the buttons (WCAG 3.3.1).
+  const form = h("form", { method: "dialog", novalidate: "" },
     h("h2", null, title),
     body.filter(Boolean).map(b => (typeof b === "string" ? h("p", null, b) : b)),
     code ? h("label", { class: "field" }, h("span", { class: "field-l" }, "Type ", h("b", null, typed), " to confirm, or its first letters and Tab"), code) : null,

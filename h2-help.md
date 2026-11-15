@@ -126,6 +126,10 @@ hive step ask --why "..." --script PATH | status | list | approve ID | deny ID: 
 
 hive improve log --what ... --measure ... --check CMD --want up|down [--kind fix|behaviour --control CMD] (a script judges it), or --no-check WHY | attach ID --check CMD --want up|down (late: never a held) | autojudge | num FIELD | judge ID held|reverted|inconclusive --why ... | list [--due] | show ID: the ledger of changes meant to make the hive better, each judged later by someone else (core/progress.py)
 
+## hive steer
+
+hive steer [--brief|--first|--log]: the few numbers the hive steers by, first one first (the RSI lab's index; hive progress heads with its --brief)
+
 ## hive progress
 
 hive progress [--since 1d] [--snapshot] [--post] [--json]: the hive's numbers for the window against the window before, with what got worse (core/progress.py)

@@ -813,10 +813,20 @@ def text(cur, prev):
     if w: lines.append("Got worse, worst first: " + ", ".join(f"{k} {b}->{a}" for _, k, b, a in w[:4]))
     return "\n".join(lines)
 
+# The one place the core names the lab's index. `hive steer` and the head of `hive progress` both read it through here;
+# the lab's scripts (index, roots, pickup_causes, durability, safety, lab, movers) move into the core after the lab's 11-17 closing verdict.
+STEER_INDEX = HOME / "projects" / "rsi-lab" / "index.py"
+
+def cmd_steer(a):
+    """hive steer [--brief|--first|--log|...]: the few numbers the hive steers by (the RSI lab's index), flags handed to it whole."""
+    if not STEER_INDEX.exists():
+        sys.exit(f"hive steer: the index is not at {STEER_INDEX} (lab closed or moved); `hive progress` still prints the table.")
+    os.execv(sys.executable, [sys.executable, "-I", str(STEER_INDEX)] + list(a.rest))
+
 def steer_start():
     """Start the RSI lab's index (the few numbers the hive steers by, in the order the person named their pain points; the table below is for diagnosis).
     Started before the scoreboard and read after it, so its 15 s (13 of them safety.py's scan) overlap the table's (2026-11-15, continuity.md R43)."""
-    try: return subprocess.Popen([sys.executable, "-I", str(HOME / "projects" / "rsi-lab" / "index.py"), "--brief"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    try: return subprocess.Popen([sys.executable, "-I", str(STEER_INDEX), "--brief"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     except Exception: return None
 
 def steer(p=None):
@@ -873,6 +883,10 @@ def main(argv=None):
     p = sp.add_parser("show", help="one entry in full"); p.add_argument("id"); p.set_defaults(f=cmd_show)
     p = sp.add_parser("progress", help="the scoreboard: --since 1d (default), --snapshot appends to ~/progress.jsonl, --post puts it in thread progress, --json")
     p.add_argument("--since", default="1d"); p.add_argument("--snapshot", action="store_true"); p.add_argument("--post", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_progress)
+    p = sp.add_parser("steer", help="the few numbers the hive steers by (the RSI lab's index); flags go to it whole"); p.add_argument("rest", nargs=argparse.REMAINDER); p.set_defaults(f=cmd_steer)
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["steer"]:  # argparse refuses a REMAINDER that starts with a flag: hand the index its flags whole
+        rest = argv[1:]; return cmd_steer(argparse.Namespace(rest=rest[1:] if rest[:1] == ["--"] else rest))
     a = ap.parse_args(argv); a.f(a)
 
 if __name__ == "__main__": main()

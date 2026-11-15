@@ -2,7 +2,11 @@
 import { h, tr } from "../core/dom.js";
 let el;
 export function showTip(x, y, ...lines) {
-  if (!el) { el = h("div", { class: "tip", role: "tooltip" }); document.body.append(el); }
+  if (!el) {
+    el = h("div", { class: "tip", role: "tooltip" }); document.body.append(el);
+    // Escape closes the readout (WCAG 1.4.13) and goes no further; moving the pointer shows it again.
+    document.addEventListener("keydown", e => { if (e.key === "Escape" && !el.hidden) { el.hidden = true; e.preventDefault(); e.stopImmediatePropagation(); } }, true);
+  }
   el.replaceChildren(...lines.flatMap((l, i) => (i ? [h("br"), tr(String(l))] : [tr(String(l))])));
   el.hidden = false;
   const r = el.getBoundingClientRect();

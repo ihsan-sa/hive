@@ -253,6 +253,7 @@ class Hunt:
         self.allow_secondary = spec.get("allow_secondary", True)
         self.allow_page_signal = spec.get("allow_page_signal", False)
         self.max_age = spec.get("max_age_years", 3)
+        if self.max_age is not None and self.max_age < 0: raise ValueError(f"spec max_age_years must not be negative, not {self.max_age}")
         self.pattern = _pattern(spec, "org_pattern") or re.compile(r"\b(?:[A-Z][\w.&'-]+\s+){1,5}(?:College|University|Institute of Technology)\b(?:\s+of\s+(?:(?:New|North|South|West|San|Los|Las|Rhode|Puerto|Saint|St\.)\s+)?[A-Z][\w-]+)?")
         self.pages = {}  # org -> direct URLs to read: a known staff page fed in
         for o, urls in (spec.get("pages") or {}).items():
