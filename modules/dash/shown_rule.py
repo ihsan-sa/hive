@@ -50,9 +50,26 @@ def addresses(p, byid):
     return "person" in mentions(p) or bool(FOR_YOU.search(text) or NEEDS.search(text) or AT_PERSON.search(text)) or (q is not None and q.get("from") == "person")
 
 
-def first_line(text, cut=CUT):
-    """The post's first line with words in it, markdown stripped, cut at 140 characters."""
+FENCE = re.compile(r"^\s*(```|~~~)")
+
+
+def prose(text):
+    """The post's lines outside code fences: a fenced page, script or log is not words to the person (a session page's
+    source once put hundreds of `?` lines under one post, thread fellows-study 11141904ac38)."""
+    out, fence = [], None
     for l in (text or "").split("\n"):
+        m = FENCE.match(l)
+        if m and (fence is None or m.group(1) == fence):
+            fence = None if fence else m.group(1)
+            continue
+        if fence is None:
+            out.append(l)
+    return out
+
+
+def first_line(text, cut=CUT):
+    """The post's first line with words in it, outside code fences, markdown stripped, cut at 140 characters."""
+    for l in prose(text):
         l = INLINE.sub("", LINK.sub(r"\1", MARK.sub("", l))).strip()
         if re.search(r"\w", l):
             return l[:cut]
@@ -64,9 +81,9 @@ def plain(l):
 
 
 def asking_lines(text, cut=CUT):
-    """The post's other lines that hold a question mark, each stripped and cut like the first."""
+    """The post's other lines outside code fences that hold a question mark, each stripped and cut like the first."""
     first = first_line(text, cut)
-    return [plain(l)[:cut] for l in (text or "").split("\n") if "?" in l and plain(l) and plain(l)[:cut] != first]
+    return [plain(l)[:cut] for l in prose(text) if "?" in l and plain(l) and plain(l)[:cut] != first]
 
 
 def stretches(posts):

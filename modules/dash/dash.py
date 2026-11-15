@@ -15,7 +15,7 @@ The web page is web/ next to this file (ui.html, the previous page, is at /old);
   hive-dash serve [--port P] web UI on http://127.0.0.1:P/ (loopback only; default 8077)
   hive-dash --json          the snapshot as JSON
 """
-import base64, email.utils, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time
+import base64, email.utils, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time, zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -2082,6 +2082,48 @@ def tail_lines(path, offset, last=0, upto=None):
         return offset, [], offset
     cut = data.rfind(b"\n") + 1  # a line still being appended waits for the next poll
     return offset + cut, [ln.decode("utf-8", "replace") for ln in data[:cut].splitlines() if ln.strip()], offset
+
+
+def tail_json(path, offset, last=0, upto=None, gz=False, step=1 << 20):
+    """/api/board and /api/log's answer, '{"offset":..,"start":..,"items":[..]}', yielded a megabyte at a time (gzipped as it
+    goes with gz=True); joined, the same bytes tail_lines gives. The whole board is 27 MB and every page load asks for all of
+    it: built as one str, then its join, encoding and gzip, a request held ~5 copies at once, and concurrent loads left the
+    dash at its 2 GB cap swapping and the machine out of memory (2026-11-15). Streamed, a request holds about one step."""
+    z = zlib.compressobj(5, zlib.DEFLATED, 31) if gz else None
+    pack = (lambda b: z.compress(b)) if z else (lambda b: b)
+    try:
+        f = open(path, "rb")
+    except OSError:
+        yield pack(b'{"offset":%d,"start":%d,"items":[]}' % (offset, offset))
+        if z: yield z.flush()
+        return
+    with f:
+        size = f.seek(0, 2)
+        if offset > size: offset = 0
+        if last and size - offset > last:
+            f.seek(size - last - 1)
+            nl = f.read(last + 1).find(b"\n")
+            if nl >= 0: offset = size - last - 1 + nl + 1
+        end = size if upto is None else max(offset, min(upto, size))
+        cut = end   # back to the last newline: a line still being appended waits for the next poll
+        while cut > offset:
+            back = max(offset, cut - 65536); f.seek(back); blk = f.read(cut - back)
+            nl = blk.rfind(b"\n")
+            if nl >= 0: cut = back + nl + 1; break
+            cut = back
+        yield pack(b'{"offset":%d,"start":%d,"items":[' % (cut, offset))
+        f.seek(offset); pos, carry, first = offset, b"", True
+        while pos < cut:
+            buf = carry + f.read(min(step, cut - pos)); pos += len(buf) - len(carry)
+            k = buf.rfind(b"\n") + 1 if pos < cut else len(buf)
+            blk, carry = buf[:k], buf[k:]
+            try: blk.decode("utf-8")
+            except UnicodeDecodeError: blk = blk.decode("utf-8", "replace").encode()
+            lines = [ln for ln in blk.splitlines() if ln.strip()]
+            if lines:
+                yield pack((b"" if first else b",") + b",".join(lines)); first = False
+        yield pack(b"]}")
+        if z: yield z.flush()
 
 
 # ---------- who may do what ----------
@@ -5060,11 +5102,15 @@ def serve(port):
                 self.send_response(304); self.send_header("ETag", tag); self.send_header("Last-Modified", lm); self.send_header("Cache-Control", cache); self.end_headers(); return
             self.send(f.read_bytes(), ct, cache=cache, etag=tag, modified=lm)   # private: only the browser keeps a copy, never the tunnel's edge
 
-        def send(self, body, ct, status=200, cookie=None, framed_here=False, cache="no-store", etag=None, modified=None):
-            gz = len(body) > 4096 and "gzip" in self.headers.get("Accept-Encoding", "")
-            if gz: body = gzip.compress(body, 5)
+        def send(self, body, ct, status=200, cookie=None, framed_here=False, cache="no-store", etag=None, modified=None, gzipped=False):
+            """body may be an iterator of chunks (tail_json, already gzipped when gzipped=True): written as they come, with no
+            Content-Length; this server speaks HTTP/1.0, so the closed connection ends the answer."""
+            stream = not isinstance(body, (bytes, bytearray))
+            gz = gzipped or (not stream and len(body) > 4096 and "gzip" in self.headers.get("Accept-Encoding", ""))
+            if gz and not stream: body = gzip.compress(body, 5)
             self.send_response(status)
-            self.send_header("Content-Type", ct); self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Type", ct)
+            if not stream: self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", cache)
             if etag: self.send_header("ETag", etag)
             if modified: self.send_header("Last-Modified", modified)
@@ -5075,7 +5121,9 @@ def serve(port):
             self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'".replace("frame-src 'self'", "frame-src 'self'" + frames) + framing)
             if self.route != "open": self.send_header("Referrer-Policy", "no-referrer")
             if gz: self.send_header("Content-Encoding", "gzip")
-            self.end_headers(); self.wfile.write(body)
+            self.end_headers()
+            for b in (body if stream else (body,)):
+                if b: self.wfile.write(b)
 
         def send_file(self, path, view=False):
             """A post's file. Agents and Slack write these, so nothing here runs in the page's origin:
@@ -5352,8 +5400,8 @@ def serve(port):
                 self.send(json.dumps(jobs_for(jobs_c.get(), self.route != "outside" or self.mode == "full"), default=str).encode(), J)
             elif u.path in ("/api/board", "/api/log"):
                 num = lambda k: int(v) if (v := (q.get(k) or [""])[0]).isdigit() else None
-                off, lines, start = tail_lines(BOARD if u.path == "/api/board" else LOG, off, num("last") or 0, num("upto"))
-                self.send(('{"offset":%d,"start":%d,"items":[%s]}' % (off, start, ",".join(lines))).encode(), J)
+                gz = "gzip" in self.headers.get("Accept-Encoding", "")
+                self.send(tail_json(BOARD if u.path == "/api/board" else LOG, off, num("last") or 0, num("upto"), gz), J, gzipped=gz)
             elif u.path == "/api/approvals":
                 self.send(json.dumps(approvals_list()).encode(), J)
             elif u.path == "/api/feedback-drafts":

@@ -37,6 +37,7 @@ export default {
   // The agents' status values: singular, so a row's cell and the filter tab read the same ("Ended" was "Terminados" for one agent).
   "Killed": "Detenido",
   "Stopped at a limit": "Parado en un límite",
+  "Stopped": "Parado",   // E18z: the Agents header kicker
   "Any status": "Cualquier estado",
   "No agents have run yet. When one starts, it shows here.": "Aún no ha corrido ningún agente. Cuando empiece uno, aparece aquí.",
   "No agents match.": "Ningún agente coincide.",
@@ -661,8 +662,18 @@ export default {
     [/^Running: ([\s\S]+)$/, "Ejecutando: $1"],
     [/^Last step: (?:Running: )?([\s\S]+)$/, (m, x) => `Último paso: ${/^Last step: Running: /.test(m) ? "Ejecutando: " : ""}${x}`],
     [/^is working: ([\s\S]+)$/, "está trabajando: $1"],
-    [/^Stop ([a-z][a-z0-9-]*\d[a-z0-9-]*)$/, "Parar $1"],
-    [/^Open ([a-z0-9]+(?:[-.][a-z0-9]+)+|[a-z][a-z0-9]*\d[a-z0-9]*)$/, "Abrir $1"],
+    // E18z: any one-word name ("Open seeds", "Stop cd34e"); every fixed "Open …"/"Stop …" label is an exact key, which tr() tries first.
+    [/^Stop (\S+)$/, "Parar $1"],
+    [/^Open (\S+)$/, "Abrir $1"],
+    // E18z: the box's live run (sign-in band, the Now meta line, the busy send hint, failed exits)
+    [/^Sign in again to Claude: (?:1 agent is|(\d+) agents are) waiting\.( Settings > Accounts\.)?$/, (_, n, s) => `Vuelve a iniciar sesión en Claude: ${n ? n + " agentes esperan" : "1 agente espera"}.${s ? " Ajustes > Cuentas." : ""}`],
+    [/^Sign in again to Claude\. New agents wait until you do\.( Settings > Accounts\.)?$/, (_, s) => `Vuelve a iniciar sesión en Claude. Los agentes nuevos esperan hasta que lo hagas.${s ? " Ajustes > Cuentas." : ""}`],
+    [/^Claude account (\S+) has expired\. Its agents moved to your other account\. Sign in again to bring it back\.$/, "La cuenta de Claude $1 ha caducado. Sus agentes pasaron a tu otra cuenta. Vuelve a iniciar sesión para recuperarla."],
+    [/^(\d+) posts? in the last hour(?: · (\d+) waiting to start)?(?: · (\S+) of work in 24h, at list prices)?$/, (_, n, q, c) => [`${n} ${pl(n, "mensaje", "mensajes")} en la última hora`, q ? `${q} esperando para empezar` : null, c ? `${c} de trabajo en 24h, a precios de lista` : null].filter(Boolean).join(" · ")],
+    [/^(Send|Start) \(Enter\)\. (\S+) reads it after its current step( ↑ past messages · Tab completes)?$/, (_, w, a, more) => `${w === "Send" ? "Enviar" : "Empezar"} (Intro). ${a === "the agent" ? "El agente" : a} lo lee tras su paso actual${more ? " ↑ mensajes anteriores · Tab completa" : ""}`],
+    [/^Queued · (.+) reads it after its current step$/, (_, a) => `En cola · ${a === "the agent" ? "el agente" : a} lo lee tras su paso actual`],
+    [/^(?:([a-z][\w-]*): )?failed \(exit (\d+)\)$/, (_, a, x) => `${a ? a + ": " : ""}falló (salida ${x})`],
+    [/^(\d+) errored$/, "$1 con error"],
     [/^(.+), (working|quiet|stuck|ended|killed|queued|limited|failed|paused|done|in job queue|waiting for your answer|hasn't run|sending|in use|new reply for you)$/, (_, n, w) => `${n === "the agent" ? "el agente" : n}, ${({ working: "trabajando", quiet: "en silencio", stuck: "atascado", ended: "terminado", killed: "detenido", queued: "en cola", limited: "limitado", failed: "fallido", paused: "en pausa", done: "hecho", "in job queue": "en la cola de trabajos", "waiting for your answer": "esperando tu respuesta", "hasn't run": "no ha corrido", sending: "enviando", "in use": "en uso", "new reply for you": "nueva respuesta para ti" })[w]}`],
     [/^Reach (.+) now, without waiting for its step to end(\. Nothing is sent until you press Interrupt again\.)?$/, (_, a, more) => `Contacta con ${a === "the agent" ? "el agente" : a === "your Hive" ? "tu Hive" : a} ya, sin esperar a que termine su paso${more ? ". No se envía nada hasta que vuelvas a pulsar Interrumpir." : ""}`],
     [/^(?:([a-z][\w-]*): )?quiet (.+?)(?:(, no job in the queue)|, hasn't seen (\d+) new posts? for it)?$/, (_, a, d, q, n) => `${a ? a + ": " : ""}en silencio ${d}${q ? ", sin tarea en la cola" : n ? `, no ha visto ${n} ${pl(n, "mensaje nuevo", "mensajes nuevos")} para él` : ""}`],

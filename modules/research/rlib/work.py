@@ -225,7 +225,8 @@ class Hunt:
             if k in spec and not isinstance(spec[k], bool): raise ValueError(f"spec {k} must be true or false, not {spec[k]!r}")
         self.target = int(spec.get("target", 25))
         self.per_org = int(spec.get("per_org", 2))
-        for k, v in (("target", self.target), ("per_org", self.per_org)):
+        self.workers = int(spec.get("workers", 4))
+        for k, v in (("target", self.target), ("per_org", self.per_org), ("workers", self.workers)):
             if v < 1: raise ValueError(f"spec {k} must be at least 1, not {v}")
         m = spec.get("must") or []
         if isinstance(m, str): m = [m]  # one word given bare: not a list of its letters
@@ -465,7 +466,7 @@ class Hunt:
 
     def run(self):
         discover = list(self.s.get("discover", []))
-        workers = int(self.s.get("workers", 4))
+        workers = self.workers
         while len(self.leads) < self.target and time.monotonic() < self.deadline:
             todo = [o for o in self.orgs if self.org_count(o) < self.per_org and (any((o, a) not in self.tried and (o, a) not in self.failed for a in self.angles) or any((o, "(page) " + u) not in self.tried for u in self.pages.get(o, [])))]
             if not todo:
