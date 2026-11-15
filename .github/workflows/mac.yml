@@ -26,7 +26,8 @@ jobs:
         # On the site install.sh is get.sh; on the raw branch it is the inner script, so point the VM at get.sh (as win-test.ps1 does)
         sed 's|"$SITE/install.sh"|"$SITE/get.sh"|' get-mac.sh > line.sh; ! cmp -s get-mac.sh line.sh
         # To a file, not a pipe: a VM program the script leaves behind would hold the pipe open and the step would run to its 42 minutes with no verdict.
-        HIVE_CHECK_LINE=line.sh sh mac-check.sh > install.log 2>&1 < /dev/null || true
+        # No voice build in the rig: it starves the 3-core runner VM and the session never closes.
+        H2_VOICE=0 HIVE_CHECK_LINE=line.sh sh mac-check.sh > install.log 2>&1 < /dev/null || true
         tail -n 80 install.log
         grep -q '^done, 0 failed\.' install.log && ! grep -q '^done, [1-9][0-9]* failed' install.log
     - name: The report
