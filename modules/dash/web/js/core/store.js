@@ -67,9 +67,25 @@ export async function post(path, body) {
   const r = await ask(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Hive-Dash": "1" }, body: JSON.stringify(body) });
   if (r.redirected) throw Error("sign in again and reload the page");
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) { const e = Error(j.error || said(r.status)); e.status = r.status; throw e; }
+  if (!r.ok) {
+    // A bare 403 on a write that was allowed a moment ago: full mode from outside may have ended (dash.py FULL_IDLE_S). Ask /api/app once; if
+    // it says "expired", the error says so in words with the way back, and the forms keep what was typed (WCAG 3.3.1, 2.2.5).
+    if (r.status === 403 && !j.error) { await loadApp(); if (S.app.mode === "expired") { const e = Error(FULL_ENDED); e.status = 403; e.fullEnded = true; throw e; } }
+    const e = Error(j.error || said(r.status)); e.status = r.status; throw e;
+  }
   return j;
 }
+/** The words a form shows beside itself when full mode ended while it was open. */
+export const FULL_ENDED = "Full mode ended (it ends after 30 minutes without use), so this wasn't saved. What you typed is still here: press \"Limited · sign in for full\" at the top, sign in with Google, then save again.";
+export const fullEnded = e => !!(e && e.fullEnded);
+// What a form held when full mode ended, kept in this tab's sessionStorage so it survives the sign-in reload (WCAG 2.2.5). Names and numbers
+// only: a caller never passes a secret value. Each form clears its own entry after a save that works, or when it's closed.
+const KEPT = "hive.kept";
+const keptAll = () => { try { return JSON.parse(sessionStorage.getItem(KEPT) || "{}") || {}; } catch (e) { return {}; } };
+export const kept = k => keptAll()[k] ?? null;
+export const keep = (k, v) => { try { const o = keptAll(); if (v == null) delete o[k]; else o[k] = v; Object.keys(o).length ? sessionStorage.setItem(KEPT, JSON.stringify(o)) : sessionStorage.removeItem(KEPT); } catch (e) {} };
+/** The line beside a form that came back with what was typed before the sign-in. */
+export const KEPT_NOTE = "Typed before you signed in again. It isn't saved yet.";
 
 // ---- ingest ----
 const ledgerAdd = (r, words) => { r.lc = words.join(" ").toLowerCase(); S.ledger.push(r); };

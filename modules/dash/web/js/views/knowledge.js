@@ -2,7 +2,7 @@
 // #knowledge/<home-relative path> opens a folder or a file, and <path>::<line> jumps to a line. The server decides what can be seen and
 // redacts all text; this view only reads, except a project's goals.md, saved through /api/plan with the plans right. On a phone the list and a file take turns.
 import { h } from "../core/dom.js";
-import { S, can, getPref, jget, post, setPref } from "../core/store.js";
+import { S, can, fullEnded, getPref, jget, post, setPref, kept, keep, KEPT_NOTE } from "../core/store.js";
 import { ago, plural, stamp, fix, int } from "../core/format.js";
 import { href, threadHref } from "../core/router.js";
 import { labelCodes, threadTitle } from "../core/model.js";
@@ -161,11 +161,32 @@ async function saveEdit(start, ctx) {
   e.saving = true; e.say = ""; ctx.update();
   try {
     const r = await post("/api/plan", { name, text: e.text, version: e.version, start });
+    keep("plan", null);
     Object.assign(e, { name, version: r.version, isNew: false, say: start ? "Saved, and an agent is starting on it." : "Saved. Nothing was started.", tone: "good" });
     K.seen.delete(`projects/${name}`); K.seen.delete(`projects/${name}/goals.md`); K.seen.delete("projects");
     if (wasNew) { e.at = `projects/${name}`; location.hash = open(e.at); return; }   // the new project's own page, with the editor still open
     refresh(ctx);
-  } catch (err) { e.say = err.message; e.tone = "bad"; ctx.update(); } finally { e.saving = false; }
+  } catch (err) {
+    e.say = err.message; e.tone = "bad"; e.lost = fullEnded(err); e.conflict = !e.isNew && /changed since you opened/i.test(err.message);
+    if (e.lost) keep("plan", { at: e.at, name: e.name, isNew: !!e.isNew, text: e.text, version: e.version });
+    // Changed elsewhere: the typed text is kept (a reload brings it back), but not the version it was opened at, which can only fail again.
+    else if (e.conflict) { e.say = CONFLICT; keep("plan", { at: e.at, name: e.name, isNew: false, text: e.text, version: null, conflict: true }); }
+    ctx.update();
+  } finally { e.saving = false; }
+}
+const CONFLICT = "This plan changed since you opened it. What you typed is kept here: load the plan as it is now to compare, then Save.";
+// The way out of a conflict: the plan as it is now, with its version, shown above the typed text, which stays in the editor. Save then
+// writes the editor over that version (and meets the check again if it changed once more).
+async function loadCurrent(ctx) {
+  const e = K.edit;
+  try {
+    const p = (await jget("/api/plans")).find(x => x.name === e.name);
+    if (!p) throw new Error("the plan isn't there any more");
+    Object.assign(e, { theirs: p.text || "", version: p.version || null, conflict: false, tone: null,
+      say: "Above is the plan as it is now. Your text is still in the editor: change it as you need, then Save writes it over the plan." });
+    if (kept("plan")) keep("plan", { at: e.at, name: e.name, isNew: false, text: e.text, version: e.version });
+  } catch (err) { e.say = `Couldn't load the plan as it is now: ${err.message}`; e.tone = "bad"; }
+  ctx.update();
 }
 function editor(ctx) {
   const e = K.edit;
@@ -174,10 +195,14 @@ function editor(ctx) {
     h("h2", { class: "kb-t" }, e.isNew ? "New project" : `Plan for ${e.name}`),
     e.isNew ? field("Name", input({ value: e.name, autocomplete: "off", ...invalid("err-pname", e.bad), oninput: (ev, n) => { e.name = n.value; } })) : null,
     e.isNew ? fieldErr("err-pname", e.bad) : null,
-    h("textarea", { class: "input", rows: 20, "aria-label": "Plan", value: e.text, oninput: (ev, n) => { e.text = n.value; } }),
-    h("div", { class: "frow" }, button("Save", () => saveEdit(false, ctx), { kind: "primary", busy: e.saving }), button("Save and start an agent", () => saveEdit(true, ctx), { disabled: e.saving }),
-      button("Close", () => { K.edit = null; ctx.update(); }, { kind: "quiet" }),
-      e.say ? h("p", { class: "fmsg", "data-tone": e.tone, role: "status" }, e.say) : null));
+    e.theirs != null ? field("The plan as it is now", h("textarea", { class: "input", rows: 8, readonly: true, value: e.theirs, "data-key": "theirs" })) : null,
+    h("textarea", { class: "input", rows: 20, "aria-label": e.theirs != null ? "Your plan" : "Plan", value: e.text, oninput: (ev, n) => { e.text = n.value; } }),
+    // A conflict's words and its way out sit in their own row just above Save, so both are beside it at any width (WCAG 3.3.1, 3.3.4).
+    e.conflict ? h("div", { class: "frow", "data-key": "conflict" }, h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, e.say),
+      button("Load the plan as it is now", () => loadCurrent(ctx), { size: "s" })) : null,
+    h("div", { class: "frow", "data-key": "acts" }, button("Save", () => saveEdit(false, ctx), { kind: "primary", busy: e.saving }), button("Save and start an agent", () => saveEdit(true, ctx), { disabled: e.saving }),
+      button("Close", () => { keep("plan", null); K.edit = null; ctx.update(); }, { kind: "quiet" }),
+      e.say && !e.conflict ? h("p", { class: "fmsg", "data-tone": e.tone, role: "status" }, e.say) : null));
 }
 
 function crumbs(path) {
@@ -382,7 +407,12 @@ export default {
   enter(ctx) { if (can("files")) refresh(ctx); },
   poll: { every: 30000, run(ctx) { if (can("files")) refresh(ctx); } },
   render(ctx) {
-    if (!can("files")) return needFull("Reading your files", "Knowledge");
+    // Full mode ended while a plan was being written: the page keeps the editor, with what was typed and the way back beside Save (WCAG 3.3.1, 2.2.5).
+    if (!can("files")) return K.edit && K.edit.lost ? h("div", { class: "page", "data-width": "narrow", "data-key": "kb-lost" }, h("div", { class: "kb-note" }, editor(ctx))) : needFull("Reading your files", "Knowledge");
+    // A plan typed before full mode ended comes back in its editor after the sign-in, on the page it was written on (store.js keep).
+    const back = kept("plan");
+    if (back && !K.edit && !K.back && back.at === parse(ctx.arg).path) { K.back = true; K.edit = { at: back.at, name: String(back.name || ""), isNew: !!back.isNew, text: String(back.text || ""), version: back.version ?? null, say: KEPT_NOTE + " Press Save to keep it, or Close to drop it." };
+      if (back.conflict) Object.assign(K.edit, { conflict: true, version: null, say: CONFLICT, tone: "bad" }); }
     const { path, line } = parse(ctx.arg), d = path ? K.seen.get(path) : null, isFile = !!d && d.type !== "dir", editing = K.edit && K.edit.at === path;
     const find = (kbd = "/") => h("label", { class: "kb-q" }, icon("search"), input({ type: "search", value: K.q, placeholder: "Search everything: notes, files, posts", "aria-label": "Search the knowledge base", "data-kb-all": "", autocomplete: "off", oninput: (e, n) => { K.q = n.value; K.qPath = path; search(ctx); ctx.update(); } }), kbd ? h("kbd", null, kbd) : null);   // the phone has no "/" key to show
     const searching = K.q.trim().length >= 2 && K.qPath === path;
