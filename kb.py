@@ -733,6 +733,7 @@ def cmd_open(a):
 RECALL_SRC = ("kb", "core", "modules"); RECALL_PREFIX = tuple(x + "/" for x in RECALL_SRC)  # notes we wrote: never the h4 mirror, the archive or project data
 RECALL_WORDS, RECALL_STALE, RECALL_ONCE, RECALL_CTX = 40, 600, 6 * 3600, 0.5
 RECALL_KNN, RECALL_KCTX, RECALL_FILES = 8, 0.3, 40  # neighbours that vote, weight of a thread word in matching messages, files weighed
+RECALL_QUIET = {"status-timer"}  # senders whose briefs are a list of thread names to refresh: their words match whatever those threads are about, so nothing recall shows them bears on the job (0 of 9 opened, 11-13..15, continuity.md R42)
 RECALL_BAR = 1.6  # score an agent's post must reach to be shown (word match + past readers, 2 is top on both); 30% opened above it against 2-6% below, 7 days to 2026-11-10
 FILLER = set("""ive idk like just really thing things stuff something anything everything want wants wanted need needs needed make makes made making
 get gets got getting going goes went know think thought see seen look looks looking way ways lot lots bit kind kinda sort maybe also still even much many please thanks
@@ -873,21 +874,22 @@ def recall_posts(ids, before=3, cap=1500):
         ctx += th[:1] + th[1:][-before:]
     return " ".join(str(p.get("text") or "") for p in mine), " ".join(str(p.get("text") or "")[:cap] for p in ctx)
 
-def recall_gate(hits, bad, person, midrun, n):
+def recall_gate(hits, bad, person, midrun, n, quiet=False):
     """What of a ranked recall gets shown: say nothing unless it is probably right. A wrong pointer costs attention on every message, so a list
     of known duds stays silent rather than falling back on them, a run already at work does not get pointers (3% opened against 10% at a fresh start),
     and an agent's post needs RECALL_BAR. A post from the person is the exception: 31% opened at any score. Measured in projects/rsi-lab/kb_rules.py."""
-    if midrun: return []
+    if midrun or quiet: return []
     return [h for h in hits if fmt_path(h["path"]) not in bad and (person or h["s"] >= RECALL_BAR)][:n]
 
 def cmd_recall(a):
     text, ctx = recall_posts(set(a.post)) if a.post else (sys.stdin.read(), "")
-    thread, person = "", not a.post  # text on stdin has no sender to judge
+    thread, person, quiet = "", not a.post, False  # text on stdin has no sender to judge
     if a.post:  # the thread of the post, so its own earlier messages are never taken as like-minded neighbours; and who wrote it, for the bar
         try:
             mine = [p for l in open(H + "/board.jsonl", errors="replace") for p in [json.loads(l)] if p.get("id") in set(a.post)]
             thread = str(mine[0].get("thread") or "") if mine else ""
             person = any(str(p.get("from") or "").lower() == "person" for p in mine)
+            quiet = bool(mine) and all(str(p.get("from") or "").lower() in RECALL_QUIET for p in mine)
         except (OSError, ValueError): pass
     if not text.strip(): return  # no such post, or nothing on stdin
     c = connect(); t0 = time.time()
@@ -896,13 +898,14 @@ def cmd_recall(a):
     if kbuse:  # what is injected leaves out the notes recall shows again and again and nobody opens (kbuse.duds); the ranking itself is untouched
         try: bad = kbuse.duds()
         except Exception: pass
-    ranked = hits[:a.n]; hits = recall_gate(hits, bad, person, a.midrun, a.n); held = [h for h in ranked if h not in hits]
+    ranked = hits[:a.n]; hits = recall_gate(hits, bad, person, a.midrun, a.n, quiet); held = [h for h in ranked if h not in hits]
     if a.who: seen = recall_shown(a.who); hits = [h for h in hits if h["path"] not in seen]
     if hits:
         print("Notes that may bear on this (matched on its words, not checked; `kb open PATH:LINE` reads one):")
         for h in hits: print("- %s:%d  %s" % (fmt_path(h["path"]), h["line"], re.sub(r"\s+", " ", h["head"])[:90]))
     rec = {"recall": a.post or "stdin", "top": [h["path"] for h in hits], "ms": int((time.time() - t0) * 1000)}
-    if held: rec.update(held=len(held), held_paths=[fmt_path(h["path"]) for h in held])  # every message is still searched; what was ranked and not shown, so what the silence cost can be counted (did the run read it anyway?)
+    if held: rec.update(held=len(held), held_paths=[fmt_path(h["path"]) for h in held])
+    if quiet: rec["quiet"] = True  # every message is still searched; what was ranked and not shown, so what the silence cost can be counted (did the run read it anyway?)
     if a.who: os.environ["HIVE_NAME"] = a.who
     if kbuse and hits:
         rec.update(id=kbuse.new_id(), shown=[[fmt_path(h["path"]), h["line"]] for h in hits])
