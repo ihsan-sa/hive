@@ -62,6 +62,8 @@ JARGON = [
     ("tool talk", re.compile(r"\b(?:PR\s*#?\d+|commit\s+[0-9a-f]{6,}|stdin|regex|jsonl|API|endpoint|refactor)\b"), "say what it means for the work"),
 ]
 
+STEP_ID = re.compile(r"\b(?:R-?\d{2,4}[\w-]*|[A-Z]{2}-\d+[a-z]?)\b")   # a ladder step id (R107, R-1114-c, IM-1b): the to-do list is the person's, ids mean nothing there
+
 def now(): return time.time()
 def who(): return os.environ.get("HIVE_NAME", "anon")
 
@@ -539,7 +541,9 @@ def main(argv=None):
             if len(a.args) < 2: sys.exit('hive focus check add FOCUS "text"')
             f = find(st, a.args[0])
             if not f: sys.exit(f"hive focus check: no focus {a.args[0]!r}")
-            r = append({"kind": "check", "focus": f["id"], "id": check_id(recs), "text": " ".join(" ".join(a.args[1:]).split())[:200]}); print(f"{r['id']}: {r['text']}"); return
+            r = append({"kind": "check", "focus": f["id"], "id": check_id(recs), "text": " ".join(" ".join(a.args[1:]).split())[:200]}); print(f"{r['id']}: {r['text']}")
+            if (m := STEP_ID.search(r["text"])): print(f"hive focus check: {m.group(0)!r} is a ladder step id the person can't use; say what it does in plain words (done {r['id']}, then add it again)", file=sys.stderr)
+            return
         if a.what in ("list", "ticked"):   # ticked: the person's ticks no agent has checked yet
             f = find(st, a.args[0]) if a.args else None
             for g in st["foci"]:

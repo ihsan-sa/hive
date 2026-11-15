@@ -26,7 +26,7 @@
   .top-in .top-status>span{height:32px;max-width:46vw;overflow:clip visible;text-overflow:ellipsis;white-space:nowrap}
   .top-in .btn[data-kind=icon]{min-width:40px;height:40px}
   /* a conversation, a file and the keyboard take the whole screen: no top bar, no bottom bar */
-  .app[data-view=thread] .top,.app[data-kb=open] .top,.top:has(~ #main .kb[data-in]){display:none}
+  .app[data-view=thread] .top:not(:has(.lost)),.app[data-kb=open] .top:not(:has(.lost)),.top:has(~ #main .kb[data-in]):not(:has(.lost)){display:none}   /* offline, the bar stays: its band is the only place that says so */
 
   /* ---- the bottom bar: Chat, Agents, Usage, Knowledge, More ---- */
   #mnav{display:block}
@@ -187,6 +187,7 @@
   .btn{min-height:40px}
   .btn.cm-need-a{min-height:44px;min-width:44px}   /* an Answer that opens the quick-answer panel: 44 px on a phone (r23) */
   .btn.nd-later,.btn.nd-moot,.yr-wb .btn,.fp-later-i .btn{min-height:44px}   /* Later, Not needed, Bring back: 44 px on a phone like Answer */
+  .tier-chip a{min-height:44px;margin-block:-14px}   /* a focus card's work-tier chip: a 44 px finger target, the chip itself stays its size */
   .btn[data-kind=icon]{position:relative}
   .btn[data-kind=icon]::before{content:"";position:absolute;inset:-4px}
   a,button{touch-action:manipulation}
@@ -263,7 +264,7 @@
   .fl-list li{padding-block:var(--s1) 0}
   .fl-list li>a{display:block;padding-block:10px}
   .ag-stack .ag .tb>.tr>[data-label]{overflow:clip visible}
-  .ag-stack .ag .tb>.tr .ref{position:relative}
+  .ag-stack .ag .tb>.tr .ref{position:relative;max-width:100%;min-width:0}   /* a long name stops at the row edge, cut with … by .ref-n, instead of running 1000 px past it */
   .ag-stack .ag .tb>.tr .ref::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
 }
 

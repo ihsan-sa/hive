@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
+<title>Call the Hive</title>
+<link rel="manifest" href="/call.webmanifest"><meta name="theme-color" content="#1b1917">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Call Hive">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/call-192.png"><link rel="apple-touch-icon" href="/icons/call-180.png">
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/base.css">
+<link rel="stylesheet" href="/css/components.css">
+<link rel="stylesheet" href="/css/call.css">
+<script type="module" src="/js/call.js"></script>
+</head><body class="callpage">
+<main id="cp">
+  <button id="cp-call" class="cp-big" type="button" disabled>Call the Hive</button>
+  <p id="cp-msg" class="cp-msg" role="status"></p>
+  <section><h2>Recent calls</h2><div id="cp-recent" class="cp-list"></div></section>
+  <section class="cp-chat"><h2>Messages</h2><div id="cp-chat" class="cp-list" aria-live="polite"></div>
+    <form id="cp-send"><input id="cp-text" autocomplete="off" placeholder="Message the Hive" enterkeyhint="send"><button type="submit">Send</button></form></section>
+</main>
+</body></html>

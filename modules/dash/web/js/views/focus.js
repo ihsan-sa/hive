@@ -4,6 +4,7 @@
 // Stats hide in simple mode. Misc is the unfiled conversations: a plain list, no summary, no to-do.
 // It shows in the chat's layout (comms.js inChat), where a conversation would: the rail beside it, its focus marked there.
 import { h } from "../core/dom.js";
+import { LOC } from "../core/format.js";
 import { S, can, post } from "../core/store.js";
 import { threadTitle, agentOn } from "../core/model.js";
 import { plural, dur, ago } from "../core/format.js";
@@ -54,7 +55,7 @@ const finished = c => c.done && (c.ok || c.ok === undefined);   // ok undefined:
 const todoNote = c => c.done && !finished(c) ? h("span", { class: "fp-tnote" }, "ticked by you · an agent will check it")
   : !c.done && c.why ? h("span", { class: "fp-tnote" }, "reopened: " + c.why) : null;
 const todoList = (rows, id, ctx) => h("ul", { class: "fp-todo" }, rows.map(c => h("li", { "data-key": "c:" + (c.id || c.text), "data-done": finished(c) ? "" : null, "data-ticked": c.done && !finished(c) ? "" : null }, box(c, ctx),
-  h("span", null, say(c.done ? c.text.replace(/^For you:\s*/i, "") : c.text), c.focus && c.focus !== id ? h("span", { class: "meta" }, " · ", focusName(c.focus)) : null, todoNote(c)), c.done ? when(c.done * 1e3, "t", "ticked") : h("span"))));
+  h("span", null, say(scrub(c.done ? c.text.replace(/^For you:\s*/i, "") : c.text)), c.focus && c.focus !== id ? h("span", { class: "meta" }, " · ", focusName(c.focus)) : null, todoNote(c)), c.done ? when(c.done * 1e3, "t", "ticked") : h("span"))));
 const todoSec = (checks, id, ctx) => {
   const open = checks.filter(c => !finished(c)), fin = checks.filter(finished).sort((a, b) => b.done - a.done);
   return [open.length ? null : h("p", { class: "fp-calm" }, "Everything on the list is done."), todoList([...open, ...fin], id, ctx)];   // done ones inline, struck through, last
@@ -160,7 +161,7 @@ function page(ctx) {
   // Agents as the chat's pills, each with how long it has been on and its own one line (the me command), never bare codes.
   const pill = n => (simpleOn() ? h("b", null, plainName(n)) : agentRef(n, { pill: true }));
   const agRow = n => { const o = agentOn(n), t = o && scrub(o.text), s = S.lastSess[n];
-    return h("li", { "data-key": "ag:" + n }, h("span", null, pill(n), s && s.start && !s.end ? h("span", { class: "meta t", title: "Started " + new Date(s.start).toLocaleString() }, " for " + dur(Date.now() - s.start)) : null),
+    return h("li", { "data-key": "ag:" + n }, h("span", null, pill(n), s && s.start && !s.end ? h("span", { class: "meta t", title: "Started " + new Date(s.start).toLocaleString(LOC) }, " for " + dur(Date.now() - s.start)) : null),
       t ? h("span", { class: "fp-ag-x" }, say(t)) : null); };
   const agents = ag.now.length || ag.day.length ? h("section", { class: "fp-sec", "data-key": "fp-ag", "aria-label": "Agents" },
     head("Agents", [ag.now.length ? `${ag.now.length} now` : null, ag.day.length ? `${ag.day.length} in the last day` : null].filter(Boolean).join(", ")),

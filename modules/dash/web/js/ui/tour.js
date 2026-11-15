@@ -3,6 +3,7 @@
 // A view's tree is morphed, so the window and the ring live on <body>. The deck's own tour is js/deck/tour.js.
 import { S, can, subscribe } from "../core/store.js";
 import { simpleOn } from "../core/simple.js";
+import { tr } from "../core/dom.js";
 import { go, parse } from "../core/router.js";
 import { OUT } from "./composer.js";
 
@@ -15,14 +16,14 @@ const SEEN = "hive.tour.seen", SEEN_SIMPLE = "hive.tour.seen.simple";
 const here = () => parse().id;
 const q = s => [...document.querySelectorAll(s)].find(e => e.getClientRects().length) || null;   // the first one on screen: on a phone the top tabs are hidden and the bottom bar's are the ones to ring
 const lastMsg = () => { const a = [...document.querySelectorAll(".cm-msgs .msg")].filter(e => e.getClientRects().length); return a.reverse().find(e => e.dataset.who !== "me") || a[0] || q(".cm-msgs"); };   // the newest agent message, not the whole column, so the window has room beside it
-const heading = text => [...document.querySelectorAll("#main .sec-t")].find(e => e.textContent.trim() === text) || null;
+const heading = text => [...document.querySelectorAll("#main .sec-t")].find(e => e.textContent.trim() === tr(text)) || null;
 const HOME = '.cp[data-place="home"] .cp-box';   // on a phone it's docked at the bottom of home (css/phone.css)
 // R7 targets (HANDOFF "The tour"): the final selector first, today's element after it until the step that builds the new one lands.
 const homeBox = () => q(".cm-home .cp .cp-box") || q(HOME);
 const needsLine = () => q("#main .needs") || q(".cm-hline");   // TODO(R7 home): .needs
 const focusCard = () => (innerWidth <= PHONE && q("#main .fc .fc-hd")) || q("#main .fc") || q(".cm-foci");   // a phone's card can fill the screen: ring its head (the name to click)
-const workingPill = () => q('.top-pill[title="See who is working"]') || q(".top-pill");
-const moreTop = () => q('.top .btn[aria-label="More"]') || q(".more > button");   // TODO(R7 step 6): .top .btn[aria-label=More] only
+const workingPill = () => q(`.top-pill[title="${tr("See who is working")}"]`) || q(".top-pill");
+const moreTop = () => q(`.top .btn[aria-label="${tr("More")}"]`) || q(".more > button");   // TODO(R7 step 6): .top .btn[aria-label=More] only
 const onFocus = () => here() === "focus";   // a focus page (#focus/<id>), the second depth
 const inThread = () => { const r = parse(); return r.id === "comms" && !!r.arg && r.arg[0] !== "~"; };
 const tabSel = id => `.tabs a[data-key="${id}"], .top-icons a[data-key="${id}"], .bnav a[data-key="${id}"]`;   // Settings is an icon at the right of the bar; on a phone the tabs are in the bottom bar
@@ -40,7 +41,7 @@ const FULL_STEPS = [
   { title: "A quick look around", text: "A few minutes, one step at a time. This window says what to click and waits for you. You can drag it, and leave whenever you like." },
   { title: "This is where you talk to the Hive", text: () => `Click Chat ${tabWhere()}.`, ring: tab("comms"), done: () => here() === "comms", skip: () => here() === "comms" },
   // The four depths (the person, ui-redesign, 2026-11-07): the home says what you want, what needs you and where each focus stands; a focus page is the whole picture; a conversation's two lines say where it stands; then the conversation itself.
-  { title: "Say what you want", text: () => `${q(HOME) ? "Type" : "Click New conversation, then type"} what you want done, the way you'd tell a person, and press Start.${q(".cm-focus-row") ? " Focus, beside the box, files it under one piece of your work; Other is none." : ""} An agent starts on it and answers here. This is a real job and uses your Claude limits, so skip it if you're not ready.`, ring: () => homeBox() || q(".cm-newbtn"), done: () => mine() > sentFrom || OUT.length > outFrom || inThread(), enter: () => { sentFrom = mine(); outFrom = OUT.length; if (parse().arg) go("comms"); }, skip: () => !can("post") },
+  { title: "Say what you want", text: () => [q(HOME) ? "Type what you want done, the way you'd tell a person, and press Start." : "Click New conversation, then type what you want done, the way you'd tell a person, and press Start.", q(".cm-focus-row") && "Focus, beside the box, files it under one piece of your work; Other is none.", "An agent starts on it and answers here. This is a real job and uses your Claude limits, so skip it if you're not ready."].filter(Boolean).map(tr).join(" "), ring: () => homeBox() || q(".cm-newbtn"), done: () => mine() > sentFrom || OUT.length > outFrom || inThread(), enter: () => { sentFrom = mine(); outFrom = OUT.length; if (parse().arg) go("comms"); }, skip: () => !can("post") },
   { title: "What needs you", text: "This one line is the first thing to read: how many things wait on you, and a link to each. When it says nothing needs you, you can close the app.", ring: needsLine, skip: () => !needsLine() },
   { title: "Where things stand", text: "One card per focus, a piece of your work with a goal: what waits on you first, then what moves now and what changed lately, each with its time. Click a waiting line to answer it right here, or a focus name for the whole picture.", ring: focusCard, done: onFocus, hasNext: true, skip: () => !q(".cm-foci") && !onFocus() },
   { title: "The whole picture", text: "Everything about this focus on one page: what moves, what changed, what needs you, its to-do list, its agents and its conversations. Click a conversation for the detail.", ring: () => q(".fp .fp-hd") || q(".fp"), done: inThread, hasNext: true, skip: () => !onFocus() },
@@ -66,7 +67,7 @@ const FULL_STEPS = [
 /** The short walk for simple view: chat and Settings only, in the words that view uses. */
 const SIMPLE_STEPS = [
   { title: "A quick look around", text: "Two minutes. This window says what to click and waits for you. You can drag it, and leave whenever you like." },
-  { title: "Say what you want", text: () => `${q(HOME) ? "Type" : "Click New conversation, then type"} what you'd like done, the way you'd tell a person, and press Start. Your Hive works on it and answers here. This is a real request, so skip it if you're not ready.`, ring: () => homeBox() || q(".cm-newbtn"), done: () => mine() > sentFrom || OUT.length > outFrom || inThread(), enter: () => { sentFrom = mine(); outFrom = OUT.length; if (parse().arg) go("comms"); }, skip: () => !can("post") },
+  { title: "Say what you want", text: () => [q(HOME) ? "Type what you'd like done, the way you'd tell a person, and press Start." : "Click New conversation, then type what you'd like done, the way you'd tell a person, and press Start.", "Your Hive works on it and answers here. This is a real request, so skip it if you're not ready."].map(tr).join(" "), ring: () => homeBox() || q(".cm-newbtn"), done: () => mine() > sentFrom || OUT.length > outFrom || inThread(), enter: () => { sentFrom = mine(); outFrom = OUT.length; if (parse().arg) go("comms"); }, skip: () => !can("post") },
   { title: "Your conversations", text: "Each request is one conversation, listed here. Click one to read it.", ring: () => q(".cm-tl a.lr-in") || q(".cm-plist a.lr-in") || q(".cm-tl button.tm-sec-ch, .cm-tl button.tm-fold"), done: inThread, enter: () => { if (here() === "comms" && parse().arg) go("comms"); openList(); }, skip: () => inThread() || !threads() },
   { title: "Answers appear here", text: "Your Hive writes back as it goes. You can close this page: the work carries on, and it's all here when you come back.", ring: lastMsg, skip: () => !inThread() },
   { title: "Reply any time", text: "Write here to carry on, even while it works. Nothing is sent until you press Send. You can also attach files.", ring: () => q('.cp[data-place="thread"] .cp-t'), skip: () => !inThread() },
@@ -78,17 +79,18 @@ let STEPS = FULL_STEPS;
 let win = null, ringEl = null, at = 0, timer = 0, raf = 0, dragged = false, moving = 0, placed = "", armed = true;
 const step = () => STEPS[at];
 const val = x => (typeof x === "function" ? x() : x);
+const say = x => tr(val(x));   // E18x: a step's words in the chosen language (a built text is translated piece by piece, then passes through as is)
 
 function paint() {
   const s = step();
-  win.querySelector(".tw-n").textContent = `${at + 1} of ${STEPS.length}`;
-  win.querySelector(".tw-t").textContent = s.title;
-  win.querySelector(".tw-p").textContent = val(s.text);
+  win.querySelector(".tw-n").textContent = tr(`${at + 1} of ${STEPS.length}`);
+  win.querySelector(".tw-t").textContent = tr(s.title);
+  win.querySelector(".tw-p").textContent = say(s.text);
   const next = win.querySelector(".tw-next"), first = at === 0, waits = s.done && !s.hasNext;
-  next.textContent = first ? "Show me around" : s.last ? "Finish" : waits ? "Skip" : "Next";
+  next.textContent = tr(first ? "Show me around" : s.last ? "Finish" : waits ? "Skip" : "Next");
   next.dataset.kind = waits ? "quiet" : "primary";
   win.querySelector(".tw-back").hidden = first;
-  const stop = win.querySelector(".tw-end"); stop.textContent = first ? "Not now" : "End tour"; stop.hidden = !!s.last;   // Finish already ends it
+  const stop = win.querySelector(".tw-end"); stop.textContent = tr(first ? "Not now" : "End tour"); stop.hidden = !!s.last;   // Finish already ends it
 }
 function show(i, dir = 1) {
   clearTimeout(moving); moving = 0;
@@ -167,7 +169,7 @@ function tick() {
   const isDone = !!s.done && s.done();
   if (!isDone) armed = true;
   if (isDone && armed && !moving) moving = setTimeout(() => { moving = 0; if (win && step() === s) next(); }, 500);
-  else if (typeof s.text === "function") { const t = val(s.text), p = win.querySelector(".tw-p"); if (p.textContent !== t) p.textContent = t; }
+  else if (typeof s.text === "function") { const t = say(s.text), p = win.querySelector(".tw-p"); if (p.textContent !== t) p.textContent = t; }
 }
 function drag(handle) {
   handle.addEventListener("pointerdown", ev => {
@@ -186,9 +188,9 @@ export function startTour() {
   STEPS = simpleOn() ? SIMPLE_STEPS : FULL_STEPS;
   try { localStorage.setItem(simpleOn() ? SEEN_SIMPLE : SEEN, "1"); } catch (e) { /* no storage: it may offer itself again */ }
   win = document.createElement("div"); win.className = "tour tour-w"; win.setAttribute("role", "dialog");   // .tour: the R7 name phone.css docks; .tour-w: the tests and components.css
-  win.setAttribute("aria-label", "Tour of the app");
+  win.setAttribute("aria-label", tr("Tour of the app"));
   win.innerHTML = `<div class="tw-top"><span class="tw-n meta"></span></div><h3 class="tw-t"></h3><p class="tw-p" aria-live="polite"></p><div class="tw-btns"></div>`;
-  win.querySelector(".tw-btns").append(btn("", "tw-end", end), btn("Back", "tw-back", () => show(Math.max(0, at - 1), -1)), btn("", "tw-next", next));
+  win.querySelector(".tw-btns").append(btn("", "tw-end", end), btn(tr("Back"), "tw-back", () => show(Math.max(0, at - 1), -1)), btn("", "tw-next", next));
   ringEl = document.createElement("div"); ringEl.className = "tour-ring"; ringEl.setAttribute("aria-hidden", "true"); ringEl.hidden = true;
   document.body.append(ringEl, win);
   drag(win.querySelector(".tw-top"));

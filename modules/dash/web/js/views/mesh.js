@@ -2,7 +2,7 @@
 // bands; each agent is drawn once, fanned out right of its main thread with a spoke whose width says how much it posted, and a
 // faint "ghost" beside any other thread it posted in. The layout is fixed by the data (mesh-layout.js), never random. Hand-off
 // lines appear only for the selection. The window picks who appears; replay shows the graph as it was at the cut.
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { S, OUTSIDE, SYS, subscribe, getPref, setPref } from "../core/store.js";
 import { agentLabel, agentStatus, isAgent, isRunning, isWarden, modelName, sEnd, threadTitle, tierOf, fileInfo, spendSince } from "../core/model.js";
 import { ago, clock, dur, firstSentence, money, now, short, toks, plural, DAY, HOUR, MIN } from "../core/format.js";
@@ -387,7 +387,7 @@ function syncGraph(D) {
   scroller.toggleAttribute("data-free", isFree); zoomEl.hidden = !isFree;
   if (isFree) { if (!GS.view.user) fitView(L); applyView(); } else { cv.style.transform = ""; cv.removeAttribute("data-lod"); }
   syncCap(D);
-  stage.setAttribute("aria-label", `Graph of the hive: ${M.count}. Tab walks ${S.app.app ? "conversations" : "threads"} and agents; Enter selects, Escape clears.`);
+  stage.setAttribute("aria-label", `${tr("Graph of the hive")}: ${tr(M.count)}. ${tr(`Tab walks ${S.app.app ? "conversations" : "threads"} and agents; Enter selects, Escape clears.`)}`);
   if (M.q !== GS.q) { GS.q = M.q; if (S2.hits[0] && !isFree) scroller.scrollTo({ top: Math.max(0, S2.hits[0].y - 60), behavior: reduced() ? "auto" : "smooth" }); }
   legend(L);
 }
@@ -512,9 +512,9 @@ function syncReplay() {
   const a = winStart(), b = now(), v = M.cut == null ? 1 : (M.cut - a) / (b - a || 1), p = (Math.max(0, Math.min(1, v)) * 100).toFixed(2) + "%";
   rpFill.style.width = p; rpHandle.style.left = p; rpHandle.setAttribute("aria-valuenow", Math.round(v * 100)); rpHandle.setAttribute("aria-valuetext", M.cut == null ? "live" : clock(M.cut));
   rpHandle.toggleAttribute("data-cut", M.cut != null);
-  rpChip.textContent = M.cut == null ? "Live" : "At " + clock(M.cut); rpChip.toggleAttribute("data-cut", M.cut != null);
+  rpChip.textContent = tr(M.cut == null ? "Live" : "At " + clock(M.cut)); rpChip.toggleAttribute("data-cut", M.cut != null);
   rpBack.hidden = M.cut == null;
-  rpPlay.lastChild.textContent = M.playing ? "Pause" : "Replay";
+  rpPlay.lastChild.textContent = tr(M.playing ? "Pause" : "Replay");
 }
 let lastAdv = 0, lastDraw = 0;
 function startPlay() { if (M.cut == null) M.cut = winStart(); M.playing = true; lastAdv = 0; syncReplay(); requestAnimationFrame(advance); }
@@ -729,8 +729,8 @@ export default {
     syncReplay();
     const showEmpty = !M.lanes.length && (M.active || !M.more.length);
     if (!showEmpty) syncGraph(D);
-    const chart = h("main", { class: "map-chart" }, showEmpty ? emptyEl(D) : keep(stage), M.tile ? null : replayEl);
-    const root = h("div", { class: "map", "data-key": "mesh", "data-tile": M.tile ? "" : null, "aria-label": "Map: " + M.count },
+    const chart = h("div", { class: "map-chart" }, showEmpty ? emptyEl(D) : keep(stage), M.tile ? null : replayEl);
+    const root = h("div", { class: "map", "data-key": "mesh", "data-tile": M.tile ? "" : null, "aria-label": tr("Map") + ": " + tr(M.count) },
       M.tile ? null : navBox(), M.tile ? null : toolbar(), h("div", { class: "map-bd" }, chart, M.tile ? null : sidePane(D)));
     // the live element is found after the page puts it in place
     requestAnimationFrame(() => {

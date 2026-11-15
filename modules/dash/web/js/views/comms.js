@@ -6,7 +6,7 @@
 // The thread list and the message list are data-own: morph leaves them alone and sync() below writes them, once the
 // render has been mounted. A poll with nothing new touches nothing in them; a new post is appended, not redrawn, before
 // the messages still on their way (.cm-out), which sync() keeps apart.
-import { h, morph } from "../core/dom.js";
+import { h, morph, tr } from "../core/dom.js";
 import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
 import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
@@ -50,13 +50,25 @@ let sideW = (() => { try { return Math.min(SIDE_MAX, Math.max(SIDE_MIN, +localSt
 try { document.documentElement.style.setProperty("--rail-now", sideW + "px"); } catch (e) {}   // the New cell in Chat's bar follows the stored rail width (Nov 9 handoff §A.3)
 // The list never takes the conversation's room: a width saved in a wide window waits for the window to grow again (the same limit is in .cm's columns, components.css).
 const sideRoom = box => Math.max(SIDE_MIN, box.clientWidth - CHAT_MIN), sideNow = box => Math.min(sideW, sideRoom(box));
-const setSide = (box, w) => { sideW = Math.round(Math.min(SIDE_MAX, sideRoom(box), Math.max(SIDE_MIN, w))); box.style.setProperty("--cm-w", sideW + "px"); document.documentElement.style.setProperty("--rail-now", sideW + "px"); try { localStorage.setItem("cm.side", sideW); } catch (e) {} };
+const setSide = (box, w) => { sideW = Math.round(Math.min(SIDE_MAX, sideRoom(box), Math.max(SIDE_MIN, w))); box.style.setProperty("--cm-w", sideW + "px"); railNow(); try { localStorage.setItem("cm.side", sideW); } catch (e) {} };
 // A conversation head narrower than 600 px (a list pane dragged wide in a 1100 window) drops the crumb and says "All" for "Show every message",
 // so the title keeps its room (round 16: it was cut to one letter). #main is the CSS container, so a container query can't see the column;
 // a container on the head would pull in every phone rule written for #main. The render carries the mark, since morph() drops attributes it didn't set.
 let headTight = false, headSeen = null;
 const headRO = typeof ResizeObserver === "function" ? new ResizeObserver(es => { for (const e of es) { headTight = e.contentRect.width < 600; e.target.toggleAttribute("data-tight", headTight); } }) : null;
 const watchHead = () => { const n = document.querySelector(".cm-head"); if (headRO && n && n !== headSeen) { if (headSeen) headRO.unobserve(headSeen); headRO.observe(headSeen = n); } };
+// Hide the whole list so the conversation and the side panel get the full width (the person, 111412344c7d). Kept on this device; desktop only
+// (the phone's list is its own page). Ctrl+\ or the head's first button toggles it; the New cell in the bar then drops its rail width.
+let sideHid = (() => { try { return localStorage.getItem("cm.sidehid") === "1"; } catch (e) { return false; } })();
+const railNow = () => document.documentElement.style.setProperty("--rail-now", sideHid ? "auto" : sideW + "px");
+railNow();
+function toggleSide() { sideHid = !sideHid; try { localStorage.setItem("cm.sidehid", sideHid ? "1" : "0"); } catch (e) {} railNow(); L.ctx && L.ctx.update(); }
+if (typeof document !== "undefined") document.addEventListener("keydown", e => {
+  if (e.key !== "\\" || !(e.ctrlKey || e.metaKey) || e.altKey || e.defaultPrevented || !document.querySelector(".cm .cm-side")) return;
+  e.preventDefault(); toggleSide();
+});
+const sideBtn = () => h("button", { type: "button", class: "btn cm-sidebtn", "data-kind": "icon", "data-key": "sidebtn", "aria-pressed": String(!sideHid), "aria-label": sideHid ? "Show the conversation list" : "Hide the conversation list",
+  title: (sideHid ? "Show" : "Hide") + " the conversation list (Ctrl+\\)", onclick: toggleSide }, icon("sidebar"));
 const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize the conversation list", tabindex: "0", "data-key": "grip", title: "Drag to resize",
   onpointerdown: e => { e.preventDefault(); const box = e.target.closest(".cm"), x0 = e.clientX, w0 = sideNow(box); e.target.setPointerCapture(e.pointerId); e.target.dataset.on = "1";
     e.target.onpointermove = m => setSide(box, w0 + m.clientX - x0);
@@ -199,7 +211,7 @@ function lineRow(p, sh, ctx) {
   const line = labelCodes(String(sh.line || "").replace(/^(\d\d:\d\d (@?[\w-]+): )@?\2\b[:,]?\s*/, "$1"));
   const open = () => { OPENED.add(p.id); L.rebuild = true; L.keep = true; L.ctx && L.ctx.update(); };
   return h("div", { class: "cm-oneline", "data-key": p.id, "data-show": KIND_NAME[postKind(p)] || "" },
-    h("button", { type: "button", class: "cm-one-b", "aria-label": "Open the whole message: " + line, title: "Open the whole message", onclick: open }, h("span", { class: "cm-one-t" }, line)),
+    h("button", { type: "button", class: "cm-one-b", "aria-label": tr("Open the whole message") + ": " + tr(line), title: "Open the whole message", onclick: open }, h("span", { class: "cm-one-t" }, line)),
     (sh.also || []).map(a => h("p", { class: "cm-one-also meta" }, labelCodes(a))));
 }
 function evRow(e) {
@@ -451,7 +463,7 @@ const tierLead = th => (app() ? null : h("span", { class: "ref-sw", "data-tone":
 
 /** One thread's state in a few words, for the list: shape, colour and the words. */
 // A row's state starts with the agent: "The agent working". Under its own title it goes by its place in that conversation, hover included (E10).
-const statePill = n => { const p = codePill(n); if (app() && p.nodeType === 1) { p.textContent = capFirst(p.textContent); } return p; };
+const statePill = n => { const p = codePill(n); if (app() && p.nodeType === 1 && !/\d/.test(p.textContent)) {  p.textContent = capFirst(p.textContent); } return p; };   // an agent id (cd34e) keeps its case
 const STATE_WORDS = { asks: () => "Waiting for your answer", working: s => (simpleOn() ? "Working on it" : [statePill(s.who), " working"]), quiet: s => (simpleOn() ? null : [statePill(s.who), " quiet"]), stuck: () => (simpleOn() ? "Taking longer than it should" : "Stuck"), queue: s => (simpleOn() ? "Waiting its turn" : [codePill(s.who), " in the job queue"]),
   queued: () => "Waiting to start", limited: () => (simpleOn() ? "Taking a break" : "Stopped at a usage limit"), failed: () => (simpleOn() ? "Ran into a problem" : "Stopped with an error"), foryou: () => "New reply for you", done: () => null };
 function stateTag(st) {
@@ -954,6 +966,7 @@ function head(c, ctx) {
   requestAnimationFrame(watchHead);
   return h("header", { class: "cm-head", "data-key": "head", "data-find": find ? "" : null, "data-tight": headTight ? "" : null },
     h("div", { class: "cm-tt", "data-dev": app() ? null : "" },
+      sideBtn(),
       h("a", { class: "btn cm-back", href: href("comms"), "data-kind": "icon", "aria-label": app() ? "Chats" : "Threads", title: app() ? "Chats" : "Threads" }, icon("chevron-left")),
       c.thread && app() && !simpleOn() ? threadCrumb(c.thread) : null,
       h("button", { type: "button", class: "cm-title-b", "data-hid": off > 0 && !simpleOn() ? "" : null, title: off > 0 && !simpleOn() ? `${off} hidden: open for the way to show them` : null, "aria-haspopup": "true", "aria-expanded": String(C.menu === "title"), onclick: e => { e.stopPropagation(); C.menu = C.menu === "title" ? null : "title"; ctx.update(); } },
@@ -1051,10 +1064,12 @@ const FIN = { asks: null, at: 0, open: true };   // open: shut, the reader saw "
 function loadFinished(ctx) { if (now() - FIN.at < 5 * MIN) return; FIN.at = now(); jget("/api/progress").then(v => { FIN.asks = (v && v.asks) || []; ctx.update(); }).catch(() => { FIN.at = 0; }); }
 /** What came of a closed ask: the first line of its evidence post, one line; the ask's own words read as an order under a "Finished" heading (reading 20261110-2009). No post found: no words. */
 function outcome(ev) { const id = (String(ev || "").match(/\b\d{12}\b/) || [])[0], p = id && S.posts.find(q => q.id === id); return p ? firstLine(displayText(p)) : ""; }
+/** Another ask still open in a finished thread: say whose move it is. "Still open" alone read as a wait on the person (reading 20261113-1736: three of four readers of an all-answered copy listed two such threads as waiting). */
+const moreAsk = a => { const o = (FIN.asks || []).filter(b => b.thread === a.thread && b.id !== a.id); return o.some(b => b.status === "person") ? "person" : o.some(b => b.status === "open" || b.status === "owned") ? "hive" : null; };
 function finishedItems() {
   const out = [], seenTh = new Set(), waits = new Set(waitingOn().map(w => w.th)), live = th => !waits.has(th) && S.threads.has(th) && !isSystemThread(S.threads.get(th)) && !btwParent(th);
   for (const a of (FIN.asks || []).filter(a => a.status === "done" && a.done_at && Date.parse(a.done_at) > SEEN_BEFORE && live(a.thread)).sort((a, b) => (a.done_at < b.done_at ? 1 : -1))) {
-    if (seenTh.has(a.thread)) continue; seenTh.add(a.thread); out.push({ th: a.thread, t: Date.parse(a.done_at), what: outcome(a.evidence), more: (FIN.asks || []).some(b => b.thread === a.thread && b.id !== a.id && (b.status === "open" || b.status === "owned" || b.status === "person")) });
+    if (seenTh.has(a.thread)) continue; seenTh.add(a.thread); out.push({ th: a.thread, t: Date.parse(a.done_at), what: outcome(a.evidence), more: moreAsk(a) });
   }
   const rest = [...S.threads.values()].filter(d => !seenTh.has(d.name) && live(d.name) && d.last > SEEN_BEFORE && startedByPerson(d.name) && /(^|\n)Done:/.test(String((S.threadStatus && S.threadStatus[d.name] || {}).text || "").trim().split("\n").pop() || "") && !waitingOn().some(w => w.th === d.name))
     .sort((a, b) => b.last - a.last);
@@ -1063,7 +1078,7 @@ function finishedItems() {
 }
 function homeFinished() {
   const it = finishedItems(); if (!it.length) return null;
-  const row = x => h("li", { class: "cm-fin-r", "data-key": "fin:" + x.th }, h("a", { href: threadHref(x.th) }, threadTitle(x.th)), x.what ? h("span", { class: "cm-old-q" }, " \u2014 ", x.what) : null, h("span", { class: "meta" }, " \u00b7 ", when(x.t)), x.more ? h("span", { class: "meta cm-fin-more" }, " \u00b7 another ask here is still open") : null);
+  const row = x => h("li", { class: "cm-fin-r", "data-key": "fin:" + x.th }, h("a", { href: threadHref(x.th) }, threadTitle(x.th)), x.what ? h("span", { class: "cm-old-q" }, " \u2014 ", x.what) : null, h("span", { class: "meta" }, " \u00b7 ", when(x.t)), x.more ? h("span", { class: "meta cm-fin-more" }, x.more === "person" ? " \u00b7 another ask here waits on you" : " \u00b7 the Hive is still on another ask here") : null);
   return h("section", { class: "cm-older cm-fin", "data-key": "fin", "aria-label": "Finished since your last visit" },
     h("details", { class: "cm-older-d", open: FIN.open ? "" : null, ontoggle: (e, d) => { if (e.target === d) FIN.open = d.open; } },
       h("summary", null, h("b", null, "Finished since your last visit"), h("span", { class: "meta" }, ` \u00b7 ${plural(it.length, "conversation")}`)),
@@ -1301,6 +1316,7 @@ function showSays(mask) {
 let opened = "";   // the thread the beacon last went out for; leaving the page forgets it
 export default {
   id: "comms", label: () => (app() ? "Chat" : "Comms"),
+  title: a => (a === "~list" ? (app() ? "Conversations" : "Threads") : a === "~new" ? (app() ? "New conversation" : "New thread") : null),   // the tab's title (app.js where): a thread is named by its h1
   tab: true,
   badge: () => { if (!app() || !S.live) return null; if (!simpleOn()) { loadFoci(); loadNeedsYou(); } if (!needsKnown()) return null; const n = needsN(); return n ? String(n) : null; },
   poll: { every: 3000, run: async ctx => { if (await pollDelivered()) ctx.update(); } },
@@ -1366,7 +1382,7 @@ function frame(ctx, c, pane) {
         c.thread && !can("post") ? readOnly(c.thread) : null,   // §5b: where this address can't post, say so in the composer's place
         post && c.thread ? composer({ thread: c.thread, update: ctx.update, top: app() ? strip(c.thread) : null }) : null,
         post && c.all ? h("p", { class: "cm-hint meta", "data-key": "hint" }, "To start something new, use New conversation.") : null]);
-    return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home && !c.list ? "" : null, "data-list": c.list ? "" : null, style: `--cm-w:${sideW}px` },
+    return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home && !c.list ? "" : null, "data-list": c.list ? "" : null, "data-side": sideHid && c.arg ? "hidden" : null, style: `--cm-w:${sideW}px` },
       h("nav", { class: "cm-side", "aria-label": app() ? "Conversations" : "Threads" }, grip(),
         h("div", { class: "cm-filters" },
           // R14: the phone's way to the rail. Home has one row that opens it as a page; that page has a way back (css/phone.css shows these only there).

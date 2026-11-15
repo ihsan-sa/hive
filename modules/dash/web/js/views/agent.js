@@ -4,7 +4,7 @@
 import { h } from "../core/dom.js";
 import { S, OUTSIDE, SYS, jget, loadAgentCosts, post, poll, can } from "../core/store.js";
 import { agentCard, agentSpend, agentState, costsPending, agentStatus, agentLabel, isAgent, isRunning, isWarden, modelName, WARDEN_HINT, sEnd, displayText, agentOn, agentSay } from "../core/model.js";
-import { DAY, HOUR, MIN, ago, dur, firstSentence, mdPlain, money, now, pct, plural, short, stamp, toks } from "../core/format.js";
+import { DAY, HOUR, MIN, ago, dur, firstSentence, mdPlain, money, now, pct, plural, short, stamp, toks, int } from "../core/format.js";
 import { threadHref } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
 import { button, defs, empty, legend, list, note, pageHeader, rank, section, share, staleNote, statusLabel, stats, wardenBadge, figPending } from "../ui/kit.js";
@@ -185,7 +185,7 @@ function pretty(t) {
 }
 function piece(raw, i, total, openFirst) {
   const t = pretty(String(raw)), lines = t.split("\n"), first = (lines.find(l => l.trim() && !/^\w+:$/.test(l.trim())) || lines[0] || "").trim();
-  const sum = (total > 1 ? `${i + 1}. ` : "") + (first.length > 110 ? first.slice(0, 110) + "…" : first) + (t.length > 300 ? `  (${t.length.toLocaleString()} characters)` : "");
+  const sum = (total > 1 ? `${i + 1}. ` : "") + (first.length > 110 ? first.slice(0, 110) + "…" : first) + (t.length > 300 ? `  (${int(t.length)} characters)` : "");
   if (t.length <= 300) return h("pre", { class: "in-pre" }, t);
   return h("details", { class: "in-det", "data-key": "it" + i, open: openFirst && i === 0 ? "" : null }, h("summary", null, sum), h("pre", { class: "in-pre" }, t));
 }
@@ -320,7 +320,7 @@ export function agentPage(n, host = "page") {
     sections: [
       section({ title: "In numbers", note: "this agent's turns, time and cost" }, stats([
         { label: "Cost", value: !S.usage || costsPending() ? figPending() : spend.usd > 0 ? money(spend.usd) : "–", note: costsPending() || !(tk[0] + tk[1] + tk[2] + tk[3]) ? null : `${toks(tk[0] + tk[1] + tk[2] + tk[3])} tokens, ${pct(tk[2], read)} of reads from cache` + (spend.sub ? `; ${money(spend.sub)} in subagents` : ""), title: `At API list prices, from the ${spend.src}.` + (byModel.length > 1 ? " " + byModel.map(([k, v]) => `${modelName(k)} ${money(v)}`).join(", ") + "." : "") + (L ? " A turn under way may not be counted yet." : "") },
-        { label: "Time running", value: ss.length ? dur(D.active) : "none", note: plural(ss.length, "session") + (spend.calls != null ? `, ${spend.calls.toLocaleString()} model calls` : "") },
+        { label: "Time running", value: ss.length ? dur(D.active) : "none", note: plural(ss.length, "session") + (spend.calls != null ? `, ${int(spend.calls)} model calls` : "") },
         { label: "Posts", value: mine.length, note: `named in ${plural(toMe.length, "post")}; ${plural(threads.length, "thread")}` },
         { label: "Changed", value: w ? plural(w.nfiles, "file") : figPending("6ch"), note: w ? [plural(w.ncommits, "commit"), w.prs.length ? plural(w.prs.length, "PR") : null, started.length ? `started ${plural(D.startedNames.length, "agent")}` : null].filter(Boolean).join(", ") : null },
       ])),

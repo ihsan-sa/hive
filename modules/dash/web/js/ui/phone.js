@@ -7,6 +7,8 @@
 // Every page polls /calls, so a call placed on one device shows live on the others: in its thread's strip (callFor, used by
 // the comms view), as "On a call" on the agent, and as a card here, where any of them can hang it up.
 import { S, jget, post, emit } from "../core/store.js";
+import { fix } from "../core/format.js";
+import { tr } from "../core/dom.js";
 
 const API = "/api/phone";
 const C = { id: null, n: 0, ctx: null, mic: null, proc: null, src: null, playing: [], cur: null, hold: null, muted: false,
@@ -230,7 +232,7 @@ export function speedControl() {
   if (SPEED) return SPEED;
   SPEED = document.createElement("label"); SPEED.className = "ph-speed";
   SPEED.innerHTML = `<span>Voice speed <b></b></span><input type="range" min="0.6" max="1.6" step="0.05" value="1.05" aria-label="Voice speed">`;
-  const inp = SPEED.querySelector("input"), b = SPEED.querySelector("b"), show = () => { b.textContent = `${(+inp.value).toFixed(2)}×`; };
+  const inp = SPEED.querySelector("input"), b = SPEED.querySelector("b"), show = () => { b.textContent = `${fix((+inp.value), 2)}×`; };
   let t = null;
   inp.oninput = () => { show(); setLiveSpeed(inp.value); clearTimeout(t); t = setTimeout(() => post(`${API}/settings`, { speed: +inp.value }).catch(() => {}), 250); };
   jget(`${API}/settings`).then(r => { inp.min = r.min; inp.max = r.max; inp.value = r.speed; SLIDER = +r.speed; show(); }).catch(() => {}); show();
@@ -243,7 +245,7 @@ function fill(html) {
   const box = C.el.querySelector(".ph-lines"); box.scrollTop = back == null ? box.scrollHeight : back;
 }
 function draw() {
-  if (!C.el) { C.el = document.createElement("div"); C.el.className = "ph-call"; C.el.setAttribute("role", "dialog"); C.el.setAttribute("aria-label", "Voice call"); document.body.append(C.el); C.el.addEventListener("click", onClick); }
+  if (!C.el) { C.el = document.createElement("div"); C.el.className = "ph-call"; C.el.setAttribute("role", "dialog"); C.el.setAttribute("aria-label", tr("Voice call")); document.body.append(C.el); C.el.addEventListener("click", onClick); }
   const show = !C.ended || C.id || C.err;
   const other = !show && LIVE.calls.find(c => c.id !== C.id && !LIVE.hidden.has(c.id));
   C.el.hidden = !show && !other; if (other) return drawOther(other); if (!show) return;

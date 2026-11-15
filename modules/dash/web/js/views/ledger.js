@@ -2,7 +2,7 @@
 // The rows are rebuilt only when the data or the filter changes, and morphed by key, so new rows slide in and nothing else moves.
 // Steps (every tool call and what agents said) are too many for the browser: /api/ledger filters and pages them on the server,
 // and they're merged with the events here. The newest N of both together are within the newest N of each, so asking for N is enough.
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { S, jget } from "../core/store.js";
 import { clock, dayName, mdPlain, plural, short } from "../core/format.js";
 import { metrics } from "../templates.js";
@@ -48,9 +48,10 @@ function stepRow(r, fresh) {
   const said = r.k === "said", x = said ? r.x : String(r.x).replace(/^Running: /, "");
   return h("li", { class: "lg-r lg-step", "data-key": r.key, "data-kind": "step", "data-fresh": fresh ? "" : null },
     h("time", { class: "lg-t", title: new Date(r.t).toISOString() }, clock(r.t)),
-    h("span", { class: "lg-b", title: [r.a, r.th ? "in " + r.th : "", said ? "said" : r.tool, x].filter(Boolean).join(" ") }, agentRef(r.a), r.th ? " in " : "", r.th ? threadRef(r.th) : "",
+    // E18p: the row's title holds only the app's words (each through tr, so a Spanish reader gets "en" and "dijo"); the step's own text is the quote's title.
+    h("span", { class: "lg-b", title: [r.a, r.th ? tr("in") + " " + r.th : "", said ? tr("said") : r.tool].filter(Boolean).join(" ") }, agentRef(r.a), r.th ? " in " : "", r.th ? threadRef(r.th) : "",
       h("span", { class: "feed-k lg-k", "data-said": said ? "" : null }, said ? "said" : r.tool),
-      h("span", { class: "lg-q", title: r.d && r.d !== x ? r.d : x && x.length > 220 ? x : null }, x ? short(x, 220) : "")));
+      h("span", { class: "lg-q", title: r.d && r.d !== x ? r.d : x || null }, x ? short(x, 220) : "")));
 }
 
 const part = x => (typeof x === "string" ? x : x.a !== undefined ? agentRef(x.a) : threadRef(x.th));
@@ -59,7 +60,7 @@ export function row(r, i, fresh) {
   const p = r.post;
   return h("li", { class: "lg-r", "data-key": "e" + i, "data-kind": r.kind, "data-fresh": fresh ? "" : null },
     h("time", { class: "lg-t", title: new Date(r.t).toISOString() }, clock(r.t)),
-    h("span", { class: "lg-b", title: r.parts.map(x => (typeof x === "string" ? x : x.a !== undefined ? x.a : x.th)).join("") + (p ? ": " + mdPlain(p.text).replace(/^(@\S+\s+)+/, "").slice(0, 400) : "") }, r.parts.map(part),
+    h("span", { class: "lg-b", title: r.parts.map(x => (typeof x === "string" ? tr(x) : x.a !== undefined ? x.a : x.th)).join("") }, r.parts.map(part),
       p ? h("span", { class: "lg-q", title: mdPlain(p.text).slice(0, 600) }, ": " + short(mdPlain(p.text).replace(/^(@\S+\s+)+/, ""), 170), (p.files || []).length ? ` (${plural(p.files.length, "file")})` : "") : null));
 }
 

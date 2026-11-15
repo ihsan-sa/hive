@@ -18,6 +18,7 @@ from pathlib import Path
 HOME = Path.home()
 CORE, PROJECTS, KB, RUN = HOME / "core", HOME / "projects", HOME / "kb", HOME / "run"
 BOARD = HOME / "board.jsonl"
+OUTCOMES = HOME / "outcomes.jsonl"   # hive outcomes' grade of each run: the brief tells a woken worker when its last round in the thread was graded nothing
 FOCUS = re.compile(r"^\s*(\d+)\.\s+\*\*(.+?)\*\*\s*\((?:thread\s+)?`([^`]+)`", re.M)
 MEASURE = re.compile(r"^.*\b(measure|metric|score|yardstick|benchmark|pass rate|p&l|sharpe)\b.*$", re.I | re.M)   # the same words progress.py counts as a measure
 THREAD = re.compile(r"\bthreads?\s+`?([0-9a-f]{12}|[a-z][a-z0-9-]{2,})`?", re.I)
@@ -208,12 +209,36 @@ def post_model_args(text, model):
     the worker's own `hive model` (review 110618506919)."""
     return ["--model", model] if model and text.startswith("@new ") else []
 
+def last_graded(worker, thread, path=None, tail=600_000):
+    """The newest run of `worker` in `thread` that hive outcomes graded on its work (delivered, partial, nothing, silent), or None.
+    Reads only the file's tail: the brief wants the last round, not the history."""
+    path = path or OUTCOMES
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2); f.seek(max(0, f.tell() - tail)); lines = f.read().decode(errors="replace").splitlines()
+    except OSError: return None
+    for l in reversed(lines):
+        try: r = json.loads(l)
+        except ValueError: continue
+        if r.get("name") == worker and r.get("thread") == thread and r.get("grade") in ("delivered", "partial", "nothing", "silent"): return r
+    return None
+
+def last_nothing(to, thread):
+    """A line for a worker woken back on a thread where its last graded round was `nothing` (R34, hive-meta continuity.md R33): in the 11-13/14
+    window keeper rounds on Sonnet delivered 57%, and 7 of the 8 wait misses were the same two workers re-reading a rung whose after: date had passed
+    but which could not pass yet, posting 'nothing due' every two hours. Nothing told them the last one had counted as nothing."""
+    r = last_graded(to, thread) if to != "new" and thread else None
+    if not r or r.get("grade") != "nothing": return ""
+    why = re.sub(r"\s+", " ", r.get("why") or "").strip()[:200]
+    return (f"\n\n**Your last round here ({(r.get('started') or '')[11:16]} UTC) was graded nothing**" + (f": {why}" if why else ".") +
+            " A wait post is not a result. If the rung cannot pass yet, move its `after:` tag to the time it can, in this run, then write a rung that moves the measure today and do it.")
+
 def brief(row):
     """The brief a keeper round posts for one focus. Every clause is here because a thin hand-written brief produced the 'nothing changed' rounds."""
     to = row["last_worker"] if row.get("last_worker") and resume_arm(row.get("thread")) else "new"
     head = f"@{to} Keeper round on {row['name']}. The ladder is the `## {row.get('section') or 'Ladder'}` section of {row.get('goals_path') or 'this focus project goals.md (create it, one line a rung)'}: read that whole file, and obey any notes in the section.\n\n"
     rung = f"**Your rung:** {row['rung']}\n\nDo this rung. Land real work, then run its check." if row.get("rung") else "**The ladder has no rung you can take.** Your work this round is to write the next 3 to 5 rungs from the measure in that file, then do the first one."
-    return head + rung + """
+    return head + rung + last_nothing(to, row.get("thread")) + """
 
 Rules for the round:
 - Read the last 5 posts of this thread for context, not for a conclusion. Earlier posts here may say nothing is left: that was a check-in, not a finding. "Nothing changed" is not a result, and you are not here to re-check the state.

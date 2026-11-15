@@ -159,15 +159,18 @@ EVENT_MSG = {"lost_subagents": "background helpers were lost when an agent ended
 
 # ---- the public templates: the only wording a failure issue can have, here and in the makers' triage (which imports these) ----
 KINDS = {
-    "agent-exit": ("An agent ended with exit code {code}", "An agent's process exited with a non-zero code."),
+    "agent-exit": ("An agent ended with exit code {code}{cause}", "An agent's process exited with a non-zero code."),
     "lost-subagents": ("Background helpers were lost when an agent ended", "An agent ended while helpers it started were still running, so their work was lost."),
     "provider-held": ("A model provider was held back", "The starter held back a model provider."),
     "unit-failed": ("Service {unit} is in a failed state", "One of the Hive's own systemd user units was found failed by the doctor check."),
 }
 EXPECTED = {"limited", "logins-paused", "killed"}   # normal operation: a login at its limit, all logins paused, an agent stopped on purpose
 EXPECTED_EXIT = {"-15", "143"}                       # SIGTERM: a stop or restart
+# Why an agent exited non-zero, as one fixed label read from the run's own output and the starter's events around it (k1920: a Mac
+# install sent 49 failed exits in 67 runs and nothing said why). Only a label from this list is ever sent, never the output's text.
+EXIT_CAUSES = ("login rejected", "never started", "resume failed", "stalled", "connection error", "turn budget", "error result", "no result")
 MSG = {
-    "agent-exit": re.compile(r"^an agent ended with exit code (?P<code>-?\d{1,4})$"),
+    "agent-exit": re.compile(r"^an agent ended with exit code (?P<code>-?\d{1,4})(?:: (?P<cause>%s))?$" % "|".join(map(re.escape, EXIT_CAUSES))),
     "lost-subagents": re.compile(r"^background helpers were lost when an agent ended$"),
     "provider-held": re.compile(r"^a model provider was held back$"),
     "unit-failed": re.compile(r"^systemd unit (?P<unit>(?:hive|hive|\[name\])-[a-z0-9@_.-]{1,60}\.(?:service|timer)) is in a failed state(?P<why>:.*)?$"),
@@ -184,7 +187,11 @@ def classify(r):
     f = {k: v for k, v in m.groupdict().items() if v and k != "why"}
     if "unit" in f: f["unit"] = f["unit"].replace("[name]-", "hive-")   # older clients scrubbed a user named hive out of unit names
     if f.get("code") in EXPECTED_EXIT: return None, "expected"
-    return kind + "".join(":" + f[k] for k in sorted(f)), f
+    return kind + "".join(":" + f[k].replace(" ", "-") for k in sorted(f)), f   # no spaces: the issue's marker reads sig=\S+
+
+def title_of(kind, fields):
+    """An issue's title from its template; the optional cause reads ": why" after the code."""
+    return KINDS[kind][0].format(**{"cause": "", **fields, **({"cause": ": " + fields["cause"]} if fields.get("cause") else {})})
 
 def osname(o):
     return {"linux": "Linux", "darwin": "macOS", "windows": "Windows"}.get((o or "").split("/")[0], "Other")
@@ -196,7 +203,7 @@ def issue_text(sig, fields, count, hives, versions, oses, first, last, by="a Hiv
     """(title, body) of a failure issue, laid out like the repo's bug form. Only the template, counts, versions and OS go in."""
     import collections
     kind = sig.split(":")[0]
-    title = KINDS[kind][0].format(**fields)
+    title = title_of(kind, fields)
     vs = sorted(versions, key=vkey) or ["unknown"]
     c = collections.Counter(osname(o) for o in oses)
     b = ("### What happened, and what you expected\n\n%s Reported automatically by Hives that share failure reports. "
@@ -234,6 +241,53 @@ def unit_failures(st):
         r = base(st, "failure"); r.update(kind="unit-failed", at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), message=clip(("systemd unit %s is in a failed state" % u) + scrub(update_why(u)), MAX_TEXT)); reps.append(r)   # the unit name is checked above; scrubbing it would turn hive-* into [name]-* for a user named hive
     return reps
 
+AUTH_TEXT = re.compile(r"not logged in|login expired|please run /login|failed to authenticate|authentication_failed|invalid api key|oauth token (has|is|was)", re.I)
+NET_TEXT = re.compile(r"connection|network|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|socket|overloaded|API Error: 5\d\d", re.I)
+
+def exit_cause(out, events=()):
+    """One label from EXIT_CAUSES for a run that exited non-zero, read from its output file's tail and the starter's events
+    for the same run (stalled, login_rejected, launch_failed, wake_failed). The text is matched here and never leaves."""
+    events = set(events)
+    if "login_rejected" in events: return "login rejected"
+    if "stalled" in events: return "stalled"
+    if "launch_failed" in events: return "never started"
+    try:
+        with open(out, "rb") as f:
+            f.seek(0, 2); cut = f.tell() > 262144; f.seek(max(0, f.tell() - 262144)); lines = f.read().decode(errors="replace").splitlines()
+    except (OSError, TypeError, ValueError): return None
+    lines = lines[1 if cut else 0:][-200:]   # a cut tail starts mid-line
+    js, said, result = 0, [], None
+    for line in lines:
+        try: e = json.loads(line)
+        except (ValueError, RecursionError):
+            if line.strip(): said.append(line)
+            continue
+        if not isinstance(e, dict): continue
+        js += 1
+        t = e.get("type")
+        if t in ("result", "turn.failed"): result = e   # turn.failed: a codex run's error end
+        if t == "assistant" and e.get("error"): said.append(str(e["error"]))
+        if t in ("error", "turn.failed"):
+            er = e.get("error"); said.append(str(e.get("message") or (er.get("message", "") if isinstance(er, dict) else er or "")))
+    if result is not None and result.get("type") == "result" and not result.get("is_error"): return None   # it finished cleanly: its text is the agent's own words
+    if result is not None: said.append(str(result.get("result", "")))
+    said = said[-6:]
+    if "wake_failed" in events: return "resume failed"   # most often "No conversation found", with no JSON line at all
+    if any(AUTH_TEXT.search(x) for x in said): return "login rejected"
+    if not js and not cut: return "never started"
+    if any(NET_TEXT.search(x) for x in said): return "connection error"
+    if result is not None and str(result.get("subtype", "")).startswith("error_max"): return "turn budget"
+    return "error result" if result is not None else "no result"
+
+def around(evs, end):
+    """Event names the starter logged about one run: from its start to the next start of the same agent, so a stall before
+    the end and a rejected login or failed launch just after it are both seen."""
+    i = next((j for j, x in enumerate(evs) if x is end), None)
+    if i is None: return []
+    lo = next((j for j in range(i - 1, -1, -1) if evs[j].get("event") == "start"), 0)
+    hi = next((j for j in range(i + 1, len(evs)) if evs[j].get("event") == "start"), len(evs))
+    return [x.get("event") for x in evs[lo:hi] if x.get("session") in (None, end.get("session")) or x.get("pid") == end.get("pid")]
+
 def build(st, want_fail, want_use):
     """Reports for log events past the saved offset. Only counts and kinds are read;
     thread names, posts, paths of work and agent output never go in."""
@@ -249,19 +303,32 @@ def build(st, want_fail, want_use):
         except ValueError: continue
     # a run that hits the usage limit exits 1 after a "limited" event (same name+session); that is not a crash
     limited = {(x.get("name"), x.get("session")) for x in evs if x.get("event") == "limited"}
+    # A run the starter ended itself to hand it new posts (woken, then SIGKILL) is not a crash either
+    woken = {(x.get("name"), x.get("pid")) for x in evs if x.get("event") == "woken"}
+    outs = st.setdefault("outs", {})   # name:pid -> the run's output file, kept across sends for a run that spans two
+    near = {}                          # name -> starter events about that agent, in order, to read a run's cause from
+    for x in evs:
+        if isinstance(x.get("name"), str): near.setdefault(x["name"], []).append(x)
     for e in evs:
         at, ev = e.get("at", ""), e.get("event")
         if at < st["since"]: continue
         first, last = first or at, at
-        if ev == "start": use["runs"] += 1
+        if ev == "start":
+            use["runs"] += 1
+            if e.get("name") and e.get("out"): outs["%s:%s" % (e["name"], e.get("pid"))] = e["out"]
         elif ev == "wake_resumed": use["restarts"] += 1
         elif ev == "limited": use["limit_hits"] += 1
         elif ev == "fallback": use["fallbacks"] += 1
-        elif ev == "end" and e.get("exit") not in (0, None) and (e.get("name"), e.get("session")) not in limited:
+        elif ev == "end" and e.get("exit") not in (0, None) and (e.get("name"), e.get("session")) not in limited and (e.get("name"), e.get("pid")) not in woken:
             use["failed_exits"] += 1
-            fails.append(("agent-exit", at, "an agent ended with exit code %s" % e.get("exit")))
+            try: cause = exit_cause(outs.get("%s:%s" % (e.get("name"), e.get("pid"))), around(near.get(e.get("name"), []), e))
+            except Exception: cause = None   # a cause is a nicety: never let it stop the reports
+            fails.append(("agent-exit", at, "an agent ended with exit code %s" % e.get("exit") + (": " + cause if cause in EXIT_CAUSES else "")))
+        if ev == "end": outs.pop("%s:%s" % (e.get("name"), e.get("pid")), None)
         if ev == "limited": fails.append(("limited", at, "a login hit its usage limit"))
         elif ev in EVENT_FAILS: fails.append((EVENT_FAILS[ev], at, EVENT_MSG[ev]))
+    if len(outs) > 200:   # runs whose end was never logged (a crash of the starter): keep the newest
+        for k in list(outs)[:-200]: outs.pop(k)
     reps = []
     if want_fail:
         for kind, at, msg in fails:

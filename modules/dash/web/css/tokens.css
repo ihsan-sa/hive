@@ -107,7 +107,9 @@
   /* Nothing starts moving on its own (WCAG 2.3.3): every animation and transition ends at once, spinners and hovers included; the busy state still shows by its label and glyph. */
   *,*::before,*::after{animation-duration:0s!important;animation-iteration-count:1!important;animation-delay:0s!important;transition-duration:0s!important;transition-delay:0s!important}
   /* Scroll-driven fades follow the person's own scrolling, not a clock, so they keep their scroll timeline. */
-  .page .seg{animation-duration:auto!important}}
+  .page .seg{animation-duration:auto!important}
+  /* The Map's running agents keep their slow soft ring, no movement of the dot (the person, 2026-11-03; css/map.css map-breathe). */
+  .map-ag:not([data-ghost]):not([data-ended])>.map-g::after{animation-duration:2.4s!important;animation-iteration-count:infinite!important}}
 
 /* developer look: same system, denser */
 :root[data-dev]{

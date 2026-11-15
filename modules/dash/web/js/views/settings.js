@@ -7,12 +7,13 @@ import { deviceFingerprint } from "../core/sign.js";
 import { notifyBlocked, notifyOn, notifySupported, notifyTest, pushOn, pushSupported, setNotify, setPush } from "../core/notify.js";
 import { DEFAULT_NAME, brandLogo, brandName } from "../core/brand.js";
 import { form } from "../templates.js";
+import { LANGS, chooseLang, getLang } from "../core/lang.js";
 import { pageHeader, section, block, blocks, button, field, infoButton, input, empty, meter, statusLabel, staleNote, statusDot, waiting } from "../ui/kit.js";
 import { act, isBusy } from "../ui/activity.js";
 import { confirm } from "../ui/dialog.js";
 import { tiersSection, loadTiers, pausedTiers } from "../ui/worktiers.js";
 import { startSignin, signinBox, clearSignin } from "../ui/signin.js";
-import { ago, dur, now, plural } from "../core/format.js";
+import { ago, dur, now, plural, fix } from "../core/format.js";
 import { accountUse } from "../core/model.js";
 import { href } from "../core/router.js";
 import { copyButton } from "../ui/refs.js";
@@ -123,7 +124,73 @@ function viewSection(ctx) {
   return section({ title: "This device", note: "this browser only", level: 1 },
     blocks(block({ title: "Simple view", key: "simple", sub: on ? "On: you see a chat, and your Hive talks to you in plain words." : "Off: you see every tab, and what the agents say to each other. Turn it on for just a chat and what's been made, with agents told to use plain words.",
       actions: button(on ? "Show everything" : "Turn on simple view", () => { setSimple(!on); ctx.update(); }, { size: "s" }) }),
-    notifyBlock(ctx), pushBlock(ctx), phoneBlock(ctx), signBlock(ctx)));
+    langBlock(), voiceBlock(ctx), notifyBlock(ctx), pushBlock(ctx), phoneBlock(ctx), signBlock(ctx)));
+}
+// Voice calls and memos: where they stand on this install (dash.py voice_view, projects/everyday/VOICE.md V1). The build runs in the
+// background after install, so this says Setting up, Didn't finish (with Try again) or Not on this install (with why) instead of a Call
+// button that is simply missing. Shown with the modules cap, which Try again needs: it starts a multi-GB build.
+let voiceTimer = null;
+async function loadVoice(ctx) {
+  if (!can("modules")) return;
+  try { F.voice = await jget("/api/voice"); } catch (e) { F.voice = { failed: e.message }; }
+  clearTimeout(voiceTimer); voiceTimer = null;
+  if (["building", "starting"].includes(F.voice.state)) voiceTimer = setTimeout(() => loadVoice(ctx), 5000);
+  ctx.update();
+}
+async function voiceRetry(ctx) {
+  F.busy.voice = true; ctx.update();
+  try { await post("/api/voice", { do: "retry" }); say("voice", "Started. It takes a few minutes; this line follows it.", "good"); }
+  catch (e) { say("voice", e.message, "bad"); }
+  F.busy.voice = false; await loadVoice(ctx);
+}
+const VOICE_WHY = {
+  "own-account": "your Hive lives in a folder of your own account, so it doesn't start a multi-GB speech build there by itself. Ask an agent to set up voice calls if you want them.",
+  wsl: "Windows (WSL) can't run the call service yet.",
+  "not-linux": "voice calls need Linux.",
+  "no-service": "this Hive was installed without its background service, which runs the calls.",
+  off: "it was turned off when this Hive was installed.",
+  older: "this Hive was installed before voice came with new installs.",
+  removed: "the voice modules were removed.",
+  "failed-add": "the voice modules didn't install.",
+};
+function voiceBlock(ctx) {
+  const V = F.voice;
+  if (!can("modules") || !V) return null;
+  const again = label => button(label, () => voiceRetry(ctx), { size: "s", disabled: !!F.busy.voice });
+  const mic = window.isSecureContext ? null : h("p", { class: "field-h", "data-key": "voice-mic" }, "On this address the browser won't lend the page a microphone: that needs https, or opening your Hive on the computer it runs on (localhost).");
+  const log = V.log ? h("pre", { class: "voice-log", "data-key": "voice-log" }, V.log) : null;
+  const since = V.since ? ago(V.since * 1000) : "";
+  let state, sub, actions = null, body = [];
+  if (V.failed) { state = "Unknown"; sub = `Couldn't read whether voice calls are set up: ${V.failed}.`; actions = button("Try again", () => loadVoice(ctx), { size: "s" }); }
+  else if (V.state === "ready") {
+    state = "Ready";
+    sub = V.memos ? "Talk to your Hive: Voice call and Voice memo are in the + menu of any chat. Your voice is turned into words on this machine and never leaves it."
+      : `Voice call is in the + menu of any chat. Voice memos aren't ready yet${V.ffmpeg ? "" : ": they need ffmpeg installed on the machine"}.`;
+  } else if (V.state === "building") {
+    state = "Setting up";
+    sub = `Building speech recognition and a voice on this machine${since ? `, started ${since}` : ""}. It takes a few minutes; Voice call shows in the + menu when it's done.`;
+    body = [log];
+  } else if (V.state === "starting") { state = "Setting up"; sub = "Built. The call service is starting."; }
+  else if (V.state === "failed" || V.state === "stopped") {
+    state = "Didn't finish";
+    sub = V.state === "stopped" ? "It was built, but the call service isn't answering." : V.rc ? "The build stopped with an error. The last lines of its log:" : "The build stopped before it finished (the machine restarted, or it was stopped). The last lines of its log:";
+    actions = again("Try again"); body = [log];
+  } else if (V.state === "unset") { state = "Not set up"; sub = "The voice modules are here, but speech recognition and the voice aren't built yet."; actions = again("Set up voice"); }
+  else {
+    state = "Not on this install";
+    const why = V.why === "small" ? `this machine had too little room: it needs ${V.need_gb} GB of free disk and 3 GB of memory, and had ${V.free_gb} GB and ${V.mem_gb} GB.` : VOICE_WHY[V.why] || "it wasn't set up.";
+    sub = "Voice calls aren't on this install: " + why;
+    if (V.can_retry) actions = again("Set up voice");
+  }
+  const chip = h("span", { class: "chip", "data-key": "voice-state", "data-state": V.state || "failed", "data-tone": { ready: "good", building: "warn", starting: "warn", failed: "bad", stopped: "bad" }[V.state] || null }, state);
+  return block({ title: "Voice calls", key: "voice", sub, ...(actions ? { actions: [chip, actions] } : { state: chip }) },   // the head grid has one column for both
+    ...body, mic, msg("voice"));
+}
+// The interface language (core/lang.js): the app's own words; agents already answer in whatever language you write.
+function langBlock() {
+  const cur = getLang();
+  return block({ title: "Language", key: "lang", sub: "The words on the screens. Agents answer in the language you write in, whatever this says.",
+    actions: LANGS.map(([code, name]) => button(name, () => chooseLang(code), { size: "s", ...(code === cur ? { kind: "primary" } : {}) })) });
 }
 // This browser's signature on posts (core/sign.js). The fingerprint is what root pins, so it has to be readable here; nothing can be done with it but compare it.
 function signBlock(ctx) {
@@ -263,7 +330,7 @@ function hiveSection(ctx) {
     F.saved.day = v;
     save({ max_daily_usd: v === "" ? null : +v }, () => { E.day = F.saved.day = was; }, "Daily cap");
   };
-  const spent = `Spent today: $${(+(F.cfg.spend_today || 0)).toFixed(2)} at API prices (UTC day). `;
+  const spent = `Spent today: $${fix((+(F.cfg.spend_today || 0)), 2)} at API prices (UTC day). `;
   const starter = async () => {
     say("starter", up ? "Stopping…" : "Starting…");
     try {
@@ -376,7 +443,7 @@ function modulesSection(ctx) {
   };
   const about = x => x.about.replace(/`/g, "") + (x.needs ? ` Needs ${x.needs}.` : "");
   const WHERE = { github: "On GitHub", git: "In a Git repository elsewhere", local: "Only on this machine" };
-  const slackBtn = () => button(F.slack ? "Close" : "Set up", () => { F.slack = F.slack ? null : { step: 1, bot: "", app: "", channel: "#hive" }; ctx.update(); }, { size: "s", kind: F.slack ? "quiet" : null });
+  const slackBtn = () => button(F.slack ? "Close" : "Set up", () => { F.slack = F.slack ? null : { step: 1, bot: "", app: "", channel: "" }; ctx.update(); }, { size: "s", kind: F.slack ? "quiet" : null });
   const end = (x, inBrowse) => {
     if (x.name === "dash") return h("span", { class: "meta" }, "this app");
     if (x.name === "slack-door" && built("slack-door") && !(S.app.slack_door || {}).connected) return slackBtn();
@@ -403,6 +470,13 @@ function modulesSection(ctx) {
       end(x, inBrowse)));
   const list = (rows, inBrowse) => h("ul", { class: "list" }, rows.map(x => row(x, inBrowse)));
   const group = (key, title, note, ...body) => h("div", { class: "mod-group", "data-group": key }, h("h3", { class: "mod-gt" }, title, note ? h("span", { class: "mod-gn" }, note) : null), body);
+  // A link to one module's row (#settings/modules/<name>, F.goRow from render): once the list is read, open the full list if the row
+  // is only there, and scroll the row into view, so a link to the Slack row shows its "Set up" with no press.
+  if (F.goRow && F.mods) {
+    const name = F.goRow; F.goRow = null;
+    if (F.mods.some(x => x.name === name && x.source !== "own" && x.state !== "installed" && !x.recommended)) F.browse = true;
+    setTimeout(() => { const el = document.querySelector(`.set-s li[data-key="${CSS.escape(name)}"]`); if (el) el.scrollIntoView({ block: "center" }); }, 0);
+  }
   const shelves = () => {
     const pub = F.mods.filter(x => x.source !== "own"), own = F.mods.filter(x => x.source === "own");
     const have = pub.filter(x => x.state === "installed"), rec = pub.filter(x => x.recommended && x.state !== "installed");
@@ -433,6 +507,9 @@ const MANIFEST = `display_information:
 features:
   bot_user:
     display_name: Hive
+  app_home:
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
 oauth_config:
   scopes:
     bot: [chat:write, reactions:write, channels:history, groups:history, im:history, channels:read, groups:read, im:read, im:write, users:read, files:read, files:write]
@@ -445,23 +522,23 @@ function slackSetup(ctx) {
     h("b", null, title), Z.step === n ? body : Z.step > n ? h("span", { class: "meta" }, "done") : null);
   const connect = async () => {
     if (Z.busy) return; Z.busy = true; ctx.update();
-    try { const r = await post("/api/slack-door", { bot_token: Z.bot.trim(), app_token: Z.app.trim(), channel: Z.channel.trim() }); say("slack", `${r.said} Post in ${r.channel || Z.channel} to test it: an agent answers there.`, "good"); Z.step = 4; Z.bot = Z.app = ""; loadApp().catch(() => {}); }
+    try { const r = await post("/api/slack-door", { bot_token: Z.bot.trim(), app_token: Z.app.trim(), channel: Z.channel.trim() }); say("slack", r.channel && r.channel[0] === "#" ? `${r.said} Post in ${r.channel} to test it: an agent answers there.` : r.said, "good"); Z.step = 4; Z.bot = Z.app = ""; loadApp().catch(() => {}); }
     catch (e) { say("slack", e.message, "bad"); }
     Z.busy = false; ctx.update();
   };
   return h("div", { class: "signin slk", "data-key": "slack" },
     h("p", null, h("b", null, "Reach the Hive from Slack")),
-    h("p", { class: "field-h" }, "One channel is one conversation. You make a small Slack app of your own, so messages go only between your Slack and this computer."),
+    h("p", { class: "field-h" }, "You make a small Slack app of your own, so messages go only between your Slack and this computer. You write to it in its Messages tab, or in a channel."),
     h("ol", { class: "sl-steps" },
-      step(1, "Make the Slack app", h("p", { class: "field-h" }, "On Slack's page, choose From a manifest, pick your workspace, and paste this:"),
+      step(1, "Make the Slack app", h("p", { class: "field-h" }, "Slack's page opens with this app text filled in: pick your workspace, then Next and Create. If the box is empty, choose From a manifest and paste this:"),
         h("div", { class: "sl-man" }, h("pre", null, MANIFEST), copyButton(MANIFEST)),
-        h("div", { class: "frow" }, h("a", { class: "btn", href: "https://api.slack.com/apps?new_app=1", target: "_blank", rel: "noopener noreferrer" }, "Open Slack's app page"), button("Done", () => { Z.step = 2; ctx.update(); }, { kind: "primary" }))),
+        h("div", { class: "frow" }, h("a", { class: "btn", href: "https://api.slack.com/apps?new_app=1&manifest_yaml=" + encodeURIComponent(MANIFEST), target: "_blank", rel: "noopener noreferrer" }, "Open Slack's app page"), button("Done", () => { Z.step = 2; ctx.update(); }, { kind: "primary" }))),
       step(2, "Paste its two keys", h("p", { class: "field-h" }, "Install the app to your workspace. Then copy the Bot token (OAuth & Permissions, starts xoxb-) and make an App token with connections:write (Basic Information, starts xapp-)."),
         h("div", { class: "fgrid" },
           field("Bot token", input({ placeholder: "xoxb-…", autocomplete: "off", spellcheck: "false", value: Z.bot, oninput: (e, n) => { Z.bot = n.value; } })),
           field("App token", input({ placeholder: "xapp-…", autocomplete: "off", spellcheck: "false", value: Z.app, oninput: (e, n) => { Z.app = n.value; } }))),
         h("div", { class: "frow" }, button("Next", () => { if (/^xoxb-/.test(Z.bot.trim()) && /^xapp-/.test(Z.app.trim())) { say("slack", ""); Z.step = 3; } else say("slack", "The bot token starts xoxb- and the app token xapp-.", "bad"); ctx.update(); }, { kind: "primary" }))),
-      step(3, "Pick the channel", field("Channel", input({ value: Z.channel, oninput: (e, n) => { Z.channel = n.value; } }), "Invite the app to it in Slack first: /invite @Hive. Everyone in the channel can direct this Hive, so use a small one."),
+      step(3, "Pick the channel", field("Channel (optional)", input({ value: Z.channel, placeholder: "empty: talk to the app directly", oninput: (e, n) => { Z.channel = n.value; } }), "Leave it empty to write to the app in Slack's Messages tab. If others share your Slack, type your name as Slack shows it. For a #channel, /invite @Hive in it first: everyone there can direct this Hive."),
         h("div", { class: "frow" }, button("Connect", connect, { kind: "primary", busy: Z.busy }), button("Back", () => { Z.step = 2; ctx.update(); }, { kind: "quiet" })))),
     msg("slack"));
 }
@@ -559,26 +636,29 @@ function navDots(ctx) {
 
 export default {
   id: "settings", label: "Settings", about: "accounts, modules, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
+  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
   },
-  back(ctx) { loadCfg(ctx); loadPhone(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update); },   // what enter reads, without enter's clearing: what the person is typing stays
-  leave() { clearInterval(upTimer); upTimer = null; forget(); forgetSecrets(); },
+  back(ctx) { loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update); },   // what enter reads, without enter's clearing: what the person is typing stays
+  leave() { F.goTo = null; clearInterval(upTimer); upTimer = null; clearTimeout(voiceTimer); voiceTimer = null; forget(); forgetSecrets(); },
   render(ctx) {
     if (S.app.can == null) return h("div", { class: "page", "data-width": "narrow" }, waiting(S.failed));   // /api/app hasn't answered: don't say "only in the app" yet
     if (!S.app.app) return h("div", { class: "page", "data-width": "narrow" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));
+    const [slug, row] = (ctx.arg || "").split("/");   // #settings/modules/slack-door: the section, then a row to open on (modulesSection's F.goRow)
+    if (row && slug === "modules" && F.goTo !== ctx.arg) { F.goTo = ctx.arg; F.goRow = row; }   // once per link, so "Hide the full list" stays hidden
     const hive = hiveSection(ctx), [everyday, setOnce] = Array.isArray(hive) ? hive : [hive, null];
     const secs = [everyday, loginsSection(ctx), useSection(), tiersSection(ctx), ...setupSections(ctx), secretsSection(ctx), viewSection(ctx), setOnce, modulesSection(ctx), accessSection(ctx)].filter(Boolean);
     const header = pageHeader({ title: "Settings" });
     if (!secs.length) return form({ header, sections: [empty("This connection can't change any settings.")] });
-    const nav = secs.map(n => n.getAttribute("aria-label")), dots = navDots(ctx);
+    const nav = secs.map(n => n.dataset.name || n.getAttribute("aria-label")),   // data-name: the English title, which the interface language (core/lang.js) leaves alone, so #settings/this-device works in any language
+    dots = navDots(ctx);
     // One section at a time (#settings/<slug>); #settings, or a slug nobody can see, shows the first. The nav is real links, so Back works.
     const slugOf = t => t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-    const now = nav.find(t => slugOf(t) === ctx.arg) || nav[0];
+    const now = nav.find(t => slugOf(t) === slug) || nav[0];
     const item = t => h("a", { href: href("settings", slugOf(t)), "data-key": t, "aria-current": t === now ? "page" : null, title: dots[t] ? dots[t][1] : null }, h("span", null, t), dots[t] ? statusDot(dots[t][0]) : null, dots[t] ? h("span", { class: "vh" }, dots[t][1]) : null);
     return h("div", { class: "page set", "data-width": "narrow", "data-key": "settings" }, header,
       h("div", { class: "set-b" },
         h("nav", { class: "set-n", "aria-label": "Settings sections", "data-key": "nav" }, nav.map(t => t === "Set once" ? [h("hr", { class: "set-rule" }), item(t)] : item(t))),
-        h("div", { class: "set-s" }, secs.filter(n => n.getAttribute("aria-label") === now))),
+        h("div", { class: "set-s" }, secs.filter(n => (n.dataset.name || n.getAttribute("aria-label")) === now))),
       S.app.install ? h("p", { class: "meta", "data-key": "install" }, "Install code ", h("code", { title: "This Hive's id in the reports it sends" }, S.app.install), " · this Hive's id in the reports it sends") : null);
   },
 };

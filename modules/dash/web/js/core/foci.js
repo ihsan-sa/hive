@@ -5,7 +5,7 @@
 import { h } from "./dom.js";
 import { S, jget, emit, post } from "./store.js";
 import { threadParent, isSystemThread, btwParent, isAgent, isRunning, threadTitle, agentLabel, inScope } from "./model.js";
-import { now, DAY, short } from "./format.js";
+import { now, DAY, short, fix } from "./format.js";
 import { faded, archived } from "../ui/threadmeta.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 import { waitingNow , laterOf } from "./needs.js";
@@ -116,7 +116,7 @@ export function fractionWords(x) {
   return x >= 0.9 ? "nearly all" : x >= 0.6 ? "most" : x >= 0.4 ? "about half" : x >= 0.28 ? "a third" : x >= 0.18 ? "a quarter" : x >= 0.12 ? "a sixth" : x >= 0.07 ? "a tenth" : x > 0 ? "a little" : "none";
 }
 export const pct = x => `${Math.round(x * 100)}%`;
-export const usd = c => (c >= 100 ? `$${Math.round(c)}` : `$${c.toFixed(2)}`);   // one money format under $100 (R6 review: "$6.40 … $30.1" read as two)
+export const usd = c => (c >= 100 ? `$${Math.round(c)}` : `$${fix(c, 2)}`);   // one money format under $100 (R6 review: "$6.40 … $30.1" read as two)
 
 export function stateOf(id) {
   // Both at once (the person, 110812313986: a focus can need them and still be working): the needs part first, then "moving".
@@ -134,10 +134,15 @@ export const isCode = w => isAgent(w) || CODE.test(w);
 export const noAskIds = text => String(text || "")
   .replace(/\s*\(\s*k\d{4}(?:\s*(?:,|;|\/|&|and)\s*k\d{4})*\s*\)/g, m => (m.match(/k\d{4}/g).some(isAgent) ? m : ""))
   .replace(/\bk\d{4}'s\s+/g, m => (isAgent(m.slice(0, 5)) ? m : "the ")).replace(/\bk\d{4}\b/g, w => (isAgent(w) ? w : "an ask"));
-/** The text with post ids, ask ids and a leading step word taken out, and the punctuation they leave tidied. */
+// A ladder step's id: R14, R107b, R-1110f-b, R-1111-r18a, and the two-letter kinds (IM-1b, WT-1, SU-1b). A leading one ("R-1110f-b: the stop…")
+// or a bracket of nothing but them ("… on thread open (R107)") goes; one inside a sentence stays, since taking it out would break the sentence.
+const STEP = String.raw`(?:R-?\d+(?:[a-z]|-[a-z0-9]+)*|[A-Z]{2}-\d+[a-z]?)`;
+const STEP_LEAD = new RegExp(String.raw`^\s*(?:rung\s+)?${STEP}(?:\s*(?:,|and|\+|&|\/)\s*${STEP})*\s*[:.–-]\s+(\S)`, "i");
+const STEP_BRACKET = new RegExp(String.raw`\s*\(\s*(?:rung\s+)?${STEP}(?:\s*(?:,|;|and|\+|&|\/)\s*${STEP})*\s*\)`, "g");
+/** The text with post ids, ask ids and a leading or bracketed step id taken out, and the punctuation they leave tidied. */
 export function scrub(text) {
   return noAskIds(String(text || "")
-    .replace(/^\s*(?:rung\s+)?R\d+[a-z]?(?:\s*(?:,|and|\+|&|-|–|\/)\s*R\d+[a-z]?)*\s*[:.–-]\s+(\S)/i, (m, c) => c.toUpperCase())
+    .replace(STEP_LEAD, (m, c) => c.toUpperCase()).replace(STEP_BRACKET, "")
     .replace(/\s*\((?:post\s+)?[0-9a-f]{12}\)/g, "")
     .replace(/(?:\b(?:in|from|see|at)\s+)?\bpost\s+[0-9a-f]{12}\b/gi, "")
     .replace(/(^|[\s(:,])(?:(?:on|in|from|at|see|by)\s+)?[0-9a-f]{12}\b/g, "$1"))
@@ -162,8 +167,10 @@ export function pills(text) {
 }
 /** An agent code as a pill that is not a link, for text that already sits inside one (a rail row, a Yours entry); anything else as it is. */
 export const codePill = n => (n && isCode(n) ? h("span", { class: "ref pill", "data-kind": "agent", title: inScope() ? agentLabel(n) : n }, agentLabel(n)) : n || "an agent");
+/** A Python box line in a post (`pytutor:box/<16 hex>`, ui/pybox.js) reads as "Python box" in a preview. */
+const BOXLINE = /(^|\n)[ \t]*`?pytutor:box\/[0-9a-f]{16}`?[ \t]*(?=\n|$)/g;
 /** A one-line preview said for the person (R21): ids scrubbed, a leading "Rung:"/"Next:" word and any step word gone, agent codes as codePill. */
-export const sayPlain = (text, max = 70) => short(scrub(String(text || "").replace(/(^|[\s(\[,;:"'])#([\w.-]*\w)/g, (m, a, w) => (S.threads.has(w) ? a + threadTitle(w) : m)).replace(/`/g, "").replace(/\s+/g, " ").replace(/^\s*(?:rung(?:\s+done)?|next|step)\s*:\s*/i, "")).replace(/\b(?:(?:the|rung)\s+)?R\d+[a-z]?\b/g, "the step").replace(/\b(?:[Ll]eftovers\s+)?rung(?:\s+\d+[a-z]?(?:\s+part\s+\w+)?)?(?=\s*[:(" ]|$)/g, "step").replace(/\bstep\s*:\s*/g, ""), max);
+export const sayPlain = (text, max = 70) => short(scrub(String(text || "").replace(BOXLINE, "$1Python box").replace(/(^|[\s(\[,;:"'])#([\w.-]*\w)/g, (m, a, w) => (S.threads.has(w) ? a + threadTitle(w) : m)).replace(/`/g, "").replace(/\s+/g, " ").replace(/^\s*(?:rung(?:\s+done)?|next|step)\s*:\s*/i, "")).replace(/\b(?:(?:the|rung)\s+)?R\d+[a-z]?\b/g, "the step").replace(/\b(?:[Ll]eftovers\s+)?rung(?:\s+\d+[a-z]?(?:\s+part\s+\w+)?)?(?=\s*[:(" ]|$)/g, "step").replace(/\bstep\s*:\s*/g, ""), max);
 /** A thread's title for a list row: a 12-hex post id in it is dropped. */
 export const railTitle = t => { const x = scrub(threadTitle(t)); return x && x !== "Untitled" ? x : threadTitle(t); };
 export function railSay(text, max = 70) {

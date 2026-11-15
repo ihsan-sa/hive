@@ -82,7 +82,7 @@ If the Hive has stopped starting agents, a band under the bar says why and where
 
 ### Chat
 
-Chat is where you'll spend your time. The left side lists your conversations. Above the list there are three things: **New conversation**, the search box, and the **Show** button (the funnel) beside it, which holds every choice about the list. The search box looks through every conversation by name or content. Start with `@` to ask a question instead, such as `@where did we get to on the launch?`, and press Enter: an agent answers in one line right there and brings up the conversations that fit.
+Chat is where you'll spend your time. The left side lists your conversations. Above the list there are three things: **New conversation**, the search box, and the **Show** button (the funnel) beside it, which holds every choice about the list. The button at the left of a conversation's title (or **Ctrl+\\**) hides the whole list so the conversation and its side panel get the full width; press it again to bring the list back, and this browser remembers your choice. The search box looks through every conversation by name or content. Start with `@` to ask a question instead, such as `@where did we get to on the launch?`, and press Enter: an agent answers in one line right there and brings up the conversations that fit.
 
 The home page is four things, top to bottom: the box, one line, one look at where the work went, and a card for each focus.
 

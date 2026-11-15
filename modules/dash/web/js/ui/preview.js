@@ -5,8 +5,8 @@
 // an <img>/<video>/<audio>/<iframe> pointed at /files/, which dash.py serves sandboxed: HTML runs in an iframe with an opaque
 // origin (sandbox="allow-scripts", plus the server's sandbox CSP), so it never touches this page, its cookie or the API.
 // openPreview(items, i): items are { id, name, size, from, t }; id is the post's 12-hex id, name the file name.
-import { h } from "../core/dom.js";
-import { stamp, ago } from "../core/format.js";
+import { h, tr } from "../core/dom.js";
+import { stamp, ago, fix } from "../core/format.js";
 import { button, icon, copyPress, scrim } from "./kit.js";
 
 /** A file's kind, from its name: picks the renderer and the badge. */
@@ -45,7 +45,7 @@ const kbRaw = it => "/api/kb/raw?path=" + encodeURIComponent(it.kb) + (/\.html?$
 export const kbRawOk = it => /\.(png|jpe?g|gif|webp|pdf)$/i.test(it.name);
 export const fileHref = it => (it.kb ? kbRaw(it) : `/files/${encodeURIComponent(it.id)}/${encodeURIComponent(it.name)}`);
 export const viewHref = it => (it.kb ? kbRaw(it) : fileHref(it) + (VIEW.has(kindOf(it.name)) ? "?view=1" : ""));
-export const keyOf = it => (it.kb ? "kb:" + it.kb : it.id + "/" + it.name);
+export const keyOf = it => (it.kb ? "kb:" + it.kb + (it.box ? "#box=" + it.box : "") : it.id + "/" + it.name);   // a Python box pinned from the chat (pybox.js) is its own item
 // Every file chip drawn in a message, by key, so the Files list can show this conversation's files with their size and sender.
 const KNOWN = new Map();
 export const remember = it => { KNOWN.set(keyOf(it), it); return it; };
@@ -58,7 +58,7 @@ export function threadFiles() {
   }
   return out;
 }
-const fsize = n => (n == null ? "" : n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
+const fsize = n => (n == null ? "" : n >= 1048576 ? fix((n / 1048576), 1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
 
 // ---- the panel ----
 const WMIN = 340, KEY = "pv.w", MODE = new Map();   // MODE: file key -> "src" when the person asked for the source
@@ -85,6 +85,7 @@ function grip() {
 function mark() {
   const k = previewKey();
   for (const el of document.querySelectorAll("[data-pv-key]")) el.toggleAttribute("data-pv-on", el.dataset.pvKey === k);
+  dispatchEvent(new CustomEvent("previewchange", { detail: k }));   // a pinned Python box folds or comes back in the chat (pybox.js)
 }
 
 /** Open items[i] in the panel. Opening while it's open just switches the file. */
@@ -102,7 +103,7 @@ export function openFiles(auto) {
   if (auto !== true) { try { localStorage.removeItem(AUTO); } catch (e) {} }   // opened by hand: it opens by itself again
   shell();
   P.list = true; P.seq++; clearTimeout(P.live); P.ctl && P.ctl.abort(); P.ctl = null;
-  P.root.setAttribute("aria-label", "Files"); P.root.dataset.kind = "files"; P.foot.hidden = true;
+  P.root.setAttribute("aria-label", tr("Files")); P.root.dataset.kind = "files"; P.foot.hidden = true;
   P.auto = auto === true; placeFiles();
   mark();
   import("../preview/files.js").then(m => { if (P.root && P.list) m.drawFiles(P.head, P.body, { open: openPreview, close: closePreview }); });
@@ -196,7 +197,7 @@ function header(it, r) {
   const n = P.items.length, k = keyOf(it), src = MODE.get(k) === "src";
   const who = it.from ? (it.from === "person" ? "you" : it.from) : null;
   const when = it.t ? stamp(it.t) : null;
-  const meta = [typeOf(it.name), fsize(it.size), it.kb ? it.kb.replace(/\/[^/]*$/, "") : who ? "from " + who + (when ? ", " + when : "") : when].filter(Boolean).join(" · ");
+  const meta = [tr(it.box ? "Python box" : typeOf(it.name)), fsize(it.size), it.kb ? it.kb.replace(/\/[^/]*$/, "") : who ? "from " + who + (when ? ", " + when : "") : when].filter(Boolean).join(" · ");
   // A project file downloads as its raw bytes only if it's an image or PDF; otherwise as the text shown, and Open goes to Knowledge.
   const dl = !it.kb || kbRawOk(it) ? fileHref(it) : r && r.text != null ? URL.createObjectURL(new Blob([r.text], { type: "text/plain" })) : null;
   if (P.blob) URL.revokeObjectURL(P.blob); P.blob = dl && dl.startsWith("blob:") ? dl : null;
@@ -282,7 +283,7 @@ function fullBtn() {
   const on = () => document.body.hasAttribute("data-pv-full");
   const b = button(on() ? "Back to the side" : "Expand", () => {
     document.body.toggleAttribute("data-pv-full", !on());
-    b.setAttribute("aria-pressed", String(on())); b.title = on() ? "Back to the side" : "Expand"; b.setAttribute("aria-label", b.title);
+    b.setAttribute("aria-pressed", String(on())); b.title = tr(on() ? "Back to the side" : "Expand"); b.setAttribute("aria-label", b.title);
   }, { kind: "icon", icon: "expand", size: "s", cls: "pv-full" });
   b.setAttribute("aria-pressed", String(on()));
   return b;
@@ -293,7 +294,7 @@ function fullBtn() {
 function switcher(it) {
   const k = keyOf(it), seen = new Set(), list = [];
   for (const x of [...P.items, ...threadFiles()]) { const kx = keyOf(x); if (!seen.has(kx)) { seen.add(kx); list.push(x); } }
-  const name = h("span", { class: "pv-fn", title: it.name }, it.name);
+  const name = h("span", { class: "pv-fn", title: it.label || it.name }, it.label || it.name);
   if (list.length < 2) return name;
   const menu = h("div", { class: "pv-menu menu", role: "menu", hidden: true }), sc = scrim(() => shut());
   sc.hidden = true;
@@ -320,7 +321,7 @@ async function show(k) {
   const n = P.items.length; P.i = ((k % n) + n) % n;
   const it = P.items[P.i], my = ++P.seq;
   P.ctl && P.ctl.abort(); P.ctl = new AbortController(); clearTimeout(P.live);
-  P.root.setAttribute("aria-label", "Preview of " + it.name);
+  P.root.setAttribute("aria-label", tr("Preview of " + it.name));
   P.root.dataset.kind = kindOf(it.name);
   header(it, null);
   P.body.replaceChildren(h("div", { class: "pv-wait meta" }, "Loading…"));
@@ -332,7 +333,7 @@ async function show(k) {
     r = await m.render(it, { source: MODE.get(keyOf(it)) === "src", signal: P.ctl.signal });
   } catch (e) {
     if (e && e.name === "AbortError") return;
-    r = { node: h("div", { class: "pv-err" }, h("p", null, "Couldn't show this file: " + (e && e.message || e)),
+    r = { node: h("div", { class: "pv-err" }, h("p", null, tr("Couldn't show this file") + ": " + tr(String(e && e.message || e))),
       it.kb ? h("a", { class: "btn", "data-size": "s", href: "#knowledge/" + encodeURIComponent(it.kb) }, "Open in Knowledge") : h("a", { class: "btn", "data-size": "s", href: fileHref(it), download: it.name }, "Download it")) };
   }
   if (my !== P.seq || !P.root || P.list) return;

@@ -26,7 +26,7 @@ Voice calls with the Hive. The person presses **Call** in the dashboard composer
     phone calls                         # calls and rings now
     phone say TEXT -o out.wav [--speed X]  # Kokoro to a file (at the saved call speed unless --speed)
 
-HTTP on the Unix socket `~/.hive/phone.sock` (mode 600, so no other account on the machine can reach it, as it could loopback; the dash proxies `/api/phone/*` for anyone with the post cap): `GET /health /rings /calls /call/ID/events?after=N`, `GET /call/ID/listen`, `POST /call {to, ring, thread, quiet}`, `/call/ID/answer|say|hangup {name, text}`, `/ring`, `/ring/ID/decline`, `/call/ID/turn` (raw PCM), `/text`, `/interrupt`, `/transfer`, `/end`. `quiet: true` makes a test call that posts no transcript.
+HTTP on the Unix socket `~/.hive/phone.sock` (mode 600, so no other account on the machine can reach it, as it could loopback; the dash proxies `/api/phone/*` for anyone with the post cap): `GET /health /rings /calls /call/ID/events?after=N`, `GET /call/ID/listen`, `POST /call {to, ring, thread, quiet}`, `/call/ID/answer|say|hangup {name, text}`, `/ring`, `/ring/ID/decline`, `/call/ID/turn` (raw PCM), `/text`, `/interrupt`, `/transfer`, `/end`. `quiet: true` makes a test call that posts no transcript. `POST /transcribe` (raw 16 kHz mono s16le PCM, up to 10 min) answers `{text, seconds}` with no call and posts nothing: the composer's Dictate mic puts that text in the box to edit before Send (everyday E18i; drive: `projects/everyday/harness/e18i_dictate.mjs`).
 
 ## Setup
 

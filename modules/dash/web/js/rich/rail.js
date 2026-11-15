@@ -16,7 +16,7 @@ export function openRail() {
     for (const post of document.querySelectorAll(".cm-msgs article.msg")) {
       const author = post.getAttribute("aria-label") || [...(post.querySelector(".msg-h")?.children || [])].map(n => n.textContent.trim()).filter(Boolean).join(" · ") || "Message";
       const add = (type, el, label) => entries.push({ type, el, label: label.trim().slice(0, 180), author });
-      for (const el of post.querySelectorAll(".md h1,.md h2,.md h3,.md h4,.md h5,.md h6")) add("Outline", el, el.textContent);
+      for (const el of post.querySelectorAll(".md .md-h1,.md .md-h2,.md .md-h3,.md .md-h4,.md .md-h5,.md .md-h6")) add("Outline", el, el.textContent);
       for (const el of post.querySelectorAll(".rc-fig,.rc-block,.md-tw")) {
         const lang = el.querySelector(".rc-lang")?.textContent || "";
         const type = el.matches(".rc-block:not(.rc-fig),.md-tw") || /^(csv|tsv)$/i.test(lang) ? "Code & tables" : "Figures";

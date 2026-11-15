@@ -3,12 +3,12 @@
 // message(post, opts) returns the whole article. Its head (.msg-h) and receipt (.msg-rc) can be redrawn on their own with
 // messageHead() and messageReceipt(), so a long list refreshes names and read marks without touching the bodies.
 // localMessage(item) draws a message that hasn't reached the board yet: sending, or failed with Retry.
-import { h, copyText } from "../core/dom.js";
+import { h, copyText, tr } from "../core/dom.js";
 import { S, can, jget, SYS, OUTSIDE, post as apiPost } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { isScript, isAgent, isWarden, isRunning, inConversation, capFirst, agentLabel, displayText, typedText, editNote, chatText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
 import { focusById, focusName, focusOf } from "../core/foci.js";
-import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
+import { clock, stamp, now, short, mdPlain, ago, DAY, MIN, fix, int } from "../core/format.js";
 import { markdown, mdCut, filesNamed } from "./markdown.js";
 import { artifactSeries, collectPages, inChat } from "../rich/artifact.js";
 import { agentRef, threadRef, agentAvatar } from "./refs.js";
@@ -17,7 +17,9 @@ import { button, icon, statusDot, copyPress, scrim } from "./kit.js";
 import { replyTo, draft, quoteRef } from "./composer.js";
 import { wordButton } from "./rootword.js";
 import { voiceMemo, VOICE } from "./voicememo.js";
+import { readAloud, stopReading, reading } from "./speak.js";
 import { openPreview, previewKey, kindOf, badgeOf, remember } from "./preview.js";
+import { boxIds, boxEmbed, boxesOn, dropBoxLines } from "./pybox.js";
 
 // ---- read marks ----
 // Has this post reached the agent it names? Read: handed to it mid-run (the inbox hook's record, /api/delivered),
@@ -129,7 +131,7 @@ export const PDF = /\.pdf$/i;
 export const VID = /\.(mp4|webm|mov|m4v)$/i;
 export const PAGE = /\.html?$/i;
 export const pageUrl = (p, f) => fileUrl(p, f) + "?view=1";
-export const fsize = n => (n == null ? "" : n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
+export const fsize = n => (n == null ? "" : n >= 1048576 ? fix((n / 1048576), 1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
 export const TYPE = { svg: "Picture", video: "Video", audio: "Audio", pdf: "PDF", html: "Web page", md: "Document", table: "Table", notebook: "Notebook", json: "Data", xlsx: "Spreadsheet", docx: "Document", pptx: "Slides", diff: "Changes", mermaid: "Diagram", code: "Code", text: "Text" };
 const OPEN_VERB = { video: "Play", audio: "Play" };
 
@@ -246,7 +248,7 @@ function sourceView(p, ws) {
       h("button", { type: "button", class: "rc-t", onclick: (e, b) => flash(b, p.text) }, "Copy"),
       h("button", { type: "button", class: "rc-t", onclick: (e, b) => { SOURCE.delete(p.id); b.closest(".msg-b").replaceWith(body(p, ws)); } }, "Back to the post")));
 }
-const flash = (b, text) => copyText(text).then(() => { const was = b.textContent; b.dataset.ok = ""; b.textContent = "Copied"; setTimeout(() => { delete b.dataset.ok; b.textContent = was; }, 1400); }, () => {});
+const flash = (b, text) => copyText(text).then(() => { const was = b.textContent; b.dataset.ok = ""; b.textContent = tr("Copied"); setTimeout(() => { delete b.dataset.ok; b.textContent = was; }, 1400); }, () => {});
 function closeMenu() {
   document.querySelector(".rc-menu")?.remove(); document.querySelector(".rc-more>.scrim")?.remove();
   document.querySelector('.rc-moreb[aria-expanded="true"], .msg-moreb[aria-expanded="true"]')?.setAttribute("aria-expanded", "false");
@@ -303,7 +305,7 @@ function body(p, ws) {
   if (!f) return h("div", { class: "msg-b" }, markBody(mdIn(t, p), ws));
   return h("div", { class: "msg-b", "data-folded": "" },
     markBody(mdIn(f.head, p), ws),
-    button(`Show the middle: ${f.lines > 2 || f.words == null ? f.lines + " more lines" : f.words.toLocaleString() + " more words"}`, (e, b) => { OPEN.add(p.id); b.closest(".msg-b").replaceWith(body(p, ws)); }, { kind: "quiet", size: "s", cls: "msg-more" }),
+    button(`Show the middle: ${f.lines > 2 || f.words == null ? f.lines + " more lines" : int(f.words) + " more words"}`, (e, b) => { OPEN.add(p.id); b.closest(".msg-b").replaceWith(body(p, ws)); }, { kind: "quiet", size: "s", cls: "msg-more" }),
     markBody(mdIn(f.tail, p), ws));
 }
 
@@ -432,7 +434,9 @@ function appMessage(p, opts) {
   const call = phoneCall(p); if (call) return call;
   const kind = SYS.has(p.from) || isScript(p.from) ? "sys" : p.from === "person" ? "me" : OUTSIDE.has(p.from) ? "out" : "agent";
   const asks = kind === "agent" && !simpleOn() && asksYou(p), split = kind === "agent" && !SOURCE.has(p.id) ? didSplit(p) : null;
-  const q = split ? { ...p, disp: split.text } : p;
+  let q = split ? { ...p, disp: split.text } : p;
+  const boxes = boxesOn() && EDIT.id !== p.id ? boxIds(p.text) : [];   // a Python box inline (ui/pybox.js): the frame stands in for its line
+  if (boxes.length) q = { ...q, disp: dropBoxLines(displayText(q)) };
   return h("article", { class: "msg", tabindex: "-1", "data-key": p.id, "data-who": kind, "data-cont": opts.cont ? "" : null, "data-report": displayText(p).length > LONG ? "" : null,
     "data-state": kind === "me" && p.interrupt ? "interrupt" : null, "data-asks": asks ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
     msgAvatar(p, kind),
@@ -441,7 +445,8 @@ function appMessage(p, opts) {
       messageHead(p, { ...opts, asks }),
       relayLine(p),
       p.reply_to ? quote(p) : null,
-      EDIT.id === p.id ? editBox(p, opts) : body(q, ws),
+      EDIT.id === p.id ? editBox(p, opts) : boxes.length && !q.disp ? null : body(q, ws),
+      boxes.length ? h("div", { class: "msg-boxes" }, boxes.map(id => boxEmbed(p.id, id))) : null,
       files.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f))) : null,
       tagChips(p),
       split ? didFold(p, split) : null,
@@ -468,9 +473,9 @@ function versionBar(p, opts) {
     re ? button("Retry", e => retry(p, opts.retryRoot || root, e), { size: "s", kind: "quiet", icon: "retry", cls: "msg-vact msg-retry", title: "Ask for another answer; this one stays behind the arrows" }) : null);
 }
 async function retry(p, root, e) {
-  const b = e && e.currentTarget; if (b) { b.disabled = true; b.textContent = "Asking…"; }
+  const b = e && e.currentTarget; if (b) { b.disabled = true; b.textContent = tr("Asking…"); }
   try { await apiPost("/api/post", { thread: p.th, retry_of: root }); }
-  catch (err) { if (b) { b.disabled = false; b.textContent = "Retry failed"; b.title = err.message; } }
+  catch (err) { if (b) { b.disabled = false; b.textContent = tr("Retry failed"); b.title = err.message; } }
 }
 function editBox(p, opts) {
   const root = opts.ver ? opts.ver.root : p.id;
@@ -570,6 +575,9 @@ function toolsMenu(p, ws) {
     can("post") ? item("Quote", () => { closeMenu(); quoteRef(p.th, { who: who(p.from), where: clock(p.t), text: quoteText(p) }); }, "Selected words, or the first lines", "msg-quote") : null,
     item("Copy link", (e, b) => { copyText(linkOf(p)); closeMenu(); }, null, "msg-link"),
     item("Copy as Markdown", () => { copyText(displayText(p)); closeMenu(); }),
+    p.from !== "person" && (window.speechSynthesis || (S.app && S.app.phone)) ? (reading(p.id)
+      ? item("Stop reading", () => { stopReading(); closeMenu(); }, null, "msg-read")
+      : item("Read aloud", () => { readAloud(p.id, displayText(p)); closeMenu(); }, null, "msg-read")) : null,
     item("Open in Yours", () => { closeMenu(); location.hash = "#yours"; }, null, "msg-yours"),
     item(SOURCE.has(p.id) ? "Back to the post" : "View source", (e, b) => {
       const was = b.closest(".msg")?.querySelector(".msg-b"); closeMenu();

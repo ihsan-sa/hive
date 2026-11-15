@@ -213,7 +213,7 @@ function blocks(ls) {
         h("tbody", null, rows.map(r => h("tr", null, head.map((_, k) => h("td", null, inline(r[k] || "")))))))));
       continue;
     }
-    if ((m = l.match(HEAD))) { out.push(h("h" + m[1].length, null, inline(m[2]))); i++; continue; }
+    if ((m = l.match(HEAD))) { out.push(h("h" + Math.min(m[1].length + 1, 6), { class: "md-h" + m[1].length }, inline(m[2]))); i++; continue; }   // one level down: the page or file around it owns the h1 (WCAG 1.3.1); md-hN keeps the look of the level written
     if (HR.test(l)) { out.push(h("hr")); i++; continue; }
     if (QUOTE.test(l)) { const q = []; for (; i < ls.length && QUOTE.test(ls[i]); i++) q.push(ls[i].replace(QUOTE, "")); out.push(h("blockquote", null, blocks(q))); continue; }
     if ((m = l.match(ITEM))) {

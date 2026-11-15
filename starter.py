@@ -172,7 +172,7 @@ def asked_model(p, c):
     return None
 
 def step_clause(model):
-    """Said at each start and wake, the natural point to weigh the model (the person, 2026-11-05, thread model-stepping). Self-judged switches were 0 of 12."""
+    """Said at a fresh start (not on a sleeper's wake: inbox.model_check asks again at call 40), the natural point to weigh the model (the person, 2026-11-05, thread model-stepping). Self-judged switches were 0 of 12."""
     if model in ("haiku", "sonnet"): return f' You\'re on {model}: if this turns into design or debugging you\'re stuck on, run `hive model opus "why"` and end your turn.'
     if model in ("opus", "fable"): return f' You\'re on {model}: if this is routine with a good stretch to do, run `hive model sonnet "why"` and end your turn. A short job, just do it.'
     return ""
@@ -442,8 +442,11 @@ def working(r, grace):
     t, w = time.time(), work.setdefault(r["name"], [0, 0.0, 0])
     if queued_heavy(r["name"]):
         w[0], w[1], w[2] = t, cpu_of(r["name"], r["pid"]), t; return True
-    if not w[0]:  # first look: take a sample and decide after a minute of it. Until that minute is
-        # measured it counts as working (w[2] = t); with w[2] = 0 the next poll, seconds later, reaped it
+    if not w[0] or t - w[0] > 180:  # first look: take a sample and decide after a minute of it. Until that minute is
+        # measured it counts as working (w[2] = t); with w[2] = 0 the next poll, seconds later, reaped it.
+        # A sample over 3 min old is a first look too: the run talked in between (a task woke a new turn, which ended
+        # in a new result) or an earlier run of this name left it. Kept, its old w[2] reaped the run at the first poll of its
+        # next quiet stretch with no CPU measured: 25 of 32 reaps on 2026-11-13/14, heavy jobs running in 9 (R35).
         w[0], w[1], w[2] = t, cpu_of(r["name"], r["pid"]), t; return True
     if t - w[0] >= min(60, grace):
         c = cpu_of(r["name"], r["pid"])
@@ -1760,7 +1763,8 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
         prompt += guarded("wake_note", k, first.get("thread"), bool(heir_of)) or ""
     fb = next((p["fallback"] for p in posts if p.get("fallback")), None)
     if fb: prompt += "\n\n" + FALLBACK_NOTE["codex" if fb == "fallback" and tier_of(model).startswith("codex") else fb].format(model=model, tier=tier_of(model))
-    elif kind != "warden" and not prov and not asked and (not resume or slept): prompt += step_clause(model)
+    # Said once per session (a5234, 2026-11-13, load P4): a woken sleeper got it at its start; inbox.model_check asks again at call 40.
+    elif kind != "warden" and not prov and not asked and not resume: prompt += step_clause(model)
     path = HOME / "sessions" / f"{name}-{dt.datetime.now():%m%d-%H%M%S}.jsonl"
     last_start[0] = time.time(); recent_starts.append(last_start[0])
     def record():

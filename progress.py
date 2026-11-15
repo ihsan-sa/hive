@@ -40,6 +40,16 @@ def paused_windows(e, t):
     except (ImportError, KeyError, ValueError, TypeError): return 0.0, 0.0
 
 
+def recent_paused(t):
+    """The larger paused share of the 24 h before t and of the last full UTC day before t. Over PAUSED_MAX, autojudge
+    waits: many checks print yesterday's number, and a paused day's number is the pause, not the change."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent)); import pauses
+        sp, d = pauses.spans(STATE / "pauses.jsonl", until=t), t.replace(hour=0, minute=0, second=0, microsecond=0)
+        return max(pauses.share(t - dt.timedelta(days=1), t, sp=sp), pauses.share(d - dt.timedelta(days=1), d, sp=sp))
+    except (ImportError, KeyError, ValueError, TypeError): return 0.0
+
+
 def paused_share(t0, t1):
     """The paused share of [t0, t1] (aware datetimes), 0..1; 0 when there is no record."""
     try:
@@ -204,6 +214,7 @@ def autojudge(post=True, t=None):
         t, items, out = t or now(), ledger(), []
         for e in sorted(items.values(), key=lambda e: e.get("at", "")):
             if e.get("status") != "landed" or not e.get("check") or e.get("due_at", "") > iso(t) or str(e.get("revisit") or "") > iso(t)[:10]: continue
+            if recent_paused(t) > PAUSED_MAX: continue  # a check that reads "the last day" would read the pause itself (i0243 read 11-12, paused all day): wait for a full day
             base, (after, err) = e.get("before"), read_check(e)
             try: retries_over = t - dt.datetime.fromisoformat(e["due_at"]) >= dt.timedelta(days=1)
             except (KeyError, ValueError): retries_over = True
@@ -288,7 +299,9 @@ def cmd_log(a):
         if a.control:
             fields["control"] = a.control; fields["control_before"], err = run_check(a.control)
             if err: sys.exit(f"hive improve log: the control doesn't work yet ({err}).")
-        fields["due_at"] = iso(now() + span(rev)) if re.fullmatch(r"\d+[hdw]", rev) else rev + "T00:00:00+00:00"
+        if re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d)?Z?", rev):  # a date with an hour: due then; revisit stays a bare date (compared with today)
+            fields["due_at"] = rev.rstrip("Z") + (":00" if len(rev.rstrip("Z")) == 16 else "") + "+00:00"; rev = rev[:10]
+        else: fields["due_at"] = iso(now() + span(rev)) if re.fullmatch(r"\d+[hdw]", rev) else rev + "T00:00:00+00:00"
         # The trial rule (from the fund's forecast trials, projects/rsi-lab/fund.md): the size expected, what the number rests on and the
         # cheap alternative to beat are written before landing, and the check reads once, at the cut-off. A row without them is marked, not refused.
         # --control is the do-nothing comparison, not the cheap alternative, so it does not stand in for --beats.
@@ -344,7 +357,14 @@ def cmd_judge(a):
     today = iso()[:10]
     if str(e.get("revisit") or "") > today: sys.exit(f"hive improve judge: {a.id}'s revisit is {e['revisit']}. No verdict before it.")
     w = [i for i in w if str(items[i].get("revisit") or "") <= today]
-    if a.verdict == "held" and judged_with(items, e):
+    if a.apart:  # R25 (meta-reflect): a window after e landed and before any row it shares a number with: only e was live, so the number is e's own
+        fr, _, to = a.apart.partition("..")
+        early = [i for i in judged_with(items, e) if str(items[i].get("at", ""))[:19] < to[:19]]
+        if not to or fr[:19] < str(e.get("at", ""))[:19] or early:
+            sys.exit(f"hive improve judge: --apart FROM..TO must start at or after {a.id} landed ({str(e.get('at'))[:19]}) and end before every row it shares a number with lands"
+                     + (f" ({', '.join(f'{i} landed {str(items[i].get("at"))[:19]}' for i in early)})" if early else "") + ".")
+        a.why, w = a.why + f"; read apart over {fr}..{to}, before {', '.join(judged_with(items, e))} landed", []
+    elif a.verdict == "held" and judged_with(items, e):
         a.verdict, a.why = "inconclusive", a.why + "; shares its number, so it cannot credit one change"
         print(f"{a.id} shares its number with {', '.join(judged_with(items, e))}: recorded as inconclusive, not held. Give it a number of its own to judge it apart.")
     for i in [a.id] + w:
@@ -550,7 +570,7 @@ def decided_lines(posts, t0, t1):
     """`Decided:` lines from agents in the window (hive-meta P4; the convention's measure against person_asks). Same agent filter as For you: not the person, not the hive's own threads."""
     return sum(len(DECIDED_LINE.findall(str(p.get("text", "")))) for p in posts if t0 <= p.get("at", "") <= t1 and p.get("from") not in ("person", "starter", "keeper") and p.get("thread") not in ("keeper", "improve", "watchdog"))
 
-REVERSE = re.compile(r"\b(revers\w*|undo|revert\w*|instead|don'?t do|do not|wrong|no,|stop doing|take (?:that|it) back)\b", re.I)
+REVERSE = re.compile(r"\b(revers\w*|undo|revert\w*|don'?t do (?:that|it|this)|stop doing|take (?:that|it) back)\b", re.I)
 
 def reversal_numbers(posts, t0, t1, within_h=24):
     """Reversals per 100 `Decided:` lines (hive-meta P4): decisions in the window whose thread got a person post within 24 h that reads as a reversal (keyword match, so a count to watch, not a verdict). Empty when there are no decisions."""
@@ -610,7 +630,10 @@ def outcomes_in(t0, t1):
         s = oc.stats([r for r in jsonl(HOME / "outcomes.jsonl") if t0 <= r.get("at", "") <= t1])
     except Exception: return {"outcomes_graded": 0, "outcome_delivered_pct": None, "outcomes_silent": None, "outcomes_nothing": None, "outcomes_intent_only": None}
     if not s["outcomes_graded"]: return {"outcomes_graded": 0, "outcome_delivered_pct": None, "outcomes_silent": None, "outcomes_nothing": None, "outcomes_intent_only": None}  # no grades, so no count: "0 -> 11, worse" on the grader's first day was a false verdict
-    return {k: s[k] for k in ("outcomes_graded", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_intent_only")}
+    out = {k: s[k] for k in ("outcomes_graded", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_intent_only")}
+    try: out.update(oc.followups(jsonl(HOME / "outcomes.jsonl"), t0, t1))   # R39: of the handed-on/promised/long-job misses, the share whose work came within 6 h
+    except Exception: pass
+    return out
 
 def kb_numbers(t0, t1):
     """From the kb query log (core/kbuse.py): searches, how many led to an observed read of what they showed, recall pointers, misses."""
@@ -621,9 +644,9 @@ def kb_numbers(t0, t1):
     return {"kb_finds": x["finds"], "kb_find_read_pct": x["find_read_pct"], "kb_recall_injections": x["recalls"], "kb_recall_opened_pct": x["recall_opened_pct"], "kb_misses_explicit": x["misses"], "kb_miss_candidates": x["candidates"]}
 
 LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "runs_reaped_repeat", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d", "outcomes_silent", "outcomes_nothing", "outcomes_intent_only", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "person_asks", "summary_flagged", "needs_gap"}
-NEUTRAL = {"decided_lines", "reversals_per_100", "kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "model_steps_up", "model_steps_down", "runs", "runs_woken", "person_replies", "keeper_rounds", "improve_rounds", "core_commits", "rsi_rounds", "reverted", "spend_usd", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "outcomes_graded"}  # activity and cost: context, not a score (the person: don't ration work for pace)
+NEUTRAL = {"decided_lines", "reversals_per_100", "kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "model_steps_up", "model_steps_down", "runs", "runs_woken", "person_replies", "keeper_rounds", "improve_rounds", "core_commits", "rsi_rounds", "reverted", "spend_usd", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "outcomes_graded", "followup_misses"}  # activity and cost: context, not a score (the person: don't ration work for pace)
 HEADLINE = ["kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "runs", "model_steps_up", "model_steps_down", "fail_pct", "runs_reaped", "runs_reaped_signalled", "runs_reaped_repeat", "runs_woken", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_landed", "improvements_judged", "improvements_sized", "reviews_independent", "held", "reverted",
-            "improvements_overdue", "reviews_independent", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "decided_lines", "reversals_per_100", "person_asks", "summary_flagged", "needs_gap", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "asks_orphaned", "leftovers_orphaned", "asks_stale", "outcomes_intent_only", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
+            "improvements_overdue", "reviews_independent", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "decided_lines", "reversals_per_100", "person_asks", "summary_flagged", "needs_gap", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "asks_orphaned", "leftovers_orphaned", "asks_stale", "outcomes_intent_only", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "followup_closed_pct", "followup_misses", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
 
 def scoreboard(since):
     log, posts, items = jsonl(LOG), jsonl(BOARD), ledger()
@@ -746,7 +769,7 @@ def main(argv=None):
     p.add_argument("--also", action="append", help="ids of open landings on the same number, judged together with this one at the revisit (silences the overlap warning)")
     p.set_defaults(f=cmd_log)
     p = sp.add_parser("judge", help="judge a landed change on its revisit date: ID held|reverted|inconclusive --why 'the number vs baseline'")
-    p.add_argument("id"); p.add_argument("verdict", choices=VERDICTS); p.add_argument("--why", default=""); p.add_argument("--self", action="store_true"); p.set_defaults(f=cmd_judge)
+    p.add_argument("id"); p.add_argument("verdict", choices=VERDICTS); p.add_argument("--why", default=""); p.add_argument("--self", action="store_true"); p.add_argument("--apart", help="FROM..TO (ISO): the number was read over a window when only this row was live, after it landed and before every row it shares a number with; a held then stays held"); p.set_defaults(f=cmd_judge)
     p = sp.add_parser("list", help="the ledger; --due for revisits past their date"); p.add_argument("--due", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_list)
     p = sp.add_parser("attach", help="give a logged change a check after the fact, on or after its revisit date; the number is kept but never counts as held (late-check): ID --check CMD --want up|down [--band N] [--before N: the number from before the change; without it, measured now and read in 48 h]")
     p.add_argument("id"); p.add_argument("--check", required=True); p.add_argument("--want"); p.add_argument("--band", type=float); p.add_argument("--before", type=float); p.set_defaults(f=cmd_attach)

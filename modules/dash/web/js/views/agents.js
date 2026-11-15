@@ -3,7 +3,7 @@
 import { h } from "../core/dom.js";
 import { S, OUTSIDE, getPref, loadAgentCosts, setPref } from "../core/store.js";
 import { HOUSE_THREADS, agentOn, agentSpend, agentStatus, costsPending, isRunning, labelCodes, loginName, modelName, sEnd, threadTitle } from "../core/model.js";
-import { ago, dur, money, plural, short, stamp, toks } from "../core/format.js";
+import { ago, dur, money, plural, short, stamp, toks, int } from "../core/format.js";
 import { metrics } from "../templates.js";
 import { button, empty, waiting, input, pageHeader, seg, stats, toolbar, pageNav, infoButton, figPending } from "../ui/kit.js";
 import { heldRoom } from "../core/room.js";
@@ -81,8 +81,8 @@ const COLS = [
   { k: "lastSeen", label: "Last active", num: 1, get: a => a.lastSeen, render: a => (isRunning(a.name) ? "now" : ago(a.lastSeen)) },
   { k: "usd", label: "Cost", num: 1, title: "At API list prices; nobody is billed this", get: a => a.usd, render: a => costsPending() ? figPending("3.5ch") : !(a.usd > 0 || a.tok > 0) ? "–" : h("span", { title: `From the ${a.spend.src}` + (a.spend.sub ? `; ${money(a.spend.sub)} in subagents` : "") }, money(a.usd)) },
   { k: "tok", label: "Tokens", num: 1, title: "Input, output and cache together", get: a => a.tok, render: a => !COST_DATA ? "–" : h("span", { title: `${toks(a.spend.t[0])} input, ${toks(a.spend.t[1])} output, ${toks(a.spend.t[2])} cache read, ${toks(a.spend.t[3])} cache write` }, toks(a.tok)) },
-  { k: "calls", label: "Calls", num: 1, title: "Model calls, subagents included", get: a => a.calls ?? -1, render: a => (a.calls == null ? "–" : a.calls.toLocaleString()) },
-  { k: "tools", label: "Tools", num: 1, title: "Tool calls in its session logs", get: a => a.tools, render: a => a.tools.toLocaleString() },
+  { k: "calls", label: "Calls", num: 1, title: "Model calls, subagents included", get: a => a.calls ?? -1, render: a => (a.calls == null ? "–" : int(a.calls)) },
+  { k: "tools", label: "Tools", num: 1, title: "Tool calls in its session logs", get: a => a.tools, render: a => int(a.tools) },
   { k: "posts", label: "Posts", num: 1, get: a => a.posts, render: a => a.posts },
   { k: "children", label: "Started", num: 1, title: "Agents it started", get: a => a.spawned, render: a => a.spawned },
 ];
@@ -132,7 +132,7 @@ export default {
     const costs = S.agentCosts; COST_DATA = all.some(a => a.usd > 0 || a.tok > 0);   // no cost data is "–", not a real zero (handoff 33)
     const costNote = costs && costs.at ? `Cost and tokens from the transcripts, read ${ago(costs.at * 1e3)}${costs.refreshing ? ", reading again" : ""}. API list prices; nobody is billed this. Tokens add up every model call's input, output and cache, so context read again on each call counts each time.` : costsPending() ? "Reading the transcripts for cost and tokens." : costs && costs.refreshing ? "Reading the transcripts for exact costs; until then these come from the session logs." : "Cost and tokens from the session logs.";
     const totals = stats([
-        { label: narrowed ? "Agents shown" : "Agents", value: found.length.toLocaleString(), note: `${found.filter(a => a.status === "running").length} running` },
+        { label: narrowed ? "Agents shown" : "Agents", value: int(found.length), note: `${found.filter(a => a.status === "running").length} running` },
         { label: "Total cost", value: all.length && costsPending() ? figPending() : COST_DATA ? money(sum(a => a.usd)) : "–", note: found.length && COST_DATA && !costsPending() ? `${money(sum(a => a.usd) / found.length)} per agent` : null },
         { label: "Tokens", value: all.length && costsPending() ? figPending() : COST_DATA ? toks(sum(a => a.tok)) : "–", note: !COST_DATA || costsPending() ? null : `${pctOf(sum(a => a.spend.t[2]), sum(a => a.tok))} re-read from cache; ${toks(sum(a => a.spend.t[1]))} written` },
         { label: "Agent time", value: found.length ? dur(sum(a => a.ran)) : "–", note: found.length ? `added up over ${plural(sum(a => a.runs), "run")}, in ${dur(Date.now() - Math.min(...found.map(a => a.when || Date.now())))}` : null },

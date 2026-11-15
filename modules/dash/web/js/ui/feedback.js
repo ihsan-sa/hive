@@ -3,7 +3,7 @@
 // the browser's own capture is one button away (it asks first); where that can't either (a plain http address, most phones, or a No) the person can paste or choose an image, or send the comment alone.
 // In a consumer Hive (one with settings.json) it goes to the makers, through /api/feedback and the report module; nothing lands on the board and no agent starts.
 // In a Hive that is its makers' own, it goes on the board in the thread "feedback", like any message. The overlay says which, and what's in it.
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { S, can, post, setupDone } from "../core/store.js";
 import { threadHref } from "../core/router.js";
 import { button } from "./kit.js";
@@ -151,7 +151,7 @@ export async function openFeedback() {
   }
   async function load(f) {
     try { const b = await createImageBitmap(f); pic = toCanvas(b, b.width, b.height); boxes = []; frozen = false; b.close(); say.hidden = true; show(); }
-    catch (e) { say.textContent = "That file isn't a picture this browser can read."; say.hidden = false; }
+    catch (e) { say.textContent = tr("That file isn't a picture this browser can read."); say.hidden = false; }
   }
   pick.addEventListener("change", () => { if (pick.files[0]) load(pick.files[0]); pick.value = ""; });
   dlg.addEventListener("paste", e => {
@@ -188,8 +188,8 @@ export async function openFeedback() {
   async function go() {
     const said = text.value.trim();
     const withPic = pic && !(toMakers() && noPicBox.checked);
-    if (!said && !withPic) { say.textContent = "Write a comment or add a picture first."; say.hidden = false; return; }
-    say.hidden = true; send.disabled = true; send.textContent = "Sending…";
+    if (!said && !withPic) { say.textContent = tr("Write a comment or add a picture first."); say.hidden = false; return; }
+    say.hidden = true; send.disabled = true; send.textContent = tr("Sending…");
     const where = location.hash.slice(1).split(/[/?]/)[0] || "home";
     try {
       if (toMakers()) await post("/api/feedback", { text: said, page: where, ...(withPic ? { image: jpeg(framed()) } : {}) });
@@ -200,18 +200,18 @@ export async function openFeedback() {
       FB.comment = "";
       dlg.close(); sentNote();
     } catch (e) {   // the comment and picture stay, so it can be sent again
-      say.textContent = "It wasn't sent: " + e.message; say.hidden = false; send.disabled = false; send.textContent = "Send";
+      say.textContent = tr("It wasn't sent: ") + e.message; say.hidden = false; send.disabled = false; send.textContent = tr("Send");
     }
   }
   async function ghIssue() {   // a prefilled link, scrubbed on this machine; the person reviews it and posts it as themselves, so no token is needed
     const said = text.value.trim();
-    if (!said) { say.textContent = "Write what went wrong first."; say.hidden = false; return; }
+    if (!said) { say.textContent = tr("Write what went wrong first."); say.hidden = false; return; }
     const tab = window.open("about:blank", "_blank");   // opened in the click, so the browser doesn't block it
     try {
       const r = await post("/api/issue-link", { text: said, page: location.hash.slice(1).split(/[/?]/)[0] || "home" });
       if (tab) { tab.opener = null; tab.location = r.url; } else location.assign(r.url);
       say.hidden = true;
-    } catch (e) { if (tab) tab.close(); say.textContent = "No link: " + e.message; say.hidden = false; }
+    } catch (e) { if (tab) tab.close(); say.textContent = tr("No link: ") + e.message; say.hidden = false; }
   }
   dlg.addEventListener("keydown", e => e.stopPropagation());   // what's open under the picture stays as it is: Escape closes this overlay only, and no shortcut acts on the page under it
   dlg.addEventListener("close", () => { if (FB.draftId && !away) { post("/api/feedback-draft-done", { id: FB.draftId }).catch(() => {}); FB.draftId = null; }

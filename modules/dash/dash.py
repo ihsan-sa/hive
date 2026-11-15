@@ -15,7 +15,7 @@ The web page is web/ next to this file (ui.html, the previous page, is at /old);
   hive-dash serve [--port P] web UI on http://127.0.0.1:P/ (loopback only; default 8077)
   hive-dash --json          the snapshot as JSON
 """
-import base64, email.utils, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time
+import base64, email.utils, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time, zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -1606,7 +1606,7 @@ class Steps:
     from where the last look stopped, so after the first pass a look costs only what was written since. Kept in memory as short
     rows (a few tens of MB for tens of thousands of steps); filtered and paged here, so the page only ever gets one page.
     Codex logs carry no times, so they're left out. Each log's agent and thread come from its start event in ~/log.jsonl."""
-    EVERY = 5
+    EVERY, STALE = 5, 60
 
     def __init__(self):
         self.rows, self.off, self.owner, self.log_off, self.at, self.sorted = [], {}, {}, 0, 0, True
@@ -1690,7 +1690,9 @@ class Steps:
                 if not all(w in hay for w in words): continue
             total += 1
             if len(out) < limit: out.append(list(r[:7]) if full else [*r[:5], "", ""])
-        return {"rows": out, "total": total, "ready": self.ready}
+        # rows last read over a minute ago (nobody had the page open) are not ready: the page says it is reading and asks again,
+        # rather than showing hours-old steps that the fresh events then push out of its newest 300
+        return {"rows": out, "total": total, "ready": self.ready and time.time() - self.at < self.STALE}
 
 
 # ---------- web ----------
@@ -2082,6 +2084,48 @@ def tail_lines(path, offset, last=0, upto=None):
     return offset + cut, [ln.decode("utf-8", "replace") for ln in data[:cut].splitlines() if ln.strip()], offset
 
 
+def tail_json(path, offset, last=0, upto=None, gz=False, step=1 << 20):
+    """/api/board and /api/log's answer, '{"offset":..,"start":..,"items":[..]}', yielded a megabyte at a time (gzipped as it
+    goes with gz=True); joined, the same bytes tail_lines gives. The whole board is 27 MB and every page load asks for all of
+    it: built as one str, then its join, encoding and gzip, a request held ~5 copies at once, and concurrent loads left the
+    dash at its 2 GB cap swapping and the machine out of memory (2026-11-15). Streamed, a request holds about one step."""
+    z = zlib.compressobj(5, zlib.DEFLATED, 31) if gz else None
+    pack = (lambda b: z.compress(b)) if z else (lambda b: b)
+    try:
+        f = open(path, "rb")
+    except OSError:
+        yield pack(b'{"offset":%d,"start":%d,"items":[]}' % (offset, offset))
+        if z: yield z.flush()
+        return
+    with f:
+        size = f.seek(0, 2)
+        if offset > size: offset = 0
+        if last and size - offset > last:
+            f.seek(size - last - 1)
+            nl = f.read(last + 1).find(b"\n")
+            if nl >= 0: offset = size - last - 1 + nl + 1
+        end = size if upto is None else max(offset, min(upto, size))
+        cut = end   # back to the last newline: a line still being appended waits for the next poll
+        while cut > offset:
+            back = max(offset, cut - 65536); f.seek(back); blk = f.read(cut - back)
+            nl = blk.rfind(b"\n")
+            if nl >= 0: cut = back + nl + 1; break
+            cut = back
+        yield pack(b'{"offset":%d,"start":%d,"items":[' % (cut, offset))
+        f.seek(offset); pos, carry, first = offset, b"", True
+        while pos < cut:
+            buf = carry + f.read(min(step, cut - pos)); pos += len(buf) - len(carry)
+            k = buf.rfind(b"\n") + 1 if pos < cut else len(buf)
+            blk, carry = buf[:k], buf[k:]
+            try: blk.decode("utf-8")
+            except UnicodeDecodeError: blk = blk.decode("utf-8", "replace").encode()
+            lines = [ln for ln in blk.splitlines() if ln.strip()]
+            if lines:
+                yield pack((b"" if first else b",") + b",".join(lines)); first = False
+        yield pack(b"]}")
+        if z: yield z.flush()
+
+
 # ---------- who may do what ----------
 # One app, one list of capabilities, and every request is checked here on the server. The page only hides what's refused.
 # No ~/.hive/web.json: the open loopback dash this has always been, with the switches it has always had (ROUTE_OPEN).
@@ -2104,12 +2148,12 @@ FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcoun
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
 GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/work-tiers": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
-           "/api/config": "config", "/api/modules": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
+           "/api/config": "config", "/api/modules": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/side-ask": "post", "/api/door": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
-            "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
+            "/api/module": "modules", "/api/voice": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
 
@@ -2644,6 +2688,82 @@ def voice_ready():
     """True when the voice module's service has proved itself working: its self-test passed and its heartbeat is under 2 minutes old."""
     st = jload(HOME / ".hive" / "voice-status.json", {})
     return isinstance(st, dict) and st.get("ok") is True and isinstance(st.get("at"), (int, float)) and time.time() - st["at"] < 120
+
+
+# Where voice calls stand on this install, for Settings > This device (projects/everyday/VOICE.md V1). core/dist/install.sh builds them in the
+# background on a first Linux install and leaves its traces in ~/.hive: voice-skipped (why it didn't), voice-setup.pid while the build runs,
+# voice-setup.rc (its exit code) when it ends, voice-setup.log. Try again (behind the modules cap) runs the same build. It runs outside this
+# app's service (systemd-run), whose memory cap is far below what the build needs. HIVE_VOICE_CMD replaces the build in tests: no download, no unit.
+VOICE_DIR = HOME / ".hive"
+VOICE_BUILD = 'phone setup; p=$?; voice setup; v=$?; [ $p = 0 ] && exit $v; exit $p'
+VOICE_WRAP = 'exec >"$HOME/.hive/voice-setup.log" 2>&1 </dev/null\necho $$ >"$HOME/.hive/voice-setup.pid"\nsh -c {cmd}\necho $? >"$HOME/.hive/voice-setup.rc"\n'
+VOICE_NO_RETRY = ("own-account", "wsl", "not-linux", "no-service")  # their own install's choice, or a place the build can't run: said, not offered
+
+def _voice_alive(pid):
+    """The build's shell is still running (not a zombie)."""
+    try: return pid > 0 and Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except (OSError, IndexError): return False
+
+def voice_view():
+    """One of: ready, building, failed, starting, stopped, unset, skipped. With why (a reason code), log (the log's last lines) and since (epoch)."""
+    def read(name):
+        try: return (VOICE_DIR / name).read_text().strip()
+        except OSError: return None
+    log, pidf, rc, skip = VOICE_DIR / "voice-setup.log", read("voice-setup.pid"), read("voice-setup.rc"), read("voice-skipped")
+    def tail():
+        try: lines = [l.rstrip() for l in log.read_text(errors="replace").splitlines() if l.strip()]
+        except OSError: return ""
+        return "\n".join(lines[-6:])[-700:]
+    def mtime(f):
+        try: return f.stat().st_mtime
+        except OSError: return None
+    has = (HOME / "modules" / "phone").is_dir()
+    base = {"can_retry": True}
+    if phone_ready(): return {**base, "state": "ready", "memos": voice_ready(), "ffmpeg": bool(shutil.which("ffmpeg"))}
+    building = pidf is not None and rc is None and _voice_alive(int(pidf) if pidf.isdigit() else 0)
+    if building: return {**base, "state": "building", "since": mtime(VOICE_DIR / "voice-setup.pid"), "log": tail(), "can_retry": False}
+    if rc is not None:
+        if rc != "0": return {**base, "state": "failed", "rc": rc, "since": mtime(VOICE_DIR / "voice-setup.rc"), "log": tail()}
+        t = mtime(VOICE_DIR / "voice-setup.rc") or 0
+        return {**base, "state": "starting" if time.time() - t < 180 else "stopped", "since": t, "log": tail()}
+    if pidf is not None: return {**base, "state": "failed", "rc": None, "since": mtime(VOICE_DIR / "voice-setup.pid"), "log": tail()}  # the build stopped without an exit code: killed, or the machine restarted
+    if log.exists():  # a build from an install that kept no pid or exit code
+        t = mtime(log) or 0
+        return {**base, "state": "building" if time.time() - t < 900 else "failed", "rc": None, "since": t, "log": tail(), "can_retry": time.time() - t >= 900}
+    if skip and not has:
+        why = skip.split()[0]; out = {**base, "state": "skipped", "why": why, "can_retry": why not in VOICE_NO_RETRY}
+        if why == "small":
+            n = (skip.split() + ["?"] * 4)[1:4]; out.update(need_gb=n[0], free_gb=n[1], mem_gb=n[2])
+        return out
+    if has: return {**base, "state": "unset"}
+    if (HOME / ".hive-voice-added").exists(): why = "removed"
+    elif (HOME / ".hive-account").exists(): why = "own-account"
+    elif "microsoft" in (Path("/proc/version").read_text().lower() if Path("/proc/version").exists() else ""): why = "wsl"
+    else: why = "older"
+    return {**base, "state": "skipped", "why": why, "can_retry": why not in VOICE_NO_RETRY}
+
+def voice_retry():
+    """Try again / Set up voice: add the two modules if they are missing and run the build in the background. Never waits on it."""
+    v = voice_view()
+    if v["state"] == "ready": raise ValueError("voice calls already work")
+    if not v.get("can_retry"): raise ValueError("voice is still being set up" if v["state"] == "building" else "voice can't be set up on this install from here")
+    for m in ("phone", "voice"):
+        if not (HOME / "modules" / m).is_dir(): module_do("add", m)
+    VOICE_DIR.mkdir(parents=True, exist_ok=True)
+    for n in ("voice-setup.rc", "voice-setup.pid", "voice-skipped"): (VOICE_DIR / n).unlink(missing_ok=True)
+    (HOME / ".hive-voice-added").touch()
+    _PHONE[0] = 0.0
+    test = os.environ.get("HIVE_VOICE_CMD")
+    import shlex
+    script = VOICE_DIR / "voice-setup.sh"  # a file, so systemd doesn't expand the $s on its command line
+    script.write_text(VOICE_WRAP.format(cmd=shlex.quote(test or VOICE_BUILD)))
+    path = f"{HOME / '.local' / 'bin'}:{os.environ.get('PATH', '/usr/bin:/bin')}"
+    if not test and shutil.which("systemd-run"):
+        r = subprocess.run(["systemd-run", "--user", "--collect", "--quiet", f"--unit=hive-voice-setup-{int(time.time())}", f"--setenv=PATH={path}", f"--setenv=HOME={HOME}",
+                            "sh", str(script)], capture_output=True, text=True, env=child_env(), timeout=30)
+        if r.returncode == 0: return {"ok": True, "via": "systemd-run"}
+    subprocess.Popen(["sh", str(script)], env={**child_env(), "PATH": path}, cwd=str(HOME), start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return {"ok": True, "via": "test" if test else "child"}
 
 
 # Must match EDIT_NOTE in web/js/core/model.js, byte for byte: the page signs it.
@@ -3925,9 +4045,15 @@ def slack_door_connect(d, signer=None):
     bot, app, ch = (str(d.get(k) or "").strip() for k in ("bot_token", "app_token", "channel"))
     if not re.fullmatch(r"xoxb-[A-Za-z0-9-]{8,250}", bot) or not re.fullmatch(r"xapp-[A-Za-z0-9-]{8,250}", app): raise ValueError("The bot token starts xoxb- and the app token xapp-.")
     name = ch.lstrip("#").strip().lower()
-    if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,79}", name): raise ValueError("Give the channel's name, like #hive.")
+    chan_ok = bool(re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,79}", name))
+    if ch.startswith("#") and not chan_ok: raise ValueError("Give the channel's name, like #hive.")
+    if len(ch) > 80: raise ValueError("That name is too long: give your name as Slack shows it, or a #channel.")
     me = slack_call("auth.test", bot, "bot token (xoxb-)")
     slack_call("apps.connections.open", app, "app token (xapp-)")
+    if not ch.startswith("#"):   # empty, or a person's name: direct messages with the app (its Messages tab), no channel to make
+        try: return slack_door_connect_dm(bot, app, ch, signer)
+        except LookupError as e:   # a bare word that names nobody may be a channel written without its #
+            if not chan_ok: raise ValueError(str(e))
     found, cursor = None, ""
     for _ in range(50):
         r = slack_call("conversations.list", bot, "bot token (xoxb-)", types="public_channel,private_channel", exclude_archived="true", limit="200", **({"cursor": cursor} if cursor else {}))
@@ -3940,6 +4066,38 @@ def slack_door_connect(d, signer=None):
     if len(mem) > SLACK_MAX_PEOPLE: raise ValueError(f"#{name} has {len(mem)} members. Everyone in the channel can direct this Hive with this computer's full rights, so pick one with {SLACK_MAX_PEOPLE} or fewer.")
     people = [u for u in mem if u != "USLACKBOT" and not (lambda x: x.get("is_bot") or x.get("deleted"))(slack_call("users.info", bot, "bot token (xoxb-)", user=u).get("user") or {})]
     if not people: raise ValueError(f"Nobody but the app is in #{name}. Join it yourself, then Connect again.")
+    started = slack_door_save(bot, app, people, [found["id"]], "#" + name)
+    dash_note(f"The Slack door was connected to #{name} by {signer or 'this machine'}, in the web app; {len(people)} owner(s). Tokens are in `~/.config/hive/slack-door-*-token`, mode 600. Don't print them.", "slack-door")
+    return {"said": f"Connected to #{name}. {len(people)} {'person' if len(people) == 1 else 'people'} there can use it{started}.", **slack_door_view()}
+
+
+def slack_door_connect_dm(bot, app, who, signer=None):
+    """Connect with no channel: the owner talks to the app in its Messages tab. Who that is comes from the workspace's people: the only
+    person in it, or the one whose Slack name matches what was typed. Nobody else is let in (the door answers listed people only)."""
+    people, cursor = [], ""
+    for _ in range(50):
+        r = slack_call("users.list", bot, "bot token (xoxb-)", limit="200", **({"cursor": cursor} if cursor else {}))
+        people += [u for u in r.get("members") or [] if u.get("id") != "USLACKBOT" and not u.get("is_bot") and not u.get("deleted") and not u.get("is_app_user")]
+        cursor = (r.get("response_metadata") or {}).get("next_cursor") or ""
+        if not cursor: break
+    key = lambda x: re.sub(r"\s+", " ", str(x or "")).strip().lstrip("@").lower()
+    if who.strip():
+        want = key(who)
+        hit = [u for u in people if want in {key(u.get("name")), key(u.get("real_name")), key((u.get("profile") or {}).get("display_name")), key((u.get("profile") or {}).get("real_name"))} - {""}]
+        if not hit: raise LookupError(f"Nobody in this Slack is called {who.strip()}. Give your name as Slack shows it, or a #channel.")
+        if len(hit) > 1: raise ValueError(f"{len(hit)} people in this Slack are called {who.strip()}. Use a #channel with just you in it instead.")
+    else:
+        if not people: raise ValueError("The app can't see anyone in this Slack. Check that the app has the users:read scope (step 1's link adds it).")
+        if len(people) > 1: raise ValueError(f"This Slack has {len(people)} people. Type your name as Slack shows it in the box, or a #channel, so only you can use the Hive.")
+        hit = people
+    owner = hit[0]["id"]
+    started = slack_door_save(bot, app, [owner], [], "direct messages")
+    dash_note(f"The Slack door was connected to direct messages with the app by {signer or 'this machine'}, in the web app; one owner. Tokens are in `~/.config/hive/slack-door-*-token`, mode 600. Don't print them.", "slack-door")
+    return {"said": f"Connected to your direct messages with the app. Open the app in Slack and write to it there{started}.", **slack_door_view()}
+
+
+def slack_door_save(bot, app, owners, channels, label):
+    """Install and start the door with these tokens, owners and channels (an empty list: direct messages only). Returns a note for a test Hive."""
     door = HOME / "modules" / "slack-door" / "door.py"
     if not door.is_file(): module_do("add", "slack-door")
     r = subprocess.run([sys.executable, "-I", str(door), "install"], capture_output=True, text=True, env=child_env(), cwd=str(HOME), timeout=60)
@@ -3950,7 +4108,7 @@ def slack_door_connect(d, signer=None):
     door_refusal_file().unlink(missing_ok=True)   # Slack just took both tokens: an old refusal no longer holds
     c = jload(sd / "slack-door.json", {}) or {}
     c = c if isinstance(c, dict) else {}
-    c.update(owners=people, members=[u for u in c.get("members") or [] if u not in people], channels=[found["id"]], channel_name="#" + name)
+    c.update(owners=owners, members=[u for u in c.get("members") or [] if u not in owners], channels=channels, channel_name=label)
     write_text_private(sd / "slack-door.json", json.dumps(c, indent=1) + "\n")
     # Start it only when systemd's units are this Hive's: a test Hive under another HOME must not restart the machine's real door.
     if HOME.resolve() == Path(pwd.getpwuid(os.getuid()).pw_dir).resolve():
@@ -3959,8 +4117,7 @@ def slack_door_connect(d, signer=None):
             if q.returncode: raise ValueError(f"saved, but the door didn't start: {short(q.stderr, 200)}")
         started = ""
     else: started = " (a test Hive: the door's service wasn't started)"
-    dash_note(f"The Slack door was connected to #{name} by {signer or 'this machine'}, in the web app; {len(people)} owner(s). Tokens are in `~/.config/hive/slack-door-*-token`, mode 600. Don't print them.", "slack-door")
-    return {"said": f"Connected to #{name}. {len(people)} {'person' if len(people) == 1 else 'people'} there can use it{started}.", **slack_door_view()}
+    return started
 
 
 def slack_door_disconnect(signer=None):
@@ -4945,11 +5102,15 @@ def serve(port):
                 self.send_response(304); self.send_header("ETag", tag); self.send_header("Last-Modified", lm); self.send_header("Cache-Control", cache); self.end_headers(); return
             self.send(f.read_bytes(), ct, cache=cache, etag=tag, modified=lm)   # private: only the browser keeps a copy, never the tunnel's edge
 
-        def send(self, body, ct, status=200, cookie=None, framed_here=False, cache="no-store", etag=None, modified=None):
-            gz = len(body) > 4096 and "gzip" in self.headers.get("Accept-Encoding", "")
-            if gz: body = gzip.compress(body, 5)
+        def send(self, body, ct, status=200, cookie=None, framed_here=False, cache="no-store", etag=None, modified=None, gzipped=False):
+            """body may be an iterator of chunks (tail_json, already gzipped when gzipped=True): written as they come, with no
+            Content-Length; this server speaks HTTP/1.0, so the closed connection ends the answer."""
+            stream = not isinstance(body, (bytes, bytearray))
+            gz = gzipped or (not stream and len(body) > 4096 and "gzip" in self.headers.get("Accept-Encoding", ""))
+            if gz and not stream: body = gzip.compress(body, 5)
             self.send_response(status)
-            self.send_header("Content-Type", ct); self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Type", ct)
+            if not stream: self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", cache)
             if etag: self.send_header("ETag", etag)
             if modified: self.send_header("Last-Modified", modified)
@@ -4960,7 +5121,9 @@ def serve(port):
             self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'".replace("frame-src 'self'", "frame-src 'self'" + frames) + framing)
             if self.route != "open": self.send_header("Referrer-Policy", "no-referrer")
             if gz: self.send_header("Content-Encoding", "gzip")
-            self.end_headers(); self.wfile.write(body)
+            self.end_headers()
+            for b in (body if stream else (body,)):
+                if b: self.wfile.write(b)
 
         def send_file(self, path, view=False):
             """A post's file. Agents and Slack write these, so nothing here runs in the page's origin:
@@ -5095,7 +5258,7 @@ def serve(port):
             path = u.path[len("/api/phone"):] + (f"?{u.query}" if u.query else "")
             try: st, b = phone_http("POST" if n is not None else "GET", path, body if n is not None else None, self.headers.get("Content-Type") or "application/octet-stream")
             except OSError: return self.deny(503, "the phone service isn't running (systemctl --user start hive-phone)")
-            return self.send(b, "application/json", status=st)
+            return self.send(b, "audio/wav" if b[:4] == b"RIFF" else "application/json", status=st)   # /say answers with wav (Read aloud)
 
         def app_info(self):
             web = web_cfg() or {}
@@ -5167,7 +5330,7 @@ def serve(port):
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
             elif u.path == "/api/brand/logo":
                 self.send_logo()
-            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/slack-door", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/accounts", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history", "/api/mail") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/voice", "/api/signin", "/api/plans", "/api/secrets", "/api/slack-door", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/accounts", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history", "/api/mail") and self.route == "open":
                 self.send_error(404)
             elif u.path == "/api/kb/home":
                 self.send(json.dumps(kb_home()).encode(), J)
@@ -5215,6 +5378,8 @@ def serve(port):
                 self.send(json.dumps(update_view()).encode(), J)
             elif u.path == "/api/modules":
                 self.send(json.dumps(modules_view()).encode(), J)
+            elif u.path == "/api/voice":
+                self.send(json.dumps(voice_view()).encode(), J)
             elif u.path == "/api/signin":
                 self.send(json.dumps(SIGNIN.view()).encode(), J)
             elif u.path == "/api/settings":
@@ -5235,8 +5400,8 @@ def serve(port):
                 self.send(json.dumps(jobs_for(jobs_c.get(), self.route != "outside" or self.mode == "full"), default=str).encode(), J)
             elif u.path in ("/api/board", "/api/log"):
                 num = lambda k: int(v) if (v := (q.get(k) or [""])[0]).isdigit() else None
-                off, lines, start = tail_lines(BOARD if u.path == "/api/board" else LOG, off, num("last") or 0, num("upto"))
-                self.send(('{"offset":%d,"start":%d,"items":[%s]}' % (off, start, ",".join(lines))).encode(), J)
+                gz = "gzip" in self.headers.get("Accept-Encoding", "")
+                self.send(tail_json(BOARD if u.path == "/api/board" else LOG, off, num("last") or 0, num("upto"), gz), J, gzipped=gz)
             elif u.path == "/api/approvals":
                 self.send(json.dumps(approvals_list()).encode(), J)
             elif u.path == "/api/feedback-drafts":
@@ -5344,7 +5509,7 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
+            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/starter", "/api/module", "/api/voice", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True, edit_of=d.get("edit_of"), retry_of=d.get("retry_of"), files_from=d.get("files_from"))
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
@@ -5371,6 +5536,9 @@ def serve(port):
                     elif u.path == "/api/brand": res = set_brand(d)
                     elif u.path == "/api/starter": starter_do(d.get("do")); SETUP.t = 0; res = {"ok": True}
                     elif u.path == "/api/module": res = {"said": module_do(d.get("do"), d.get("name"))}
+                    elif u.path == "/api/voice":
+                        if d.get("do") != "retry": raise ValueError("do: retry")
+                        res = voice_retry()
                     elif u.path == "/api/slack-door": res = slack_door_disconnect(self.signer) if d.get("do") == "disconnect" else slack_door_connect(d, self.signer)
                     elif u.path == "/api/signin": res = SIGNIN.start(d.get("name"), bool(d.get("console")))
                     elif u.path == "/api/signin/code": SIGNIN.code(d.get("code")); res = {"ok": True}

@@ -1,6 +1,7 @@
 // The one-tap call page (/call/): a home-screen app for the phone. The call itself is ui/phone.js (its card has Mute and Hang up);
 // this adds the Call button, the recent-calls list from the phone service, and a chat pane on the board thread "phone-chat".
 import { S, jget, post, loadApp } from "./core/store.js";
+import { LOC } from "./core/format.js";
 import { startCall, end, phoneInit, phoneReady, inCall } from "./ui/phone.js";
 
 const $ = id => document.getElementById(id);
@@ -34,7 +35,7 @@ async function recent(force) {
     const r = await jget("/api/phone/history"), sig = JSON.stringify(r.calls.map(c => c.id)) + [...open];
     if (sig === lastRecent && !force) return; lastRecent = sig;
     $("cp-recent").innerHTML = r.calls.length ? r.calls.map(c => {
-      const when = new Date(c.started * 1000).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }), mins = Math.max(1, Math.round((c.ended - c.started) / 60));
+      const when = new Date(c.started * 1000).toLocaleString(LOC, { weekday: "short", hour: "numeric", minute: "2-digit" }), mins = Math.max(1, Math.round((c.ended - c.started) / 60));
       const tr = open.has(c.id) ? `<div class="cp-tr">${esc(c.lines.map(([s, t]) => `${s === "person" ? "You" : s}: ${t}`).join("\n"))}</div>` : "";
       return `<div><div class="cp-row"><div data-open="${esc(c.id)}"><b>${esc(c.agent)}</b><small>${esc(when)} · ${mins} min · transcript</small></div><button data-call="${esc(c.agent)}">Call</button></div>${tr}</div>`;
     }).join("") : `<small>No calls yet.</small>`;
@@ -48,7 +49,7 @@ async function chat() {
     if (sig === lastChat) return; const box = $("cp-chat"), stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 30; lastChat = sig;
     box.innerHTML = r.posts.length ? r.posts.map(p => {
       const files = (p.files || []).map(f => { const m = /files\/([0-9a-f]{12})\//.exec(f.path || ""); return m ? `<div><a href="/files/${m[1]}/${encodeURIComponent(f.name)}" target="_blank">${esc(f.name)}</a></div>` : ""; }).join("");
-      return `<div class="cp-post${p.from === "person" ? " me" : ""}"><small>${esc(p.from === "person" ? "You" : p.from)} · ${esc(new Date(p.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))}</small>${link(p.text)}${files}</div>`;
+      return `<div class="cp-post${p.from === "person" ? " me" : ""}"><small>${esc(p.from === "person" ? "You" : p.from)} · ${esc(new Date(p.at).toLocaleTimeString(LOC, { hour: "numeric", minute: "2-digit" }))}</small>${link(p.text)}${files}</div>`;
     }).join("") : `<small>Agents can send you links and files here: hive post --thread phone-chat</small>`;
     if (stick) window.scrollTo(0, document.body.scrollHeight);
   } catch {}

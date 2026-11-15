@@ -1,7 +1,7 @@
 // Design: Claude Design from the dashboard. A real Claude Code session on a login, which the person starts and types into; the server keeps it (class DesignRoom).
 import { h, selecting } from "../core/dom.js";
 import { S, can, jget, post } from "../core/store.js";
-import { ago } from "../core/format.js";
+import { ago, LOC } from "../core/format.js";
 import { confirm } from "../ui/dialog.js";
 import { table } from "../ui/table.js";
 import { pageHeader, section, button, input, empty, waiting, meter, note } from "../ui/kit.js";
@@ -34,7 +34,7 @@ const designCell = a => a.used_here ? state("good", "Yes, working here")
   : a.design === "admin" ? state("warn", "Yes, if your admin allows it", "An admin of this organization can turn it off. Not tried on this account yet.")
   : state("warn", "Can't tell", "The plan isn't known. This account may be signed out.");
 
-const designDate = d => new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+const designDate = d => new Date(d + "T12:00:00").toLocaleDateString(LOC, { month: "long", day: "numeric", year: "numeric" });
 
 function accountsPart(v, ctx) {
   const session = v.running ? v.session_login : null, cc = v.can_connect !== false;

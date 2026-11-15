@@ -31,6 +31,7 @@ const P = {
   stop: ["M9 7h6a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2z"],   // filled by .btn-stop
   "chevron-down": ["M6 9l6 6 6-6"],
   "chevron-up": ["M6 15l6-6 6 6"],
+  sidebar: ["M5 4h14a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 19 20H5a1.5 1.5 0 0 1-1.5-1.5v-13A1.5 1.5 0 0 1 5 4z", "M9.5 4v16"],
   "chevron-left": ["M15 6l-6 6 6 6"],
   "chevron-right": ["M9 6l6 6-6 6"],
   filter: ["M4 6h16", "M7 12h10", "M10 18h4"],

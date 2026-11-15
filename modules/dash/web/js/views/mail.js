@@ -28,7 +28,8 @@ export default chatPlace("mail", {
         onClick: () => { M.open = on ? null : m.id; ctx.update(); },
         whole: on,
         text: on ? h("div", null,
-          h("pre", { class: "mail-body" }, m.text + (m.truncated ? "\n[cut]" : "")),
+          h("pre", { class: "mail-body" }, m.text),
+          m.truncated ? h("p", { class: "meta" }, "The rest of this message was cut off.") : null,
           (m.attachments || []).length ? h("p", { class: "meta" }, "Attachments (names only): ", m.attachments.map(a => a.name + (a.size != null ? ` (${kb(a.size)})` : "")).join(", ")) : null) : (m.text || "").slice(0, 160),
       };
     });

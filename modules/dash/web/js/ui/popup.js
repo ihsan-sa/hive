@@ -2,7 +2,7 @@
 // (the menu is often drawn later in the page, so Tab alone would skip it), and Escape from the menu or its button sends focus back to the button
 // once the menu's own code has closed it. Pointer clicks are left alone. The menu is the [role=menu] or [role=listbox] nearest the button.
 const MENU = "[role=menu],[role=listbox]";
-const ITEM = "[role=menuitem],[role=option],a[href],button:not([disabled]),input:not([disabled]),select";
+const ITEM = "[role=menuitem]:not([disabled],[aria-disabled=true]),[role=option]:not([aria-disabled=true]),a[href],button:not([disabled]),input:not([disabled]),select";   // a disabled first item (Move earlier on the first card) would leave focus outside
 let opener = null, wasIn = false;   // wasIn: focus was last on the button or in a menu (kept by focusin, so it holds after the menu is removed)
 const menuOf = b => { for (let n = b.parentElement, i = 0; n && i < 4; n = n.parentElement, i++) { const m = n.querySelector(MENU); if (m && !m.hidden && m.getClientRects().length) return m; } return null; };
 const later = (fn, tries = 6) => requestAnimationFrame(() => { if (!fn() && tries > 1) later(fn, tries - 1); });

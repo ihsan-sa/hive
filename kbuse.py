@@ -259,6 +259,17 @@ def bulk(rs):
             if i - j + 1 >= BULK: out.update(x[1] for x in xs[j:i + 1])
     return out
 
+def repeats(rs):
+    """{id of a repeat: id of the search it repeats}: the same agent, the same query word for word, within 10 minutes of the last one, among searches that could be logged
+    (shown something, not filtered, not a tester's). A retry or a probe loop (2026-11-13: one agent re-ran the same four queries three times in 15 min); the first counts, and a read of any repeat credits it."""
+    last, out = {}, {}
+    for r in sorted((r for r in rs if "q" in r and r.get("id") and r.get("agent") and r.get("shown") and not r.get("filtered") and not r.get("tester")), key=lambda r: r["at"]):
+        t = calendar.timegm(time.strptime(r["at"][:19], "%Y-%m-%dT%H:%M:%S")); k = (r["agent"], r["q"])
+        if k in last and t - last[k][0] <= BULK_S: out[r["id"]] = last[k][1]
+        else: last[k] = (t, r["id"]); continue
+        last[k] = (t, last[k][1])
+    return out
+
 def numbers(t0, t1, rs=None):
     """The window's use of the knowledge base; t0, t1 as YYYY-MM-DDTHH:MM:SS, UTC. Records from before the logging have no id and stay out of every share."""
     rs = records() if rs is None else rs
@@ -270,7 +281,9 @@ def numbers(t0, t1, rs=None):
             path = r.get("read") or re.sub(r":\d+$", "", r.get("open", ""))
             for i in [r["from"], *r.get("also", [])]: followed.setdefault(i, set()).add(path)
     finds = [r for r in win if "q" in r]
-    burst = bulk(rs)
+    rep = repeats(rs); burst = bulk(rs) | set(rep)
+    for i, first in rep.items():
+        if i in followed: followed.setdefault(first, set()).update(followed[i])
     logged = [r for r in finds if r.get("id") and r.get("shown") and not r.get("filtered") and not r.get("tester") and r["id"] not in burst]
     recalls = [r for r in win if r.get("recall") and r.get("id") and r.get("agent") and not r.get("neighbours")]
     pointers = [(r["id"], p) for r in recalls for p, _ in r.get("shown", [])]

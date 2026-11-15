@@ -1,0 +1,14 @@
+{
+  "name": "Call the Hive",
+  "short_name": "Call",
+  "description": "One tap to call the Hive.",
+  "start_url": "/call/",
+  "scope": "/call/",
+  "display": "standalone",
+  "background_color": "#1b1917",
+  "theme_color": "#1b1917",
+  "icons": [
+    {"src": "/icons/call-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "/icons/call-512.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}

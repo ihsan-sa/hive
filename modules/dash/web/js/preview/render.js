@@ -70,11 +70,15 @@ const DOOR_MAX = 250000;
 function doorOf(it) { const d = it.kb && S.app.doors; return (d && Object.prototype.hasOwnProperty.call(d, it.kb) && d[it.kb]) || null; }
 // The frame's address carries a random key (#door=...) that only the page loaded there can read; a call without it is ignored,
 // so a document the frame later navigates to gets no door. The listener ends with the preview (signal).
-function relay(fr, door, key, signal) {
+// onSize (a Python box inline in a chat, ui/pybox.js): the page may also say { hive: 1, type: "size", key, h }; only a finite number is read,
+// clamped, and it sets the frame's height and nothing else (warden 111413221f61).
+export function relay(fr, door, key, signal, onSize) {
   let t = 0, n = 0;
   const on = async e => {
     const d = e.data;
-    if (e.source !== fr.contentWindow || e.origin !== "null" || !d || typeof d !== "object" || d.hive !== 1 || d.type !== "door") return;
+    if (e.source !== fr.contentWindow || e.origin !== "null" || !d || typeof d !== "object" || d.hive !== 1) return;
+    if (d.type === "size") { if (onSize && d.key === key && typeof d.h === "number" && Number.isFinite(d.h)) onSize(Math.round(Math.min(640, Math.max(32, d.h)))); return; }
+    if (d.type !== "door") return;
     if (typeof d.id !== "number" || typeof d.path !== "string" || d.path.length > 60 || d.key !== key) return;
     const now = performance.now(); if (now - t > 1000) { t = now; n = 0; } if (++n > 8) return;
     const back = m => { try { e.source.postMessage(Object.assign({ hive: 1, type: "door", id: d.id }, m), "*"); } catch { /* the frame went away */ } };
@@ -86,11 +90,17 @@ function relay(fr, door, key, signal) {
   };
   addEventListener("message", on, signal ? { signal } : undefined);
 }
+// A Python box pinned from the chat (ui/pybox.js) is the course page with its box id and the dash's theme in the fragment, as inline.
+const DARK = matchMedia("(prefers-color-scheme: dark)");
+const theme = () => { const t = document.documentElement.dataset.theme; return t === "light" || t === "dark" ? t : DARK.matches ? "dark" : "light"; };
 function page(it, signal) {
   const door = doorOf(it), key = door ? Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("") : "";
-  const src = () => viewHref(it) + (door ? "#door=" + key : "");
-  const fr = h("iframe", { class: "pv-frame", src: src(), title: it.name, sandbox: "allow-scripts allow-modals allow-pointer-lock", referrerpolicy: "no-referrer", loading: "lazy" });
+  const box = door && /^[0-9a-f]{16}$/.test(it.box || "") ? it.box : "";
+  const src = () => viewHref(it) + (door ? "#door=" + key : "") + (box ? "&box=" + box + "&theme=" + theme() : "");
+  // a pinned box gets the frame name pybox-pin (not in the address) so it fills the panel instead of sizing to its content
+  const fr = h("iframe", { class: "pv-frame", name: box ? "pybox-pin" : null, src: src(), title: it.label || it.name, sandbox: "allow-scripts allow-modals allow-pointer-lock", referrerpolicy: "no-referrer", loading: "lazy" });
   if (door) relay(fr, door, key, signal);
+  if (box && signal) { const paint = () => { fr.src = src(); }; addEventListener("themechange", paint, { signal }); DARK.addEventListener("change", paint, { signal }); }   // only the fragment changes: the box keeps its state
   return h("div", { class: "pv-page" },
     h("div", { class: "pv-note meta" }, h("span", null, door ? "Interactive page, sandboxed: it can't reach this dashboard, only its own practice service." : "Interactive page, sandboxed: it can't reach this dashboard or the network."),
       h("button", { type: "button", class: "pv-zb", onclick: () => { fr.src = "about:blank"; setTimeout(() => { fr.src = src(); }); } }, "Reload")),
@@ -191,7 +201,7 @@ export async function render(it, { source, signal } = {}) {
     return { node: wrap(await office[k](buf, it.name)) };
   }
   if (k === "svg" && !source) return { node: image(it, viewHref(it)), source: true };
-  if (k === "html" && !source) return { node: page(it, signal), source: true };
+  if (k === "html" && !source) return { node: page(it, signal), source: !it.box };
 
   const tx = await textOf(it, signal);
   if (tx.bin || (k === "other" && /[\0-\x08\x0e-\x1a]/.test(tx.t.slice(0, 4096)))) return noPreview(it, "There's no preview for this kind of file.");

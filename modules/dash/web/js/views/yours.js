@@ -110,8 +110,10 @@ function page(ctx) {
     h("button", { type: "button", class: "seg-b", "aria-pressed": String(!waits), onclick: () => go("yours") }, "Everything"),
     h("button", { type: "button", class: "seg-b", "aria-pressed": String(waits), onclick: () => go("yours", "waits") }, "Waits on you", n ? h("i", { class: "n" }, String(n)) : null));
   const ORDER = [["new", "Newest first"], ["focus", "By focus"]];
+  // aria-haspopup lets popup.js put keyboard focus in the menu and back on the button after Escape (drive_app_keys part 3).
+  const menuButton = (b, open) => { b.setAttribute("aria-haspopup", "menu"); b.setAttribute("aria-expanded", String(!!open)); return b; };
   const order = waits ? h("span", { class: "yr-order", style: "position:relative" },
-    button("Order: newest first, or by focus", () => { Y.menu = !Y.menu; ctx.update(); }, { kind: "icon", size: "s", icon: "filter", cls: "yr-sort" }),
+    menuButton(button("Order: newest first, or by focus", () => { Y.menu = !Y.menu; ctx.update(); }, { kind: "icon", size: "s", icon: "filter", cls: "yr-sort" }), Y.menu),
     Y.menu ? [scrim(() => { Y.menu = false; ctx.update(); }), h("div", { class: "menu", role: "menu", "data-side": "bottom-end", "data-key": "yr-menu" }, ORDER.map(([k, l]) =>
       h("button", { type: "button", class: "menu-i", role: "menuitemradio", "aria-checked": String(Y.by === k), onclick: () => { Y.by = k; Y.menu = false; ctx.update(); } }, l)))] : null) : null;
   const search = h("div", { class: "yr-tools", "data-key": "tools" }, h("div", { class: "yr-search", "data-key": "search" },
@@ -134,6 +136,6 @@ export default chatPlace("yours", {
   tab: true,
   enter(ctx) { Y.limit = 40; Y.menu = false; Y.at = performance.now(); clearTimeout(Y.timer); if (!S.history) Y.timer = setTimeout(ctx.update, HOLD_MS + 20); ctx.update(); },
   render(ctx) { return page(ctx); },
-  escape: () => closeQuick(),
+  escape: ctx => { if (closeQuick()) return; if (Y.menu) { Y.menu = false; ctx && ctx.update(); } },   // Escape closes the Order menu too (WCAG 2.1.2)
   leave() { clearTimeout(Y.timer); closeQuick(); },
 });

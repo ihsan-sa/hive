@@ -55,7 +55,7 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklab,var(--warn) 3
   .tab{flex:1;justify-content:center;padding:0 8px}
 }
 /* inside a conversation on a phone the app bar folds away; the thread head carries back + title */
-@container (max-width:640px){body:has(.cm[data-in]:not([data-home])) .top{display:none}}
+@container (max-width:640px){body:has(.cm[data-in]:not([data-home])) .top:not(:has(.lost)){display:none}}
 
 /* ===== More: an icon button with a menu — replaces the "---- More ----" block ===== */
 /* ---- menus (R7): one family, from the design. The old per-menu classes (more-m, rc-menu, pv-menu, cm-menu) stay on as hooks and keep only where they sit. The phone sheet is step 3 ---- */
@@ -194,7 +194,7 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklab,var(--warn) 3
 .sw>span{overflow:hidden;text-overflow:ellipsis}
 
 /* ---- refs: agent and thread ---- */
-.ref{display:inline-flex;align-items:baseline;gap:6px;min-width:0;color:var(--ink);text-decoration:none;font-weight:600}
+.ref{display:inline-flex;align-items:baseline;gap:6px;min-width:0;max-width:100%;color:var(--ink);text-decoration:none;font-weight:600}
 .ref:hover{color:var(--ink)}
 .ref:hover .ref-n{text-decoration:underline;text-underline-offset:2px;text-decoration-color:var(--ink-3)}
 .ref-n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -548,8 +548,8 @@ table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 .lg-day{padding:var(--s3) 0 var(--s1);font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-2)}
 .lg-r{display:flex;gap:var(--s3);align-items:baseline;padding:3px 0;border-top:1px solid var(--line)}
 .lg-t{flex:none;width:4.6rem;white-space:nowrap;color:var(--ink-2);font-size:var(--fs-meta);font-variant-numeric:tabular-nums}
-.lg-b{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.lg-b .ref{margin-inline:2px}
+.lg-b{flex:0 1 auto;min-width:0;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.lg-b .ref{margin-inline:2px;max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}
 .lg-b .ref:first-child{margin-left:0}
 .lg-q{color:var(--ink-2)}
 .lg-r[data-kind=trouble] .lg-b{color:var(--bad-ink)}
@@ -719,8 +719,8 @@ button.lr-in{width:calc(100% + 16px);border:0;background:none;text-align:left;fo
 .md{white-space:pre-wrap;overflow-wrap:anywhere}
 .md p{margin:.45em 0}
 .md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}
-.md h1,.md h2,.md h3,.md h4,.md h5,.md h6{margin:.7em 0 .25em;line-height:var(--lh-tight);font-weight:var(--w-bold)}
-.md h1{font-size:var(--fs-lead)}.md h2{font-size:var(--fs-title)}.md h3,.md h4{font-size:var(--fs-body)}.md h5,.md h6{font-size:var(--fs-body);color:var(--ink-2)}
+.md .md-h1,.md .md-h2,.md .md-h3,.md .md-h4,.md .md-h5,.md .md-h6{margin:.7em 0 .25em;line-height:var(--lh-tight);font-weight:var(--w-bold)}
+.md .md-h1{font-size:var(--fs-lead)}.md .md-h2{font-size:var(--fs-title)}.md .md-h3,.md .md-h4{font-size:var(--fs-body)}.md .md-h5,.md .md-h6{font-size:var(--fs-body);color:var(--ink-2)}
 .md ul,.md ol{margin:.35em 0;padding-left:1.5em}
 .md li{margin:.12em 0}.md li>p{margin:0}.md li>p+*{margin-top:.25em}
 .md code{font-family:var(--mono);font-size:.9em;padding:.05em .3em;border-radius:var(--r-s);background:var(--sunken)}
@@ -738,9 +738,9 @@ button.lr-in{width:calc(100% + 16px);border:0;background:none;text-align:left;fo
 .md[data-rich]{line-height:1.55;max-width:none}
 .md[data-rich]>p,.md[data-rich] section>p,.md[data-rich] li,.md[data-rich] blockquote{max-width:var(--measure);text-wrap:pretty}
 .md[data-rich] p{margin:.65em 0}
-.md[data-rich] h1{font-size:var(--fs-lead);margin:.2em 0 .35em}
-.md[data-rich] h2,.md[data-rich] summary{font-size:var(--fs-title);font-weight:var(--w-bold);line-height:var(--lh-tight)}
-.md[data-rich] h3{font-size:var(--fs-body);margin:1em 0 .25em}
+.md[data-rich] .md-h1{font-size:var(--fs-lead);margin:.2em 0 .35em}
+.md[data-rich] .md-h2,.md[data-rich] summary{font-size:var(--fs-title);font-weight:var(--w-bold);line-height:var(--lh-tight)}
+.md[data-rich] .md-h3{font-size:var(--fs-body);margin:1em 0 .25em}
 .md[data-rich] ul,.md[data-rich] ol{margin:.5em 0}
 .md[data-rich] li{margin:.22em 0}
 .md[data-rich] li>ul,.md[data-rich] li>ol{margin:.15em 0}
@@ -902,6 +902,7 @@ rc-lazy[data-mode=inline]{display:inline}
 .rc-art .rc-paramsn{padding:var(--s2) var(--s3);border-top:1px solid var(--line)}
 .rc-art .rc-paramsn[hidden]{display:none}
 .rc-artgo{height:30px;padding:0 var(--s4);border:0;border-radius:var(--r-s);background:var(--ink);color:var(--on-ink);font-size:var(--fs-small);font-weight:var(--w-med);cursor:pointer}
+.rc-artgo[data-kind=quiet]{background:none;box-shadow:inset 0 0 0 1px var(--line-2);color:var(--ink)}
 @media (pointer:coarse){.rc-artgo{height:44px}}
 .rc-fig[data-full] .rc-own,.rc-fig[data-full] .rc-art{flex:1;min-height:0;display:flex;flex-direction:column}
 .rc-fig[data-full] .rc-art iframe{flex:1;height:auto!important}
@@ -1017,6 +1018,16 @@ rc-lazy[data-mode=inline]{display:inline}
 .msg-rc>span b{font-weight:var(--w-bold)}
 .msg-files{display:flex;flex-wrap:wrap;gap:var(--s2);margin-top:6px}
 .msg[data-who=me]>.msg-files{justify-content:flex-end}
+/* a Python box inline in a chat message (js/ui/pybox.js): the course frame, sized by the page to its content */
+.msg-boxes{display:flex;flex-direction:column;gap:var(--s2);margin-top:6px}
+.pybox{width:100%;max-width:820px;border:1px solid var(--line);border-radius:var(--r-m);overflow:hidden;background:var(--surface)}
+.pybox-f{display:block;width:100%;height:380px;border:0;background:var(--surface)}
+.pybox{position:relative}
+.pybox-bar{position:absolute;top:6px;right:6px;z-index:1}
+.pybox-bar .btn{background:var(--surface);opacity:.85}
+.pybox-bar .btn:hover,.pybox-bar .btn:focus-visible{opacity:1}
+.pybox-fold{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px}
+.pybox-fold[hidden],.pybox-bar[hidden],.pybox-f[hidden]{display:none}
 .msg-thumb,.msg-file{border:1px solid var(--line-2);border-radius:var(--r-m);background:var(--surface);color:var(--ink);cursor:pointer;text-align:left;text-decoration:none;font-size:var(--fs-meta)}
 span.msg-thumb,span.msg-file{cursor:default}
 .msg-thumb:hover,.msg-file:hover{border-color:var(--ink-3);color:var(--ink)}
@@ -1837,7 +1848,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cm-home-l{display:none}
 @container (max-width:640px){
   .cm-tools .avs{gap:0;margin-right:4px}   /* R7b L2: the design keeps the agents in a phone head, as a small overlapped stack before Find and Files */
-  .cm-tools .avs .av{width:22px;height:22px;font-size:9px;border-radius:6px}
+  .cm-tools .avs .av{width:24px;height:24px;font-size:9px;border-radius:6px}   /* 24 px: big enough to tap (WCAG 2.5.8) */
   .cm-tools .avs .av+.av{margin-left:-6px;box-shadow:0 0 0 2px var(--bg)}
   .cm-tools .avs .av:nth-child(n+3){display:none}                  /* two faces; a tap on the stack lists them all */
   .cm{grid-template-columns:minmax(0,1fr)}                 /* one pane: the list, or the open conversation */
@@ -1944,7 +1955,7 @@ html:not([data-dev]) .av>.st[data-tone=ended]{display:none}   /* design 1110g: i
 .avs-pop-h,.avs-pop-r{animation:avs-drop .18s cubic-bezier(.2,.8,.3,1) both;animation-delay:calc(var(--i) * 22ms)}
 .avs-pop-h{padding:2px 10px;border-radius:var(--r-pill);background:var(--surface);border:1px solid var(--line);color:var(--ink-3);white-space:nowrap}
 .avs-pop-r>.ref{display:flex;align-items:center;gap:6px;height:28px;padding:0 12px 0 10px;border:1px solid var(--line);border-radius:var(--r-pill);background:var(--surface);box-shadow:var(--e1,0 1px 2px rgb(0 0 0/.08));color:var(--ink);text-decoration:none;white-space:nowrap}
-.avs-pop-r>.ref:hover,.avs-pop-r>.ref:focus-visible{background:var(--hover);border-color:var(--line-2,var(--line))}
+.avs-pop-r>.ref:hover,.avs-pop-r>.ref:focus-visible{background:var(--hover);border-color:var(--line-2)}
 .avs-pop-r .sw{margin-left:6px;color:var(--ink-3);font-size:var(--fs-meta)}
 @keyframes avs-drop{from{opacity:0;transform:translateY(calc(var(--i) * -8px - 6px)) scale(.9)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion: reduce){.avs-pop-h,.avs-pop-r{animation:none}}
@@ -2385,6 +2396,8 @@ dialog.rc-rail[open]{display:flex;flex-direction:column;gap:var(--s2)}
 .ph-call,.ph-rings{position:fixed;right:16px;bottom:16px;z-index:60;width:min(360px,calc(100vw - 32px));background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:var(--e2);padding:14px 16px;font-size:var(--fs-body)}
 .ph-rings{bottom:auto;top:calc(var(--bar-h,56px) + 12px);padding:0;border:0;background:none;box-shadow:none;display:grid;gap:8px}
 .ph-call[hidden],.ph-rings[hidden]{display:none}
+/* an open menu or popover sits in the top bar's or bottom nav's stacking context (z 30/50), below the card's 60: step the card and rings under it while one is open (UI test round 18) */
+body:has(.menu,.pv-menu,.cm-menu,.lr-menu) :is(.ph-call,.ph-rings){z-index:1}
 .ph-top,.ph-ring{display:flex;align-items:center;gap:12px}
 .ph-ring{background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--e2);padding:12px 14px}
 .ph-ring>div{flex:1;min-width:0}
@@ -2584,9 +2597,9 @@ text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--in
 .pv-save .pv-menu{left:auto;right:0;top:calc(100% + 4px);min-width:11em}
 .pv-save:not([open]) .pv-menu{display:none}
 .pv-md>.md{max-width:72ch;font-size:var(--fs-read);line-height:1.65}
-.pv-md>.md h1{font-size:1.7em;margin:.2em 0 .5em;letter-spacing:-.01em}
-.pv-md>.md h2{font-size:1.3em;margin:1.5em 0 .4em;padding-bottom:.2em;border-bottom:1px solid var(--line)}
-.pv-md>.md h3{font-size:1.08em;margin:1.2em 0 .3em}
+.pv-md>.md .md-h1{font-size:1.7em;margin:.2em 0 .5em;letter-spacing:-.01em}
+.pv-md>.md .md-h2{font-size:1.3em;margin:1.5em 0 .4em;padding-bottom:.2em;border-bottom:1px solid var(--line)}
+.pv-md>.md .md-h3{font-size:1.08em;margin:1.2em 0 .3em}
 .pv-md>.md p,.pv-md>.md li{margin:.6em 0}
 .pv-md>.md table{display:block;overflow-x:auto;margin:1em 0;font-size:.92em}
 .pv-md>.md th,.pv-md>.md td{border:0;border-bottom:1px solid var(--line);padding:6px 12px}
@@ -2594,7 +2607,7 @@ text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--in
 .pv-md>.md tr:nth-child(even) td{background:color-mix(in srgb,var(--sunken) 45%,transparent)}
 /* library-style reading details: quotes with a bar, quiet rules, roomy lists, soft inline code, links that read as links */
 .pv-md>.md>:first-child{margin-top:0}
-.pv-md>.md h4{font-size:1em;margin:1.1em 0 .25em;color:var(--ink-2)}
+.pv-md>.md .md-h4{font-size:1em;margin:1.1em 0 .25em;color:var(--ink-2)}
 .pv-md>.md :is(ul,ol){margin:.6em 0;padding-left:1.6em}
 .pv-md>.md li>:is(ul,ol){margin:.2em 0}
 .pv-md>.md li::marker{color:var(--ink-3)}
@@ -2618,9 +2631,9 @@ text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--in
 .brought-w{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Chat messages read like a document (the person, 5 Nov: the library's markdown looks better): the reading look the preview panel uses (.pv-md), at chat size. */
 .msg-b>.md[data-rich]{line-height:1.65}
-.msg-b>.md[data-rich] h1{font-size:1.45em;margin:.2em 0 .5em;letter-spacing:-.01em}
-.msg-b>.md[data-rich] h2{font-size:1.2em;margin:1.3em 0 .4em;padding-bottom:.2em;border-bottom:1px solid var(--line)}
-.msg-b>.md[data-rich] h3{font-size:1.05em;margin:1.1em 0 .3em}
+.msg-b>.md[data-rich] .md-h1{font-size:1.45em;margin:.2em 0 .5em;letter-spacing:-.01em}
+.msg-b>.md[data-rich] .md-h2{font-size:1.2em;margin:1.3em 0 .4em;padding-bottom:.2em;border-bottom:1px solid var(--line)}
+.msg-b>.md[data-rich] .md-h3{font-size:1.05em;margin:1.1em 0 .3em}
 .msg-b>.md[data-rich] :is(h1,h2,h3):first-child{margin-top:0}
 .msg-b>.md[data-rich] .md-tw table{margin:.4em 0}
 .msg-b>.md[data-rich] .md-tw :is(th,td){border:0;border-bottom:1px solid var(--line);padding:6px 12px}
@@ -2822,7 +2835,7 @@ button.fl-rn:hover{text-decoration:underline}
 .fl-box .fl-yout{fill:var(--ink-2)}
 .fl-box .fl-next{font-size:var(--fs-meta);fill:var(--ink)}
 .fl-say{cursor:pointer}
-.fl-say rect{fill:var(--surface);stroke:var(--line-2,var(--line))}
+.fl-say rect{fill:var(--surface);stroke:var(--line-2)}
 .fl-say:hover rect,.fl-say:focus-visible rect{stroke:var(--ink-3)}
 .fl-say:focus-visible{outline:none}
 .fl-box .fl-say text{fill:var(--ink-2);font-size:var(--fs-micro)}
@@ -3210,6 +3223,7 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .fc:hover .fc-tools .btn,.fc:focus-within .fc-tools .btn{opacity:1}
 @media (hover:none){.fc-tools .btn{opacity:1}}
 .fc-ev{grid-template-columns:48px minmax(0,1fr)}
+.fc-ev .t{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}   /* the time is the only copy on the row: with wider text spacing it wraps, never cuts to "32m a…" (WCAG 1.4.12, drive_app_spacing) */
 .fc-ev-x .pill.ref,.fc-ev-x .ref{background:none;padding:0;border:0;height:auto;font-family:var(--mono);font-weight:var(--w-bold);color:var(--ink)}
 .fc-sub{display:none}                            /* "Now", "Lately", "Conversations" labels: the ink step and the rule say it */
 .fc-rows{border-top:1px solid var(--line);padding-top:6px}
@@ -3440,8 +3454,20 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .tier-more>summary{cursor:pointer;color:var(--ink-2);font-size:var(--fs-meta);width:max-content}
 .tier-more[open]>summary{margin-bottom:var(--s2)}
 .tier-log{margin:0;padding:0;list-style:none;display:grid;gap:var(--s1);font-size:var(--fs-meta)}
-.tier-chip a{color:inherit;text-decoration:none}
+.tier-chip a{color:inherit;text-decoration:none;display:inline-flex;align-items:center;min-height:24px;margin-block:-4px}   /* a 24 px tap target (WCAG 2.5.8) in the same chip height */
 .tier-chip a:hover{text-decoration:underline}
 .tier-chip-s{font-weight:var(--w-reg,400)}
 .tier-intro { margin: 0 0 12px; }
 @media (max-width:640px){.tier-it .lr-in{flex-direction:column;align-items:stretch;gap:var(--s1)}.tier-it .frow-end{width:100%}.tier-it select.input{width:100%}}
+.voice-log{max-height:9rem;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--fs-meta);color:var(--ink-2);background:var(--sunken);border-radius:var(--r-s,6px);padding:var(--s2,8px);margin:var(--s2,8px) 0 0}
+
+/* Hide the conversation list (views/comms.js toggleSide): the conversation takes the width. Desktop only; the phone has its own list page. */
+.cm-sidebtn{flex:none}
+@media (min-width:701px){
+  .cm[data-side="hidden"]{grid-template-columns:minmax(0,1fr)}
+  .cm[data-side="hidden"] .cm-side{display:none}
+}
+@media (max-width:700px){.cm-sidebtn{display:none}}
+
+/* a long unbroken word in a page head (an agent id, a title) wraps inside the page instead of widening it */
+.ph-title,.ph-lead,.ph-meta{overflow-wrap:anywhere;min-width:0;max-width:100%}

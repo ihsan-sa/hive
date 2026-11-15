@@ -2,7 +2,7 @@
 // drive_rich checks it, and fails if the page is served without that CSP (use test/serve_csp.py).
 // An html fence as a live page the person opens: a sandboxed frame with an opaque origin and no network. It can't see this page,
 // its cookie or the board. All it can do is send the two small messages below, and those only ever become numbers and short text.
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { figure } from "./figure.js";
 import { sigOf } from "./math.js";
 
@@ -20,6 +20,27 @@ const isDark = () => {
 };
 const docOf = (code, dark) => `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${CSP}">`
   + `<style>html{color-scheme:${dark ? "dark" : "light"}}body{margin:12px;font:14px/1.5 system-ui,sans-serif}</style>${HELPER}${code}`;
+
+// A page in a tab of its own: a small wrapper page from this tab (a blob: address) holding the same sandboxed frame, so the page
+// still runs with no origin and no network. It isn't told the dash's theme or asked for its height: it follows the system, like any page.
+const TABS = new Map();
+const esc = s => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+export function tabDoc(code, title) {
+  const inner = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${CSP}">${code}`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title || inner.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "Interactive page")}</title>`
+    + `<style>html,body{margin:0;height:100%;overflow:hidden}iframe{display:block;width:100%;height:100%;border:0}</style></head>`
+    + `<body><iframe sandbox="allow-scripts" referrerpolicy="no-referrer" allow="" srcdoc="${esc(inner)}"></iframe></body></html>`;
+}
+function openTab(code, title) {
+  let url = TABS.get(code);
+  if (!url) {
+    url = URL.createObjectURL(new Blob([tabDoc(code, title)], { type: "text/html" }));
+    TABS.set(code, url);
+    if (TABS.size > 20) { const [k, u] = TABS.entries().next().value; TABS.delete(k); URL.revokeObjectURL(u); }
+  }
+  const a = h("a", { href: url, target: "_blank", rel: "noopener noreferrer", hidden: true });
+  document.body.append(a); a.click(); a.remove();
+}
 
 /** Numbers and short strings under short names; anything else is dropped. */
 export function cleanValues(v) {
@@ -110,6 +131,7 @@ function drawArtifact(code, title, st, box, ver) {
   const size = kb => (kb < 1 ? "under 1" : Math.round(kb)) + " kB";
   const card = h("div", { class: "rc-artc" },
     h("button", { type: "button", class: "rc-artgo", onclick: () => open() }, "Open"),
+    h("button", { type: "button", class: "rc-artgo", "data-kind": "quiet", "data-arttab": "", onclick: () => openTab(code, title) }, "Open in new tab"),
     h("span", null, `Interactive page, ${size(code.length / 1024)}. It runs sealed off from this dashboard and your login, with its network blocked.`));
   const close = h("button", { type: "button", class: "rc-t", "data-artclose": "", onclick: () => shut() }, "Close page");
 
@@ -143,17 +165,18 @@ function drawArtifact(code, title, st, box, ver) {
     seen.observe(wrap);
   }
   function open() {
-    st.open = true; card.hidden = true; close.hidden = false;
+    st.open = true; card.hidden = true; close.hidden = false; tab.hidden = false;
     const f = fsB(); if (f) f.hidden = false;
     build(); watch();
   }
   function shut() {
     st.open = false; st.px = 0; destroy(); seen?.disconnect();
-    card.hidden = false; close.hidden = true;
+    card.hidden = false; close.hidden = true; tab.hidden = true;
     const f = fsB(); if (f) { if (box.hasAttribute("data-full")) f.click(); f.hidden = true; }
   }
-  close.hidden = true;
-  box.querySelector(".rc-tools")?.prepend(close);
+  const tab = h("button", { type: "button", class: "rc-t", "data-arttab": "", title: "Open this page in a new tab", onclick: () => openTab(code, title) }, "New tab");
+  close.hidden = true; tab.hidden = true;
+  box.querySelector(".rc-tools")?.prepend(tab, close);
   wrap.append(card, vals);
   if (ver) {
     const bar = h("div", { class: "rc-artv", hidden: true });
@@ -176,9 +199,9 @@ function drawArtifact(code, title, st, box, ver) {
       }
       cur = pick == null || pick >= n ? n - 1 : pick;
       if (l[cur] !== code) swap(l[cur]);
-      nav.hidden = false; nav.setAttribute("aria-label", `Version ${cur + 1} of ${n} of this page`);
+      nav.hidden = false; nav.setAttribute("aria-label", tr(`Version ${cur + 1} of ${n} of this page`));
       older.disabled = cur === 0; newer.disabled = cur === n - 1; count.textContent = `${cur + 1} / ${n}`;
-      say.textContent = cur === n - 1 ? "Newest version of this page." : `An older version (${cur + 1} of ${n}), as it was then.`;
+      say.textContent = tr(cur === n - 1 ? "Newest version of this page." : `An older version (${cur + 1} of ${n}), as it was then.`);
     }
     function swap(c) {   // show another version in this same frame; Ask and View source follow it
       code = ver.shown = c; card.lastChild.textContent = `Interactive page, ${size(code.length / 1024)}. It runs sealed off from this dashboard and your login, with its network blocked.`;

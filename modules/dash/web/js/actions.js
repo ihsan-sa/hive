@@ -1,5 +1,5 @@
 // Things that change the hive. Each is a confirm window; controls appear only where can() allows.
-import { h } from "./core/dom.js";
+import { h, tr } from "./core/dom.js";
 import { S, can, built, post, poll, pollUsage } from "./core/store.js";
 import { simpleOn } from "./core/simple.js";
 import { short } from "./core/format.js";
@@ -127,7 +127,7 @@ export function askTier(th) {
     title: "Tier for " + threadTitle(th), ok: "Save",
     body: [h("p", { class: "meta" }, `Now: ${tier(was).label}${setNow ? ", set here on the dashboard" : ", from the list in kb/priorities.md"}. Your choice is saved there, in its own section, and beats the list for this thread.`),
       ...TIERS.map(t => opt(t.key, t.key === "other" ? "Not in the order" : t.label, desc[t.key], () => { pick = t.key; warn.textContent = was === "held" && pick !== "held" ? "This takes it off hold. The keeper may start work on it again." : ""; })),
-      setNow ? opt("", "Back to the list", "remove your dashboard setting", () => { pick = null; warn.textContent = "This goes back to what the list in kb/priorities.md says."; }) : null,
+      setNow ? opt("", "Back to the list", "remove your dashboard setting", () => { pick = null; warn.textContent = tr("This goes back to what the list in kb/priorities.md says."); }) : null,
       warn],
     onOk: async () => { if (pick === was && setNow) return; await post("/api/tier", { thread: th, tier: pick }); await poll(); },
   });

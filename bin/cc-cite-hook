@@ -2,7 +2,7 @@
 """PreToolUse hook on Bash: a board post that answers from the web must cite the pages it used.
 
 If the agent read outside web pages (WebFetch, WebSearch, or curl/wget to a non-local http(s) URL) since its last post,
-and the post it is about to send has no footnote (`[^`) and no http link, the post is refused once with a note saying
+and the post it is about to send has no footnote (`[^`; a plain link is not enough), the post is refused once with a note saying
 how to cite. The same post sent again goes through, so this can never block an agent for good (a post that rightly
 has nothing to cite just repeats). Anything it can't read lets the call through."""
 import hashlib, json, os, re, sys
@@ -33,7 +33,7 @@ def main():
         if d.get("tool_name") != "Bash": return 0
         cmd = (d.get("tool_input") or {}).get("command") or ""
         if not POST.search(cmd) or "--done-quiet" in cmd: return 0
-        if "[^" in cmd or re.search(r"https?://", cmd): return 0
+        if "[^" in cmd: return 0  # a footnote; a bare or inline link alone draws no Sources list
         if not web_reads(d["transcript_path"]): return 0
     except Exception:
         return 0
