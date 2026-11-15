@@ -9,7 +9,7 @@
 //   its text and offers Retry, Edit and Discard. The board is append-only, so nothing here suggests unsending a posted one.
 import { uploadFile } from "../core/upload.js";
 import { h, tr } from "../core/dom.js";
-import { S, can, jget, post, poll, loadApp } from "../core/store.js";
+import { S, can, jget, post, poll, loadApp, fullEnded, kept, keep as keepTyped, KEPT_NOTE } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { foci, focusById, focusOf, focusName, listed, threadLine } from "../core/foci.js";
 import { go } from "../core/router.js";
@@ -27,7 +27,7 @@ import { delivery } from "./message.js";   // circular, used only at render time
 // sent: thread → the interrupt just sent there ({who, it, at, seen}), for the live line's stopping → reading → normal.
 const CP = { update: null, th: undefined, focus: false, ac: null, menu: false, drag: false, sig: "", hist: null, mode: {}, sent: {} };
 // The secret box (the person, 11041306e4d2): a name and a hidden value saved straight to /api/secret. The value never enters the draft, the board or localStorage.
-const SB = { open: false, rows: [{ name: "", value: "" }], say: "", tone: null, busy: false };
+const SB = { open: false, rows: [{ name: "", value: "" }], say: "", tone: null, busy: false, lost: false };
 const refresh = () => CP.update && CP.update();
 const IMGNAME = /\.(png|jpe?g|gif|webp)$/i;
 const size = n => (n >= 1048576 ? fix((n / 1048576), 1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
@@ -703,7 +703,7 @@ async function openSecrets(th) {
   if (want.length && SB.open && !SB.rows.some(r => r.name || r.value)) { SB.rows = want.map(name => ({ name, value: "", asked: true })); refresh(); }
   queueMicrotask(() => document.querySelector(SB.rows[0].asked ? ".cp-sval" : ".cp-sname")?.focus());
 }
-const closeSecrets = () => { SB.open = false; SB.rows = [{ name: "", value: "" }]; refresh(); };
+const closeSecrets = () => { keepTyped("composer", null); SB.open = false; SB.lost = false; SB.rows = [{ name: "", value: "" }]; refresh(); };
 const dropSecrets = () => { SB.say = ""; closeSecrets(); };   // the person closed it: an old complaint goes with it, unlike the "Saved" line a save leaves
 async function saveSecret() {
   // What is missing is said beside the box it belongs to (WCAG 3.3.1, drive_app_errors), not only in the line above the rows.
@@ -716,7 +716,11 @@ async function saveSecret() {
   SB.busy = true; SB.say = ""; refresh();
   const done = [];
   try { for (const r of todo) { await post("/api/secret", { name: r.name.trim(), value: r.value }); done.push(r.name.trim()); r.value = ""; } }
-  catch (e) { SB.say = (done.length ? `Saved ${done.join(", ")}. ` : "") + e.message; SB.tone = "bad"; }
+  catch (e) {
+    SB.say = (done.length ? `Saved ${done.join(", ")}. ` : "") + e.message; SB.tone = "bad";
+    // Full mode ended with the box open: it stays open with the names typed and the way back above them (WCAG 3.3.1, 2.2.5); the values go.
+    if (fullEnded(e)) { SB.lost = true; for (const r of SB.rows) r.value = ""; keepTyped("composer", SB.rows.filter(r => !done.includes(r.name.trim())).map(r => r.name)); }
+  }
   SB.rows = SB.rows.filter(r => !done.includes(r.name.trim()));
   if (!SB.say) {
     SB.say = `Saved ${done.join(", ")}. ${done.length > 1 ? "They" : "It"} can't be shown again; tell the agent ${done.length > 1 ? "their names" : "its name"}.`; SB.tone = "good";
@@ -850,10 +854,11 @@ function effortPick(d, r, th) {
 
 /** The lock's click: open the secret box, or say why it can't open in limited mode. */
 function secretClick(th) {
+  if (SB.open && SB.lost) { dropSecrets(); return; }
   if (!can("secrets")) { SB.open = false; SB.tone = "bad"; SB.say = "Saving a secret needs full mode, which ends after 30 minutes without using the app. Press \"Limited · sign in for full\" at the top, then press the lock again."; refresh(); return; }
   if (SB.open) dropSecrets(); else openSecrets(th);
 }
-const secretsOn = () => can("secrets") || !!(S.app && S.app.secrets_on && S.app.mode === "expired");
+const secretsOn = () => can("secrets") || SB.lost || !!(S.app && S.app.secrets_on && S.app.mode === "expired");
 
 /** +: files, a voice memo, a secret, a call; at home, Name it…; on a phone, Text size (Aa is hidden there). */
 function addPop(th, d) {
@@ -967,6 +972,9 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
   const armed = !!(th && CP.mode[th] === "interrupt");
   const lw = busy || (th && CP.sent[th] && CP.sent[th].who), phase = th && lw ? livePhase(th, lw) : null;
   const ph = armed ? (S.app && S.app.app ? "Tell it what to do instead…" : `Tell ${busy} what to do instead…`) : !th ? "Say what you want done" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who && !(S.app && S.app.app) ? `Reply to ${r.who}…` : "Reply…";   // the app look names no code in the box (E10)
+  // The names typed in the secret box before full mode ended come back, box open, after the sign-in (store.js keep); values never are kept.
+  const back = kept("composer");
+  if (Array.isArray(back) && back.length && !SB.back && !SB.open && can("secrets")) { SB.back = true; SB.open = true; SB.rows = back.map(name => ({ name: String(name), value: "" })); SB.say = KEPT_NOTE + " Type each value again, then Save."; SB.tone = null; }
   const sendWord = armed ? "Interrupt" : place === "thread" ? "Send" : "Start";
   return h("div", { class: "cp", "data-key": k, "data-place": place, "data-mode": armed ? "interrupt" : null, "data-fmt": fmtOpen() ? "" : null, ...(th ? {} : dropZone(null)) },  // a thread's composer is inside its conversation's zone
     d.err ? h("p", { class: "cp-err", role: "alert", "data-key": "err" }, d.err) : null,
@@ -976,12 +984,12 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
     // An agent waiting on the person's answer isn't working: the question above already says so, and there is nothing to interrupt.
     phase || (busy && !(top && top.querySelector(`[data-key="run:${busy}"]`)) && !waitsHere(th, busy)) ? liveLine(th, lw, phase, armed) : null,
     h("div", { class: "cp-box", "data-key": "box" },
-      armed || d.reply || d.quote || d.files.length || (SB.open && can("secrets")) || SB.say || (!th && d.naming) ? h("div", { class: "cp-top", "data-key": "top" },
+      armed || d.reply || d.quote || d.files.length || (SB.open && (can("secrets") || SB.lost)) || SB.say || (!th && d.naming) ? h("div", { class: "cp-top", "data-key": "top" },
         armed ? intNote(th, busy) : null,
         d.reply ? replyChip(d) : null,
         d.quote ? quoteChip(d) : null,
         d.files.length ? filesRow(th, d) : null,
-        SB.open && can("secrets") ? secretRow() : null,
+        SB.open && (can("secrets") || SB.lost) ? secretRow() : null,
         SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,
         !th && d.naming ? h("div", { class: "cp-name-row", "data-key": "name" }, input({ class: "input cp-name", placeholder: "A short name, like fix-contact-form", "aria-label": "Name for this job", value: d.name, oninput: (e, n) => { d.name = n.value; keep(d); } })) : null) : null,
       CP.ac ? h("div", { class: "cp-ac", role: "listbox", "aria-label": "Names", "data-key": "ac", ...(CP.ac.down ? { "data-down": "", style: `max-height:${CP.ac.room}px;overflow-y:auto` } : {}) }, acList(th)) : null,

@@ -1,7 +1,7 @@
 // Settings: Everyday, Accounts, Power and sandbox, Data sharing, Secrets, This device, Set once, Modules, Access from outside (R7). Shown only where can() allows each part.
 import { status as st } from "../core/status.js";
 import { h } from "../core/dom.js";
-import { S, can, built, jget, needsAccount, post, loadApp, said } from "../core/store.js";
+import { S, can, built, jget, needsAccount, post, loadApp, said, fullEnded, kept, keep, KEPT_NOTE } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
 import { deviceFingerprint } from "../core/sign.js";
 import { notifyBlocked, notifyOn, notifySupported, notifyTest, pushOn, pushSupported, setNotify, setPush } from "../core/notify.js";
@@ -18,14 +18,16 @@ import { accountUse } from "../core/model.js";
 import { href } from "../core/router.js";
 import { copyButton } from "../ui/refs.js";
 import { MODELS, POWER, accountsData, codexPart, forget, keysPart, loadPage, modelPart, pageData, powerPart, reading, rootNote, sandboxPart, sharePart } from "../ui/setup.js";
-import { forgetSecrets, secretParts } from "./secrets.js";
+import { forgetSecrets, secretParts, secretsLost } from "./secrets.js";
 
 // Everything the person is typing lives here, so a poll never loses it.
-const F = { bad: {}, badIn: {}, cfg: null, ed: null, mods: null, say: {}, newLogin: "", url: "", busy: {}, access: null, saved: null, flash: {} };
+const F = { bad: {}, badIn: {}, cfg: null, ed: null, mods: null, say: {}, newLogin: "", url: "", busy: {}, access: null, saved: null, flash: {}, was: {}, lost: false, kept: {} };
 // A switch that saved says so beside it for 1.5 s.
 const flash = (k, update) => { F.flash[k] = Date.now(); setTimeout(() => { if (Date.now() - (F.flash[k] || 0) >= 1400) { delete F.flash[k]; update(); } }, 1500); };
 const savedMark = k => F.flash[k] ? h("span", { class: "blk-saved field-ok", role: "status" }, "✓ Saved") : null;
 const say = (k, text, tone) => { F.say[k] = text ? { text, tone } : null; };
+// Beside a box that came back with what was typed before the sign-in: it saves when the box is left, as any change does.
+const keptNote = k => F.kept[k] && !F.bad[k] ? h("p", { class: "field-h kept-note", role: "status", "data-key": "kept-" + k }, KEPT_NOTE + " Click in the box, then leave it, to save.") : null;
 const msg = k => F.say[k] ? h("p", { class: "fmsg", "data-tone": F.say[k].tone || null, role: "status" }, F.say[k].text) : null;
 const CAPTEXT = { read: "Read everything", files: "Read files: notes, modules, scripts, projects", post: "Post as you, which starts agents", stop: "Kill agents", tier: "Change work tiers: pause, move, stop points", limits: "Pause logins and change stop lines", logins: "Sign in and add logins", config: "Change settings", modules: "Add and remove modules", plans: "Edit project plans", secrets: "Store secrets" };
 
@@ -39,8 +41,11 @@ async function loadCfg(ctx) {
     if (!F.cfgRead) { ctx.update(); return; }
     F.say.hive = { text: `Couldn't refresh the settings (${e.message}). These are from the last read.`, tone: "bad", held: true };
   }
+  const fresh = !F.ed;
   F.ed ||= { max: F.cfg.max_sessions ?? "", kpe: F.cfg.keeper_every_s || 10800, au: F.cfg.auto_update !== false, bud: F.cfg.max_budget_usd ?? "", day: F.cfg.max_daily_usd ?? "", style: F.cfg.answer_style || "" };
   F.saved ||= { max: F.ed.max, bud: F.ed.bud, day: F.ed.day, style: F.ed.style };
+  // A number typed when full mode ended comes back after the sign-in, in its box and marked not saved (store.js keep).
+  if (fresh && can("config")) for (const k of ["max", "bud", "day"]) { const v = kept("set." + k); if (v != null && String(v) !== String(F.saved[k])) { F.ed[k] = v; F.kept[k] = true; } else if (v != null && String(v) === String(F.saved[k])) keep("set." + k, null); }
   ctx.update();
 }
 let upTimer = null;
@@ -299,40 +304,45 @@ function brandBlocks(ctx) {
 }
 
 function hiveSection(ctx) {
-  if (!can("config")) return null;
+  // Full mode can end while a number is being typed (dash.py FULL_IDLE_S): the section stays, with what was typed and the way back beside it (WCAG 3.3.1).
+  if (!can("config") && !(F.lost && F.ed)) return null;
   if (!F.ed) return section({ title: "Everyday", note: "what you change in a normal week; changes save as you make them", level: 1 }, F.cfgErr ? [empty(`Couldn't read the settings: ${F.cfgErr}`, { kind: "error" }), button("Try again", () => { F.cfgErr = null; ctx.update(); return loadCfg(ctx); }, { size: "s" })] : empty("Reading…", { kind: "loading" }));
   const E = F.ed, up = S.app.setup && S.app.setup.starter, brand = brandBlocks(ctx);
   // Each control saves on its own and sends only its own field; a refusal puts the old value back.
-  const save = async (fields, undo, mark) => {
-    try { await post("/api/config", fields); if (mark) { say("hive", ""); flash(mark, ctx.update); } else say("hive", "Saved. The hive uses it within seconds.", "good"); }
-    catch (e) { undo(); say("hive", e.message, "bad"); }
+  // key: the number box it came from. If full mode ended, the box keeps what was typed and says so beside itself; the next save tries again.
+  const save = async (fields, undo, mark, key) => {
+    try { await post("/api/config", fields); F.lost = false; if (key) { keep("set." + key, null); F.kept[key] = false; } if (mark) { say("hive", ""); flash(mark, ctx.update); } else say("hive", "Saved. The hive uses it within seconds.", "good"); }
+    catch (e) {
+      if (key && fullEnded(e)) { F.lost = true; F.saved[key] = F.was[key]; F.bad[key] = e.message; keep("set." + key, String(F.ed[key])); }
+      else { undo(); say("hive", e.message, "bad"); }
+    }
     ctx.update();
   };
   const toggle = (label, on, onChange) => [savedMark(label), h("input", { type: "checkbox", role: "switch", class: "switch", "aria-label": label, checked: on, onchange: (e, n) => onChange(n.checked) })];
   const saveMax = () => {
     const was = F.saved.max, v = F.badIn.max ? "?" : String(E.max).trim();   // a number box holding letters reads as empty: that's not "no limit"
-    if (v === String(was)) { if (F.bad.max) { F.bad.max = ""; ctx.update(); } return; }
+    if (v === String(was)) { if (F.kept.max) { F.kept.max = false; keep("set.max", null); } if (F.bad.max) { F.bad.max = ""; ctx.update(); } return; }
     // A bad number stays in the box, marked, with the reason beside it (WCAG 3.3.1); nothing is saved until it's fixed or emptied.
     if (v !== "" && !(Number.isInteger(+v) && +v >= 1 && +v <= 200)) { F.bad.max = "Agents at once is a whole number from 1 to 200, or empty for no limit."; ctx.update(); return; }
     F.bad.max = "";
-    F.saved.max = v;
-    save({ max_sessions: v === "" ? null : +v }, () => { E.max = F.saved.max = was; }, "Agents at once");
+    F.saved.max = v; F.was.max = was;
+    save({ max_sessions: v === "" ? null : +v }, () => { E.max = F.saved.max = was; }, "Agents at once", "max");
   };
   const saveBud = () => {
     const was = F.saved.bud, v = F.badIn.bud ? "?" : String(E.bud).trim();   // a number box holding letters reads as empty: that's not "no limit"
-    if (v === String(was)) { if (F.bad.bud) { F.bad.bud = ""; ctx.update(); } return; }
+    if (v === String(was)) { if (F.kept.bud) { F.kept.bud = false; keep("set.bud", null); } if (F.bad.bud) { F.bad.bud = ""; ctx.update(); } return; }
     if (v !== "" && !(+v > 0 && +v < 10000)) { F.bad.bud = "The most one run may spend is a number of dollars above 0 and under 10,000, or empty for no cap."; ctx.update(); return; }
     F.bad.bud = "";
-    F.saved.bud = v;
-    save({ max_budget_usd: v === "" ? null : +v }, () => { E.bud = F.saved.bud = was; }, "Budget per run");
+    F.saved.bud = v; F.was.bud = was;
+    save({ max_budget_usd: v === "" ? null : +v }, () => { E.bud = F.saved.bud = was; }, "Budget per run", "bud");
   };
   const saveDay = () => {
     const was = F.saved.day, v = F.badIn.day ? "?" : String(E.day).trim();   // a number box holding letters reads as empty: that's not "no limit"
-    if (v === String(was)) { if (F.bad.day) { F.bad.day = ""; ctx.update(); } return; }
+    if (v === String(was)) { if (F.kept.day) { F.kept.day = false; keep("set.day", null); } if (F.bad.day) { F.bad.day = ""; ctx.update(); } return; }
     if (v !== "" && !(+v > 0 && +v < 100000)) { F.bad.day = "The daily cap is a number of dollars above 0 and under 100,000, or empty for no cap."; ctx.update(); return; }
     F.bad.day = "";
-    F.saved.day = v;
-    save({ max_daily_usd: v === "" ? null : +v }, () => { E.day = F.saved.day = was; }, "Daily cap");
+    F.saved.day = v; F.was.day = was;
+    save({ max_daily_usd: v === "" ? null : +v }, () => { E.day = F.saved.day = was; }, "Daily cap", "day");
   };
   // E33: how the person wants answers, given to every new chat (the starter adds ~/answer-style.md to each agent's instructions).
   const saveStyle = () => {
@@ -368,7 +378,7 @@ function hiveSection(ctx) {
         actions: button("Download", null, { size: "s", href: "/api/export", icon: "download", title: "Download my chats" }) }) : null,
       block({ title: "Agents at once", sub: "Empty means no limit. Saves when you leave the box.",
         actions: [savedMark("Agents at once"), input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", value: E.max, ...invalid("err-max", F.bad.max), oninput: (e, n) => { E.max = n.value; F.badIn.max = n.validity.badInput; }, onchange: saveMax, onfocusout: saveMax })] },
-        fieldErr("err-max", F.bad.max)),
+        fieldErr("err-max", F.bad.max), keptNote("max")),
       // Always on: picking up work that stopped is the Hive's promise, not a switch (the person, 2026-11-08, post 110818074c18). Only the pace is chosen.
       block({ title: "Keep work moving", sub: `${paceSay(E.kpe)}, pick up work that stopped and start work nobody asked for, and sooner once nothing has run for half an hour. It uses your limits.`,
         actions: [h("select", { class: "input", value: E.kpe, "aria-label": "How often to keep work moving", title: "How often to keep work moving",
@@ -384,10 +394,10 @@ function hiveSection(ctx) {
         actions: toggle("Update by itself", E.au, v => { E.au = v; save({ auto_update: v }, () => { E.au = !v; }, "Update by itself"); }) }),
       block({ title: "Budget per run", sub: E.bud === "" ? "Empty means no cap. A cap stops a run that reaches it (counted at API prices) and says so in its thread. Applies from each run's next start." : `Each run stops at $${E.bud}, counted at API prices, and says so in its thread. Applies from each run's next start. Empty removes the cap.`,
         actions: [savedMark("Budget per run"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Budget per run in dollars", value: E.bud, ...invalid("err-bud", F.bad.bud), oninput: (e, n) => { E.bud = n.value; F.badIn.bud = n.validity.badInput; }, onchange: saveBud, onfocusout: saveBud })] },
-        fieldErr("err-bud", F.bad.bud)),
+        fieldErr("err-bud", F.bad.bud), keptNote("bud")),
       block({ title: "Daily cap", sub: spent + (E.day === "" ? "Empty means no cap. A cap holds new agents from starting once a day's spend reaches it; running ones finish." : `No new agents start once a day's spend reaches $${E.day}; running ones finish. Empty removes the cap.`),
         actions: [savedMark("Daily cap"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Daily cap in dollars", value: E.day, ...invalid("err-day", F.bad.day), oninput: (e, n) => { E.day = n.value; F.badIn.day = n.validity.badInput; }, onchange: saveDay, onfocusout: saveDay })] },
-        fieldErr("err-day", F.bad.day))),
+        fieldErr("err-day", F.bad.day), keptNote("day"))),
     msg("brand"), msg("hive"));
   return [everyday, setOnce];
 }
@@ -453,7 +463,7 @@ function setupSections(ctx) {
     section({ title: "Power and sandbox", level: 1, note: "who decides what agents may do, and what holds them to it; changes save as you make them" }, pg ? [sandboxBroken(pg), powerPart(ctx.update), h("h3", { class: "set-sub", "data-key": "sandbox" }, "Sandbox"), sandboxPart(ctx.update)] : reading()),
     section({ title: "Data sharing", level: 1, note: "what's sent, and whether it is; changes save as you make them" }, pg ? [sharePart(ctx.update, true)] : reading())];
 }
-const secretsSection = ctx => can("secrets") ? section({ title: "Secrets", level: 1, note: "send a token to the Hive; it's never shown back" }, h("div", { class: "stack secrets" }, secretParts(ctx))) : null;
+const secretsSection = ctx => can("secrets") || secretsLost() ? section({ title: "Secrets", level: 1, note: "send a token to the Hive; it's never shown back" }, h("div", { class: "stack secrets" }, secretParts(ctx))) : null;
 
 function modulesSection(ctx) {
   if (!can("modules")) return null;
@@ -657,7 +667,7 @@ function navDots(ctx) {
 
 export default {
   id: "settings", label: "Settings", about: "accounts, modules, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
+  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.lost = false; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
   },
   back(ctx) { loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update); },   // what enter reads, without enter's clearing: what the person is typing stays
   leave() { F.goTo = null; clearInterval(upTimer); upTimer = null; clearTimeout(voiceTimer); voiceTimer = null; forget(); forgetSecrets(); },
