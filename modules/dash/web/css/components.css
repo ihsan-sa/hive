@@ -1301,7 +1301,9 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 .cp-srow{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .cp-shead{display:flex;gap:6px;align-items:center}
 .cp-sask{margin:0 2px;flex:1;min-width:0}
+.cp-srow .cp-scell{display:flex;flex-direction:column;gap:2px;flex:1 1 9em;min-width:0}
 .cp-srow .input{height:var(--ctl-s);font-size:var(--fs-small);flex:1 1 9em;min-width:0}
+.cp-scell .input{flex:none;width:100%}
 .cp-ssay{padding:6px 10px 0;margin:0}
 .cp-ssay[data-tone=bad]{color:var(--bad-ink)}
 @container (max-width:640px){.cp-hint{display:none}.cp-bar{justify-content:flex-start}.cp-send{margin-left:auto}.cp-t{font-size:16px}}
