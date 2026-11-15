@@ -193,6 +193,20 @@ def waits(threads, running, t, cap=7200):
         if (until := wait_holds(lines[-1], base, running, cap)): out[th] = until
     return out
 
+WAIT_PERSON = re.compile(r"^waiting:.*\b(?:person|person's)\b", re.I)
+def person_waiter(p, running=()):
+    """The `person` event of moving-p2.md section 3: a person post with no @name that follows an agent's newest `Waiting: ... person ...` line in its thread names that agent,
+    so the wait on the person ends when they write, whether or not they remembered the name. None for a stop, a post that names someone, one in a system thread, an agent
+    still running, or a thread whose newest agent line is anything else (the wait is over, or it was never on them)."""
+    th = p.get("thread") or p.get("id")
+    if p.get("from") != "person" or not th or th in SYSTEM_THREADS or (p.get("to") or []) or (is_stop and is_stop(p)) or re.search(r"(?<![\w.])@\w", str(p.get("text", ""))): return None
+    mine = [q for q in thread_posts(th) if AGENT.match(str(q.get("from", ""))) and (epoch(q.get("at")) or 0) <= (epoch(p.get("at")) or 0)]
+    if not mine: return None
+    last = mine[-1]; name = str(last["from"]).lower()
+    lines = [clean(l) for l in str(last.get("text", "")).splitlines() if l.strip()]
+    if not lines or not WAIT_PERSON.match(lines[-1]) or name in running: return None
+    return name
+
 def find_next(r, busy=()):
     """The step a run ended on, from its newest own post and newest own status line in its thread: newest first, a Next line counts and a stop reason
     wins. A plain newest post does not cancel a Next in the bar; an older post of the run is not read, since the newer one overtook it. {line, post, since}, or None.

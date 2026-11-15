@@ -5267,9 +5267,9 @@ def serve(port):
             sandboxed, no sniffing, and only plain images open in the tab.
             view=True opens an .html file as a page, which is how someone sees a draft website. Its scripts run in a sandbox with
             no origin (no cookies, no reading the dash) and no network at all, so the page has to carry its own styles and pictures."""
-            m = re.fullmatch(r"/files/([0-9a-f]{12})/([A-Za-z0-9_][A-Za-z0-9_.-]*)", path)
+            m = re.fullmatch(r"/files/([0-9a-f]{12}|groups/[A-Za-z0-9_][A-Za-z0-9_-]*)/([A-Za-z0-9_][A-Za-z0-9_.-]*)", path)   # groups/<focus>/: a group's own files (E37b)
             f = HOME_FILES / m[1] / m[2] if m else None
-            if not f or f.is_symlink() or not f.is_file() or not f.resolve().is_relative_to(HOME_FILES.resolve()): return self.send_error(404)
+            if not f or f.is_symlink() or f.parent.is_symlink() or not f.is_file() or not f.resolve().is_relative_to(HOME_FILES.resolve()): return self.send_error(404)
             ct = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}.get(f.suffix.lower())
             if view and f.suffix.lower() == ".svg": ct = "image/svg+xml"   # only ?view=1, for the preview's <img>; the sandbox CSP below stops its scripts if opened in a tab
             page = view and f.suffix.lower() in (".html", ".htm")

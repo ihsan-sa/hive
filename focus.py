@@ -311,6 +311,73 @@ def focus_of(st, thread, posts=None):
         if par and par != thread: return focus_of(st, par, None)
     return None
 
+def tag_history(recs, thread):
+    """The foci a thread was tagged into, oldest first (None where it was taken out)."""
+    return [None if r.get("off") else r.get("focus") for r in recs if r.get("kind") == "tag" and r.get("thread") == thread]
+
+def picked_group(first):
+    """The group the person picked when they started a chat (a group:ID tag the dash puts on their own web post), or None."""
+    if str(first.get("from", "")).lower() != "person" or first.get("via"): return None   # the person's own web post, not a door or relay
+    return next((t.split(":", 1)[1] for t in first.get("tags") or [] if str(t).startswith("group:")), None)
+
+def group_for(st, recs, first):
+    """The group (a focus with instructions or files) the thread of post `first` is in, as its focus dict, or None: the thread's focus as
+    the board files it; only a thread never tagged falls back on its parent's focus or the group the person picked at its start, so a chat
+    taken out of a group stays out (E37b)."""
+    th = first.get("thread", first["id"])
+    fid = focus_of(st, th)
+    if not fid and not tag_history(recs, th):
+        fid = picked_group(first) or (first.get("parent") and focus_of(st, first["parent"]))   # the person's own pick wins over the parent's
+    f = next((x for x in st["foci"] if x["id"] == fid), None) if fid else None
+    return f if f and f.get("brief") else None
+
+def openers(threads, board=None):
+    """{thread: its first post} for the given threads, read from the board (only lines naming one of them are parsed). A thread whose
+    opener isn't on the board is left out."""
+    want = {t for t in threads if t}; out = {}
+    if not want: return out
+    keys = [t.encode() for t in want]
+    try:
+        with open(board or BOARD, "rb") as fh:
+            for ln in fh:
+                if not any(k in ln for k in keys): continue
+                try: p = json.loads(ln)
+                except ValueError: continue
+                if not isinstance(p, dict) or not p.get("id"): continue
+                th = p.get("thread") or p["id"]
+                if th in want and th not in out: out[th] = p
+    except OSError: pass
+    return out
+
+def opener(first, board=None):
+    """The first post of the thread of post `first` (the parent and picked-group fallbacks live there), else `first` itself."""
+    th = first.get("thread") or first.get("id")
+    if not th or th == first.get("id"): return first
+    return openers([th], board).get(th, first)
+
+def moved_after_last_run(recs, thread, starts=None):
+    """True when the thread's latest tag record (a move in or out of a focus) is newer than every agent run begun in it, so the next run
+    is the first since the move. `starts`: [(t, thread)] as run_starts gives, else read from the log."""
+    tags = [r for r in recs if r.get("kind") == "tag" and r.get("thread") == thread]
+    if not tags: return False
+    t = ts(tags[-1].get("at"))
+    starts = run_starts(t) if starts is None else starts
+    return not any(th == thread and st >= t for st, th in starts)
+
+def group_left(st, recs, first, once=False, starts=None):
+    """The group a chat was last in and is in no longer (moved out, or to another focus), as its focus dict, or None (E37b: an agent that
+    slept through the move is told the group's instructions no longer apply). Only a group that still has instructions or files counts.
+    once: only when no run has begun in the thread since the move, so the agent is told on its next start or resume, not on every one."""
+    th = first.get("thread", first["id"])
+    if once and not moved_after_last_run(recs, th, starts): return None
+    cur = group_for(st, recs, first)
+    seq = [picked_group(first)] + tag_history(recs, th)
+    for fid in reversed(seq):
+        if fid and fid != (cur or {}).get("id"):
+            f = next((x for x in st["foci"] if x["id"] == fid), None)
+            if f and f.get("brief"): return f
+    return None
+
 def run_starts(since):
     """[(t, thread)] for every agent run the starter began after `since` (the start events in ~/log.jsonl)."""
     out = []

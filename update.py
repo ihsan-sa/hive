@@ -130,7 +130,7 @@ def healthy():
     r = subprocess.run([str(CORE / "hive"), "who"], capture_output=True, text=True, timeout=60)
     if r.returncode: raise Failed("hive who: " + r.stderr.strip()[-300:])
 
-TIMERS = ("hive-update.timer", "hive-progress.timer", "hive-asks.timer", "hive-outcomes.timer")
+TIMERS = ("hive-update.timer", "hive-progress.timer", "hive-asks.timer", "hive-outcomes.timer", "hive-remind.timer")
 PROBES = (["focus", "json"], ["asks", "list"], ["waits"], ["stalled"])
 
 def selfcheck():

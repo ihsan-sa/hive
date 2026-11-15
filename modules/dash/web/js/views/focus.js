@@ -12,6 +12,7 @@ import { href, go, threadHref } from "../core/router.js";
 import { simpleOn, plainName } from "../core/simple.js";
 import { button, empty, statusWord, section, waiting } from "../ui/kit.js";
 import { agentRef } from "../ui/refs.js";
+import { openPreview, fileHref } from "../ui/preview.js";
 import { loadFoci, fociFailed, focusById, focusOf, threadsOf, needsOf, askedOf, agentsOf, stateOf, pills, plainPills, needSource, scrub, threadLine, focusName, MISC, FOCI_EVERY, activityOf, shareOf, fractionWords, pct, usd } from "../core/foci.js";
 import { waitingLater } from "../core/needs.js";
 import { archived } from "../ui/threadmeta.js";
@@ -147,6 +148,13 @@ async function saveBrief(f, ctx) {
   } catch (e) { B.busy = false; B.err = "Couldn't save: " + (e && e.message || "the server didn't answer") + "."; }
   ctx.update();
 }
+/** A group file as a link that opens it in the preview beside the page (served from the group's own folder, E37b); a new tab on a modified click. */
+function groupFile(f, files, i) {
+  const items = files.map(x => ({ id: "groups/" + f.id, name: fileName(x) }));
+  return h("a", { class: "fp-brief-l", href: fileHref(items[i]), target: "_blank", rel: "noopener",
+    onclick: e => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button) return; e.preventDefault(); openPreview(items, i); } }, items[i].name);
+}
+
 function briefSec(f, ctx) {
   if (f.misc) return null;
   const b = f.brief || { text: "", files: [] }, mine = can("config");
@@ -157,7 +165,7 @@ function briefSec(f, ctx) {
     return h("section", { class: "fp-sec fp-brief", "data-key": "fp-brief", "aria-label": "Instructions for chats here" }, head("Instructions for chats here", null,
         mine ? button(b.text || (b.files || []).length ? "Edit" : "Add", () => { FP.brief = { f: f.id, text: b.text || "", add: [], drop: [], err: "", busy: false }; ctx.update(); }, { kind: "quiet", size: "s", cls: "fp-brief-e" }) : null),
       b.text ? h("p", { class: "fp-brief-x" }, b.text) : h("p", { class: "fp-calm" }, "None yet. " + SAYS),
-      (b.files || []).length ? h("ul", { class: "fp-brief-f" }, b.files.map(x => h("li", { "data-key": "bf:" + x }, fileName(x)))) : null);
+      (b.files || []).length ? h("ul", { class: "fp-brief-f" }, b.files.map((x, i) => h("li", { "data-key": "bf:" + x }, groupFile(f, b.files, i)))) : null);
   }
   const files = (b.files || []).filter(x => !B.drop.includes(fileName(x)));
   return h("section", { class: "fp-sec fp-brief", "data-key": "fp-brief", "aria-label": "Instructions for chats here" }, head("Instructions for chats here"),

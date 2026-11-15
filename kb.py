@@ -888,9 +888,30 @@ def recall_gate(hits, bad, person, midrun, n, quiet=False):
     if midrun or quiet: return []
     return [h for h in hits if fmt_path(h["path"]) not in bad and (person or h["s"] >= RECALL_BAR)][:n]
 
+def recall_wall(c, hits, first):
+    """The hits without posts from a group (a focus with the person's instructions or files) that the asking chat isn't in, so a chat
+    outside a group is never pointed at the group's chats (E37b, like the starter's neighbours hint). `first`: the asking post, or None
+    (text on stdin: no group is its own). Any error: no board hit at all."""
+    try:
+        import focus
+        recs = focus.records(); st = focus.state(recs=recs, posts=[])
+        walled = {f["id"] for f in st["foci"] if f.get("brief")}
+        if not walled: return hits
+        mine = (focus.group_for(st, recs, focus.opener(first)) or {}).get("id") if first else None
+        ths = {}
+        for h in hits:
+            if h["path"].startswith("board:"):
+                r = c.execute("SELECT title FROM doc WHERE path=?", (h["path"],)).fetchone()
+                ths[h["path"]] = r[0][7:] if r and str(r[0] or "").startswith("thread ") else ""
+        ops = focus.openers(set(ths.values()))   # a thread in a group only through its parent, or picked at its start, is walled too
+        grp = lambda th: (focus.group_for(st, recs, ops[th]) or {}).get("id") if th in ops else focus.focus_of(st, th)
+        return [h for h in hits if not (h["path"] in ths and (not ths[h["path"]] or grp(ths[h["path"]]) in walled - {mine}))]
+    except Exception: return [h for h in hits if not h["path"].startswith("board:")]
+
 def cmd_recall(a):
     text, ctx = recall_posts(set(a.post)) if a.post else (sys.stdin.read(), "")
     thread, person, quiet = "", not a.post, False  # text on stdin has no sender to judge
+    mine = []
     if a.post:  # the thread of the post, so its own earlier messages are never taken as like-minded neighbours; and who wrote it, for the bar
         try:
             mine = [p for l in open(H + "/board.jsonl", errors="replace") for p in [json.loads(l)] if p.get("id") in set(a.post)]
@@ -901,6 +922,7 @@ def cmd_recall(a):
     if not text.strip(): return  # no such post, or nothing on stdin
     c = connect(); t0 = time.time()
     hits = recall(c, text, a.n + 4, ctx, thread=thread) if kbuse else recall(c, text, a.n, ctx, thread=thread)
+    hits = recall_wall(c, hits, mine[0] if mine else None)
     bad = set()
     if kbuse:  # what is injected leaves out the notes recall shows again and again and nobody opens (kbuse.duds); the ranking itself is untouched
         try: bad = kbuse.duds()

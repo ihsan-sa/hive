@@ -1,7 +1,7 @@
 """What a sandboxed agent can ask of the outside. One per install, started by the starter (sandbox.ensure_broker), outside every sandbox.
 
 Each run gets a socket folder mounted read-only at /run/sandbox, so which socket a request came in on says who asked:
-- ctl.sock: post, done, step, module. A post is signed with that name, so nobody inside can post as the person, or as anyone else.
+- ctl.sock: post, done, step, module, remind. A post is signed with that name, so nobody inside can post as the person, or as anyone else.
 - egress.sock: an HTTP proxy that refuses this machine and private ranges.
 
 A step is a script to run outside, as the user. Who decides goes by the power level in settings.json (kb/consumer-sandbox.md):
@@ -281,6 +281,18 @@ def done(name):
     (d / name).write_text("it said its work was finished\n")
     return {"out": f"{name} is marked done: a later message in its thread starts a new agent, unless the person names {name}."}
 
+def remind(name, req):
+    """`hive remind` from inside the sandbox: the store and the ticker are outside (~/.hive/remind), so set, list and remove run here, as that name, in its thread
+    (projects/everyday E38). remind.py checks the rest: names it may mention, times, the cap."""
+    args = req.get("args")
+    if not isinstance(args, list) or not args or len(args) > 40 or not all(isinstance(x, str) and len(x) <= 2000 for x in args): return {"err": "remind: bad arguments"}
+    if args[0] not in ("at", "every", "list", "rm"): return {"err": "remind: at, every, list or rm"}
+    thread = str(req.get("thread") or run_of(name).get("thread") or run_of(name).get("post") or "")
+    if thread.startswith("step-") and run_of(name).get("thread") != thread: return {"err": "a step-... thread is its judge's alone"}
+    if any(x.split("=", 1)[0] == "--thread" and "step-" in x for x in args) or any(args[i] == "--thread" and args[i + 1:i + 2] and args[i + 1].startswith("step-") for i in range(len(args))): return {"err": "a step-... thread is its judge's alone"}
+    r = subprocess.run([sys.executable, "-I", str(CORE / "remind.py"), *args], text=True, capture_output=True, timeout=60, env={**post_env(name), **({"HIVE_THREAD": thread} if thread else {})})
+    return {"out": r.stdout.strip()[-4000:], "err_out": r.stderr.strip()[-2000:], "rc": r.returncode}
+
 module_lock = threading.Lock()
 
 def module(name, req):
@@ -305,7 +317,7 @@ def serve_ctl(c, name):
             blobs = [r.read(n) for n in sizes]
             verb = req.get("verb")
             out = (post(name, req, blobs) if verb == "post" else done(name) if verb == "done" else ask(name, req, blobs) if verb == "ask"
-                   else status(name) if verb == "status" else bar(name, req) if verb == "bar" else verdict(name, req) if verb == "verdict" else module(name, req) if verb == "module" else {"err": f"no verb {verb}"})
+                   else status(name) if verb == "status" else bar(name, req) if verb == "bar" else verdict(name, req) if verb == "verdict" else module(name, req) if verb == "module" else remind(name, req) if verb == "remind" else {"err": f"no verb {verb}"})
         except (OSError, ValueError, TypeError, subprocess.SubprocessError) as x:
             out = {"err": str(x)[:300]}
         try: c.sendall((json.dumps(out) + "\n").encode())

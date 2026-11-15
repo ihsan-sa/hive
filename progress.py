@@ -23,7 +23,21 @@ LEDGER, SNAPS, LOG, BOARD = HOME / "improvements.jsonl", HOME / "progress.jsonl"
 CORE, STATE, PROJECTS = HOME / "core", HOME / ".hive", HOME / "projects"
 Hive = next((CORE / n for n in ("hive", "hive") if (CORE / n).exists()), CORE / "hive")  # an installed Hive's CLI is called hive
 RSI_LEDGER = PROJECTS / "rsi-loop" / "ledger.jsonl"
-VERDICTS = ("held", "reverted", "inconclusive", "reverted-candidate", "unjudgeable")  # reverted-candidate is the script's; unjudgeable: nothing could ever credit this one change: the number got worse, the owner decides
+VERDICTS = ("held", "reverted", "inconclusive", "reverted-candidate", "unjudgeable", "expired")  # reverted-candidate is the script's
+# R47c: the closing verdicts end a row that can have no verdict, never by its owner, and the lab's index counts them apart:
+# unjudgeable: no number for this change exists (a still-landed row with no check); expired: its case came up too few times by the
+# revisit to read (a count and where it was counted). Neither replaces a held or reverted reading, and unjudgeable not an inconclusive one.
+CLOSING = ("unjudgeable", "expired")
+REAL = ("held", "reverted", "reverted-candidate")
+
+def closes(status, verdict):
+    """Whether a closing verdict may land on a row now at status (the ledger fold and hive improve judge both ask)."""
+    return status not in REAL + CLOSING and not (verdict == "unjudgeable" and status == "inconclusive")
+
+def lands(status, rec):
+    """Whether a judge record folds onto a row now at status. late-check's withdrawals (2026-11-10: a check written after landing
+    had read held, and was withdrawn as unjudgeable 16 min later, i0001 and 31 more) are corrections of the reading, so they land."""
+    return rec.get("verdict") not in CLOSING or rec.get("by") == "late-check" or closes(status, rec.get("verdict"))
 MEASURE = re.compile(r"measure|metric|score|yardstick|benchmark|passes|pass rate|p&l|sharpe", re.I)
 
 CHECK_TIMEOUT_S = 120
@@ -95,9 +109,12 @@ def ledger():
     for r in jsonl(LEDGER):
         if r.get("judge"):
             e = items.get(r["judge"])
-            if e: e.update(status=r["verdict"], judged_at=r["at"], judged_by=r.get("by"), judged_why=r.get("why", ""))
+            if e and lands(e.get("status"), r):  # R47c: a closing never overwrites a reading (a late-check withdrawal does)
+                e.update(status=r["verdict"], judged_at=r["at"], judged_by=r.get("by"), judged_why=r.get("why", ""))
             continue
-        if r.get("id"): items[r["id"]] = {**items.get(r["id"], {}), **r}
+        if r.get("id"):  # later rows (notes, corrections) add fields; when and by whom it landed stay the first row's (R47c review)
+            old = items.get(r["id"], {})
+            items[r["id"]] = {**old, **r, **{k: old[k] for k in ("at", "by") if old.get(k)}}
     # rsi-loop's landed wins count too: they're the measured ones
     for r in jsonl(RSI_LEDGER):
         if r.get("verdict") != "win": continue
@@ -112,7 +129,7 @@ def ledger():
                     "measure": "rsi-loop replay delivered score and cost (results/replay-*)" if r.get("gate") == "replay" else "rsi-loop bench passes and cost (results/)", "baseline": r.get("why", ""), "revisit": rev, "status": "landed",
                     "commit": r.get("landed") or r.get("commit", ""), "thread": "rsi-loop"}
         for r2 in jsonl(LEDGER):  # a judge record for an rsi id
-            if r2.get("judge") == i: items[i].update(status=r2["verdict"], judged_at=r2["at"], judged_by=r2.get("by"), judged_why=r2.get("why", ""))
+            if r2.get("judge") == i and lands(items[i].get("status"), r2): items[i].update(status=r2["verdict"], judged_at=r2["at"], judged_by=r2.get("by"), judged_why=r2.get("why", ""))
     return items
 
 def due_groups(items, t=None):
@@ -342,14 +359,30 @@ def cmd_log(a):
               + ". One revisit cannot credit one change, so a held on any of them is recorded as inconclusive."
               " To judge it apart, give it a number of its own (an A/B arm, a sub-number) in the measure.")
 
+def run_name(me):
+    """{"run": name} when the agent run this judge is under was started as another name: HIVE_NAME is the caller's to set, the run's
+    own environment is not, so a judge passed off under another name shows on the record (R47c review)."""
+    pid = os.getppid()
+    for _ in range(12):
+        try:
+            cmd = open(f"/proc/{pid}/cmdline", "rb").read().split(b"\0")[0]
+            if os.path.basename(cmd) == b"claude":
+                env = dict(x.split(b"=", 1) for x in open(f"/proc/{pid}/environ", "rb").read().split(b"\0") if b"=" in x)
+                run = env.get(b"HIVE_NAME", b"").decode()
+                return {"run": run} if run and run != me else {}
+            pid = int(open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError): return {}
+    return {}
+
 def cmd_judge(a):
     items = ledger()
     e = items.get(a.id)
     if not e: sys.exit(f"hive improve judge: no improvement {a.id}")
     me = os.environ.get("HIVE_NAME", os.environ.get("USER", "?"))
+    if me in ("check", "late-check"): sys.exit(f"hive improve judge: {me} is the name the hourly check signs with; a judge by hand can't use it.")
     w = [i for i in judged_with(items, e) if items.get(i, {}).get("status") == "landed"]
     mine = [x["id"] for x in [e] + [items[i] for i in w] if x.get("by") == me]
-    if mine and not a.self:
+    if mine and not a.self and a.verdict not in CLOSING:  # a closing verdict is recorded for this row alone, so only its own owner is barred (below)
         sys.exit(f"hive improve judge: {', '.join(mine)} was logged by you" + (f" and is judged with {a.id}" if mine != [a.id] else "")
                  + ". The judge is never who proposed (the rule); pass --self only if nobody else can, and say why in --why.")
     if not a.why: sys.exit("hive improve judge: --why must give the number you looked at, against the baseline.")
@@ -357,21 +390,70 @@ def cmd_judge(a):
     today = iso()[:10]
     if str(e.get("revisit") or "") > today: sys.exit(f"hive improve judge: {a.id}'s revisit is {e['revisit']}. No verdict before it.")
     w = [i for i in w if str(items[i].get("revisit") or "") <= today]
+    if a.verdict in CLOSING:  # R47c: closing a row takes it out of what is owed, so the owner can't, and the reason must be on the record
+        if e.get("by") == me: sys.exit(f"hive improve judge: {a.verdict} closes a row with no verdict, so it is never set by who logged it ({a.id}), --self or not. Ask an agent that didn't.")
+        if a.apart or a.base: sys.exit(f"hive improve judge: {a.verdict} is no reading, so --apart/--base don't apply.")
+        if not closes(e.get("status"), a.verdict):
+            sys.exit(f"hive improve judge: {a.id} already reads {e.get('status')}" + (" (a reading of its number)" if a.verdict == "unjudgeable" and e.get("status") == "inconclusive" else "")
+                     + f"; {a.verdict} closes only a row with no reading, so it would hide one.")
+        if a.verdict == "unjudgeable" and e.get("check"): sys.exit(f"hive improve judge: {a.id} has a check, so a number exists: not unjudgeable.")
+        src = re.search(r"\b[0-9a-f]{12}\b|[\w.~-]+/[\w./-]+|\b[\w-]+\.(?:jsonl|json|md|py|log)\b", a.why)
+        cases = re.search(r"\bcases?\W{0,3}(\d+)|\b(\d+)\W{0,3}cases?\b", a.why)
+        if a.verdict == "expired" and not (cases and int(cases.group(1) or cases.group(2)) <= 2 and src):
+            sys.exit("hive improve judge: expired needs --why to say 'cases N' (N the cases that came up by the revisit, 0 to 2) and where you counted them (a file path or a post id).")
+        if a.verdict == "unjudgeable" and not src:
+            sys.exit("hive improve judge: unjudgeable needs --why to say where you looked for its number (a file path or a post id).")
+        day = (now() - dt.timedelta(hours=24)).isoformat()
+        mine24 = [r["judge"] for r in jsonl(LEDGER) if r.get("judge") and r.get("by") == me and r.get("verdict") in CLOSING and str(r.get("at", "")) >= day]
+        if len(mine24) >= 3: sys.exit(f"hive improve judge: you closed {', '.join(mine24)} in the last 24 h; three a day is the most one judge closes. Ask another agent.")
+        w = []  # the case not coming up for this row says nothing about the rows it shares a number with
+    if a.base and not a.apart: sys.exit("hive improve judge: --base is the baseline window for an --apart reading; give both.")
     if a.apart:  # R25 (meta-reflect): a window after e landed and before any row it shares a number with: only e was live, so the number is e's own
+        def ts(x):  # times as times: as strings, 2026-02-03T00:00 sorted before the 2026-02-03T00:00:00 it equals (R47c)
+            d = dt.datetime.fromisoformat(str(x).strip().replace("Z", "+00:00"))
+            return d if d.tzinfo else d.replace(tzinfo=dt.timezone.utc)
         fr, _, to = a.apart.partition("..")
-        early = [i for i in judged_with(items, e) if str(items[i].get("at", ""))[:19] < to[:19]]
-        if not to or fr[:19] < str(e.get("at", ""))[:19] or early:
-            sys.exit(f"hive improve judge: --apart FROM..TO must start at or after {a.id} landed ({str(e.get('at'))[:19]}) and end before every row it shares a number with lands"
+        bf, _, bt = (a.base or "").partition("..")
+        shared = judged_with(items, e)
+        if [i for i in shared if not items[i].get("at")]:
+            sys.exit(f"hive improve judge: {', '.join(i for i in shared if not items[i].get('at'))} shares {a.id}'s number and has no landing time, so no window can be placed apart from it.")
+        try:
+            A0, A1, at = ts(fr), ts(to), ts(e.get("at", ""))
+            B0, B1 = (ts(bf), ts(bt)) if a.base else (None, None)
+            landed = {i: ts(items[i].get("at", "")) for i in shared}
+        except ValueError: sys.exit("hive improve judge: --apart and --base take FROM..TO in ISO time, e.g. 2026-11-10T00:45..2026-11-11T00:45.")
+        # R47c: with --base BFROM..BTO (just before e landed), a shared row live a whole window before BFROM is live in both windows (a rolling
+        # number has taken it in by then), so the move is still e's own
+        early = [i for i in shared if landed[i] < A1 and not (B0 and landed[i] < B0 - (B1 - B0))]
+        if not A0 < A1 or A0 < at or early:
+            sys.exit(f"hive improve judge: --apart FROM..TO must run forward, start at or after {a.id} landed ({str(e.get('at'))[:19]}) and end before every row it shares a number with lands"
+                     + (" (with --base, a row that landed a whole window before the baseline began doesn't count)" if a.base else "")
                      + (" (" + ", ".join(i + " landed " + str(items[i].get("at"))[:19] for i in early) + ")" if early else "") + ".")
-        a.why, w = a.why + f"; read apart over {fr}..{to}, before {', '.join(judged_with(items, e))} landed", []
+        if a.base:  # the windows sit on landing, so the only free choice is their length (no sliding them until the number reads held)
+            hr = dt.timedelta(hours=1)
+            if not B0 < B1 or not at - hr <= B1 <= at or not at <= A0 <= at + hr:
+                sys.exit(f"hive improve judge: with --base, BTO must be within the hour before {a.id} landed ({str(e.get('at'))[:19]}) and --apart's FROM within the hour after, and both must run forward.")
+            gone = sorted({r["judge"] for r in jsonl(LEDGER) if r.get("judge") in shared and r.get("verdict") in ("reverted", "reverted-candidate")}
+                          | {i for i in shared if items[i].get("status") in ("reverted", "reverted-candidate")})
+            if gone: sys.exit(f"hive improve judge: {', '.join(gone)} shares {a.id}'s number and was read as reverted, so it may not be live in both windows; --base can't read {a.id} apart from it.")
+            lb, la = (B1 - B0).total_seconds(), (A1 - A0).total_seconds()
+            if min(lb, la) < 0.8 * max(lb, la):
+                sys.exit(f"hive improve judge: the baseline window ({lb / 3600:g} h) and the read window ({la / 3600:g} h) differ by more than a fifth; a count over unequal windows reads their lengths. Trim the longer one.")
+        before = [i for i in shared if B0 and landed[i] < B0]
+        after = [i for i in shared if i not in before]
+        a.why += f"; read apart over {fr}..{to}" + (f" against a baseline over {bf}..{bt}" if a.base else "")
+        a.why += (f", before {', '.join(after)} landed" if after else "") + (f"; {', '.join(before)} landed before the baseline, so live in both windows" if before else "")
+        w = []
     elif a.verdict == "held" and judged_with(items, e):
         a.verdict, a.why = "inconclusive", a.why + "; shares its number, so it cannot credit one change"
         print(f"{a.id} shares its number with {', '.join(judged_with(items, e))}: recorded as inconclusive, not held. Give it a number of its own to judge it apart.")
     for i in [a.id] + w:
-        append(LEDGER, {"judge": i, "at": iso(), "by": me, "verdict": a.verdict, "why": a.why if i == a.id else f"judged with {a.id}: {a.why}"})
+        append(LEDGER, {"judge": i, "at": iso(), "by": me, "verdict": a.verdict, "why": a.why if i == a.id else f"judged with {a.id}: {a.why}", **run_name(me),
+                        **({"apart": a.apart, **({"base": a.base} if a.base else {})} if a.apart and i == a.id else {})})
     if w: print(f"judged with {', '.join(w)}: they share a number, so this verdict is recorded for each of them.")
     print(f"{a.id}: {a.verdict}. " + ("Now revert it (or confirm it was) and say so in its thread." if a.verdict == "reverted" else
-                                       "Set a later revisit with hive improve log if the number needs more time." if a.verdict == "inconclusive" else "Kept."))
+                                       "Set a later revisit with hive improve log if the number needs more time." if a.verdict == "inconclusive" else
+                                       "Closed with no verdict: the lab's index counts it apart from held and reverted." if a.verdict in CLOSING else "Kept."))
 
 def table(rows, cols):
     w = [max(len(str(r.get(c, ""))) for r in rows + [{c: c}]) for c in cols]
@@ -688,7 +770,7 @@ def window(t0, t1, log, posts, items):
     nposts, nperson, noticed = board_in(posts, t0, t1)
     rs = reply_s(posts, t0, t1)
     landed = [e for e in items.values() if t0 <= e.get("at", "") <= t1]
-    judged = [e for e in items.values() if t0 <= e.get("judged_at", "") <= t1 and e.get("judged_by") != "late-check" and e.get("status") != "unjudgeable"]
+    judged = [e for e in items.values() if t0 <= e.get("judged_at", "") <= t1 and e.get("judged_by") != "late-check" and e.get("status") not in CLOSING]
     rsi = [r for r in jsonl(RSI_LEDGER) if t0 <= r.get("at", "") <= t1]
     w = {"from": t0, "to": t1, "runs": runs, "runs_failed": failed, "runs_reaped": reaped, "runs_reaped_signalled": reaped_signalled(log, posts, t0, t1), "runs_reaped_repeat": reaped_repeat(log, t0, t1), "runs_limited": limited, "runs_woken": events_in(log, t0, t1, "woken"),
          "fail_pct": round(100.0 * failed / runs, 1) if runs else 0.0,
@@ -872,8 +954,9 @@ def main(argv=None):
     p.add_argument("--expect", metavar="TEXT", help="for a gain no number reads: what will be visibly better, who could see it, and what would count as not better, written before it lands; a non-builder judges it at the revisit. A wrong or unchecked number is worse than none")
     p.add_argument("--also", action="append", help="ids of open landings on the same number, judged together with this one at the revisit (silences the overlap warning)")
     p.set_defaults(f=cmd_log)
-    p = sp.add_parser("judge", help="judge a landed change on its revisit date: ID held|reverted|inconclusive --why 'the number vs baseline'")
-    p.add_argument("id"); p.add_argument("verdict", choices=VERDICTS); p.add_argument("--why", default=""); p.add_argument("--self", action="store_true"); p.add_argument("--apart", help="FROM..TO (ISO): the number was read over a window when only this row was live, after it landed and before every row it shares a number with; a held then stays held"); p.set_defaults(f=cmd_judge)
+    p = sp.add_parser("judge", help="judge a landed change on its revisit date: ID held|reverted|inconclusive --why 'the number vs baseline'; expired (its case never came up) or unjudgeable (no number exists) close it with no verdict, never by its owner")
+    p.add_argument("id"); p.add_argument("verdict", choices=VERDICTS); p.add_argument("--why", default=""); p.add_argument("--self", action="store_true"); p.add_argument("--apart", help="FROM..TO (ISO): the number was read over a window when only this row was live, after it landed and before every row it shares a number with; a held then stays held")
+    p.add_argument("--base", help="BFROM..BTO (ISO; a time with no zone is UTC), with --apart: the baseline window, ending within the hour before this row landed, with --apart starting within the hour after, the two within a fifth of each other in length; a row it shares a number with that landed a whole window before BFROM (and was never read as reverted) is live in both, so it doesn't block. --why gives the number over each"); p.set_defaults(f=cmd_judge)
     p = sp.add_parser("list", help="the ledger; --due for revisits past their date"); p.add_argument("--due", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_list)
     p = sp.add_parser("attach", help="give a logged change a check after the fact, on or after its revisit date; the number is kept but never counts as held (late-check): ID --check CMD --want up|down [--band N] [--before N: the number from before the change; without it, measured now and read in 48 h]")
     p.add_argument("id"); p.add_argument("--check", required=True); p.add_argument("--want"); p.add_argument("--band", type=float); p.add_argument("--before", type=float); p.set_defaults(f=cmd_attach)
