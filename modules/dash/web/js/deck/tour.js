@@ -162,13 +162,21 @@ function after(e) {
 const checkReady = () => { const s = step(); if (win && s && s.ready && s.ready() && !moving) advanceSoon(); };
 
 const button = (text, cls, fn) => { const b = document.createElement("button"); b.type = "button"; b.textContent = text; b.className = cls; b.addEventListener("click", fn); return b; };
+/** Send the window to the other side of the screen: left and right, or top and bottom when it's nearly as wide as the screen. */
+function flip() {
+  const b = win.getBoundingClientRect(), z = parseFloat(document.documentElement.style.zoom) || 1, st = win.style;
+  if (b.width < innerWidth * 0.6) { st.left = (innerWidth - b.right) / z + "px"; st.top = b.top / z + "px"; } else { st.left = b.left / z + "px"; st.top = (innerHeight - b.bottom) / z + "px"; }
+  st.right = st.bottom = "auto";
+}
 function drag(handle) {
+  handle.title = "Drag to move, or click to send it to the other side of the screen";
   handle.addEventListener("pointerdown", ev => {
     if (ev.target.closest("button")) return;
     const r = win.getBoundingClientRect(), z = parseFloat(document.documentElement.style.zoom) || 1, dx = ev.clientX - r.left, dy = ev.clientY - r.top;
     handle.setPointerCapture(ev.pointerId);
-    const mv = m => { win.style.left = (m.clientX - dx) / z + "px"; win.style.top = (m.clientY - dy) / z + "px"; win.style.right = win.style.bottom = "auto"; };
-    const up = () => { handle.removeEventListener("pointermove", mv); handle.removeEventListener("pointerup", up); };
+    const mv = m => { if (Math.hypot(m.clientX - ev.clientX, m.clientY - ev.clientY) < 4) return; win.style.left = (m.clientX - dx) / z + "px"; win.style.top = (m.clientY - dy) / z + "px"; win.style.right = win.style.bottom = "auto"; };
+    // A click that doesn't move is the one-press way (WCAG 2.5.7): the window goes to the other side of the screen.
+    const up = u => { handle.removeEventListener("pointermove", mv); handle.removeEventListener("pointerup", up); if (Math.hypot(u.clientX - ev.clientX, u.clientY - ev.clientY) < 4) flip(); };
     handle.addEventListener("pointermove", mv); handle.addEventListener("pointerup", up);
   });
 }

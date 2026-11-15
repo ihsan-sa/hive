@@ -197,6 +197,9 @@ def with_ladder(row, g):
     if lad:
         row.update(rung=lad["next"]["text"] if lad["next"] else None, rungs_left=lad["left"], rungs_done=lad["done"], rungs_no_check=lad["no_check"], parked=lad["parked"], **({"section": lad["section"]} if lad.get("section") else {}))
         if lad["parked"]: row["idle"] = False
+        # every open rung carries a future after: gate and none is open now: a round could only write more rungs, so hold the keeper until the earliest gate (ae5ec, 2026-11-15: 18 idle rounds a day on improve-survey)
+        open_ = [r for r in lad["rungs"] if r["state"] == " "]
+        if not lad["next"] and open_ and all(r["after"] and r["checked"] for r in open_): row["idle"] = False
     return row
 
 def resume_arm(thread):

@@ -39,7 +39,7 @@ TEXT = re.compile(r"\.(md|txt|rst|jsonl?)$")
 SKIP_DIR = {".git", "node_modules", "__pycache__", "dist", "boards-site-pdfs", "build", "runs", ".venv", "venv", "target"}
 # Kept out on purpose: the graded tests hold the answers (they'd rank above the sources), the query log is ours.
 # Agent worktrees are copies of the main checkouts: 25,000 files that repeat the same few. Keep the main ones.
-SKIP_PROJECT = re.compile(r"^projects/(rsi-loop/arms|hive-meta/interp/goals-history|rsi-lab/bench/replay|_wt|[^/]*-a[0-9a-f]{4,5}(-[^/]*)?|[^/]*-zc-[^/]*|[^/]*-wt|[^/]*-land)(/|$)|/(tests/fixtures|pinned|skills|reference/remediations)/")
+SKIP_PROJECT = re.compile(r"^projects/(rsi-loop/arms|hive-meta/interp/goals-history|rsi-lab/bench/replay|_wt|[^/]*-a[0-9a-f]{4,5}(-[^/]*)?|[^/]*-zc-[^/]*|[^/]*-wt|[^/]*-land)(/|$)|/(tests/fixtures|pinned|skills|reference/remediations)/|^projects/[^/]*/laptop-design/all/[^/]*/kb/")
 # A module's own docs, read live from ~/modules (prose only; not its tests, fixtures, design data or the _notes above).
 # Agents' clones of a module under projects/ mostly hold older copies of those same files, so a clone's file that the live module
 # also has is left out when it has the same text or isn't newer; a newer, different one stays (a doc fixed on a branch not merged
@@ -73,7 +73,7 @@ def stale_copy(p, lp):
     except OSError: return False
 
 # The grader's unchecked drafts are their own source, ranked low and marked [draft] (outcomes.py); ones the dream dropped aren't searched at all.
-SKIP_DRAFTS = re.compile(r"^kb/(_drafts|_dropped/drafts)(/|$)")
+SKIP_DRAFTS = re.compile(r"^kb/(_drafts|_dropped)(/|$)")
 SKIP_FILE = re.compile(r"(^|/)(question-test-[^/]*|\.queries\.jsonl|miss-candidates\.jsonl|MANIFEST)$")
 NOINDEX = re.compile(r"<!--\s*kb:\s*skip\s*-->")  # in a file's first 500 chars: keep it out of the index (notes that quote many queries outrank real answers)
 PROJECT_ONLY = re.compile(r"\.md$")  # in projects/ and core/, prose only, not every data file

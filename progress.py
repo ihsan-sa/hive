@@ -29,6 +29,10 @@ VERDICTS = ("held", "reverted", "inconclusive", "reverted-candidate", "unjudgeab
 # revisit to read (a count and where it was counted). Neither replaces a held or reverted reading, and unjudgeable not an inconclusive one.
 CLOSING = ("unjudgeable", "expired")
 REAL = ("held", "reverted", "reverted-candidate")
+# R47e: a row that reads a number and changes nothing (a daily reading: i0233, i0240, i0292, i0296; no where, no commit) is no change
+# to judge. A non-owner marks it with hive improve reading, a later row giving it kind "reading", and it is no longer owed a verdict;
+# the lab's index counts it apart with the closings, under the same ceiling.
+READING = "reading"
 
 def closes(status, verdict):
     """Whether a closing verdict may land on a row now at status (the ledger fold and hive improve judge both ask)."""
@@ -137,8 +141,8 @@ def due_groups(items, t=None):
     each only once its own revisit date has come."""
     today, out, seen = (t or now()).date().isoformat(), [], set()
     for e in sorted(items.values(), key=lambda e: e.get("at", "")):
-        if e["id"] in seen or e.get("status") != "landed": continue
-        g = [items[i] for i in [e["id"]] + judged_with(items, e) if i in items and items[i].get("status") == "landed"]
+        if e["id"] in seen or e.get("status") != "landed" or e.get("kind") == READING: continue
+        g = [items[i] for i in [e["id"]] + judged_with(items, e) if i in items and items[i].get("status") == "landed" and items[i].get("kind") != READING]
         seen.update(x["id"] for x in g)
         g = [x for x in g if x.get("due_at", "") <= iso(t) and (x.get("revisit") or "9999") <= today]  # a check runs at its hour, not at the start of its day
         if g: out.append(g)
@@ -172,7 +176,11 @@ def overlaps(items, measure, t=None, skip=()):
         if str(e.get("revisit", "")) >= today or (at and at >= t0): out[e["id"]] = sorted(shared)
     return out
 
-def links(e): return set(e.get("also") or []) | set(e.get("shares") or [])
+def links(e, items=None):
+    """The ids e names in --also and shares; given the ledger, only those in it. R47e: i0281's --also holds a free-text case list
+    ('case list: replay.py ...'), which read as a row with no landing time and refused every window placed apart from it."""
+    ids = set(e.get("also") or []) | set(e.get("shares") or [])
+    return ids if items is None else {i for i in ids if i in items}
 
 def same_check(items, x):
     """Rows reading the very same check command over a window that overlaps x's: one number, so it can't credit either."""
@@ -185,7 +193,7 @@ def judged_with(items, e):
     seen, todo = {e["id"]}, [e["id"]]
     while todo:
         x = todo.pop()
-        near = links(items.get(x, {})) | same_check(items, x) | {o["id"] for o in items.values() if x in links(o)}
+        near = links(items.get(x, {}), items) | same_check(items, x) | {o["id"] for o in items.values() if x in links(o)}
         todo += sorted(near - seen); seen |= near
     return sorted(seen - {e["id"]})
 
@@ -459,6 +467,21 @@ def table(rows, cols):
     w = [max(len(str(r.get(c, ""))) for r in rows + [{c: c}]) for c in cols]
     print("  ".join(c.ljust(w[i]) for i, c in enumerate(cols)))
     for r in rows: print("  ".join(str(r.get(c, "")).ljust(w[i]) for i, c in enumerate(cols)))
+
+def cmd_reading(a):
+    """R47e: mark a logged row as a reading (it read a number, changed nothing), so no verdict is owed for it. Never by its owner."""
+    items = ledger()
+    e = items.get(a.id)
+    if not e: sys.exit(f"hive improve reading: no improvement {a.id}")
+    me = os.environ.get("HIVE_NAME", os.environ.get("USER", "?"))
+    if e.get("by") == me: sys.exit(f"hive improve reading: {a.id} was logged by you; a reading takes it out of what is owed, so ask an agent that didn't.")
+    if e.get("kind") == READING: sys.exit(f"hive improve reading: {a.id} is already a reading ({e.get('reading_by')}).")
+    if e.get("status") in REAL: sys.exit(f"hive improve reading: {a.id} reads {e['status']}; a verdict stands, nothing to take out.")
+    if e.get("where") or e.get("commit"): sys.exit(f"hive improve reading: {a.id} changed {e.get('where') or e.get('commit')}, so it is a change, not a reading.")
+    if not re.search(r"\b[0-9a-f]{12}\b|[\w.~-]+/[\w./-]+|\b[\w-]+\.(?:jsonl|json|md|py|log)\b|\bi\d{4}\b", a.why or ""):
+        sys.exit("hive improve reading: --why must say what number it read and for what (a row id, a file path or a post id).")
+    append(LEDGER, {"id": a.id, "kind": READING, "reading_by": me, "reading_at": iso(), "reading_why": a.why})
+    print(f"{a.id}: a reading, no longer owed a verdict. The lab's index counts it apart, with the closings.")
 
 def cmd_list(a):
     if a.due: autojudge()
@@ -957,6 +980,8 @@ def main(argv=None):
     p = sp.add_parser("judge", help="judge a landed change on its revisit date: ID held|reverted|inconclusive --why 'the number vs baseline'; expired (its case never came up) or unjudgeable (no number exists) close it with no verdict, never by its owner")
     p.add_argument("id"); p.add_argument("verdict", choices=VERDICTS); p.add_argument("--why", default=""); p.add_argument("--self", action="store_true"); p.add_argument("--apart", help="FROM..TO (ISO): the number was read over a window when only this row was live, after it landed and before every row it shares a number with; a held then stays held")
     p.add_argument("--base", help="BFROM..BTO (ISO; a time with no zone is UTC), with --apart: the baseline window, ending within the hour before this row landed, with --apart starting within the hour after, the two within a fifth of each other in length; a row it shares a number with that landed a whole window before BFROM (and was never read as reverted) is live in both, so it doesn't block. --why gives the number over each"); p.set_defaults(f=cmd_judge)
+    p = sp.add_parser("reading", help="mark a row that read a number and changed nothing (no --where, no --commit) as a reading, not owed a verdict; never by its owner: ID --why 'what it read, for what'")
+    p.add_argument("id"); p.add_argument("--why", required=True); p.set_defaults(f=cmd_reading)
     p = sp.add_parser("list", help="the ledger; --due for revisits past their date"); p.add_argument("--due", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_list)
     p = sp.add_parser("attach", help="give a logged change a check after the fact, on or after its revisit date; the number is kept but never counts as held (late-check): ID --check CMD --want up|down [--band N] [--before N: the number from before the change; without it, measured now and read in 48 h]")
     p.add_argument("id"); p.add_argument("--check", required=True); p.add_argument("--want"); p.add_argument("--band", type=float); p.add_argument("--before", type=float); p.set_defaults(f=cmd_attach)

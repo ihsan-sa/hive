@@ -171,13 +171,21 @@ function tick() {
   if (isDone && armed && !moving) moving = setTimeout(() => { moving = 0; if (win && step() === s) next(); }, 500);
   else if (typeof s.text === "function") { const t = say(s.text), p = win.querySelector(".tw-p"); if (p.textContent !== t) p.textContent = t; }
 }
+/** Send the window to the other side of the screen: left and right, or top and bottom when it's nearly as wide as the screen. It then stays where it was put, as after a drag. */
+function flip() {
+  const b = win.getBoundingClientRect(), st = win.style; dragged = true;
+  if (b.width < innerWidth * 0.6) { st.left = innerWidth - b.right + "px"; st.top = b.top + "px"; } else { st.left = b.left + "px"; st.top = innerHeight - b.bottom + "px"; }
+  st.right = st.bottom = "auto";
+}
 function drag(handle) {
+  handle.title = "Drag to move, or click to send it to the other side of the screen";
   handle.addEventListener("pointerdown", ev => {
     if (ev.target.closest("button")) return;
     const r = win.getBoundingClientRect(), dx = ev.clientX - r.left, dy = ev.clientY - r.top;
     handle.setPointerCapture(ev.pointerId);
-    const mv = m => { dragged = true; const st = win.style; st.left = m.clientX - dx + "px"; st.top = m.clientY - dy + "px"; st.right = st.bottom = "auto"; };
-    const up = () => { handle.removeEventListener("pointermove", mv); handle.removeEventListener("pointerup", up); };
+    const mv = m => { if (Math.hypot(m.clientX - ev.clientX, m.clientY - ev.clientY) < 4) return; dragged = true; const st = win.style; st.left = m.clientX - dx + "px"; st.top = m.clientY - dy + "px"; st.right = st.bottom = "auto"; };
+    // A click that doesn't move is the one-press way (WCAG 2.5.7): the window goes to the other side of the screen.
+    const up = u => { handle.removeEventListener("pointermove", mv); handle.removeEventListener("pointerup", up); if (Math.hypot(u.clientX - ev.clientX, u.clientY - ev.clientY) < 4) flip(); };
     handle.addEventListener("pointermove", mv); handle.addEventListener("pointerup", up);
   });
 }

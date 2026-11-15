@@ -69,10 +69,12 @@ if (typeof document !== "undefined") document.addEventListener("keydown", e => {
 });
 const sideBtn = () => h("button", { type: "button", class: "btn cm-sidebtn", "data-kind": "icon", "data-key": "sidebtn", "aria-pressed": String(!sideHid), "aria-label": sideHid ? "Show the conversation list" : "Hide the conversation list",
   title: (sideHid ? "Show" : "Hide") + " the conversation list (Ctrl+\\)", onclick: toggleSide }, icon("sidebar"));
-const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize the conversation list", tabindex: "0", "data-key": "grip", title: "Drag to resize",
-  onpointerdown: e => { e.preventDefault(); const box = e.target.closest(".cm"), x0 = e.clientX, w0 = sideNow(box); e.target.setPointerCapture(e.pointerId); e.target.dataset.on = "1";
-    e.target.onpointermove = m => setSide(box, w0 + m.clientX - x0);
-    e.target.onpointerup = e.target.onpointercancel = () => { delete e.target.dataset.on; e.target.onpointermove = e.target.onpointerup = e.target.onpointercancel = null; }; },
+const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize the conversation list", tabindex: "0", "data-key": "grip", title: "Drag to resize, or click to widen a step (from the widest it goes back to the narrowest); double-click resets",
+  // A click that doesn't move is the one-press way (WCAG 2.5.7): a step wider, and from the widest back to the narrowest.
+  onpointerdown: e => { e.preventDefault(); const g = e.target.closest(".cm-grip"), box = g.closest(".cm"), x0 = e.clientX, w0 = sideNow(box); g.setPointerCapture(e.pointerId); g.dataset.on = "1";
+    g.onpointermove = m => { if (Math.abs(m.clientX - x0) >= 4) setSide(box, w0 + m.clientX - x0); };
+    g.onpointercancel = () => { delete g.dataset.on; g.onpointermove = g.onpointerup = g.onpointercancel = null; };
+    g.onpointerup = u => { g.onpointercancel(); if (Math.abs(u.clientX - x0) < 4) setSide(box, w0 >= Math.min(SIDE_MAX, sideRoom(box)) - 4 ? SIDE_MIN : w0 + 80); }; },
   ondblclick: e => setSide(e.target.closest(".cm"), 280),
   onkeydown: e => { const d = e.key === "ArrowLeft" ? -24 : e.key === "ArrowRight" ? 24 : 0; if (d) { e.preventDefault(); const box = e.target.closest(".cm"); setSide(box, sideNow(box) + d); } } });
 // The side list's two views (the person, 11071518 2bab): "focus" (the default) puts each conversation under its focus, in the order of the
@@ -82,7 +84,7 @@ const VIEW_KEY = "hive.comms.view", HIDE_KEY = "hive.comms.hidefaded";
 const store = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* this page only */ } };
 const C = { view: (() => { try { const v = localStorage.getItem(VIEW_KEY); return v === "recent" ? v : "focus"; } catch (e) { return "focus"; } })(),
   hideFaded: (() => { try { return localStorage.getItem(HIDE_KEY) !== "0"; } catch (e) { return true; } })(),   // on unless the person turned it off (2026-11-08)
-  err: "", imp: false, conv: undefined, q: "", show: null, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, find: false, strip: false };
+  err: "", imp: false, conv: undefined, q: "", show: null, commsNew: true, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, find: false, strip: false };
 let errTimer = 0;
 /** A change to a conversation (pin, star, archive) is shown at once; when the server refuses it the list goes back, and this says why for a few seconds. */
 const tryMeta = (th, patch, ctx) => setMeta(th, patch).catch(e => { C.err = "Couldn't save that: " + (e && e.message || "the server didn't answer") + "."; clearTimeout(errTimer); errTimer = setTimeout(() => { C.err = ""; ctx.update(); }, 8000); ctx.update(); });
@@ -114,16 +116,26 @@ const hay = p => (p.lc ??= [p.text, p.from, ...(p.files || []).map(f => f.name)]
 const hit = (p, w) => (w.startsWith("tag:") && w.length > 4 ? (p.tags || []).some(t => (w.includes(":", 4) ? t.toLowerCase() === w.slice(4) : t.toLowerCase().split(":").slice(1).join(":") === w.slice(4))) : hay(p).includes(w));
 
 // What to show: any of For you, Updates and Agent comms, as a mask of SHOW bits. Kept in this browser. Searching ignores it, so a hidden message can still be found.
-const SHOW_KEY = "hive.comms.kinds", OLD_KEY = "hive.comms.show", OLD = { you: SHOW.you, updates: SHOW.you | SHOW.updates, all: SHOW.ALL };
+// The stored number also carries COMMS_NEW while Agent comms has never been on in this browser (C.commsNew): until then the app look leaves its chip out (E10), and after that
+// the chip stays, on or off. A choice saved before 2026-11-15 has no such mark, so its chip is drawn: someone who has already chosen has seen it.
+const SHOW_KEY = "hive.comms.kinds", OLD_KEY = "hive.comms.show", OLD = { you: SHOW.you, updates: SHOW.you | SHOW.updates, all: SHOW.ALL }, COMMS_NEW = 8;
 function showMask() {
   if (simpleOn()) return SHOW.you | SHOW.updates;   // fixed: there's no Show bar here
   if (C.show === null) {
-    try { const v = localStorage.getItem(SHOW_KEY); C.show = v !== null ? Number(v) & SHOW.ALL : OLD[localStorage.getItem(OLD_KEY)]; } catch (e) { /* no storage: the default, for this page */ }
+    try {
+      const v = localStorage.getItem(SHOW_KEY); C.show = v !== null ? Number(v) & SHOW.ALL : OLD[localStorage.getItem(OLD_KEY)];
+      C.commsNew = v !== null ? !!(Number(v) & COMMS_NEW) : C.show == null;
+    } catch (e) { /* no storage: the default, for this page */ }
     if (C.show == null) C.show = app() ? SHOW.you | SHOW.updates : SHOW.ALL;
+    if (C.show & SHOW.comms) C.commsNew = false;
   }
   return C.show;
 }
-function setShow(mask, ctx) { C.show = mask; try { localStorage.setItem(SHOW_KEY, mask); } catch (e) { /* no storage: this page only */ } ctx.update(); }
+function setShow(mask, ctx) {
+  C.show = mask; if (mask & SHOW.comms) C.commsNew = false;
+  try { localStorage.setItem(SHOW_KEY, mask | (C.commsNew ? COMMS_NEW : 0)); } catch (e) { /* no storage: this page only */ }
+  ctx.update();
+}
 /** What this conversation's messages are cut to. By or to a name you asked for by name, and a search, show everything. */
 const maskFor = c => (simpleOn() || ((c.thread || c.all) && !words(C.q).length) ? showMask() : SHOW.ALL);
 /** A conversation this person is part of. In simple mode the hive's own (its upkeep, its agents between themselves) stay out of the list. */
@@ -935,9 +947,9 @@ const tmetaSig = () => Object.entries(S.threadMeta || {}).map(([k, v]) => k + (v
 function showChips(ctx) {
   const mask = showMask();
   const group = h("div", { class: "tm-show", role: "group", "aria-label": "Show", title: showSays(mask) },
-    // E10 (ae6a2, 1110232186c2): in the app look Agent comms is off by default and means nothing to a newcomer, so its chip shows only once it is on
-    // (the title menu's Show N hidden turns it on), and then stays so it can be turned off again
-    SHOW_PARTS.filter(([b]) => !(app() && b === SHOW.comms && !(mask & b))).map(([b, l, t]) => h("button", { type: "button", class: "tm-chip", "data-show": KIND_NAME[b], "aria-pressed": String(!!(mask & b)), title: (mask & b ? "Hide " : "Show ") + t,
+    // E10 (ae6a2, 1110232186c2): in the app look Agent comms is off by default and means nothing to a newcomer, so its chip is left out until it has been on once in this browser
+    // (the title menu's Show N hidden turns it on). From then on it stays, on or off: drawn only while on, it vanished under the click that turned it off (the person, 11151632fb95)
+    SHOW_PARTS.filter(([b]) => !(app() && b === SHOW.comms && !(mask & b) && C.commsNew)).map(([b, l, t]) => h("button", { type: "button", class: "tm-chip", "data-show": KIND_NAME[b], "aria-pressed": String(!!(mask & b)), title: (mask & b ? "Hide " : "Show ") + t,
       onclick: () => setShow(showMask() ^ b, ctx) }, h("i", { "aria-hidden": "true" }), l)),
     mask ? null : h("p", { class: "meta tm-show-says" }, showSays(mask)));
   return app() ? h("div", { class: "tm-showwrap" }, group) : group;

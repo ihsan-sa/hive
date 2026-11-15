@@ -124,7 +124,7 @@ hive step ask --why "..." --script PATH | status | list | approve ID | deny ID: 
 
 ## hive improve
 
-hive improve log --what ... --measure ... --check CMD --want up|down [--kind fix|behaviour --control CMD] (a script judges it), or --no-check WHY | attach ID --check CMD --want up|down (late: never a held) | autojudge | num FIELD | judge ID held|reverted|inconclusive --why ... | list [--due] | show ID: the ledger of changes meant to make the hive better, each judged later by someone else (core/progress.py)
+hive improve log --what ... --measure ... --check CMD --want up|down [--kind fix|behaviour --control CMD] (a script judges it), or --no-check WHY | attach ID --check CMD --want up|down (late: never a held) | autojudge | num FIELD | judge ID held|reverted|inconclusive --why ... | reading ID --why ... (read a number, changed nothing: not owed a verdict) | list [--due] | show ID: the ledger of changes meant to make the hive better, each judged later by someone else (core/progress.py)
 
 ## hive steer
 

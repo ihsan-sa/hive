@@ -5357,7 +5357,7 @@ def serve(port):
             """Sets route, can and signed for this request, or answers it and returns False. Checked on every request."""
             web = web_cfg()
             if web is None: return True  # the open dash: no web.json here, as on a site that hasn't set one up
-            self.route, self.can, self.signed, self.signer, self.simple, self.email = "refused", (), False, None, False, ""
+            self.route, self.can, self.signed, self.signer, self.simple, self.email = "refused", (), False, None, False, ""; self.own_site = False
             if web.get("broken"): self.deny(500, "web.json is missing or can't be read, so nothing is served. Fix or delete it, then run hive web --setup"); return False
             hd = {k.lower(): v for k, v in self.headers.items()}
             route = route_of(hd, self.client_address[0], port, web)
@@ -5373,7 +5373,8 @@ def serve(port):
                 allowed = person_can(claims, out, active=self.command == "POST" or hd.get("x-hive-active") == "1")
                 if not allowed: self.deny(403, "this sign-in isn't on this app's list"); return False
                 self.signer = signer_of(claims, out); self.email = str(claims.get("email") or "").strip().lower()
-                if out is not (web.get("outside") or {}): self.signer = f"{self.signer} at {site_key(hd.get('host'))}"[:80]  # a site's own profile: the post says which name it came in on
+                self.own_site = out is (web.get("outside") or {})   # the main profile, not a site's own
+                if not self.own_site: self.signer = f"{self.signer} at {site_key(hd.get('host'))}"[:80]  # a site's own profile: the post says which name it came in on
                 # web.json "simple": sign-ins that open in simple mode until their browser says otherwise. Presentation only, so a bad value just means no.
                 names = web.get("simple")
                 self.simple = isinstance(names, list) and str(claims.get("email") or "").strip().lower() in {str(n).lower() for n in names}
@@ -5396,6 +5397,10 @@ def serve(port):
             try: st, b = phone_http("POST" if n is not None else "GET", path, body if n is not None else None, self.headers.get("Content-Type") or "application/octet-stream")
             except OSError: return self.deny(503, "the phone service isn't running (systemctl --user start hive-phone)")
             return self.send(b, "audio/wav" if b[:4] == b"RIFF" else "application/json", status=st)   # /say answers with wav (Read aloud)
+
+        def full_signin(self):
+            """The owner's full sign-in: outside in full mode, or the local session. The board page's bridge and the doors need it."""
+            return (getattr(self, "route", None) == "outside" and getattr(self, "mode", None) == "full") or (getattr(self, "route", None) == "local" and self.signed)
 
         def app_info(self):
             web = web_cfg() or {}

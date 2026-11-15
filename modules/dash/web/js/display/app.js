@@ -77,14 +77,16 @@ function grips() {
     t[d > 0 ? i : i + 1] += Math.abs(d) - left; put(axis, t); schedule();
   };
   const grip = (axis, i, a, b) => {
-    const col = axis === "col", el = h("div", { class: "dt-grip", "data-axis": axis, role: "separator", tabindex: "0", "aria-orientation": col ? "vertical" : "horizontal", "aria-label": "Move the edge between tiles", title: "Drag to resize, double-click to reset",
+    const col = axis === "col", el = h("div", { class: "dt-grip", "data-axis": axis, role: "separator", tabindex: "0", "aria-orientation": col ? "vertical" : "horizontal", "aria-label": "Move the edge between tiles", title: "Drag to resize, or click to step it (from the far end it starts again); double-click to reset",
       style: col ? `grid-column:${i + 2};grid-row:${a + 1}/${b + 2}` : `grid-row:${i + 2};grid-column:${a + 1}/${b + 2}` });
     el.addEventListener("pointerdown", e => {
       e.preventDefault(); el.setPointerCapture(e.pointerId); el.dataset.on = "";
-      const r = grid.getBoundingClientRect(), k = r.width / (grid.offsetWidth || 1); let last = col ? e.clientX : e.clientY;
-      const mv = ev => { const at = col ? ev.clientX : ev.clientY; move(axis, i, (at - last) / k); last = at; };
+      const r = grid.getBoundingClientRect(), k = r.width / (grid.offsetWidth || 1), at0 = col ? e.clientX : e.clientY; let last = at0, went = false;
+      const mv = ev => { const at = col ? ev.clientX : ev.clientY; if (!went && Math.abs(at - at0) < 4) return; went = true; move(axis, i, (at - last) / k); last = at; };
       el.addEventListener("pointermove", mv);
-      el.addEventListener("pointerup", () => { el.removeEventListener("pointermove", mv); delete el.dataset.on; save(); }, { once: true });
+      // A click that doesn't move is the one-press way (WCAG 2.5.7): the edge steps right or down, and from as far as it goes it starts again from the other end.
+      el.addEventListener("pointerup", () => { el.removeEventListener("pointermove", mv); delete el.dataset.on;
+        if (!went) { const t0 = px(axis)[i]; move(axis, i, 64); if (Math.abs(px(axis)[i] - t0) < 1) move(axis, i, -1e5); } save(); }, { once: true });
     });
     el.addEventListener("keydown", e => {
       const d = (col ? { ArrowLeft: -16, ArrowRight: 16 } : { ArrowUp: -16, ArrowDown: 16 })[e.key];
