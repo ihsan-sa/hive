@@ -38,6 +38,15 @@ def check_names(*names):
             fail(f"@{n} can't be named in a reminder (only @person or an agent's own name, never a warden)")
 
 
+THREAD = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,100}")
+MAX_FAILS = 30  # a post that fails this many ticks in a row (a thread hive refuses) is dropped, not retried forever
+
+
+def mine(it, by, here):
+    """The person may touch every reminder; an agent the ones it set and the ones in the thread it is working in (whoever answers "stop it" there)."""
+    return by == "person" or it.get("by") == by or (here is not None and it.get("thread") == here)
+
+
 def parse_when(s, now):
     s = s.strip()
     if m := re.fullmatch(r"\+(\d+)([mhd])", s): return now + dt.timedelta(**{{"m": "minutes", "h": "hours", "d": "days"}[m[2]]: int(m[1])})
@@ -109,7 +118,9 @@ def lock(path):
 def add(kind, when, text, to="person", thread=None, store=None, now=None, by=""):
     store, now = store or STATE / "reminders.json", now or dt.datetime.now()
     thread = thread or woke_thread() or fail("which thread? add --thread T")
+    if not THREAD.fullmatch(thread): fail(f"{thread!r} is not a thread id")
     to = to.lstrip("@").lower(); check_names(to, *MENTION.findall(text))
+    if by and by != "person" and to not in ("person", by.lower()): fail(f"an agent's reminder goes to @person or to itself, not @{to}")
     if not text.strip(): fail("no text")
     if kind == "at": due = parse_when(when, now); cron = None
     else:
@@ -117,7 +128,7 @@ def add(kind, when, text, to="person", thread=None, store=None, now=None, by="")
         if too_often(cron, now): fail(f"that fires more than once in {MIN_GAP_MIN} minutes")
     with lock(store):
         items = load(store)
-        if len(items) >= MAX_ITEMS: fail("too many reminders; remove some")
+        if sum(i.get("by") == by for i in items) >= MAX_ITEMS or len(items) >= 10 * MAX_ITEMS: fail("too many reminders; remove some")
         item = {"id": secrets.token_hex(3), "due": due.isoformat(timespec="minutes"), "cron": cron, "to": to, "thread": thread, "text": text, "by": by}
         save(items + [item], store)
     return item
@@ -128,7 +139,7 @@ def post_as_remind(item, late=False, run=subprocess.run):
     check_names(item["to"], *MENTION.findall(item["text"]))
     text = f"@{item['to']} " + item["text"] + (" (this was due earlier; the machine was off or busy)" if late else "")
     env = {k: v for k, v in os.environ.items() if k not in ("HIVE_NAME", "HIVE_THREAD")}
-    run([sys.executable, "-I", str(CORE / "hive"), "post", "--as", "remind", "--to", item["to"], "--thread", item["thread"]], input=text, text=True, capture_output=True, check=True, env=env, timeout=120)
+    run([sys.executable, "-I", str(CORE / "hive"), "post", "--as", "remind", "--to", item["to"], "--thread=" + item["thread"]], input=text, text=True, capture_output=True, check=True, env=env, timeout=120)
 
 
 def tick(store=None, now=None, post=post_as_remind):
@@ -144,8 +155,10 @@ def tick(store=None, now=None, post=post_as_remind):
             try: post(it, late)
             except SystemExit as e: print(f"remind: dropped {it.get('id')}: {e}", file=sys.stderr); continue  # a name it may no longer use: retrying won't help
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, KeyError):
-                keep.append(it); continue  # try again next tick
-            fired.append(it["id"])
+                if it.get("fails", 0) + 1 >= MAX_FAILS: print(f"remind: dropped {it.get('id')} after {MAX_FAILS} failed posts", file=sys.stderr)
+                else: keep.append({**it, "fails": it.get("fails", 0) + 1})
+                continue  # try again next tick
+            fired.append(it["id"]); it.pop("fails", None)
             if it["cron"]: keep.append({**it, "due": next_after(it["cron"], now).isoformat(timespec="minutes")})
         save(keep, store)
     return fired
@@ -169,19 +182,21 @@ def options(a):
 
 def main(argv):
     a, opts = options(list(argv)); to, thread = opts.get("--to", "person"), opts.get("--thread")
-    by = os.environ.get("HIVE_NAME", "person")
+    by = os.environ.get("HIVE_NAME") or "person"
     if a[:1] in (["at"], ["every"]) and len(a) >= 3:
         when, rest = a[1], a[2:]
         if a[0] == "at" and len(rest) > 1 and re.fullmatch(r"\d\d:\d\d", rest[0]) and re.fullmatch(r"\d{4}-\d\d-\d\d", when): when, rest = f"{when} {rest[0]}", rest[1:]
         it = add(a[0], when, " ".join(rest), to, thread, by=by); print(it["id"], "next", it["due"], "in", it["thread"], "(stop it: hive remind rm " + it["id"] + ")")
     elif a[:1] == ["list"]:
-        items = [it for it in load(STATE / "reminders.json") if not thread or it["thread"] == thread]
+        here = woke_thread() if by != "person" else None
+        items = [it for it in load(STATE / "reminders.json") if mine(it, by, here) and (not thread or it["thread"] == thread)]
         for it in items: print(it["id"], it["due"], it["cron"] or "once", "@" + it["to"], it["thread"], it["text"][:60])
         if not items: print("no reminders" + (f" in {thread}" if thread else ""))
     elif a[:1] == ["rm"] and len(a) == 2:
         with lock(STATE / "reminders.json"):
-            items = load(STATE / "reminders.json"); keep = [i for i in items if i["id"] != a[1]]
-            if len(keep) == len(items): fail(f"no reminder {a[1]} (see: hive remind list)")
+            items = load(STATE / "reminders.json"); here = woke_thread() if by != "person" else None
+            keep = [i for i in items if i["id"] != a[1] or not mine(i, by, here)]
+            if len(keep) == len(items): fail(f"no reminder {a[1]} of yours or in this thread (see: hive remind list)")
             save(keep, STATE / "reminders.json")
         print("removed", a[1])
     elif a[:1] == ["tick"]: tick()

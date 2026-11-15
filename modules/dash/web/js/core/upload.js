@@ -8,7 +8,10 @@ export async function uploadFile(f) {
   for (let i = 0; ; i++) {
     let r = null;
     try { r = await fetch("/api/upload?name=" + encodeURIComponent(f.name), { method: "POST", headers: { "X-Hive-Dash": "1", "Content-Type": "application/octet-stream" }, body: f }); }
-    catch (e) { if (i >= WAIT_MS.length) throw Error("the connection to your Hive dropped while uploading " + f.name); }
+    catch (e) {
+      if (navigator.onLine === false) throw Error("your Hive couldn't be reached to upload " + f.name + ": this device is offline");   // no network at all: say so now, not after half a minute of "Uploading…"
+      if (i >= WAIT_MS.length) throw Error("the connection to your Hive dropped while uploading " + f.name);
+    }
     if (r && ![502, 503, 504].includes(r.status)) {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw Error(j.error || "the upload of " + f.name + " failed: " + said(r.status));

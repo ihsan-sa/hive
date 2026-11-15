@@ -47,7 +47,7 @@ export const activeNow = () => Date.now() - lastInput < 60000 && document.visibi
 /** An HTTP status in plain words, for the pages' error lines ("Couldn't read the settings: <this>"). */
 export const said = n => n === 403 ? "this sign-in isn't allowed to do that" : n === 404 ? "the Hive doesn't have that" : n === 408 || n === 504 ? "the Hive took too long to answer"
   : n === 413 ? "it's too big" : n === 429 ? "the Hive is busy, so try again in a moment" : n === 502 || n === 503 ? "the Hive isn't answering" : n >= 500 ? "the Hive hit a problem" : "the Hive turned it down";
-const ask = (u, o) => fetch(u, o).catch(() => { throw Error("can't reach the server"); });
+const ask = (u, o) => fetch(u, o).catch(() => { throw Object.assign(Error("can't reach the server"), { unreached: true }); });
 // A page's own read that failed for a passing reason (no answer, a 5xx, busy) while the store's reads may still answer: app.js tries the page again soon instead of on its timer.
 const STORE_READS = /^\/api\/(live|log|board|approvals|feedback-drafts)$/;
 let ownFail = () => {};
@@ -78,14 +78,16 @@ export async function post(path, body) {
 /** The words a form shows beside itself when full mode ended while it was open. */
 export const FULL_ENDED = "Full mode ended (it ends after 30 minutes without use), so this wasn't saved. What you typed is still here: press \"Limited · sign in for full\" at the top, sign in with Google, then save again.";
 export const fullEnded = e => !!(e && e.fullEnded);
+// The request never reached the Hive (offline, or the dashboard down): a form keeps what was typed and the next save tries again.
+export const unreached = e => !!(e && e.unreached);
 // What a form held when full mode ended, kept in this tab's sessionStorage so it survives the sign-in reload (WCAG 2.2.5). Names and numbers
 // only: a caller never passes a secret value. Each form clears its own entry after a save that works, or when it's closed.
 const KEPT = "hive.kept";
 const keptAll = () => { try { return JSON.parse(sessionStorage.getItem(KEPT) || "{}") || {}; } catch (e) { return {}; } };
 export const kept = k => keptAll()[k] ?? null;
 export const keep = (k, v) => { try { const o = keptAll(); if (v == null) delete o[k]; else o[k] = v; Object.keys(o).length ? sessionStorage.setItem(KEPT, JSON.stringify(o)) : sessionStorage.removeItem(KEPT); } catch (e) {} };
-/** The line beside a form that came back with what was typed before the sign-in. */
-export const KEPT_NOTE = "Typed before you signed in again. It isn't saved yet.";
+/** The line beside a form that came back with what was typed before a sign-in or a reload. */
+export const KEPT_NOTE = "Kept from before the page was loaded again. It isn't saved yet.";
 
 // ---- ingest ----
 const ledgerAdd = (r, words) => { r.lc = words.join(" ").toLowerCase(); S.ledger.push(r); };

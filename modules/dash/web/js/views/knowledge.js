@@ -2,7 +2,7 @@
 // #knowledge/<home-relative path> opens a folder or a file, and <path>::<line> jumps to a line. The server decides what can be seen and
 // redacts all text; this view only reads, except a project's goals.md, saved through /api/plan with the plans right. On a phone the list and a file take turns.
 import { h } from "../core/dom.js";
-import { S, can, fullEnded, getPref, jget, post, setPref, kept, keep, KEPT_NOTE } from "../core/store.js";
+import { S, can, fullEnded, unreached, getPref, jget, post, setPref, kept, keep, KEPT_NOTE } from "../core/store.js";
 import { ago, plural, stamp, fix, int } from "../core/format.js";
 import { href, threadHref } from "../core/router.js";
 import { labelCodes, threadTitle } from "../core/model.js";
@@ -168,7 +168,8 @@ async function saveEdit(start, ctx) {
     refresh(ctx);
   } catch (err) {
     e.say = err.message; e.tone = "bad"; e.lost = fullEnded(err); e.conflict = !e.isNew && /changed since you opened/i.test(err.message);
-    if (e.lost) keep("plan", { at: e.at, name: e.name, isNew: !!e.isNew, text: e.text, version: e.version });
+    // Full mode ended, or the Save never reached the Hive (no network): the draft is kept for a reload too (WCAG 2.2.5).
+    if (e.lost || unreached(err)) keep("plan", { at: e.at, name: e.name, isNew: !!e.isNew, text: e.text, version: e.version });
     // Changed elsewhere: the typed text is kept (a reload brings it back), but not the version it was opened at, which can only fail again.
     else if (e.conflict) { e.say = CONFLICT; keep("plan", { at: e.at, name: e.name, isNew: false, text: e.text, version: null, conflict: true }); }
     ctx.update();

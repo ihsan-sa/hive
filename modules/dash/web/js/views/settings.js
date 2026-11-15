@@ -1,7 +1,7 @@
 // Settings: Everyday, Accounts, Power and sandbox, Data sharing, Secrets, This device, Set once, Modules, Access from outside (R7). Shown only where can() allows each part.
 import { status as st } from "../core/status.js";
 import { h } from "../core/dom.js";
-import { S, can, built, jget, needsAccount, post, loadApp, said, fullEnded, kept, keep, KEPT_NOTE } from "../core/store.js";
+import { S, can, built, jget, needsAccount, post, loadApp, said, fullEnded, unreached, kept, keep, KEPT_NOTE } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
 import { deviceFingerprint } from "../core/sign.js";
 import { notifyBlocked, notifyOn, notifySupported, notifyTest, pushOn, pushSupported, setNotify, setPush } from "../core/notify.js";
@@ -314,6 +314,8 @@ function hiveSection(ctx) {
     try { await post("/api/config", fields); F.lost = false; if (key) { keep("set." + key, null); F.kept[key] = false; } if (mark) { say("hive", ""); flash(mark, ctx.update); } else say("hive", "Saved. The hive uses it within seconds.", "good"); }
     catch (e) {
       if (key && fullEnded(e)) { F.lost = true; F.saved[key] = F.was[key]; F.bad[key] = e.message; keep("set." + key, String(F.ed[key])); }
+      // No network: the typed number stays in the box with the reason beside it, and leaving the box again saves it (WCAG 3.3.1).
+      else if (key && unreached(e)) { F.saved[key] = F.was[key]; F.bad[key] = "Couldn't reach the Hive, so this wasn't saved. What you typed is kept: click in the box, then leave it, to save once you're back online."; keep("set." + key, String(F.ed[key])); }
       else { undo(); say("hive", e.message, "bad"); }
     }
     ctx.update();
