@@ -393,7 +393,7 @@ export default {
         : K.q.trim().length >= 2 && K.qPath === path ? resultsView()
         : !path ? h("div", { class: "kb-note", "data-key": "home" }, h("header", { class: "kb-h kb-home-h" }, h("h1", { class: "kb-t" }, "Knowledge"), h("p", { class: "meta" }, "What the Hive has written down and built. Read-only, except project plans.")),
           kbChat(ctx), homeSections(ctx))
-        : K.failed.has(path) ? h("div", { class: "kb-note", "data-key": "gone" }, h("a", { class: "btn kb-back", href: open(parent(path)), "data-kind": "quiet", "data-size": "s" }, icon("chevron-left"), parent(path).split("/").pop() || "Knowledge"), empty(K.failed.get(path) === "404" ? `~/${path} isn't here, or isn't shown here. Dotfiles and anything named like a key stay hidden.` : `Couldn't read ~/${path}.`))
+        : K.failed.has(path) ? h("div", { class: "kb-note", "data-key": "gone" }, h("a", { class: "btn kb-back", href: open(parent(path)), "data-kind": "quiet", "data-size": "s" }, icon("chevron-left"), parent(path).split("/").pop() || "Knowledge"), empty(K.failed.get(path) === "404" ? `~/${path} isn't here, or isn't shown here. Dotfiles and anything named like a key stay hidden.` : `Couldn't read ~/${path}.`, { kind: K.failed.get(path) === "404" ? "empty" : "error" }))
         : !d ? h("div", { class: "kb-none", "data-key": "wait" }, empty("Reading…", { kind: "loading" }))
         : [kbChat(ctx, { compact: true, cur: path }), isFile ? fileView(d, line, ctx) : folderView(d, ctx)]);
     const want = `${path}::${line}`;

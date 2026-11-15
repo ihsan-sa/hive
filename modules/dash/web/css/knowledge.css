@@ -33,7 +33,7 @@
 /* the search field (sidebar "find a file" and the main "search everything"): one shape, icon inside */
 .kb-q{position:relative;display:block;min-width:0}
 .kb-q>.ic{position:absolute;left:10px;top:50%;width:15px;height:15px;margin-top:-7.5px;color:var(--ink-3);pointer-events:none}
-.kb-q input{width:100%;height:var(--ctl);padding:0 var(--s3) 0 32px;border:1px solid var(--line);border-radius:var(--r-m);background:var(--surface);font:inherit;font-size:var(--fs-small);color:var(--ink)}
+.kb-q input{width:100%;height:var(--ctl);padding:0 var(--s3) 0 32px;border:1px solid var(--edge);border-radius:var(--r-m);background:var(--surface);font:inherit;font-size:var(--fs-small);color:var(--ink)}
 .kb-q input::placeholder{color:var(--ink-3)}
 .kb-q input:hover{border-color:var(--line-2)}
 .kb-q input:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 3px var(--accent-bg)}
@@ -158,7 +158,7 @@
 /* ================= Ask the Hive ================= */
 /* One card: the thread (when there is one) on top, the composer at the bottom. Home page: full; a file page with an
    answer open: [data-collapsed] one line that expands. */
-.kb-ask{display:grid;gap:0;border:1px solid var(--line-2);border-radius:var(--r-xl);background:var(--surface);box-shadow:var(--e1);overflow:hidden;transition:border-color .15s,box-shadow .15s}
+.kb-ask{display:grid;gap:0;border:1px solid var(--edge);border-radius:var(--r-xl);background:var(--surface);box-shadow:var(--e1);overflow:hidden;transition:border-color .15s,box-shadow .15s}
 .kb-ask:focus-within{border-color:color-mix(in oklab,var(--accent) 55%,var(--line-2))}
 .kb-ask-in:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:var(--r-s)}
 .kb-ask-h{display:flex;align-items:center;gap:var(--s2);margin:0;padding:var(--s3) var(--s4) 0;font-size:var(--fs-small);font-weight:var(--w-bold);color:var(--ink)}

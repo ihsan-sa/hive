@@ -153,7 +153,7 @@ export function needFull(what, title) {
 
 export function empty(text, { kind = "empty", title } = {}) {
   if (kind === "loading" && text === "Reading…") return skeleton();
-  return h("div", { class: "empty", "data-kind": kind, role: kind === "error" ? "alert" : null }, title ? h("div", { class: "empty-t" }, title) : null, text);
+  return h("div", { class: "empty", "data-kind": kind, role: kind === "error" ? "alert" : kind === "loading" ? "status" : null }, title ? h("div", { class: "empty-t" }, title) : null, text);
 }
 
 /** Data on its way: grey lines where the rows will be, in place of a word in an empty page. The word stays for a screen reader; the CSS holds it back 150 ms so a quick read never flashes it. */
@@ -249,10 +249,10 @@ export function note({ tone = "info", title, actions, key }, ...body) {
       actions ? h("div", { class: "note-a" }, actions) : null));
 }
 
-/** Block: one setting or account, in a .blks group. {title, sub, state, actions, key, fold, open, onToggle}.
+/** Block: one setting or account, in a .blks group. {title, sub, state, actions, key, fold, open, onToggle, live}. live: sub is a notice (a failed read), so a screen reader says it.
  *  fold makes it a <details>: keep open in view state and pass onToggle, or a refresh closes it. Put actions in the body when folded. */
-export function block({ title, sub, state, actions, key, fold, open, onToggle }, ...body) {
-  const head = [h("b", { class: "blk-t" }, title), sub ? h("span", { class: "blk-s" }, sub) : null, state || null, actions ? h("span", { class: "blk-a" }, actions) : null];
+export function block({ title, sub, state, actions, key, fold, open, onToggle, live }, ...body) {
+  const head = [h("b", { class: "blk-t" }, title), sub ? h("span", { class: "blk-s", role: live ? "status" : null }, sub) : null, state || null, actions ? h("span", { class: "blk-a" }, actions) : null];
   const b = body.flat().filter(Boolean), inner = b.length ? h("div", { class: "blk-b" }, b) : null;
   if (fold) return h("details", { class: "blk", "data-key": key || null, open: open ? "" : null, ontoggle: onToggle ? e => onToggle(e.target.open) : null }, h("summary", { class: "blk-h" }, head), inner);
   return h("div", { class: "blk", "data-key": key || null }, h("div", { class: "blk-h" }, head), inner);

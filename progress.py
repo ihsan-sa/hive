@@ -526,7 +526,86 @@ def cost_since(t0):
     try:
         out = subprocess.run([str(exe), "--since", t0, "--by", "day", "--json"], capture_output=True, text=True, timeout=120).stdout
         return float(json.loads(out).get("total_usd", 0))
-    except (OSError, ValueError, subprocess.TimeoutExpired, TypeError, AttributeError): return None
+    except (OSError, ValueError, subprocess.SubprocessError, TypeError, AttributeError): return None
+
+COST_CACHE = HOME / ".cache" / "hive-progress-cost.json"
+COST_CACHE_DAYS = 15  # files untouched this long drop out of the cache; --since windows longer than this reparse them
+
+def _cost_file(cm, f, ent):
+    """One transcript's calls {id: [ts, usd]}, reading only the bytes past the cached offset (transcripts are append-only).
+    Same filter and last-write-wins as module cost's calls()."""
+    st = os.stat(f)
+    if not ent or ent.get("ino") != st.st_ino or st.st_size < ent.get("off", 0):
+        ent = {"ino": st.st_ino, "off": 0, "msgs": {}}
+    if st.st_size == ent["off"]: return ent
+    with open(f, "rb") as fh:
+        fh.seek(ent["off"]); data = fh.read()
+    end = data.rfind(b"\n") + 1  # a half-written last line waits for the next run
+    for line in data[:end].decode("utf-8", "replace").splitlines():
+        if '"assistant"' not in line or '"usage"' not in line: continue
+        try: d = json.loads(line)
+        except ValueError: continue
+        if d.get("type") != "assistant": continue
+        m = d.get("message") or {}
+        if not m.get("usage"): continue
+        ent["msgs"][m.get("id") or d.get("uuid")] = [d.get("timestamp") or "", round(cm.price(m.get("model"), m["usage"]), 6)]
+    ent["off"] += end
+    return ent
+
+def cost_calls(cm, since):
+    """(ts, usd) per model call since `since`, as module cost's calls() yields them (deduped by message id per session,
+    and across logins for a session stored on more than one), from a per-file cache so a run reads only what was
+    appended since the last one. 2026-11-15 (R43b): the full read was 22 s at load 11 over 7 GB of transcripts."""
+    import glob, hashlib
+    key = hashlib.sha1(json.dumps(sorted(cm.PRICES.items())).encode()).hexdigest()[:12]
+    try:
+        cache = json.loads(COST_CACHE.read_text())
+        if cache.get("key") != key: cache = {}
+    except (OSError, ValueError): cache = {}
+    files_c = cache.get("files", {}); keep = {}
+    old = time.time() - COST_CACHE_DAYS * 86400
+    mains = [m for login in cm.logins() for m in glob.glob(os.path.join(login, "projects", "*", "*.jsonl"))]
+    copies = {}
+    for m in mains: copies[os.path.basename(m)] = copies.get(os.path.basename(m), 0) + 1
+    counted, cut, out = {}, since.strftime("%Y-%m-%dT%H:%M:%S") if since else None, []
+    for login in cm.logins():
+        for main in (m for m in mains if m.startswith(os.path.join(login, "projects") + os.sep)):
+            session = os.path.basename(main)[:-6]
+            files = [main] + sorted(glob.glob(os.path.join(main[:-6], "subagents", "*.jsonl")))
+            try: mt = max(os.path.getmtime(f) for f in files)
+            except OSError: continue
+            if since and mt < since.timestamp(): continue
+            msgs = {}
+            for f in files:
+                try: ent = _cost_file(cm, f, files_c.get(f))
+                except OSError: continue
+                msgs.update(ent["msgs"])
+                if os.path.getmtime(f) >= old: keep[f] = ent
+            if copies[os.path.basename(main)] > 1:
+                seen = counted.setdefault(session, set())
+                msgs = {k: v for k, v in msgs.items() if k not in seen}; seen.update(msgs)
+            out.extend((ts, usd) for ts, usd in msgs.values() if not (cut and ts and ts[:19] < cut))
+    try:
+        COST_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = COST_CACHE.with_name(f"{COST_CACHE.name}.{os.getpid()}")
+        tmp.write_text(json.dumps({"key": key, "files": keep}, separators=(",", ":"))); os.replace(tmp, COST_CACHE)
+    except OSError: pass
+    return out
+
+def cost_split(tp, t0, cached=True):
+    """(USD since tp, USD since t0) in one read of the transcripts, summed on each side of t0.
+    Two hive-cost runs read every transcript twice, 45 of the 64 s `hive progress` took at load 25 (2026-11-15, continuity.md R43);
+    the read is cached per file since R43b. Falls back to two cost_since runs when module cost can't be imported."""
+    try:
+        spec = importlib.util.spec_from_file_location("h2cost", HOME / "modules" / "cost" / "cost.py"); cm = importlib.util.module_from_spec(spec); spec.loader.exec_module(cm)
+        cut, both, cur = t0[:19], 0.0, 0.0
+        rows = cost_calls(cm, cm.parse_since(tp)) if cached else ((c.get("ts") or "", c["usd"]) for c in cm.calls(cm.parse_since(tp)))
+        for ts, usd in rows:
+            both += usd
+            if ts[:19] >= cut: cur += usd
+        return round(both, 2), round(cur, 2)
+    except Exception:
+        return cost_since(tp), cost_since(t0)
 
 def commits_in(t0, t1):
     try:
@@ -655,7 +734,7 @@ def scoreboard(since):
     cur = window(iso(t0), iso(t1), log, posts, items)
     prev = window(iso(tp), iso(t0), log, posts, items)
     cur["paused_share"], prev["paused_share"] = paused_share(t0, t1), paused_share(tp, t0)  # a window the hive sat paused in reads the pause
-    both, cur_cost = cost_since(iso(tp)), cost_since(iso(t0))
+    both, cur_cost = cost_split(iso(tp), iso(t0))
     cur["spend_usd"] = None if cur_cost is None else round(cur_cost, 2)
     prev["spend_usd"] = None if both is None or cur_cost is None else round(both - cur_cost, 2)
     od = due_groups(items)
@@ -734,19 +813,33 @@ def text(cur, prev):
     if w: lines.append("Got worse, worst first: " + ", ".join(f"{k} {b}->{a}" for _, k, b, a in w[:4]))
     return "\n".join(lines)
 
-def steer():
-    """The few numbers the hive steers by, in the order the person named their pain points (the RSI lab's index; the table below is for diagnosis)."""
+def steer_start():
+    """Start the RSI lab's index (the few numbers the hive steers by, in the order the person named their pain points; the table below is for diagnosis).
+    Started before the scoreboard and read after it, so its 15 s (13 of them safety.py's scan) overlap the table's (2026-11-15, continuity.md R43)."""
+    try: return subprocess.Popen([sys.executable, "-I", str(HOME / "projects" / "rsi-lab" / "index.py"), "--brief"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    except Exception: return None
+
+def steer(p=None):
+    p = p or steer_start()
+    if p is None: return ""
     try:
-        r = subprocess.run([sys.executable, "-I", str(HOME / "projects" / "rsi-lab" / "index.py"), "--brief"], capture_output=True, text=True, timeout=60)
-        return r.stdout.strip() if r.returncode == 0 else ""
-    except Exception: return ""
+        out, _ = p.communicate(timeout=60)
+        return out.strip() if p.returncode == 0 else ""
+    except Exception:
+        p.kill(); p.wait(); return ""
 
 def cmd_progress(a):
-    cur, prev = scoreboard(a.since)
+    sp, t_go = None if a.json else steer_start(), time.monotonic()
+    try: cur, prev = scoreboard(a.since)
+    except BaseException:
+        if sp: sp.kill(); sp.wait()
+        raise
+    try: cur["took_s"], cur["load1"] = round(time.monotonic() - t_go, 1), round(os.getloadavg()[0], 1)  # R43: the scoreboard's own seconds and the load it ran at, so a slow table can be told from a busy machine
+    except OSError: pass
     if a.snapshot: append(SNAPS, cur)
     if a.json: print(json.dumps({"now": cur, "before": prev, "worse": worst(cur, prev)}, indent=1)); return
     t = text(cur, prev)
-    s = steer()
+    s = steer(sp)
     if s: t = s + "\n\n" + t
     print(t)
     if a.post:

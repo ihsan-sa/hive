@@ -58,6 +58,7 @@
   --tint:     light-dark(oklch(20% .006 265 / .04), oklch(95% .003 265 / .05));
   --line:     light-dark(oklch(92.6% .004 265), oklch(26.5% .005 265));
   --line-2:   light-dark(oklch(86.5% .005 265), oklch(34%   .006 265));
+  --edge:     light-dark(oklch(60% .006 265), oklch(54% .007 265));   /* a control's own edge (text box, checkbox, switch, composer): 3.2 to 3.6:1 on --surface, --bg, --sunken, --hover, both themes (WCAG 1.4.11; drive_app_nontext) */
   --ink:      light-dark(oklch(20%   .006 265), oklch(95%   .003 265));
   --ink-2:    light-dark(oklch(42%   .008 265), oklch(80%   .005 265));
   --ink-3:    light-dark(oklch(52%   .008 265), oklch(67%   .006 265)); /* measured: 5.0 to 6.6:1 on --bg, --surface, --sunken, both themes */
