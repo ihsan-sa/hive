@@ -39,5 +39,15 @@
   "repo": "https://github.com/Hive-RSI-Lab/hive-link.git",
   "about": "Signed messages between Hives: ed25519 keys, pinned peers, replay and rate limits.",
   "needs": "python3 cryptography"
+ },
+ "lab": {
+  "repo": "https://github.com/Hive-RSI-Lab/hive-lab.git",
+  "about": "Quick experiments on small open language models (lenses, probes, steering, patching), behaviour tests on Claude, and a Neuronpedia client.",
+  "needs": "about 9 GB of disk for PyTorch and two small models, via lab setup; a GPU is optional"
+ },
+ "lit": {
+  "repo": "https://github.com/Hive-RSI-Lab/hive-lit.git",
+  "about": "Search, fetch, read and check ML and AI-safety papers from the command line.",
+  "needs": "pdftotext (poppler-utils) to read PDFs"
  }
 }

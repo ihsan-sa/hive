@@ -463,7 +463,7 @@ const tierLead = th => (app() ? null : h("span", { class: "ref-sw", "data-tone":
 
 /** One thread's state in a few words, for the list: shape, colour and the words. */
 // A row's state starts with the agent: "The agent working". Under its own title it goes by its place in that conversation, hover included (E10).
-const statePill = n => { const p = codePill(n); if (app() && p.nodeType === 1) { p.textContent = capFirst(p.textContent); } return p; };
+const statePill = n => { const p = codePill(n); if (app() && p.nodeType === 1 && !/\d/.test(p.textContent)) {  p.textContent = capFirst(p.textContent); } return p; };   // an agent id (cd34e) keeps its case
 const STATE_WORDS = { asks: () => "Waiting for your answer", working: s => (simpleOn() ? "Working on it" : [statePill(s.who), " working"]), quiet: s => (simpleOn() ? null : [statePill(s.who), " quiet"]), stuck: () => (simpleOn() ? "Taking longer than it should" : "Stuck"), queue: s => (simpleOn() ? "Waiting its turn" : [codePill(s.who), " in the job queue"]),
   queued: () => "Waiting to start", limited: () => (simpleOn() ? "Taking a break" : "Stopped at a usage limit"), failed: () => (simpleOn() ? "Ran into a problem" : "Stopped with an error"), foryou: () => "New reply for you", done: () => null };
 function stateTag(st) {

@@ -797,7 +797,8 @@ function toMenu(th, r) {
 const MODELS = [["opus", "Opus 5.5", "Most capable, uses the most of your plan"], ["sonnet", "Sonnet 5.5", "Fast and capable, for most jobs"], ["haiku", "Haiku 5.5", "Quickest, for small jobs"], ["fable", "Fable 5.2", ""], ["astra", "Astra", ""]];
 // The app look says an agent's place in this conversation in its hover words too (E10); the developer look keeps the code.
 const said = (th, n) => (S.app && S.app.app && n && isAgent(n) ? inConversation(th, () => agentLabel(n)) : n);
-const Said = (th, n) => (S.app && S.app.app && n && isAgent(n) ? capFirst(said(th, n)) : n);
+const Said = (th, n) => (S.app && S.app.app && n && isAgent(n) ? capId(said(th, n)) : n);
+const capId = s => (/\d/.test(s || "") ? s : capFirst(s));   // "the agent" → "The agent", but an id (cd34e) keeps its case
 function modelPick(d, r, th) {
   // An agent already running stays on its model for this run; a pick here is kept by the starter and holds from its next run.
   const who = r && r.who, live = who && who !== "new" && isRunning(who);

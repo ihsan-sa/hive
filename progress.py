@@ -570,7 +570,7 @@ def decided_lines(posts, t0, t1):
     """`Decided:` lines from agents in the window (hive-meta P4; the convention's measure against person_asks). Same agent filter as For you: not the person, not the hive's own threads."""
     return sum(len(DECIDED_LINE.findall(str(p.get("text", "")))) for p in posts if t0 <= p.get("at", "") <= t1 and p.get("from") not in ("person", "starter", "keeper") and p.get("thread") not in ("keeper", "improve", "watchdog"))
 
-REVERSE = re.compile(r"\b(revers\w*|undo|revert\w*|instead|don'?t do|do not|wrong|no,|stop doing|take (?:that|it) back)\b", re.I)
+REVERSE = re.compile(r"\b(revers\w*|undo|revert\w*|don'?t do (?:that|it|this)|stop doing|take (?:that|it) back)\b", re.I)
 
 def reversal_numbers(posts, t0, t1, within_h=24):
     """Reversals per 100 `Decided:` lines (hive-meta P4): decisions in the window whose thread got a person post within 24 h that reads as a reversal (keyword match, so a count to watch, not a verdict). Empty when there are no decisions."""
