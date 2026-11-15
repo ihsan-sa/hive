@@ -38,6 +38,9 @@ jobs:
         for f in ha.stderr.log serial.log serialv.log serialp.log; do echo "=== $f"; tail -n 60 "$HOME/.hive/lima/hive/$f" 2>/dev/null || true; done
         ls -la "$HOME/.hive/lima/hive" 2>/dev/null || true
         ps -axo pid,etime,command | grep -i -E 'lima|hive' | grep -v grep | cut -c1-200 || true
+        echo "=== inside the VM"
+        L="$HOME/.hive/lima-dist/bin/limactl"
+        timeout 60 "$L" shell --workdir / hive sh -c 'ps -eo pid,ppid,etime,stat,args --forest | cut -c1-200; echo ---; tail -n 30 /home/hive/.h2/voice-setup.log 2>/dev/null; journalctl -n 30 --no-pager 2>/dev/null | cut -c1-200' </dev/null || true
     - name: Uninstall, for real
       if: always()
       timeout-minutes: 5
