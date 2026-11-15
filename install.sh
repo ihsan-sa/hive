@@ -207,6 +207,11 @@ if [ "$SERVICE" = 1 ]; then
   place "$CORE/hive-outcomes.service" hive-outcomes.service; place "$CORE/hive-outcomes.timer" hive-outcomes.timer
   systemctl --user daemon-reload
   systemctl --user enable --now hive-outcomes.timer
+  # Reminders: once a minute, posts what is due from `hive remind` (no model, no port). The one ticker agents use instead of writing their own timers.
+  mkdir -p "$U/hive-remind.service.d"; cp "$U/hive-dash.service.d/local.conf" "$U/hive-remind.service.d/local.conf"
+  place "$CORE/hive-remind.service" hive-remind.service; place "$CORE/hive-remind.timer" hive-remind.timer
+  systemctl --user daemon-reload
+  systemctl --user enable --now hive-remind.timer
   # Reports and the daily check-in: every 6h; a no-op until setup is done, while "share" in settings.json is off, or with no endpoint.
   mkdir -p "$U/hive-report.service.d"; cp "$U/hive-dash.service.d/local.conf" "$U/hive-report.service.d/local.conf"
   place "$HOME/modules/report/hive-report.service" hive-report.service; place "$HOME/modules/report/hive-report.timer" hive-report.timer

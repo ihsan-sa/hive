@@ -75,9 +75,11 @@ export function pausedTiers() {
 }
 
 // ---- Settings > Work tiers ----
-async function change(op, body, done, what) {
+// saved: runs only once the change is in (a new tier's or a rename's typed name is cleared then, not when the press starts, so a refusal
+// keeps it in the box). A second press while the first is on its way is dropped by act, and leaves the tiers as they are.
+async function change(op, body, done, what, saved) {
   T.say = null;
-  try { T.data = await act("tiers-" + op, what || "Changing work tiers", () => post("/api/work-tiers", { op, ...body }), done); T.at = Date.now(); T.say = what ? { text: what, tone: "good" } : null; }
+  try { const r = await act("tiers-" + op, what || "Changing work tiers", () => post("/api/work-tiers", { op, ...body }), done); if (r === false) return; T.data = r; T.at = Date.now(); T.say = what ? { text: what, tone: "good" } : null; if (saved) saved(); }
   catch (e) { T.say = { text: `Nothing changed: ${e.message}`, tone: "bad" }; }
   done();
 }
@@ -118,7 +120,7 @@ function tierBlock(t, done) {
       h("select", { class: "input", "aria-label": `Stop point for ${t.name}`, title: "Past this share of the week's usage, nothing new in this tier starts", onchange: e => change("stop", { tier: id, pct: e.target.value }, done, `${t.name}: stop point saved.`) },
         STOPS.map(([v, l]) => h("option", { value: v, selected: (t.stop == null ? "none" : String(t.stop)) === v ? "" : null }, l))),
       t.default ? null : button("Make default", () => change("default", { tier: id }, done, `Work with no tier now goes to ${t.name}.`), { size: "s", kind: "quiet" })),
-    h("form", { class: "frow", onsubmit: e => { e.preventDefault(); const v = (T.rename[id] || "").trim(); if (v && v !== t.name) change("rename", { tier: id, name: v }, () => { delete T.rename[id]; done(); }, `Renamed to ${v}.`); } },
+    h("form", { class: "frow", onsubmit: e => { e.preventDefault(); const v = (T.rename[id] || "").trim(); if (v && v !== t.name) change("rename", { tier: id, name: v }, done, `Renamed to ${v}.`, () => { delete T.rename[id]; }); } },
       h("div", { class: "frow-grow", "data-size": "s" }, field("Name", input({ value: rn, maxlength: 40, "aria-label": `Name of ${t.name}`, oninput: e => { T.rename[id] = e.target.value; } }))),
       button("Rename", null, { type: "submit", size: "s", kind: "quiet" }),
       t.default ? null : button("Remove tier", () => { confirm({ title: `Remove ${t.name}?`, body: ["What it holds moves to the default tier."], ok: "Remove", kind: "danger", onOk: () => change("drop", { tier: id }, done, `Removed ${t.name}.`) }); }, { size: "s", kind: "danger" }))));
@@ -138,7 +140,7 @@ export function tiersSection(ctx) {
       T.say ? h("p", { class: "fmsg", "data-tone": T.say.tone, role: "status" }, T.say.text) : null,
       blocks(...tiers().map(t => tierBlock(t, done)), logBlock()),
       // An empty name is said beside the box (WCAG 3.3.1, drive_app_errors), and typing a name clears it.
-      h("form", { class: "frow", "data-key": "tier-new", onsubmit: e => { e.preventDefault(); const v = T.name.trim(); if (!v) { T.bad = "Give the new tier a name first, like Weekend."; return done(); } T.bad = ""; change("new", { name: v }, () => { T.name = ""; done(); }, `Added ${v}.`); } },
+      h("form", { class: "frow", "data-key": "tier-new", onsubmit: e => { e.preventDefault(); if (isBusy("tiers-new")) return; const v = T.name.trim(); if (!v) { T.bad = "Give the new tier a name first, like Weekend."; return done(); } T.bad = ""; change("new", { name: v }, done, `Added ${v}.`, () => { T.name = ""; }); } },
         h("div", { class: "frow-grow", "data-size": "s" }, field("Add a tier", input({ placeholder: "a name, like Weekend", value: T.name, maxlength: 40, ...invalid("err-tname", T.bad), oninput: e => { T.name = e.target.value; if (T.bad && T.name.trim()) { T.bad = ""; done(); } } })), fieldErr("err-tname", T.bad)),
         button("Add", null, { type: "submit", busy: isBusy("tiers-new") })),
       h("p", { class: "field-h" }, "Upkeep (backups, guards, the watchdog) is never paused.")];

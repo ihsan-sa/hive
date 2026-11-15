@@ -1,0 +1,10 @@
+[Unit]
+Description=Hive reminders: post what is due (hive remind tick; one pass, no port, no model)
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=TMPDIR=%h/.cache/hive-tmp
+Nice=15
+MemoryMax=200M
+ExecStart=/usr/bin/python3 -I %h/core/remind.py tick

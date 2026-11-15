@@ -706,6 +706,7 @@ async function openSecrets(th) {
 const closeSecrets = () => { keepTyped("composer", null); SB.open = false; SB.lost = false; SB.rows = [{ name: "", value: "" }]; refresh(); };
 const dropSecrets = () => { SB.say = ""; closeSecrets(); };   // the person closed it: an old complaint goes with it, unlike the "Saved" line a save leaves
 async function saveSecret() {
+  if (SB.busy) return;   // Enter pressed twice in the value box (drive_app_twice): the first save is still on its way, so a second would save it again
   // What is missing is said beside the box it belongs to (WCAG 3.3.1, drive_app_errors), not only in the line above the rows.
   const rows = SB.rows.filter(r => r.name.trim() || r.value);
   SB.rows.forEach(r => { r.bad = {}; });

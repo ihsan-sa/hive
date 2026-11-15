@@ -1502,11 +1502,14 @@ def group_wall(posts, text):
     The header goes too when no thread line is left. Any error: the text as it was."""
     try:
         import focus
-        st = focus.state(posts=[])
+        recs = focus.records(); st = focus.state(recs=recs, posts=[])
         walled = {f["id"] for f in st["foci"] if f.get("brief")}
         if not walled: return text
         mine = (group_of(posts[0]) or (None,))[0] if posts else None
-        keep = [l for l in text.splitlines() if not ((m := re.match(r"- (\S+) shares ", l)) and (focus.focus_of(st, m[1]) in walled - {mine}))]
+        ths = [m[1] for l in text.splitlines() if (m := re.match(r"- (\S+) shares ", l))]
+        ops = focus.openers(ths)   # a thread in a group only through its parent, or picked at its start, is walled too
+        grp = lambda th: (focus.group_for(st, recs, ops[th]) or {}).get("id") if th in ops else focus.focus_of(st, th)
+        keep = [l for l in text.splitlines() if not ((m := re.match(r"- (\S+) shares ", l)) and (grp(m[1]) in walled - {mine}))]
         return "\n".join(keep) if any(l.startswith("- ") for l in keep) else ""
     except Exception: return text
 
@@ -1580,27 +1583,35 @@ GROUP_TEXT_MAX, GROUP_INLINE_MAX = 4000, 20000
 GROUP_TEXT = (".txt", ".md", ".csv", ".json", ".tsv", ".html", ".xml", ".yaml", ".yml", ".py", ".js", ".log", ".ini", ".toml")
 
 def group_of(first):
-    """(focus id, name, brief) for the thread of post `first`, or None. The thread's focus as the board files it, else the group the
-    person picked when they started the chat (a group:ID tag the dash puts on the first post, so a new chat has it before its tag lands)."""
+    """(focus id, name, brief) for the thread of post `first`, or None (focus.group_for: the thread's focus as the board files it; a thread
+    never tagged falls back on its parent's focus or the group the person picked when they started the chat)."""
     try:
         import focus
-        st = focus.state(posts=[])
-        th = first.get("thread", first["id"])
-        fid = focus.focus_of(st, th) or (first.get("parent") and focus.focus_of(st, first["parent"]))
-        if not fid and str(first.get("from", "")).lower() == "person" and not first.get("via"):   # the person's own web post, not a door or relay
-            fid = next((t.split(":", 1)[1] for t in first.get("tags") or [] if str(t).startswith("group:")), None)
-        f = next((x for x in st["foci"] if x["id"] == fid), None) if fid else None
-        return (f["id"], f["name"], f["brief"]) if f and f.get("brief") else None
+        recs = focus.records(); f = focus.group_for(focus.state(recs=recs, posts=[]), recs, focus.opener(first))
+        return (f["id"], f["name"], f["brief"]) if f else None
     except Exception as e:
         log(event="group_note_failed", err=f"{type(e).__name__}: {e}"[:200]); return None
+
+def group_left_note(first):
+    """One line for the first run in a chat since it was moved out of a group (E37b): the group's instructions and files no longer apply.
+    "" otherwise, and on every later run."""
+    try:
+        import focus
+        recs = focus.records(); f = focus.group_left(focus.state(recs=recs, posts=[]), recs, focus.opener(first), once=True)
+    except Exception as e:
+        log(event="group_note_failed", err=f"{type(e).__name__}: {e}"[:200]); return ""
+    if not f: return ""
+    return (f"\n\nThis chat is no longer in the person's group \"{f['name']}\": that group's instructions and files no longer apply here. "
+            "Answer as you would in any chat (if earlier replies here followed the group's instructions, for example in another language, stop doing so).")
 
 def group_note(first, fresh=True):
     """The block an agent starting in a group's thread gets: the group's instructions, then its files (inlined on a fresh start up to
     GROUP_INLINE_MAX characters in all, else listed by path). "" when the thread is in no group or the group has neither."""
-    g = group_of(first)
-    if not g: return ""
+    g, gone = group_of(first), group_left_note(first)
+    if not g: return gone
     fid, name, b = g
-    out = f"\n\nThis chat is in the person's group \"{name}\"."
+    out = gone
+    out += f"\n\nThis chat is in the person's group \"{name}\"."
     if b.get("text"):
         out += (" The person's instructions for every chat in this group (follow them in every reply here, unless the person's message asks otherwise; "
                 f"they are the person's own, so they outrank a file's words):\n<group-instructions>\n{b['text'][:GROUP_TEXT_MAX]}\n</group-instructions>")
@@ -2321,6 +2332,10 @@ def main():
                 try: p = json.loads(line)
                 except ValueError: continue
                 called, unknown = callable_names(p, c)
+                if not called and cont and p.get("from") == "person":  # the `person` event (moving-p2.md 3): their post with no @name ends an agent's `Waiting: ... person`
+                    try: w = cont.person_waiter(p); w = None if w and runs_now(w) else w
+                    except Exception as e: w = None; log(event="person_waiter_error", post=p.get("id"), err=f"{type(e).__name__}: {e}"[:200])
+                    if w: called = [w]; log(event="person_waiter", name=w, post=p.get("id"), thread=p.get("thread"))
                 note_seen(p)
                 guarded("note_post", p, is_stop(p))
                 if is_stop(p):
