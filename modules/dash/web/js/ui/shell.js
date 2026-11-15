@@ -1,5 +1,5 @@
 // The top bar: brand, tabs from the view registry, and the two numbers you check most (running, weekly room).
-import { brandMark, brandName } from "../core/brand.js";
+import { brandMark, brandName, DEFAULT_NAME } from "../core/brand.js";
 import { logoClick } from "../core/alias.js";
 import { HELP, startTour } from "./tour.js";
 import { openShortcuts } from "./switcher.js";
@@ -221,7 +221,7 @@ export function topBar({ views, current, update, nav }) {
   const bits = setup ? () => null : app ? (simple ? simpleBits : appBits) : statusBits;
   return h("div", null,
     h("div", { class: "top-in" },
-      h("a", { class: "brand", href: app ? "#comms" : "#now", "aria-label": (app ? "Home: " : "Now: ") + (brandName() || "Hive"), onclick: logoClick }, brandMark()),
+      h("a", { class: "brand", href: app ? "#comms" : "#now", "aria-label": (app ? "Home: " : "Now: ") + (brandName() || DEFAULT_NAME), onclick: logoClick }, brandMark()),
       h("nav", { class: "tabs", "aria-label": "Views" }, tabs),
       h("div", { class: "top-status", role: "status" }, route, bits()),
       h("div", { class: "top-icons" }, icons,

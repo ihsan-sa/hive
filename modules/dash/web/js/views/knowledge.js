@@ -6,7 +6,7 @@ import { S, can, getPref, jget, post, setPref } from "../core/store.js";
 import { ago, plural, stamp, fix, int } from "../core/format.js";
 import { href, threadHref } from "../core/router.js";
 import { labelCodes, threadTitle } from "../core/model.js";
-import { button, empty, skeleton, waiting, field, input, list, needFull, copyPress } from "../ui/kit.js";
+import { button, empty, skeleton, waiting, field, fieldErr, input, invalid, list, needFull, copyPress } from "../ui/kit.js";
 import { icon } from "../ui/icons.js";
 import { markdown } from "../ui/markdown.js";
 import { markWords } from "../ui/message.js";
@@ -156,7 +156,8 @@ async function saveEdit(start, ctx) {
   const e = K.edit, name = e.isNew ? e.name.trim() : e.name;
   const wasNew = e.isNew;
   if (e.saving) return;   // a double click would post twice, and with "Save and start" start a second agent
-  if (!name) { e.say = "Give the project a name first."; e.tone = "bad"; ctx.update(); return; }
+  e.bad = name ? "" : "Give the project a name first, like garden-sensor.";   // beside the box and marked on it (WCAG 3.3.1)
+  if (!name) { e.say = ""; ctx.update(); return; }
   e.saving = true; e.say = ""; ctx.update();
   try {
     const r = await post("/api/plan", { name, text: e.text, version: e.version, start });
@@ -171,7 +172,8 @@ function editor(ctx) {
   if (e.failed) return empty(e.failed, { kind: "error" });
   return h("section", { class: "kb-edit", "data-key": "edit" },
     h("h2", { class: "kb-t" }, e.isNew ? "New project" : `Plan for ${e.name}`),
-    e.isNew ? field("Name", input({ value: e.name, autocomplete: "off", oninput: (ev, n) => { e.name = n.value; } })) : null,
+    e.isNew ? field("Name", input({ value: e.name, autocomplete: "off", ...invalid("err-pname", e.bad), oninput: (ev, n) => { e.name = n.value; } })) : null,
+    e.isNew ? fieldErr("err-pname", e.bad) : null,
     h("textarea", { class: "input", rows: 20, "aria-label": "Plan", value: e.text, oninput: (ev, n) => { e.text = n.value; } }),
     h("div", { class: "frow" }, button("Save", () => saveEdit(false, ctx), { kind: "primary", busy: e.saving }), button("Save and start an agent", () => saveEdit(true, ctx), { disabled: e.saving }),
       button("Close", () => { K.edit = null; ctx.update(); }, { kind: "quiet" }),

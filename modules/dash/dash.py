@@ -533,9 +533,35 @@ def dismiss_shown(d):
 CHECKLIST = STATE / "checklist.json"   # needs_you.CHECKS: {"items": [...]}; agents write it with `hive summary check`
 
 FOCUS_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,60}")
-def focus_do(d):
+def focus_do(d, full=True):
     """POST /api/focus: put a thread in a focus ({thread, focus}) or take it out ({thread, off: true}); focus.py keeps the record (hive focus tag).
-    {order: [focus ids]} sets the order the foci show in, rail and home alike (hive focus order)."""
+    {order: [focus ids]} sets the order the foci show in, rail and home alike (hive focus order).
+    {brief: {focus, text?, files?: [upload refs], drop?: [names]}}: the group's own instructions and files, given to every chat in it (E37, hive focus brief).
+    full: the sign-in may change settings; a group's instructions steer every agent in it, so a limited one can't."""
+    if "brief" in d:
+        if not full: raise ValueError("only a full sign-in can change a group's instructions")
+        x = d.get("brief") if isinstance(d.get("brief"), dict) else {}
+        fid = str(x.get("focus") or "").lower()
+        if not FOCUS_ID.fullmatch(fid): raise ValueError("bad focus")
+        args = ["brief", fid]
+        if "text" in x:
+            if not isinstance(x["text"], str) or len(x["text"]) > 4000: raise ValueError("a group's instructions take 4000 characters at most")
+            args.append("--set")
+        refs = [UPLOAD_REF.fullmatch(str(u)) for u in x.get("files") or []]
+        if not all(refs) or len(refs) > 10: raise ValueError("a file wasn't recognised")
+        paths = [INCOMING / m[1] / m[2] for m in refs]
+        if not all(q.is_file() and not q.is_symlink() for q in paths): raise ValueError("a file is gone; add it again")
+        for q in paths: args += ["--file", str(q)]
+        for n in x.get("drop") or []:
+            n = Path(str(n)).name
+            if not n or n.startswith("-"): raise ValueError("bad file name")
+            args += ["--drop", n]
+        if len(args) == 2: raise ValueError("nothing to change")
+        r = subprocess.run(["nice", "-n", "15", sys.executable, "-I", str(HOME / "core" / "focus.py")] + args, input=x.get("text") or "", capture_output=True, text=True, timeout=30, env={**os.environ, "HIVE_NAME": "person"})
+        if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
+        for q in paths: shutil.rmtree(q.parent, ignore_errors=True)
+        foci_c.t = 0
+        return {"ok": True, "focus": fid, "said": r.stdout.strip()}
     if "order" in d:
         ids = d.get("order")
         if not isinstance(ids, list) or not ids or len(ids) > 60 or not all(isinstance(i, str) and FOCUS_ID.fullmatch(i) for i in ids): raise ValueError("bad order")
@@ -2148,7 +2174,7 @@ FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcoun
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
 GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/work-tiers": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
-           "/api/config": "config", "/api/modules": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
+           "/api/config": "config", "/api/export": "config", "/api/modules": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
@@ -2769,7 +2795,7 @@ def voice_retry():
 # Must match EDIT_NOTE in web/js/core/model.js, byte for byte: the page signs it.
 EDIT_NOTE = "(edited message {v}: this version replaces it. Answer it instead, as if that message and your answer to it were never sent; anything already done for it stays done, so don't redo it.)\n"
 
-def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None, sig=None, interrupt=False, effort=None, notice=False, edit_of=None, retry_of=None, files_from=None):
+def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None, sig=None, interrupt=False, effort=None, notice=False, edit_of=None, retry_of=None, files_from=None, focus=None):
     """A post as the person. As the Slack mirror does it: a plain message wakes the agent on the thread (thread_agent), a reply wakes the author
     of the post replied to, and no thread (or a thread with no agent yet) starts a new agent. Mentions in the text win.
     signer: who signed in, from a verified Access token, when more than one person can: it heads the text, so an agent and the board can see who wrote it.
@@ -2782,8 +2808,12 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     of the agent's reply with this id. Both go on the board as fields (hive post --edit-of/--retry-of) and the chat draws them as versions; the
     agent reads a one-line note on what to do (everyday E12). A retry has no typed text, so it goes unsigned, like a notice.
     files_from: with edit_of, the version being edited (its id): its files go with the new version, so editing the words keeps them (E12d).
+    focus: a new chat started under this group (the composer's picker): the first post carries group:ID, so the starter gives the agent the
+    group's instructions even before the thread's tag lands (core/starter.py group_of), and the thread is filed there right after (E37).
     Returns {"id", "thread", "said"}, or raises ValueError with a sentence for the page."""
     text = str(text or "").strip()
+    focus = str(focus or "").lower() or None
+    if focus and (thread or not FOCUS_ID.fullmatch(focus)): focus = None
     for k, v in (("edit", edit_of), ("retry", retry_of)):
         if v is not None and (not thread or not re.fullmatch(r"[0-9a-f]{6,20}", str(v))): raise ValueError(f"the message to {k} isn't one in this conversation")
     if retry_of: text, notice, interrupt, reply_to, uploads = "", True, False, None, ()
@@ -2840,12 +2870,15 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     if pairing:  # before the post, so a connector reading the board always finds it
         PAIR_ACCEPTED.parent.mkdir(parents=True, exist_ok=True)
         with PAIR_ACCEPTED.open("a") as f: f.write(json.dumps({"at": time.time(), "text": text}) + "\n")
-    cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else []) + (["--model", PICK_MODELS[model]] if model else []) + (["--effort", effort] if effort and not word else []) + (["--interrupt"] if interrupt and not limited and not word else []) + (["--edit-of", str(edit_of)] if edit_of else []) + (["--retry-of", str(retry_of)] if retry_of else [])
+    cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else []) + (["--model", PICK_MODELS[model]] if model else []) + (["--effort", effort] if effort and not word else []) + (["--interrupt"] if interrupt and not limited and not word else []) + (["--edit-of", str(edit_of)] if edit_of else []) + (["--retry-of", str(retry_of)] if retry_of else []) + (["--tag", f"group:{focus}"] if focus else [])
     for p in paths + kept: cmd += ["--file", str(p)]
     r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), **({"HIVE_POST_VIA": "web-notice"} if (notice or btw) and not limited else {}), **({"HIVE_POST_VIA": "limited"} if limited else {}), **({"HIVE_POST_VIA": "web-pair"} if pairing else {}), **({"HIVE_POST_SIG": json.dumps(sig)} if sig else {})}, cwd=str(HOME), timeout=60)
     if r.returncode: raise ValueError(short(r.stderr, 300) or "the post failed")
     for p in paths: shutil.rmtree(p.parent, ignore_errors=True)
     pid = r.stdout.strip()
+    if focus and not btw:
+        try: focus_do({"thread": pid, "focus": focus})
+        except (ValueError, OSError, subprocess.SubprocessError): pass   # it stays in Misc, where the title menu can file it
     return {"id": pid, "thread": thread or pid, "said": short(r.stderr.replace("hive post: ", "", 1), 300)}
 
 
@@ -3689,7 +3722,16 @@ _cfg_lock = threading.Lock()
 
 def config_view():
     c = cfg()
-    return {**{k: c.get(k) for k in ("max_sessions", "keeper_every_s", "keeper_idle_s", "usage_stop_pct", "auto_update", "update_every_s", "update_pace", "max_budget_usd", "max_daily_usd")}, "spend_today": spend_today()}
+    try: style = ANSWER_STYLE.read_text(errors="replace")
+    except OSError: style = ""
+    return {**{k: c.get(k) for k in ("max_sessions", "keeper_every_s", "keeper_idle_s", "usage_stop_pct", "auto_update", "update_every_s", "update_pace", "max_budget_usd", "max_daily_usd")}, "spend_today": spend_today(),
+            "answer_style": style.strip()}
+
+
+# E33 (projects/everyday): the person's standing word on how they want answers, from Settings › Everyday. Its own file, not config.json: free text.
+# The starter adds it to every new agent's instructions (core starter.py system_for) and rebuilds the warm agent when it changes.
+ANSWER_STYLE = HOME / "answer-style.md"
+ANSWER_STYLE_MAX = 2000
 
 
 def spend_today():
@@ -3733,6 +3775,17 @@ def set_config(d):
     if "update_pace" in d:
         if d["update_pace"] not in ("every", "daily"): raise ValueError("how often to update is every release or about once a day")
         new["update_pace"] = d["update_pace"]; new["update_pace_chosen"] = True  # install.sh drops a "daily" nobody chose
+    style = None
+    if "answer_style" in d:
+        style = d["answer_style"]
+        if not isinstance(style, str): raise ValueError("how you want answers is text")
+        style = style.replace("\r\n", "\n").strip()
+        if len(style) > ANSWER_STYLE_MAX: raise ValueError(f"how you want answers fits in {ANSWER_STYLE_MAX} characters")
+    def put_style():  # after everything else in the request has saved, so a refused request changes nothing
+        if style is None: return
+        if style: write_text_private(ANSWER_STYLE, style + "\n")
+        else: ANSWER_STYLE.unlink(missing_ok=True)
+    if not new and style is not None: put_style(); return config_view()
     if not new: raise ValueError("nothing to change")
     with _cfg_lock:
         c = jload(HOME / "core" / "config.json")
@@ -3742,7 +3795,91 @@ def set_config(d):
             if c.get(k) is None: c.pop(k, None)
         t = HOME / "core" / f".config.json.{os.getpid()}.{threading.get_ident()}"
         t.write_text(json.dumps(c, indent=2) + "\n"); t.replace(HOME / "core" / "config.json")
+    put_style()
     return config_view()
+
+
+# E34 (projects/everyday): Settings › Download my chats. One zip, a folder per chat: chat.md (plain text, the messages in order) and its files.
+EXPORT_FILES_MAX = 500 * 2**20   # files past this are listed in chat.md but left out of the zip, so the download stays sane
+
+
+EXPORT_LOCK = threading.Lock()   # one export at a time: each is a full pass over the board and a temp file the size of the zip
+
+
+def export_name(s, n=40):
+    """A name that is safe as one folder or file name on every system: letters (any script), digits, - and _ only."""
+    import unicodedata
+    return re.sub(r"[^\w]+|_+", "-", unicodedata.normalize("NFC", s)).strip("-")[:n].strip("-") or "chat"
+
+
+def export_file(z, src, arc, left):
+    """Copy one of the person's files into the zip, at most left bytes. The bytes come from one open handle, so a swap after
+    the checks can't put another file in: no symlinks, a regular file under ~/files, one link only (a hard link could be to anything)."""
+    try:
+        real = Path(os.path.realpath(src))
+        if not real.is_relative_to(HOME_FILES.resolve()) or Path(src).is_symlink(): return "gone"
+        fd = os.open(real, os.O_RDONLY | os.O_NOFOLLOW)
+    except (OSError, ValueError): return "gone"
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1: return "gone"
+        if st.st_size > left: return "over"
+        with z.open(arc, "w") as w: shutil.copyfileobj(_Capped(f, st.st_size), w)   # no more than was checked, even if it grows
+    return st.st_size
+
+
+class _Capped:
+    def __init__(self, f, n): self.f, self.n = f, n
+    def read(self, k=-1):
+        if self.n <= 0: return b""
+        b = self.f.read(self.n if k is None or k < 0 else min(k, self.n)); self.n -= len(b); return b
+
+
+def export_zip(out):
+    """Write the zip of every chat on the board into the binary file out."""
+    import zipfile
+    threads, order = {}, []
+    with BOARD.open(errors="replace") as f:
+        for ln in f:
+            try: p = json.loads(ln)
+            except ValueError: continue
+            if not isinstance(p, dict): continue
+            th = str(p.get("thread") or p.get("id") or "")
+            if not th: continue
+            if th not in threads: threads[th] = []; order.append(th)
+            threads[th].append(p)
+    meta, names, left, now = thread_meta(), thread_names() or {}, EXPORT_FILES_MAX, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    plain = lambda t: re.sub(r"^reply to message [0-9a-f]+:\s*", "", re.sub(r"^(?:[ \t]*@[\w.-]+[,:]?[ \t]+)+", "", t), flags=re.I)   # the words, without the routing (as the chat shows them)
+    used, day = set(), lambda a: str(a)[:10] if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(a)[:10]) else "undated"
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        index = []
+        for th in order:
+            posts = threads[th]
+            first = next((p for p in posts if p.get("from") == PERSON), posts[0])
+            title = str((meta.get(th) or {}).get("title") or names.get(th) or " ".join(plain(str(first.get("text", ""))).split())[:70] or th)
+            base = f"{day(posts[0].get('at', ''))} {export_name(title)}"
+            while base.lower() in used: base += "-" + export_name(th, 12)
+            used.add(base.lower()); taken = {"chat.md"}
+            lines = [f"# {title}", "", f"Chat {th}, {len(posts)} messages. Exported {now}.", ""]
+            for p in posts:
+                who = "You" if p.get("from") == PERSON else "Agent " + str(p.get("from")) if re.fullmatch(r"[a-z][0-9a-f]{4}", str(p.get("from") or "")) else str(p.get("from") or "?")
+                at = str(p.get("at", ""))[:16].replace("T", " ")
+                text = str(p.get("text", "")); m = re.match(r"\(edited message (\S+): this version replaces it\..*?\)\n", text)
+                if m: text = text[m.end():]   # the note is for the agent; the reader gets a mark instead
+                if p.get("from") == PERSON: text = plain(text)
+                lines += ["---", f"{who} · {at} UTC" + (f" (edited, replaces {m.group(1)})" if m else ""), "", text.rstrip()]
+                for fl in p.get("files") or []:
+                    if not isinstance(fl, dict): continue
+                    name = re.sub(r"[^\w.-]", "_", str(fl.get("name") or "file")).lstrip(".")[-80:] or "file"
+                    leaf = f"{re.sub(r'[^0-9A-Za-z]', '', str(p.get('id', '')))[:12]}-{name}"
+                    while leaf.lower() in taken: leaf = "x" + leaf
+                    got = export_file(z, str(fl.get("path", "")), f"{base}/{leaf}", left)
+                    if isinstance(got, int): left -= got; taken.add(leaf.lower()); lines.append(f"[file: {leaf}]")
+                    else: lines.append(f"[file: {name}, " + ("not in this download: the download's size limit was reached]" if got == "over" else "gone]"))
+                lines.append("")
+            z.writestr(f"{base}/chat.md", "\n".join(lines))
+            index.append(f"{base}/chat.md  ({len(posts)} messages)")
+        z.writestr("README.txt", f"Your chats, exported {now}. One folder per chat: chat.md is the chat as plain text, oldest message first, with its files beside it.\n\n" + "\n".join(index) + "\n")
 
 
 # The hive's name and logo, from Settings. Only how this app looks: nothing else reads them, and agents keep their names.
@@ -5330,7 +5467,7 @@ def serve(port):
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
             elif u.path == "/api/brand/logo":
                 self.send_logo()
-            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/voice", "/api/signin", "/api/plans", "/api/secrets", "/api/slack-door", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/accounts", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history", "/api/mail") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/voice", "/api/signin", "/api/plans", "/api/secrets", "/api/slack-door", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/accounts", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history", "/api/mail", "/api/export") and self.route == "open":
                 self.send_error(404)
             elif u.path == "/api/kb/home":
                 self.send(json.dumps(kb_home()).encode(), J)
@@ -5374,6 +5511,21 @@ def serve(port):
                 self.send(json.dumps(webpush_view()).encode(), J)
             elif u.path == "/api/config":
                 self.send(json.dumps(config_view()).encode(), J)
+            elif u.path == "/api/export":
+                if not EXPORT_LOCK.acquire(blocking=False): return self.send(json.dumps({"error": "a download of your chats is already being made; try again in a minute"}).encode(), J, status=429)
+                try: t = tempfile.TemporaryFile(dir=STATE); export_zip(t); n = t.tell(); t.seek(0)
+                except BaseException: EXPORT_LOCK.release(); raise
+                with t:
+                    EXPORT_LOCK.release()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/zip")
+                    self.send_header("Content-Length", str(n))
+                    self.send_header("Content-Disposition", f'attachment; filename="chats-{datetime.now().strftime("%Y-%m-%d")}.zip"')
+                    self.send_header("Content-Security-Policy", "sandbox; default-src 'none'")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    shutil.copyfileobj(t, self.wfile)
             elif u.path == "/api/update":
                 self.send(json.dumps(update_view()).encode(), J)
             elif u.path == "/api/modules":
@@ -5489,7 +5641,7 @@ def serve(port):
                 if not 0 < n <= LOGO_MAX: return self.deny(413, "a logo can be up to 2 MB")
                 try: return self.send(json.dumps(set_logo(self.rfile.read(n))).encode(), "application/json")
                 except (ValueError, OSError) as e: return self.deny(400, str(e))
-            if not 0 < n < ({"/api/post": 2**20, "/api/feedback": 2**20, "/api/issue-link": 2**16, "/api/plan": 2**19, "/api/secret": 2**18, "/api/door": 2**18}.get(u.path) or (4096 if self.route != "open" else 1024)): return self.send_error(403)
+            if not 0 < n < ({"/api/post": 2**20, "/api/feedback": 2**20, "/api/issue-link": 2**16, "/api/plan": 2**19, "/api/secret": 2**18, "/api/door": 2**18, "/api/focus": 2**15}.get(u.path) or (4096 if self.route != "open" else 1024)): return self.send_error(403)
             try: d = json.loads(self.rfile.read(n))
             except ValueError: return self.send_error(400)
             if not isinstance(d, dict): return self.send_error(400)
@@ -5511,14 +5663,14 @@ def serve(port):
                 except ValueError as e: return self.deny(400, str(e))
             if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/starter", "/api/module", "/api/voice", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
                 try:
-                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True, edit_of=d.get("edit_of"), retry_of=d.get("retry_of"), files_from=d.get("files_from"))
+                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True, edit_of=d.get("edit_of"), retry_of=d.get("retry_of"), files_from=d.get("files_from"), focus=d.get("focus"))
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
                     elif u.path == "/api/shown": res = dismiss_shown(d)
                     elif u.path == "/api/loadtime": res = record_loadtime(d, self.route)
                     elif u.path == "/api/opened": res = record_opened(d, self.route)
                     elif u.path == "/api/checklist": res = checklist_do(d)
-                    elif u.path == "/api/focus": res = focus_do(d)
+                    elif u.path == "/api/focus": res = focus_do(d, full="config" in self.can)
                     elif u.path == "/api/feedback": res = send_feedback(d)
                     elif u.path == "/api/feedback-draft-done": res = feedback_draft_done(d)
                     elif u.path == "/api/issue-link": res = issue_link(d)

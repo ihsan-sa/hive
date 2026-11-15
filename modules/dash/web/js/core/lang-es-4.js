@@ -370,6 +370,7 @@ export default {
   "Slides": "Diapositivas", "Diagram": "Diagrama", "Network data": "Datos de red", "Circuit": "Circuito", "Code": "Código",
   "Text": "Texto", "File": "Archivo",
   "Show every message": "Mostrar cada mensaje",
+  "All: show every message": "Todas: mostrar cada mensaje",
   "Show every message in full, not shortened to one line": "Mostrar cada mensaje completo, no recortado a una línea",
   "Open the whole message": "Abrir el mensaje completo",
   // E18y: a running agent (Now, its panel, the conversation's strip and box)

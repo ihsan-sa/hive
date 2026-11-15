@@ -2,11 +2,11 @@
 import { h } from "../core/dom.js";
 import { S, can, jget, post } from "../core/store.js";
 import { ago } from "../core/format.js";
-import { button, empty, field, input, list, pageHeader, section } from "../ui/kit.js";
+import { button, empty, field, fieldErr, input, invalid, list, pageHeader, section } from "../ui/kit.js";
 import { secretsReach } from "../ui/setup.js";
 import { confirm } from "../ui/dialog.js";
 
-const F = { items: null, name: "", value: "", say: null, tone: null, asked: false };
+const F = { items: null, name: "", value: "", say: null, tone: null, asked: false, bad: {} };
 const say = (text, tone) => { F.say = text; F.tone = tone || null; };
 
 async function load(ctx) {
@@ -22,7 +22,9 @@ export function secretParts(ctx, level) {
       return [empty(`Couldn't read what's stored: ${F.readErr}`, { kind: "error" }), button("Try again", () => { F.readErr = null; F.asked = false; ctx.update(); }, { size: "s" })];
     }
     const save = async () => {
-      if (!F.name.trim() || !F.value) { say(F.name.trim() ? "Type the value too." : "Give it a name first.", "bad"); ctx.update(); return; }
+      // An empty box says so beside itself and is marked (WCAG 3.3.1), not only in the line by Save.
+      F.bad = { name: F.name.trim() ? "" : "Give it a name first, like github-token.", value: F.value ? "" : "Type the value too." };
+      if (F.bad.name || F.bad.value) { say(null); ctx.update(); return; }
       try { await post("/api/secret", { name: F.name.trim(), value: F.value }); say(`Saved ${F.name.trim()}. It can't be shown again.`, "good"); F.name = F.value = ""; await load(ctx); }
       catch (e) { say(e.message, "bad"); }
       ctx.update();
@@ -41,8 +43,8 @@ export function secretParts(ctx, level) {
       section({ title: "Add or replace", note: "send a token to the Hive", level },
         h("p", { class: "field-h sec-lead" }, "Then tell an agent the name in chat and what it's for. ", reach, S.app.route === "outside" ? " Cloudflare carries it on the way here." : ""),
         h("div", { class: "fgrid" },
-          field("Name", input({ value: F.name, autocomplete: "off", placeholder: "github-token", oninput: (e, n) => { F.name = n.value; } })),
-          field("Value", input({ type: "password", value: F.value, autocomplete: "new-password", oninput: (e, n) => { F.value = n.value; } }))),
+          h("div", { class: "field-w" }, field("Name", input({ value: F.name, autocomplete: "off", placeholder: "github-token", ...invalid("err-sname", F.bad.name), oninput: (e, n) => { F.name = n.value; } })), fieldErr("err-sname", F.bad.name)),
+          h("div", { class: "field-w" }, field("Value", input({ type: "password", value: F.value, autocomplete: "new-password", ...invalid("err-sval", F.bad.value), oninput: (e, n) => { F.value = n.value; } })), fieldErr("err-sval", F.bad.value))),
         h("div", { class: "frow" }, button("Save", save, { kind: "primary" }),
           F.say ? h("p", { class: "fmsg", "data-tone": F.tone, role: "status" }, F.say) : null)),
       section({ title: "Stored", note: "names only; values are never shown", level }, list(F.items.map(r => ({
@@ -51,7 +53,7 @@ export function secretParts(ctx, level) {
       })), { empty: "Nothing stored yet." }))];
 }
 
-export const forgetSecrets = () => { F.value = ""; F.say = null; };
+export const forgetSecrets = () => { F.value = ""; F.say = null; F.bad = {}; };
 export default {
   id: "secrets", label: "Secrets", tab: false,   // One place: the Secrets section in Settings. This page is the address #secrets, which goes there.
   enter() { location.hash = "#settings/secrets"; },

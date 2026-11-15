@@ -32,11 +32,15 @@ them that an agent writes, so it stays in plain words: no rung ids, post ids, pa
                                       their usual order; the newest order wins (the dash's drag writes it). --reset: back to default
   hive focus moved [--since 2d]         threads moved between foci lately, newest first (from, to, who, when; up to a week back);
                                       the dashboard's home shows the same as Recently moved
+  hive focus brief FOCUS [--set] [--file P]... [--drop NAME]... [--off]   the group's own instructions and files (everyday E37):
+                                      every agent started in a thread of the focus is given them in its opening message (core/starter.py
+                                      group_note). --set reads the instructions on stdin (empty: none); --file copies a file into
+                                      ~/files/groups/FOCUS/; --drop takes one off; --off clears both. Without options it prints them
   hive focus json                       everything, for the dashboard (/api/foci)
 
 The duty (time-invariant, no cleanup pulses): the agent that posts a result in a thread that is in a focus updates the focus's
 summary in the same run. The inbox hook says so once when it sees the result post and an older summary.
-Records go to ~/.hive/focus.jsonl, append-only: {kind: focus|tag|link|relation|summary|aim|check|check_done|check_untick|file|order, ..., from, at}.
+Records go to ~/.hive/focus.jsonl, append-only: {kind: focus|tag|link|relation|summary|aim|check|check_done|check_untick|file|order|brief, ..., from, at}.
 """
 import argparse, datetime as dt, json, os, re, sys, time
 from pathlib import Path
@@ -51,6 +55,8 @@ RESULT = re.compile(r"^(Done|Blocked|Needs the person|Waiting|Told to stop):\s*\
 MISC = "misc"
 RELATE = ("thread", "agent", "file")   # what hive focus relate joins to a focus
 MAX_SUMMARY, MAX_BULLET = 2500, 220
+BRIEF_MAX, BRIEF_FILES, BRIEF_FILE_MAX = 4000, 10, 10_000_000   # a group's instructions (characters), how many files, and each file's size
+GROUP_FILES = HOME / "files" / "groups"
 WINDOWS = {"day": 86400, "week": 7 * 86400}   # the home card's gauge: each focus's share of the hive's work over the last day and week
 # What reads as agent talk on the person's pages. Each: (name, regex, what to do instead).
 JARGON = [
@@ -233,7 +239,16 @@ def state(recs=None, pri=None, posts=None):
             if r.get("off"): files.pop((r["focus"], r["path"]), None)
             else: files[(r["focus"], r["path"])] = {"path": r["path"], "post": r.get("post"), "from": r.get("from"), "at": r.get("at")}
     for (fid, _), x in sorted(files.items(), key=lambda kv: -(kv[1].get("at") or 0)): foci[fid]["files"].append(x)
+    for r in recs:   # a group's instructions and files (E37): the newest record holds the whole of both
+        # Only the person's (an agent's record would steer every chat in the group as if the person said it), only files in the group's
+        # own folder (a hand-written record can't inline ~/.hive/...), and none from before the focus was last made (a re-used id starts clean).
+        if r["kind"] == "brief" and r.get("focus") in foci and r.get("from") == "person" and (r.get("at") or 0) >= (foci[r["focus"]].get("made") or 0):
+            own = (GROUP_FILES / r["focus"]).resolve()
+            text = (r.get("text") or "").strip()
+            files = [x for x in r.get("files") or [] if isinstance(x, str) and Path(x).resolve().parent == own and not Path(x).is_symlink()]
+            foci[r["focus"]]["brief"] = {"text": text, "files": files, "from": r.get("from"), "at": r.get("at")} if text or files else None
     for f in foci.values():
+        f.setdefault("brief", None)
         if f.get("thread") and f["thread"] not in f["threads"]: f["threads"].insert(0, f["thread"])
     order = ordered(order, recs)
     # Needs-you items the person put off (the person, 1108133400fb): key -> {key, th, focus, text, t, what: "later"|"moot", from, at};
@@ -471,6 +486,10 @@ def main(argv=None):
     p.add_argument("--text", default=""); p.add_argument("--t", type=float, default=0)
     p = sp.add_parser("lint"); p.add_argument("focus", nargs="?"); p.add_argument("--json", action="store_true")
     p = sp.add_parser("file"); p.add_argument("path"); p.add_argument("--post"); p.add_argument("--focus"); p.add_argument("--off", action="store_true")   # a kb note filed under a focus (kb file --from/--focus calls this)
+    p = sp.add_parser("brief", help="the group's own instructions and files, given to every agent started in it")
+    p.add_argument("focus"); p.add_argument("--set", action="store_true", help="the instructions come on stdin (empty: none)")
+    p.add_argument("--file", action="append", default=[], help="copy this file into the group"); p.add_argument("--drop", action="append", default=[], help="take this file (its name) off")
+    p.add_argument("--off", action="store_true", help="clear the instructions and the files"); p.add_argument("--json", action="store_true")
     p = sp.add_parser("order"); p.add_argument("ids", nargs="*"); p.add_argument("--reset", action="store_true")
     p = sp.add_parser("moved", help="threads moved between foci lately, newest first"); p.add_argument("--since", default="2d", help="how far back: 30m, 12h, 3d (up to a week)")
     sp.add_parser("json")
@@ -577,6 +596,57 @@ def main(argv=None):
         if not fid: print("no focus for it (the post's thread is in Misc; give --focus ID)"); return
         append({"kind": "file", "focus": fid, "path": a.path.strip(), **({"post": a.post} if a.post else {}), **({"off": True} if a.off else {})})
         print(("taken off" if a.off else "listed on") + f" the focus page of {fid}: {a.path.strip()}"); return
+    if a.cmd == "brief":
+        f = find(st, a.focus)
+        if not f: sys.exit(f"hive focus brief: no focus {a.focus!r} (hive focus list)")
+        b = f.get("brief") or {"text": "", "files": []}
+        if (a.set or a.file or a.drop or a.off) and who() != "person":
+            sys.exit("hive focus brief: a group's instructions and files are the person's to set, from its focus page")
+        if not (a.set or a.file or a.drop or a.off):
+            if a.json: print(json.dumps(b)); return
+            print(b["text"] or "(no instructions)")
+            for x in b["files"]: print(f"file: {x}")
+            return
+        text, files = ("", []) if a.off else (b["text"], list(b["files"]))
+        gone = list(b["files"]) if a.off else []
+        if a.off and (GROUP_FILES / f["id"]).is_dir() and not (GROUP_FILES / f["id"]).is_symlink():   # off empties the group's folder, strays included
+            gone += [str(x) for x in (GROUP_FILES / f["id"]).iterdir() if x.is_file() or x.is_symlink()]
+        if a.set and not a.off:
+            if sys.stdin.isatty(): sys.exit("hive focus brief --set: the instructions come on stdin, a quoted heredoc")
+            text = sys.stdin.read().strip()
+            if len(text) > BRIEF_MAX: sys.exit(f"hive focus brief: {len(text)} characters; a group's instructions take {BRIEF_MAX} at most")
+        for d in a.drop:
+            keep = [x for x in files if Path(x).name != Path(d).name]
+            if len(keep) == len(files): sys.exit(f"hive focus brief: no file {d!r} in {f['id']}")
+            gone += [x for x in files if x not in keep]; files = keep
+        add = []
+        for src in a.file:
+            sp_ = Path(src).expanduser()
+            if not sp_.is_file() or sp_.is_symlink(): sys.exit(f"hive focus brief: {src} isn't a file")
+            if sp_.stat().st_size > BRIEF_FILE_MAX: sys.exit(f"hive focus brief: {sp_.name} is over {BRIEF_FILE_MAX // 1_000_000} MB")
+            add.append(sp_)
+        d = GROUP_FILES / f["id"]
+        named = {}
+        for sp_ in add:
+            name = re.sub(r"[^A-Za-z0-9_. -]+", "_", sp_.name).strip(" .") or "file"
+            if name in named: sys.exit(f"hive focus brief: {named[name].name} and {sp_.name} would both be saved as {name}; rename one")
+            named[name] = sp_
+        if len({*files, *(str(d / n) for n in named)}) > BRIEF_FILES: sys.exit(f"hive focus brief: a group takes {BRIEF_FILES} files at most")
+        if named:
+            import shutil, tempfile
+            if d.is_symlink() or GROUP_FILES.is_symlink(): sys.exit(f"hive focus brief: {d} is a link; not writing through it")
+            d.mkdir(parents=True, exist_ok=True)
+            for name, sp_ in named.items():
+                dst = d / name
+                files = [x for x in files if x != str(dst)]   # the same name again replaces it
+                fd, tmp = tempfile.mkstemp(dir=d, prefix=".up-"); os.close(fd)
+                shutil.copyfile(sp_, tmp); os.replace(tmp, dst); files.append(str(dst))   # replace, never write through a link planted at dst
+        for x in gone:
+            if x not in files and Path(x).parent == d:
+                try: Path(x).unlink()
+                except OSError: pass
+        append({"kind": "brief", "focus": f["id"], "text": text, "files": files})
+        print(f"{f['id']}: " + (f"{len(text)} characters of instructions" if text else "no instructions") + f", {len(files)} file" + ("" if len(files) == 1 else "s")); return
     if a.cmd == "order":
         if a.reset: append({"kind": "order", "ids": []}); print("order back to the default"); return
         if not a.ids: print(" ".join(f["id"] for f in st["foci"])); return

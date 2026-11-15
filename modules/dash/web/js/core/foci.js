@@ -24,7 +24,7 @@ export function loadFoci(force) {
     L.p = null; L.failed = !v;
     if (!v) { if (S.foci === undefined) { S.foci = { foci: [], tags: {}, lint: [], failed: true }; emit({ foci: true }); } return S.foci; }
     if (L.want) { if (now() - L.want.at > 60e3 || sameOrder(v.foci, L.want.ids)) L.want = null; else v.foci = arrange(v.foci, L.want.ids); }   // a read that left before the move landed keeps the moved order
-    const sig = x => JSON.stringify(x && [x.tags, (x.moved || []).length && x.moved[0].at, x.foci.map(f => [f.id, f.name, f.summary && f.summary.at, f.checks.map(c => c.id + (c.done ? 1 : 0)).join()])]);
+    const sig = x => JSON.stringify(x && [x.tags, (x.moved || []).length && x.moved[0].at, x.foci.map(f => [f.id, f.name, f.summary && f.summary.at, f.checks.map(c => c.id + (c.done ? 1 : 0)).join(), f.brief && [f.brief.at, f.brief.text, f.brief.files]])]);   // the brief too (E37): a saved group instruction shows at once
     if (sig(v) !== sig(S.foci)) { S.foci = v; emit({ foci: true }); }
     return v;
   });

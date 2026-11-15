@@ -144,6 +144,21 @@ export function field(label, control, hint) {
 }
 export const input = props => h("input", { class: "input", ...props });
 
+/** A field that fails says what is wrong in words, beside it (WCAG 3.3.1), never only a red border: aria-invalid on the control and the text tied to it
+ *  by aria-describedby. In a rendered view: spread invalid(id, text) into the control's props and put fieldErr(id, text) right after it (both empty when
+ *  text is empty). In a dialog, which is built once and never morphed: markBad(control, text), and markBad(control) to clear it. Suite: drive_app_errors. */
+export const invalid = (id, text) => text ? { "aria-invalid": "true", "aria-describedby": id } : {};
+export const fieldErr = (id, text) => text ? h("p", { class: "field-err", id, role: "alert", "data-key": id }, text) : null;
+let badSeq = 0;
+export function markBad(control, text) {
+  const was = control.getAttribute("aria-describedby"), old = was && document.getElementById(was);
+  if (old) old.remove();
+  if (!text) { control.removeAttribute("aria-invalid"); control.removeAttribute("aria-describedby"); return; }
+  const id = "fe-" + ++badSeq, p = fieldErr(id, text);
+  (control.closest(".field") || control).after(p);
+  control.setAttribute("aria-invalid", "true"); control.setAttribute("aria-describedby", id);
+}
+
 /** Empty, loading and error states. kind: empty | loading | error | page */
 /** A page that needs the files right: one wording, one way back. */
 export function needFull(what, title) {

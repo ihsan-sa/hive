@@ -239,7 +239,7 @@ Grades:
   nothing    it posted, but no delivery and no handover: status only, questions back, or the wrong thing
   not_asked  the post asked this agent nothing concrete (a thread update, an acknowledgement, a hand-off to someone else)
 
-Judge only against what the post asked, not whether the work was good. A post that says "stop" or "thanks" and a short reply is not_asked; so is a chase ("???", "hello?", "status?", "did you do it") answered with where things stand. Reply with JSON only:
+Judge only against what the post asked, not whether the work was good. A post that says "stop" or "thanks" and a short reply is not_asked; so is a chase ("???", "hello?", "status?", "done yet?", "did you do it", a note that a wait is due) answered with where things stand, and a post asking for work the person had put on hold, answered by pointing to that hold. Reply with JSON only:
 {"grades":[{"run":"<RUN key>","grade":"delivered|partial|nothing|not_asked","why":"<at most 20 words>"}]}
 
 One more job, on delivered and partial runs only. If a post by the agent holds a fact another agent could use months from now in other work, add to that run's grade:

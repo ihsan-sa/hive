@@ -6,7 +6,7 @@ import { short } from "./core/format.js";
 import { threadTitle, tierOf, agentLabel, capFirst, ownStep } from "./core/model.js";
 import { TIERS, tier } from "./core/status.js";
 import { confirm } from "./ui/dialog.js";
-import { button, input, field } from "./ui/kit.js";
+import { button, input, field, markBad } from "./ui/kit.js";
 
 // ---- Kill: the window is the first step, typing the exact code the second. The server checks the code again. ----
 export function killButton(n) {
@@ -78,7 +78,10 @@ export function askPause(U, l) {
 }
 
 const pctInput = (v, ph) => input({ type: "number", min: 0, max: 100, step: 1, value: v ?? "", placeholder: ph, style: "width:7rem" });
-const val = (i, hi) => { const v = i.value.trim(); if (v === "") return null; const n = Number(v); if (!isFinite(n) || n < 0 || n > hi) throw Error(`${v} isn't a number from 0 to ${hi}`); return n; };
+// A bad number is marked on its box with the reason beside it (WCAG 3.3.1), as well as in the dialog's "Nothing changed" line.
+const val = (i, hi, lo = 0) => { const v = i.value.trim(); markBad(i);
+  if (i.validity && i.validity.badInput) { markBad(i, `That isn't a number: type one from ${lo} to ${hi}, or leave it empty.`); throw Error("that isn't a number"); }   // letters read as empty
+  if (v === "") return null; const n = Number(v); if (!isFinite(n) || n < lo || n > hi) { const why = `${v} isn't a number from ${lo} to ${hi}`; markBad(i, why + "."); throw Error(why); } return n; };
 
 // ---- A login's stop lines: weekly and 5-hour. Empty means the default. ----
 export function askLimits(U, l) {
@@ -100,7 +103,7 @@ export function askStopLine(U) {
     title: "Where new agents stop", ok: "Save",
     body: ["Past this share of its weekly limit, an account gets no new agents unless you ask for them. An account with its own line uses that instead. At 100, agents run right up to the account's real limit, which leaves no reserve for your own messages once every account is out. Subscriptions only.",
       field("Weekly, %", i)],
-    onOk: async () => { const v = val(i, 100); if (!v) throw Error("Give a number from 1 to 100."); await post("/api/config", { usage_stop_pct: v }); await pollUsage(); },
+    onOk: async () => { const v = val(i, 100, 1); if (v == null) { markBad(i, "Give a number from 1 to 100."); throw Error("Give a number from 1 to 100"); } await post("/api/config", { usage_stop_pct: v }); await pollUsage(); },
   });
 }
 

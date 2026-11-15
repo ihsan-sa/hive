@@ -54,11 +54,27 @@ export function avatars(names, { max = 4, size } = {}) {
   // In a conversation an agent and its heirs share one name (E12b): one avatar for them, the running one else the last.
   if (inScope()) { const by = new Map(); for (const n of names) { const l = /^a[0-9a-f]{4}$/.test(n) ? agentLabel(n) : n, o = by.get(l); if (!o || !isRunning(o)) by.set(l, n); } names = [...by.values()]; }
   const running = names.filter(n => isRunning(n)).length;
+  shutOnEscape();
   return h("span", { class: "avs-w", tabindex: "0", "aria-label": `${names.length} agents here; show the list` },
     h("span", { class: "avs" }, names.slice(0, max).map(n => agentAvatar(n, { size })), names.length > max ? h("span", { class: "av", "data-size": size || null }, "+" + (names.length - max)) : null),
     h("div", { class: "avs-pop", role: "group", "aria-label": "Agents here" }, h("div", { class: "avs-pop-l" },
       h("div", { class: "avs-pop-h meta", style: "--i:0" }, `${names.length} ${names.length === 1 ? "agent" : "agents"}` + (running ? ` · ${running} running` : "")),
       [...names].sort((a, b) => isRunning(b) - isRunning(a)).map((n, i) => h("div", { class: "avs-pop-r", "data-key": n, style: `--i:${Math.min(i + 1, 12)}` }, pill(n))))));
+}
+// Escape closes an open list (WCAG 1.4.13) without moving the pointer or focus, and goes no further (no page's own Escape);
+// the next hover or focus opens it again.
+let escOn = false;
+function shutOnEscape() {
+  if (escOn) return; escOn = true;
+  document.addEventListener("keydown", e => {
+    if (e.key !== "Escape") return;
+    const open = [...document.querySelectorAll(".avs-w:hover, .avs-w:focus-within")].filter(w => !w.hasAttribute("data-shut"));
+    if (!open.length) return;
+    for (const w of open) w.setAttribute("data-shut", "");
+    e.preventDefault(); e.stopImmediatePropagation();
+  }, true);
+  document.addEventListener("pointerover", e => { const w = e.target.closest && e.target.closest(".avs-w[data-shut]"); if (w && !(e.relatedTarget && w.contains(e.relatedTarget))) w.removeAttribute("data-shut"); });
+  document.addEventListener("focusin", e => { if (e.target.matches && e.target.matches(".avs-w[data-shut]")) e.target.removeAttribute("data-shut"); });
 }
 // A pill in the list: name, state, then model and cost so far (the person, 2026-11-07).
 function pill(n) {

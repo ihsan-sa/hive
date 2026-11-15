@@ -8,7 +8,7 @@ import { notifyBlocked, notifyOn, notifySupported, notifyTest, pushOn, pushSuppo
 import { DEFAULT_NAME, brandLogo, brandName } from "../core/brand.js";
 import { form } from "../templates.js";
 import { LANGS, chooseLang, getLang } from "../core/lang.js";
-import { pageHeader, section, block, blocks, button, field, infoButton, input, empty, meter, statusLabel, staleNote, statusDot, waiting } from "../ui/kit.js";
+import { pageHeader, section, block, blocks, button, field, fieldErr, infoButton, input, invalid, empty, meter, statusLabel, staleNote, statusDot, waiting } from "../ui/kit.js";
 import { act, isBusy } from "../ui/activity.js";
 import { confirm } from "../ui/dialog.js";
 import { tiersSection, loadTiers, pausedTiers } from "../ui/worktiers.js";
@@ -21,7 +21,7 @@ import { MODELS, POWER, accountsData, codexPart, forget, keysPart, loadPage, mod
 import { forgetSecrets, secretParts } from "./secrets.js";
 
 // Everything the person is typing lives here, so a poll never loses it.
-const F = { cfg: null, ed: null, mods: null, say: {}, newLogin: "", url: "", busy: {}, access: null, saved: null, flash: {} };
+const F = { bad: {}, badIn: {}, cfg: null, ed: null, mods: null, say: {}, newLogin: "", url: "", busy: {}, access: null, saved: null, flash: {} };
 // A switch that saved says so beside it for 1.5 s.
 const flash = (k, update) => { F.flash[k] = Date.now(); setTimeout(() => { if (Date.now() - (F.flash[k] || 0) >= 1400) { delete F.flash[k]; update(); } }, 1500); };
 const savedMark = k => F.flash[k] ? h("span", { class: "blk-saved field-ok", role: "status" }, "✓ Saved") : null;
@@ -39,8 +39,8 @@ async function loadCfg(ctx) {
     if (!F.cfgRead) { ctx.update(); return; }
     F.say.hive = { text: `Couldn't refresh the settings (${e.message}). These are from the last read.`, tone: "bad", held: true };
   }
-  F.ed ||= { max: F.cfg.max_sessions ?? "", kpe: F.cfg.keeper_every_s || 10800, au: F.cfg.auto_update !== false, bud: F.cfg.max_budget_usd ?? "", day: F.cfg.max_daily_usd ?? "" };
-  F.saved ||= { max: F.ed.max, bud: F.ed.bud, day: F.ed.day };
+  F.ed ||= { max: F.cfg.max_sessions ?? "", kpe: F.cfg.keeper_every_s || 10800, au: F.cfg.auto_update !== false, bud: F.cfg.max_budget_usd ?? "", day: F.cfg.max_daily_usd ?? "", style: F.cfg.answer_style || "" };
+  F.saved ||= { max: F.ed.max, bud: F.ed.bud, day: F.ed.day, style: F.ed.style };
   ctx.update();
 }
 let upTimer = null;
@@ -310,25 +310,37 @@ function hiveSection(ctx) {
   };
   const toggle = (label, on, onChange) => [savedMark(label), h("input", { type: "checkbox", role: "switch", class: "switch", "aria-label": label, checked: on, onchange: (e, n) => onChange(n.checked) })];
   const saveMax = () => {
-    const was = F.saved.max, v = String(E.max).trim();
-    if (v === String(was)) return;
-    if (v !== "" && !(Number.isInteger(+v) && +v >= 1 && +v <= 200)) { E.max = was; say("hive", "Agents at once is a whole number from 1 to 200, or empty for no limit.", "bad"); ctx.update(); return; }
+    const was = F.saved.max, v = F.badIn.max ? "?" : String(E.max).trim();   // a number box holding letters reads as empty: that's not "no limit"
+    if (v === String(was)) { if (F.bad.max) { F.bad.max = ""; ctx.update(); } return; }
+    // A bad number stays in the box, marked, with the reason beside it (WCAG 3.3.1); nothing is saved until it's fixed or emptied.
+    if (v !== "" && !(Number.isInteger(+v) && +v >= 1 && +v <= 200)) { F.bad.max = "Agents at once is a whole number from 1 to 200, or empty for no limit."; ctx.update(); return; }
+    F.bad.max = "";
     F.saved.max = v;
     save({ max_sessions: v === "" ? null : +v }, () => { E.max = F.saved.max = was; }, "Agents at once");
   };
   const saveBud = () => {
-    const was = F.saved.bud, v = String(E.bud).trim();
-    if (v === String(was)) return;
-    if (v !== "" && !(+v > 0 && +v < 10000)) { E.bud = was; say("hive", "The most one run may spend is a number of dollars above 0, or empty for no cap.", "bad"); ctx.update(); return; }
+    const was = F.saved.bud, v = F.badIn.bud ? "?" : String(E.bud).trim();   // a number box holding letters reads as empty: that's not "no limit"
+    if (v === String(was)) { if (F.bad.bud) { F.bad.bud = ""; ctx.update(); } return; }
+    if (v !== "" && !(+v > 0 && +v < 10000)) { F.bad.bud = "The most one run may spend is a number of dollars above 0 and under 10,000, or empty for no cap."; ctx.update(); return; }
+    F.bad.bud = "";
     F.saved.bud = v;
     save({ max_budget_usd: v === "" ? null : +v }, () => { E.bud = F.saved.bud = was; }, "Budget per run");
   };
   const saveDay = () => {
-    const was = F.saved.day, v = String(E.day).trim();
-    if (v === String(was)) return;
-    if (v !== "" && !(+v > 0 && +v < 100000)) { E.day = was; say("hive", "The daily cap is a number of dollars above 0, or empty for no cap.", "bad"); ctx.update(); return; }
+    const was = F.saved.day, v = F.badIn.day ? "?" : String(E.day).trim();   // a number box holding letters reads as empty: that's not "no limit"
+    if (v === String(was)) { if (F.bad.day) { F.bad.day = ""; ctx.update(); } return; }
+    if (v !== "" && !(+v > 0 && +v < 100000)) { F.bad.day = "The daily cap is a number of dollars above 0 and under 100,000, or empty for no cap."; ctx.update(); return; }
+    F.bad.day = "";
     F.saved.day = v;
     save({ max_daily_usd: v === "" ? null : +v }, () => { E.day = F.saved.day = was; }, "Daily cap");
+  };
+  // E33: how the person wants answers, given to every new chat (the starter adds ~/answer-style.md to each agent's instructions).
+  const saveStyle = () => {
+    const was = F.saved.style, v = String(E.style).trim();
+    if (v === String(was).trim()) return;
+    if (v.length > 2000) { say("hive", "How you want answers fits in 2000 characters.", "bad"); ctx.update(); return; }
+    F.saved.style = v;
+    save({ answer_style: v }, () => { F.saved.style = was; }, "How I want answers");   // a refused save keeps what was typed; the next focus-out tries again
   };
   const spent = `Spent today: $${fix((+(F.cfg.spend_today || 0)), 2)} at API prices (UTC day). `;
   const starter = async () => {
@@ -348,8 +360,15 @@ function hiveSection(ctx) {
   // R7: the controls you reach for in a normal week first, Stop the Hive as the last of them; what you set up once lives in its own section.
   const everyday = section({ title: "Everyday", note: "what you change in a normal week; changes save as you make them", level: 1, actions: statusLabel(up ? "working" : "ended", up ? "running" : "not running") },
     blocks(
+      block({ title: "How I want answers", sub: "Every chat follows this from its next reply, like \"short answers, metric units, no bullet lists\". Saves when you leave the box.", key: "answer-style", actions: savedMark("How I want answers") },
+        h("textarea", { class: "input set-style", rows: 3, maxlength: 2000, "aria-label": "How I want answers", placeholder: "Anything every answer should follow", value: E.style,
+          oninput: (e, n) => { E.style = n.value; }, onchange: saveStyle, onfocusout: saveStyle })),
+      // E34 (GAPS row 19): every chat as plain text with its files, in one zip, made by the server (/api/export).
+      can("config") ? block({ title: "Download my chats", sub: "Every chat as plain text with its files, in one zip. A big Hive takes a minute.", key: "export",
+        actions: button("Download", null, { size: "s", href: "/api/export", icon: "download", title: "Download my chats" }) }) : null,
       block({ title: "Agents at once", sub: "Empty means no limit. Saves when you leave the box.",
-        actions: [savedMark("Agents at once"), input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", value: E.max, oninput: (e, n) => { E.max = n.value; }, onchange: saveMax, onfocusout: saveMax })] }),
+        actions: [savedMark("Agents at once"), input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", value: E.max, ...invalid("err-max", F.bad.max), oninput: (e, n) => { E.max = n.value; F.badIn.max = n.validity.badInput; }, onchange: saveMax, onfocusout: saveMax })] },
+        fieldErr("err-max", F.bad.max)),
       // Always on: picking up work that stopped is the Hive's promise, not a switch (the person, 2026-11-08, post 110818074c18). Only the pace is chosen.
       block({ title: "Keep work moving", sub: `${paceSay(E.kpe)}, pick up work that stopped and start work nobody asked for, and sooner once nothing has run for half an hour. It uses your limits.`,
         actions: [h("select", { class: "input", value: E.kpe, "aria-label": "How often to keep work moving", title: "How often to keep work moving",
@@ -364,9 +383,11 @@ function hiveSection(ctx) {
       block({ title: "Update by itself", sub: F.up && F.up.installed ? "Installs new releases as often as you chose above. Keeps your settings and goes back if it fails. When it's off, this Hive still looks and says so above, and you choose when to update." : "Installs each new release. Keeps your settings and goes back if it fails.",
         actions: toggle("Update by itself", E.au, v => { E.au = v; save({ auto_update: v }, () => { E.au = !v; }, "Update by itself"); }) }),
       block({ title: "Budget per run", sub: E.bud === "" ? "Empty means no cap. A cap stops a run that reaches it (counted at API prices) and says so in its thread. Applies from each run's next start." : `Each run stops at $${E.bud}, counted at API prices, and says so in its thread. Applies from each run's next start. Empty removes the cap.`,
-        actions: [savedMark("Budget per run"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Budget per run in dollars", value: E.bud, oninput: (e, n) => { E.bud = n.value; }, onchange: saveBud, onfocusout: saveBud })] }),
+        actions: [savedMark("Budget per run"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Budget per run in dollars", value: E.bud, ...invalid("err-bud", F.bad.bud), oninput: (e, n) => { E.bud = n.value; F.badIn.bud = n.validity.badInput; }, onchange: saveBud, onfocusout: saveBud })] },
+        fieldErr("err-bud", F.bad.bud)),
       block({ title: "Daily cap", sub: spent + (E.day === "" ? "Empty means no cap. A cap holds new agents from starting once a day's spend reaches it; running ones finish." : `No new agents start once a day's spend reaches $${E.day}; running ones finish. Empty removes the cap.`),
-        actions: [savedMark("Daily cap"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Daily cap in dollars", value: E.day, oninput: (e, n) => { E.day = n.value; }, onchange: saveDay, onfocusout: saveDay })] })),
+        actions: [savedMark("Daily cap"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Daily cap in dollars", value: E.day, ...invalid("err-day", F.bad.day), oninput: (e, n) => { E.day = n.value; F.badIn.day = n.validity.badInput; }, onchange: saveDay, onfocusout: saveDay })] },
+        fieldErr("err-day", F.bad.day))),
     msg("brand"), msg("hive"));
   return [everyday, setOnce];
 }
@@ -411,10 +432,10 @@ function loginsSection(ctx) {
         h("div", { class: "lr-in frow fsplit" }, h("b", null, l.name), l.signed_in ? null : statusLabel("out"),
           h("span", { class: "frow-end" }, button(l.signed_in ? "Sign in again" : "Sign in", () => startSignin("login-" + l.name, l.name, false, ctx.update), { size: "s", kind: l.signed_in ? "quiet" : null }))),
         signinBox("login-" + l.name, ctx.update)))) : null,
-      h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (F.newLogin.trim()) { say("newlogin", null); startSignin("login-new", F.newLogin.trim(), false, ctx.update, () => { F.newLogin = ""; }); } else { say("newlogin", "Give it a name first.", "bad"); ctx.update(); } } },
-        h("div", { class: "frow-grow", "data-size": "s" }, field("Add another account", input({ placeholder: "a name for it, like work", value: F.newLogin, oninput: (e, n) => { F.newLogin = n.value; } }))),
+      h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (F.newLogin.trim()) { say("newlogin", null); F.bad.login = ""; startSignin("login-new", F.newLogin.trim(), false, ctx.update, () => { F.newLogin = ""; }); } else { F.bad.login = "Give it a name first, like work."; ctx.update(); } } },
+        h("div", { class: "frow-grow", "data-size": "s" }, field("Add another account", input({ placeholder: "a name for it, like work", value: F.newLogin, ...invalid("err-login", F.bad.login), oninput: (e, n) => { F.newLogin = n.value; } }))),
         button("Sign in to it", null, { type: "submit" })),
-      msg("newlogin"),
+      fieldErr("err-login", F.bad.login), msg("newlogin"),
       h("p", { class: "field-h" }, "A second subscription gives the Hive more room: new agents go to whichever has the most left. Adding one signs in, checks it isn't one you already have, and makes one short test run."),
       signinBox("login-new", ctx.update)), other.rows));
 }

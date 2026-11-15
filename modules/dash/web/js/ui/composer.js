@@ -178,9 +178,9 @@ async function deliver(it) {
   it.state = "sending"; it.err = ""; refresh();
   try {
     if (!it.refs) { it.uploading = it.files.length > 0; refresh(); const refs = []; for (const f of it.files) refs.push(await uploadFile(f.file)); it.refs = refs; it.uploading = false; }
-    const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null, effort: simpleOn() ? null : it.effort || null, quote: it.quote || null, ...(it.interrupt ? { interrupt: true } : {}) });
+    const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null, effort: simpleOn() ? null : it.effort || null, quote: it.quote || null, ...(it.interrupt ? { interrupt: true } : {}), ...(!it.th && it.focus ? { focus: it.focus } : {}) });
     it.id = res.id; it.state = "sent"; const thr = it.th;
-    if (!it.th && res.thread) { it.th = res.thread; if (it.focus) post("/api/focus", { thread: res.thread, focus: it.focus }).catch(() => {}); go("comms", res.thread); loadApp(); }   // filed under the focus picked in the box; a failure leaves it in Misc, where the title menu can file it
+    if (!it.th && res.thread) { it.th = res.thread; go("comms", res.thread); loadApp(); }   // the server files it under the focus picked in the box (and the agent gets that group's instructions, E37); a failure leaves it in Misc, where the title menu can file it
     else if (res.thread && res.thread !== it.th) { it.th = res.thread; it.aside = true; openAside(thr, res.thread, it.text.replace(/^\s*\/btw\s*/i, "")); loadApp(); }   // /btw: it lives in the side thread; stay here
     poll();
   } catch (e) { it.state = "failed"; it.err = simpleOn() && !/sign in/.test(e.message) ? "Check your connection, then try again." : e.message; it.uploading = false; }
@@ -811,7 +811,7 @@ function modelPick(d, r, th) {
   const label = cur ? MODEL_LABELS[cur] || cur : first, open = CP.menu === "model";
   const pick = v => { d.model = v; keep(d); CP.menu = false; refresh(); };
   return h("div", { class: "pop cp-mpop", "data-key": "model" },
-    h("button", { type: "button", class: "dd cp-model", "data-picked": d.model ? "" : null, "data-value": cur, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Model: " + label, title: note + ". Pick another to change it.", onclick: (e, b) => { const r = (b || e.target.closest(".cp-model")).getBoundingClientRect(); CP.mdown = innerHeight - r.bottom > r.top; toggle("model")(); } }, h("span", { class: "cp-lab", "aria-hidden": "true" }, "Model"), label === "Model" ? "Default" : label, icon("chevron")),
+    h("button", { type: "button", class: "dd cp-model", "data-picked": d.model ? "" : null, "data-value": cur, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Model: " + (label === "Model" ? "Default" : label), title: note + ". Pick another to change it.", onclick: (e, b) => { const r = (b || e.target.closest(".cp-model")).getBoundingClientRect(); CP.mdown = innerHeight - r.bottom > r.top; toggle("model")(); } }, h("span", { class: "cp-lab", "aria-hidden": "true" }, "Model"), label === "Model" ? "Default" : label, icon("chevron")),
     open ? h("div", { class: "menu cp-mmenu", role: "listbox", "aria-label": "Model", "data-side": CP.mdown ? "bottom-end" : "top-end", "data-w": "wide", "data-key": "mm" },
       menuHead(note, "h"),
       [["", first, live || row ? "Leave it as it is" : "The default"], ...MODELS.filter(([v]) => live || row || v !== def).map(([v, l, s]) => [v, l, s])].map(([v, l, s]) =>
@@ -833,7 +833,7 @@ function effortPick(d, r, th) {
   const note = other ? "Effort applies to Claude runs only" : live ? (now ? `${Said(th, who)} is at ${now} effort for this run` : `${Said(th, who)} keeps its effort for this run`) : known ? (held ? `${Said(th, who)} wakes at ${held} effort` : `${Said(th, who)} wakes at Claude's default effort`) : "How hard a new agent thinks";
   const pick = v => { d.effort = v; keep(d); CP.menu = false; refresh(); };
   return h("div", { class: "pop cp-mpop cp-epop", "data-key": "effort" },
-    h("button", { type: "button", class: "dd cp-model cp-effort", disabled: other, "data-picked": cur ? "" : null, "data-value": cur, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Effort: " + (other ? "Claude runs only" : shown || "as is"), title: note + (other ? "" : ". Pick one to change it."), onclick: (e, b) => { const r = (b || e.target.closest(".cp-effort")).getBoundingClientRect(); CP.mdown = innerHeight - r.bottom > r.top; toggle("effort")(); } },
+    h("button", { type: "button", class: "dd cp-model cp-effort", disabled: other, "data-picked": cur ? "" : null, "data-value": cur, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Effort: " + (other ? "Claude only" : shown ? (EFFORTS.find(([v]) => v === shown) || [, shown])[1] : "Default"), title: note + (other ? "" : ". Pick one to change it."), onclick: (e, b) => { const r = (b || e.target.closest(".cp-effort")).getBoundingClientRect(); CP.mdown = innerHeight - r.bottom > r.top; toggle("effort")(); } },
       // Label and value like the Model and Focus pills beside it, so "Effort" alone never reads as a missing value (round 16)
       h("span", { class: "cp-lab", "aria-hidden": "true" }, "Effort"), h("span", { class: "cp-ev" }, other ? "Claude only" : shown ? (EFFORTS.find(([v]) => v === shown) || [, shown])[1] : "Default"), other ? null : icon("chevron")),
     open ? h("div", { class: "menu cp-mmenu", role: "listbox", "aria-label": "Effort", "data-side": CP.mdown ? "bottom-end" : "top-end", "data-w": "wide", "data-key": "em" },

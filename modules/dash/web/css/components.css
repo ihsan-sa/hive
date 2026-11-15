@@ -577,6 +577,9 @@ table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 .draft .draft-diff{white-space:pre}
 .fmsg[data-tone=good]{color:var(--good-ink)}
 .fmsg[data-tone=bad]{color:var(--bad-ink)}
+/* A field that fails: the words beside it (kit.js fieldErr), and the border as a second cue, never the only one (WCAG 3.3.1, drive_app_errors) */
+.field-err{font-size:var(--fs-small);color:var(--bad-ink);margin:var(--s1,4px) 0 0;overflow-wrap:anywhere}
+.input[aria-invalid=true]{border-color:var(--bad)}
 .fmsg[data-tone=warn]{color:var(--warn-ink)}
 .signin{margin-top:var(--s3);padding:var(--s3);border:1px solid var(--line);border-radius:var(--r-m);background:var(--sunken)}
 .steps{margin:0 0 var(--s2);padding-left:1.2em;display:grid;gap:var(--s1)}
@@ -1950,7 +1953,7 @@ html:not([data-dev]) .av>.st[data-tone=ended]{display:none}   /* design 1110g: i
 /* The list opens as pills dropping down in a line under the stack. The pop's padding-top is the bridge the pointer crosses;
    the scrolling is on the inner list so nothing clips the bridge. */
 .avs-pop{position:absolute;top:100%;right:0;z-index:25;display:none;padding-top:6px}
-.avs-w:hover>.avs-pop,.avs-w:focus-within>.avs-pop{display:block}
+.avs-w:not([data-shut]):hover>.avs-pop,.avs-w:not([data-shut]):focus-within>.avs-pop{display:block}   /* data-shut: Escape closed it (refs.js) */
 .avs-pop-l{display:flex;flex-direction:column;align-items:flex-end;gap:4px;max-height:min(60vh,420px);overflow-y:auto;padding:2px 4px 8px 12px;font-size:var(--fs-small)}
 .avs-pop-h,.avs-pop-r{animation:avs-drop .18s cubic-bezier(.2,.8,.3,1) both;animation-delay:calc(var(--i) * 22ms)}
 .avs-pop-h{padding:2px 10px;border-radius:var(--r-pill);background:var(--surface);border:1px solid var(--line);color:var(--ink-3);white-space:nowrap}
@@ -3471,3 +3474,9 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 
 /* a long unbroken word in a page head (an agent id, a title) wraps inside the page instead of widening it */
 .ph-title,.ph-lead,.ph-meta{overflow-wrap:anywhere;min-width:0;max-width:100%}
+/* Instructions for chats here (everyday E37): the focus page's group instructions and files */
+.fp-brief .fp-brief-x{white-space:pre-wrap;margin:0}
+.fp-brief .fp-brief-in{width:100%;box-sizing:border-box;margin:6px 0}
+.fp-brief .fp-brief-f{list-style:none;padding:0;margin:6px 0;display:grid;gap:4px}
+.fp-brief .fp-brief-f li{overflow-wrap:anywhere}
+.fp-brief .fp-brief-add{margin:4px 0 8px;cursor:pointer;display:inline-flex}
