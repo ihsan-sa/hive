@@ -133,7 +133,6 @@ def c_hunt(a):
         try: age = float(h.max_age) if h.max_age is not None else None
         except (TypeError, ValueError): age = None
         if age is not None and age <= 0: warn(f"max_age_years {h.max_age} is 0 or less, so every dated page would count as stale")
-        if h.read < 1: warn(f"read_per_search {h.read} is below 1, so no page would be read and no lead could be found")
         try: sd = float(h.s.get("stale_days", 365))
         except (TypeError, ValueError): sd = 365
         if sd <= 0: warn(f"stale_days {h.s.get('stale_days')} is 0 or less, so every page would count as stale and get the extra departure search")
