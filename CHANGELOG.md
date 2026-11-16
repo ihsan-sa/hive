@@ -4,6 +4,10 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## An agent that will carry on by itself no longer shows as Failed
+
+When an agent lost its connection to Claude (or the machine restarted under it), the Hive said it would carry on by itself, but the conversation showed the same run as **Failed** with "a message wakes it to try again" right underneath. Now the conversation says it stopped, why, and that it carries on by itself; the bar reads **Paused**, and it isn't counted as needing you. If the Hive gives up after several tries, it shows as Failed as before.
+
 ## A button that wipes the knowledge base, with a way back
 
 Settings has a new last section, **Wipe the knowledge base**, for when a Hive should start a piece of work without what its agents learned before. It moves every note in the knowledge base into a private copy on the same machine. Your priorities and your standing directions stay where they are, and so do the board, the projects, the core and the modules. Nothing is deleted: the section lists the copies from earlier wipes, and **Put back** merges one in again without overwriting a note that is there now.

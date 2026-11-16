@@ -13,7 +13,7 @@ export const S = {
   live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {}, shown: [], threadStatus: {}, waitsIn: {}, agentStatus: {},
   posts: [], byId: {}, threads: new Map(), off: 0, boardStart: null,
   sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0, logStart: null, history: false,
-  agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(),
+  agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(), diedNow: new Set(),
   ledger: [],                 // {t, kind, parts:[string | {a:name} | {th:thread}], lc}
   running: new Map(), pending: {},
   stCache: new Map(),
@@ -116,6 +116,7 @@ function ingestLog(items) {
     const r = logRow(e, t); if (r) ledgerAdd(r, [e.event, e.name || "", e.thread || "", e.by || ""]);
     if (e.event === "start") {
       S.limitedNow.delete(e.session); // resumed: limitedSess keeps the history, limitedNow means still stopped
+      S.diedNow.delete(e.session);
       const s = { out: e.out ? String(e.out).split("/").pop().replace(/\.jsonl$/, "") : null, name: e.name, session: e.session, start: t, end: null, exit: null,
         thread: e.thread, from: e.from, post: e.post, resumed: !!e.resumed, heirOf: e.heir_of || null, model: e.model || null, effort: e.effort || null, harness: e.harness || null, provider: e.provider || null, login: e.login || null };
       S.sessions.push(s); if (e.thread) S.lastByThread[e.thread] = s; S.lastSess[e.name] = s; S.open[e.name + e.session] = s; S.agents.add(e.name);
@@ -132,7 +133,12 @@ function ingestLog(items) {
       ledgerAdd({ t, kind: bad ? "trouble" : "agent", parts: [{ a: e.name }, bad ? ` failed (exit ${exit})` : " ended", th ? " in " : "", th ? { th } : ""] }, [bad ? "failed" : "ended", e.name, th || ""]);
     } else if (e.event === "woken" || e.event === "reaped") { const s = S.open[e.name + e.session]; if (s) s.byStarter = true; }
     else if (e.event === "killed") S.killed[e.name] = t;
-    else if (e.event === "heir") { const s = S.lastSess[e.name]; if (s) { s.replacedBy = e.heir; S.limitedNow.delete(s.session); } } // a new agent took over: the old name isn't "stopped" any more
+    else if (e.event === "heir") { const s = S.lastSess[e.name]; if (s) { s.replacedBy = e.heir; S.limitedNow.delete(s.session); S.diedNow.delete(s.session); } } // a new agent took over: the old name isn't "stopped" any more
+    else if (e.event === "died") {
+      // the starter queued the run that just ended to resume by itself (lost connection, restart, ...): not a failure the person must act on,
+      // or the thread said "will carry on by themselves" and "Failed" side by side (feedback 2026-11-16). given_up ends that.
+      const s = S.lastSess[e.name]; if (s && s.session === e.session && s.end) { s.retry = e.why || "other"; S.diedNow.add(e.session); }
+    } else if (e.event === "given_up") { const s = S.lastSess[e.name]; if (s && s.session === e.session) s.retry = null; S.diedNow.delete(e.session); }
     else if (e.event === "limited") {
       // Mark the run that just ended, not the session: a resumed agent keeps its session id, so a session-wide mark
       // would call every later normal end of that agent a usage limit.
@@ -162,7 +168,7 @@ const FIRST_BYTES = 2_000_000, LOG_FIRST_BYTES = 600_000;
 let logHeld = [];   // the log items read so far, kept until the older part has arrived: ingestLog keeps no raw events to rebuild from
 let filling = false;   // the older part is on its way: a poll that lands meanwhile has nothing older of its own, and must not call the history complete (R73)
 function resetLog() {
-  Object.assign(S, { sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set() });
+  Object.assign(S, { sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(), diedNow: new Set() });
   S.ledger = S.ledger.filter(r => r.b);
 }
 async function backfill(boardUpto, logUpto) {

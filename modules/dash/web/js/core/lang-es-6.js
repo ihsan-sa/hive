@@ -6,6 +6,8 @@ const WHO = { "The agent": "El agente", "An agent": "Un agente", "The Hive": "El
 const who = n => WHO[n] || n.replace(/^Agent ([A-Z]{1,2})$/, "Agente $1");
 const when = t => (t === "just now" ? "ahora mismo" : `hace ${t.replace(/ ago$/, "")}`);   // format.js ago(): "just now", "12s ago", "5m ago", "2.5h ago", "3d ago"
 const AGO = "(just now|\\d+(?:[.,]\\d)?[smhd] ago)";
+const RETRY = { "no connection to Claude": "sin conexión con Claude", "the machine restarted": "la máquina se reinició", "went silent with nothing running": "se quedó en silencio sin nada en marcha",
+  "ended before it finished": "terminó antes de acabar", "reached its budget or turn limit": "llegó a su presupuesto o límite de turnos" };
 const LABEL = { "Asked": "Pedido", "Asked earlier": "Pedido antes", "Earlier": "Antes", "Later": "Después", "Not needed": "No hace falta" };
 export default {
   // the state words the older tables don't have
@@ -24,6 +26,10 @@ export default {
   "carrying on after your reply": "sigue tras tu respuesta",
   "not picked up yet": "nadie lo ha recogido aún",
   "taking a break; it carries on by itself": "se toma un descanso; sigue por sí solo",
+  ...RETRY,
+  "stopped, carries on by itself": "parado; sigue por sí solo",
+  "is taking a break and carries on by itself.": "se toma un descanso y sigue por sí solo.",
+  "It carries on by itself; a message wakes it sooner.": "Sigue por sí solo; un mensaje lo despierta antes.",
   "ran into a problem; a message makes it try again": "tuvo un problema; un mensaje hace que lo intente de nuevo",
   // why the count doesn't have a conversation that is on the list
   "You put this off": "Lo dejaste para después",
@@ -54,6 +60,10 @@ export default {
     [/^(.+) stopped answering$/, (_, n) => `${who(n)} dejó de responder`],
     // a run that ended badly after the summary was written
     [new RegExp(`^stopped at a usage limit ${AGO}; it carries on by itself$`), (_, t) => `se paró por un límite de uso ${when(t)}; sigue por sí solo`],
+    // a run the starter resumes by itself (lost connection, a restart): starter.py's WHY_WORDS, model.js retryWords
+    [new RegExp(`^stopped \\((.+)\\) ${AGO}; it carries on by itself$`), (_, w, t) => `se paró (${RETRY[w] || w}) ${when(t)}; sigue por sí solo`],
+    [new RegExp(`^stopped \\((.+)\\) ${AGO} and carries on by itself\\. A message wakes it sooner\\.$`), (_, w, t) => `se paró (${RETRY[w] || w}) ${when(t)} y sigue por sí solo. Un mensaje lo despierta antes.`],
+    [/^(.+) stopped \((.+)\)$/, (_, n, w) => `${who(n)} se paró (${RETRY[w] || w})`],
     [new RegExp(`^stopped with an error ${AGO}; a message wakes it to try again$`), (_, t) => `se paró con un error ${when(t)}; un mensaje lo despierta para intentarlo de nuevo`],
   ],
 };
