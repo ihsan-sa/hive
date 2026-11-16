@@ -259,7 +259,7 @@ function live(it, my, known) {
   const tick = async () => {
     if (my !== P.seq || !P.root || P.list) return;
     const w = P.head && P.head.querySelector(".pv-live");
-    if (w && known.t) w.textContent = "changed " + ago(known.t * 1000);
+    if (w && known.t) w.textContent = tr("changed " + ago(known.t * 1000));
     if (document.hidden) { P.live = setTimeout(tick, LIVE_MS); return; }
     try {
       const r = await fetch("/api/kb/open?path=" + encodeURIComponent(it.kb), { cache: "no-store" });
@@ -272,8 +272,8 @@ function live(it, my, known) {
           const x = await m.render(it, { source: MODE.get(keyOf(it)) === "src" });
           if (my !== P.seq || !P.root || P.list) return;
           header(it, x); P.body.replaceChildren(x.node); P.body.scrollTop = top;
-          const w2 = P.head.querySelector(".pv-live"); if (w2) { w2.textContent = "changed just now"; w2.dataset.fresh = ""; setTimeout(() => w2.isConnected && delete w2.dataset.fresh, 4000); }
-        } else if (!known.t) { Object.assign(known, { t: d.t, size: d.size }); const w3 = P.head.querySelector(".pv-live"); if (w3) w3.textContent = "changed " + ago(d.t * 1000); }
+          const w2 = P.head.querySelector(".pv-live"); if (w2) { w2.textContent = tr("changed just now"); w2.dataset.fresh = ""; setTimeout(() => w2.isConnected && delete w2.dataset.fresh, 4000); }
+        } else if (!known.t) { Object.assign(known, { t: d.t, size: d.size }); const w3 = P.head.querySelector(".pv-live"); if (w3) w3.textContent = tr("changed " + ago(d.t * 1000)); }
       }
     } catch (e) {}
     P.live = setTimeout(tick, LIVE_MS);

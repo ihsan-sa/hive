@@ -40,6 +40,12 @@ export function loginRow(U, l, t, span = 48 * HOUR) {
     : l.five != null ? limitGauge("5-hour", { u: l.five / 100, r: rs.five_hour }, hStop, t, [src], short)
     : l.weekly != null ? limitGauge("5-hour", { u: 0, r: null }, hStop, t, [short ? "none open" : "no 5-hour window open: no use in the last 5 hours"], short)
     : L.five_hour ? limitGauge("5-hour", L.five_hour, hStop, t, [], short) : null;
+  // a model's own weekly share inside the weekly limit (Fable's on some plans): its agents wait for its reset when it's full (person, 2026-11-16)
+  const held = l.held_models || [], cap = m => m.charAt(0).toUpperCase() + m.slice(1);
+  const models = Object.entries(l.scoped || {}).filter(([, v]) => v && typeof v.percent === "number").map(([m, v]) =>
+    ({ model: m, held: held.includes(m), ...limitGauge(cap(m), { u: v.percent / 100, r: v.resets }, null, t,
+      [held.includes(m) ? h("b", null, short ? `${cap(m)} agents wait` : `${cap(m)} agents wait for this reset; other models keep working.`)
+        : short ? null : `${cap(m)}'s own weekly share, inside the weekly limit.`], short) }));
   // history, in about 190 buckets carried forward, aligned so it holds still
   const N = 192, step = Math.max(MIN, Math.round(span / N / MIN) * MIN), start = Math.floor((t - N * step) / step) * step, a5 = new Array(N).fill(null), a7 = new Array(N).fill(null);
   for (const [w, u5, u7] of l.series || []) { const i = Math.floor((w * 1e3 - start) / step); if (i >= 0 && i < N) { if (u5 != null) a5[i] = u5 * 100; if (u7 != null) a7[i] = u7 * 100; } }
@@ -52,7 +58,7 @@ export function loginRow(U, l, t, span = 48 * HOUR) {
     state: out ? { key: "out" } : l.paused ? { key: "paused", text: "paused: no new runs" } : inUse(l, U) ? { key: "inuse" } : { key: "atstop" },
     note: short ? (st.weekly != null ? `own line: ${st.weekly}%` : null)
       : `Stops at ${wStop}% weekly${st.weekly == null ? " (global)" : ""}` + (no5 ? ". No 5-hour limit on this plan." : hStop != null ? `, ${hStop}% 5-hour.` : ", no 5-hour stop."),
-    gauges: [weekly, five].filter(Boolean),
+    gauges: [weekly, five, ...models].filter(Boolean),
     history: any(a7) || any(a5) ? chart({ series, kind: "step", start, step, max: 100, mark: wStop, compact: true, height: 44, area: false, names: ["weekly", "5-hour"], fmt: v => Math.round(v) + "%" }) : h("span", { class: "meta" }, "no history yet"),
     actions: [out && can("logins") ? button("Sign in", null, { size: "s", href: href("settings", "accounts") }) : null,
       ...(can("limits") ? [button(S.app.app ? "Stop line" : "Stop lines", () => askLimits(U, l), { size: "s" }), button(l.paused ? "Resume" : "Pause", () => askPause(U, l), { size: "s", kind: "quiet" })] : [])],
@@ -239,14 +245,16 @@ function appAccounts(U, t, R) {
   const us = U.logins || [];
   const rows = us.map(l => loginRow(U, l, t, Math.min(R.span, 7 * DAY)));
   const row = r => {
-    const w = r.gauges.find(g => g.label === "Weekly"), f = r.gauges.find(g => g.label === "5-hour"), [tone, word] = acctWord(r);
+    const w = r.gauges.find(g => g.label === "Weekly"), f = r.gauges.find(g => g.label === "5-hour"), ms = r.gauges.filter(g => g.model), [tone, word] = acctWord(r);
     const reset = g => g && (g.lines || []).find(x => typeof x === "string");
     return h("div", { class: "lr u-acct", "data-key": r.key, "data-dim": r.dim ? "" : null },
       h("span", { class: "av", "aria-hidden": "true" }, (r.name || "?")[0].toUpperCase()),
       h("span", { class: "u-acct-m" },
         h("span", { class: "lr-t" }, h("b", null, r.name), r.tag ? h("span", { class: "meta" }, "Claude · " + r.tag) : null),
-        h("span", { class: "lr-s" }, [`Week ${w ? w.value : "?"}`, f ? `5 hours ${f.value}` : null].filter(Boolean).join(" · ")),
-        h("span", { class: "gauge-rs meta" }, reset(w) || "not read yet"), f && reset(f) ? h("span", { class: "gauge-rs meta" }, "5 hours " + reset(f)) : null),
+        h("span", { class: "lr-s" }, [`Week ${w ? w.value : "?"}`, f ? `5 hours ${f.value}` : null, ...ms.map(g => `${g.label} ${g.value}`)].filter(Boolean).join(" · ")),
+        h("span", { class: "gauge-rs meta" }, reset(w) || "not read yet"), f && reset(f) ? h("span", { class: "gauge-rs meta" }, "5 hours " + reset(f)) : null,
+        // a model's own limit (Fable's): its reset shows once it's nearly full, and that its agents wait while the starter holds them
+        ...ms.filter(g => g.held || g.pct >= 90).map(g => h("span", { class: "gauge-rs meta" }, `${g.label} ${reset(g) || ""}`.trim() + (g.held ? `; ${g.label} agents wait, other models keep working` : "")))),
       w && w.pct != null ? meter({ value: w.pct, stop: w.stop, tone: tone === "bad" ? "bad" : null, label: `${r.name}: ${w.value} of the week used` }) : h("span", { class: "meta" }, "–"),
       statusWord(tone, word, null, "pg-t"),
       r.actions && r.actions.filter(Boolean).length ? h("span", { class: "u-acct-a" }, ...r.actions) : null);

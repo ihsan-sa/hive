@@ -335,7 +335,6 @@
   .msg[data-who=me]>.msg-c{max-width:88%}
   .cm-helper{padding-left:12px}
   .cm-strip-b .cm-strip-m{display:none}
-  .cm-strip[data-fold] .cm-strip-b>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }
 
 /* ===== R7 step 2: the composer (.cp*), from the design's chat.css "the composer"; overrides the older .cp rules in components.css ===== */
@@ -420,13 +419,6 @@ html[data-read="1.3"]{--read-scale:1.3}
 /* R7 step 4: a long report keeps its author line pinned while you scroll it, grouped or not */
 /* R7b S4: it sticks at the scroller's very top, not under its 8px top padding, and its band covers that gap, so no words show above it */
 .msg[data-report]:not([data-who=me])>.msg-c>.msg-h,.msg[data-report][data-cont]:not([data-who=me])>.msg-c>.msg-h{display:flex;position:sticky;top:-8px;z-index:4;min-height:38px;background:var(--surface,#fff);padding:10px 0 2px}
-/* R7 step 4: the thread status bar shares .cm-strip with the composer's live strip (components.css "status strip"), whose
-   closed-state grid squeezed line a into a word-wide column with line b drawn over it. The status bar is its own block:
-   line a, line b and the meta each a full-width row that wraps. */
-.cm-status.cm-strip,.cm-status.cm-strip:not([data-open]){display:grid;grid-template-columns:minmax(0,1fr);gap:2px;align-items:start;min-height:0;max-width:none;width:auto;margin:0;padding:6px var(--s4);border:0;border-bottom:1px solid var(--line);border-radius:0;background:none;font-size:var(--fs-small);line-height:1.45;color:var(--ink-2)}
-.cm-status.cm-strip>.cm-strip-a,.cm-status.cm-strip>.cm-strip-b,.cm-status.cm-strip>.cm-strip-m,.cm-status.cm-strip>.cm-status-more{grid-column:1;display:block;min-width:0;overflow-wrap:anywhere;white-space:normal}
-.cm-status.cm-strip>.cm-strip-m{white-space:normal}
-@media (max-width:699px){.cm-status.cm-strip,.cm-status.cm-strip:not([data-open]){padding:4px var(--s4) 6px}}
 /* Focus picker: the model picker's menu, with a long name cut short */
 .cp-fbtn .cp-ficon{display:none;width:16px;height:16px;vertical-align:-3px}
 .cp-fbtn .cp-fname{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -454,29 +446,68 @@ html[data-read="1.3"]{--read-scale:1.3}
 .msg[data-asks] .msg-pick{background:var(--surface);border-color:var(--line-2);color:var(--ink)}   /* Go with 1 / Go with 2: secondary, small */
 .msg[data-asks] .msg-answer{display:none}   /* Answer: the composer is already addressed to this agent; Reply stays in the hover bar */
 
-/* §8.4 The thread's summary: one muted line beside the title, not a three-line block over the messages */
-.cm-status.cm-strip,.cm-status.cm-strip:not([data-open]){display:flex;align-items:center;gap:8px;min-width:0;padding:0 0 0 10px;margin-left:4px;border:0;border-left:1px solid var(--line);background:none;flex:1}
-.cm-status.cm-strip>.cm-strip-a{font-weight:400;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto}
-.cm-status.cm-strip>.cm-strip-b{display:none}
-.cm-status.cm-strip>.cm-strip-m,.cm-status.cm-strip>.cm-status-more{display:none}
-.cm-status.cm-strip[data-open]{position:absolute;left:var(--s5);right:var(--s5);top:100%;z-index:5;display:grid;gap:4px;padding:var(--s3) var(--s4);border:0;border-radius:var(--r-l);background:var(--surface);box-shadow:var(--e2)}
-.cm-status.cm-strip[data-open]>*{display:block!important;white-space:normal}
-@media (max-width:699px){.cm-status.cm-strip,.cm-status.cm-strip:not([data-open]){display:none}}   /* phone: the summary is the title button's sub line */
+/* §8.4, then a0f4b (the person, 11160014bf8b: "tell me what I need to know when"): where the conversation stands, on a row of its own under the title and
+   the tools. A mark and a word say the state, then the one line; a second, quieter fact follows while the row has room. A click opens the whole summary
+   under the row, in the flow: it moves the messages down and covers none of them. Every rule starts .cm-head> so it beats the strip's own look
+   (components.css "status strip") and the phone sheet, whatever their order. */
+@media (min-width:700px){
+  .cm-head:has(>.cm-status){flex-wrap:wrap;align-content:flex-start;row-gap:0;padding-top:6px}
+  .cm-head>.cm-status.cm-strip,.cm-head>.cm-status.cm-strip:not([data-open]){flex:0 0 100%;display:flex;flex-wrap:nowrap;align-items:flex-start;gap:0 8px;box-sizing:border-box;min-width:0;min-height:0;width:auto;max-width:none;margin:0;padding:0 0 6px;border:0;border-radius:0;background:none;font-size:var(--fs-small);line-height:20px;color:var(--ink-2)}
+  /* line a wraps inside a box one line high: the second fact needs 16ch beside the first, or it goes to a second line nobody sees */
+  .cm-head>.cm-status.cm-strip>.cm-strip-a{flex:1 1 0;min-width:0;display:flex;flex-wrap:wrap;column-gap:8px;height:20px;overflow:hidden;font-weight:400;color:var(--ink-2);border-radius:var(--r-s)}
+  .cm-head>.cm-status .cm-st-main{flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cm-head>.cm-status .cm-st-main>.st{margin-right:6px;vertical-align:1px}
+  .cm-head>.cm-status .cm-st-w{font-weight:600;color:var(--ink)}
+  .cm-head>.cm-status[data-state=asks] .cm-st-w{color:var(--accent-ink)}
+  .cm-head>.cm-status .cm-st-also{flex:1 0 16ch;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink-3)}
+  .cm-head>.cm-status.cm-strip:not([data-open])>.cm-strip-b,.cm-head>.cm-status.cm-strip:not([data-open])>.cm-strip-m{display:none}
+  .cm-head>.cm-status.cm-strip>.tier-chip{flex:none}
+  .cm-head>.cm-status.cm-strip>.cm-st-age{flex:none;margin-left:auto;white-space:nowrap}
+  .cm-head>.cm-status.cm-strip>.cm-strip-a:hover .cm-st-t,.cm-head>.cm-status.cm-strip>.cm-strip-a:hover .cm-st-also{color:var(--ink)}
+  /* open: every word of the summary, each line its own block; a long one scrolls inside the head (160px at most; on a window under 720px high less,
+     down to three lines) so the messages keep their room */
+  .cm-head>.cm-status.cm-strip[data-open]{flex-wrap:wrap;padding-bottom:8px}
+  .cm-head>.cm-status.cm-strip[data-open]>.cm-strip-a{height:auto;overflow:visible}
+  .cm-head>.cm-status[data-open] .cm-st-main,.cm-head>.cm-status[data-open] .cm-st-also{flex:0 0 100%;white-space:normal;overflow:visible;overflow-wrap:anywhere}
+  .cm-head>.cm-status[data-open] .cm-st-also[data-dup],.cm-head>.cm-status.cm-strip[data-open]>.cm-st-age{display:none}
+  .cm-head>.cm-status.cm-strip[data-open]>.cm-strip-b{order:1;flex:0 0 100%;display:block;min-width:0;max-height:clamp(60px,calc(100vh - 560px),160px);overflow:auto;color:var(--ink-2);overflow-wrap:anywhere}
+  .cm-head>.cm-status[data-open] .cm-st-l{display:block}
+  .cm-head>.cm-status.cm-strip[data-open]>.cm-strip-m{order:2;flex:0 0 100%;display:block;white-space:normal;padding-top:2px}
+}
+@media (max-width:699px){.cm-head>.cm-status.cm-strip,.cm-head>.cm-status.cm-strip:not([data-open]),.cm-head>.cm-status.cm-strip[data-open]{display:none}}   /* phone: the title button's sub line says it; the title's menu has the whole summary */
+/* a phone under 600px: who is here, Files, Contents, Show every message, the side questions and the board panel fold behind one More button, so the
+   title keeps its room (at 481px it had 152px with every tool out); More opens them as a row of their own under the title */
+.cm-head .cm-more-b{display:none}
+@media (max-width:599px){
+  .cm-head .cm-more-b{display:inline-flex}
+  .cm-head:not([data-more]) .cm-tools>:is(.avs-w,.cm-files,.cm-showall,button.cm-aside-b,.rc-railbtn,.cm-board-b){display:none}
+  .cm-head[data-more]{flex-wrap:wrap;row-gap:0}
+  .cm-head[data-more]>.cm-tools{flex:0 0 100%;justify-content:flex-end;margin-left:0}
+  .cm-head[data-more]>.cm-tools>.avs-w{min-height:40px;align-items:center}   /* who is here: the stack is 24px high; in the open row it is a 40px target like the rest */
+}
+/* the phone's title menu opens with the same line: mark, word, the one line; the rest of the summary follows it */
+.cm-menu-st-a{color:var(--ink)}
+.cm-menu-st-a>.st{margin-right:6px;vertical-align:1px}
+.cm-menu-st[data-state=asks] .cm-menu-st-a>b{color:var(--accent-ink)}
+.cm-menu-st-also{color:var(--ink-3)}
 
 /* §8.5 Avatars carry the status dot; the name line doesn't repeat it. No CSS: drop the statusDot in messageHead() (HANDOFF §8.5). */
 
 /* §8.6 The live line above the composer: one line per state, the question is not repeated */
 .cm-line[data-key=asks] .cm-line-a{display:none}   /* its Answer button: the composer below is already addressed to the agent */
 .cm-line[data-key=asks] q{display:none}             /* the quoted question: it is the message right above */
-/* §8.4: the summary's first line under the title button, on a phone only (PhoneThread); the strip in the head is hidden there */
+/* §8.4: where it stands, in one line under the title button, on a phone only (PhoneThread); the bar in the head is hidden there */
 .cm-title-sub{display:none}
 .cm-strip-a[role=button]{cursor:pointer}
 @media (max-width:699px){
   .cm-title-b:has(.cm-title-sub){flex-wrap:wrap;height:auto;min-height:40px;row-gap:0;text-align:left}
-  .cm-title-sub{display:block;flex-basis:100%;min-width:0;font-size:12px;line-height:16px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cm-title-sub{display:block;flex-basis:100%;min-width:0;font-size:12px;line-height:16px;font-weight:400;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cm-title-sub>.st{margin-right:6px;vertical-align:1px}
+  .cm-title-sub>b{font-weight:600;color:var(--ink-2)}
+  .cm-title-sub[data-state=asks]>b{color:var(--accent-ink)}
 }
 .cm-menu-st{display:none}
-@media (max-width:699px){.cm-menu-st{display:grid;gap:4px;padding:var(--s2) var(--s3) var(--s3);margin-bottom:var(--s1);border-bottom:1px solid var(--line);color:var(--ink-2);max-width:min(340px,86vw)}.cm-menu-st p{margin:0}}
+@media (max-width:699px){.cm-menu-st{display:grid;gap:4px;padding:var(--s2) var(--s3) var(--s3);margin-bottom:var(--s1);border-bottom:1px solid var(--line);color:var(--ink-2);max-width:min(340px,86vw);max-height:min(40vh,240px);overflow:auto}.cm-menu-st p{margin:0}}
 /* E12: version arrows, Edit and Retry under a message; the inline editor */
 .msg-ver{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1,4px) var(--s2,8px);margin-top:var(--s1,4px)}
 .msg-ver-n{display:inline-flex;align-items:center;gap:2px}

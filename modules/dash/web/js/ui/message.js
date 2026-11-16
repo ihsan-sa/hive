@@ -562,9 +562,10 @@ function didFold(p, s) {
 // each with its output, folded under the answer. /api/ran reads them from the run's session log; one read asks for every reply drawn at once.
 const RAN = new Map(), RAN_OPEN = new Set(), RAN_STEP_OPEN = new Set();
 let ranQ = null;
+const ranWait = p => now() - p.t < 30e3 ? 2e3 : 15e3;   // ask again for a fresh reply's code every 2 s for its first half minute, then every 15 s
 function ranAsk(p) {
   const e = RAN.get(p.id);
-  if (e && (e.v === null || e.v.steps.length || now() - p.t > 3 * MIN || now() - e.at < 15e3)) return;   // a reply just sent may beat its log: ask again in 15 s for its first 3 minutes
+  if (e && (e.v === null || e.v.steps.length || now() - p.t > 3 * MIN || now() - e.at < ranWait(p))) return;   // a reply just sent may beat its log: ask again (ranFetch sets a timer) for its first 3 minutes
   RAN.set(p.id, { v: e ? e.v : null, at: now(), busy: true });
   if (!ranQ) { ranQ = new Map(); queueMicrotask(ranFetch); }
   ranQ.set(p.id, p.t);
@@ -578,7 +579,9 @@ async function ranFetch() {
     for (const [id] of part) {
       const r = v && v[id] && Array.isArray(v[id].steps) ? v[id] : { steps: [] };
       RAN.set(id, { v: r, at: now() });
-      if (!r.steps.length) continue;
+      const p0 = S.byId[id];
+      // E42b: the post lands on the board a moment before its command's result reaches the run's log, so a fresh reply's first ask often finds nothing. Ask again on a timer, not on the next redraw, which may not come.
+      if (!r.steps.length) { if (p0 && now() - p0.t < 3 * MIN) setTimeout(() => { for (const slot of document.querySelectorAll(`.msg[data-key="${CSS.escape(id)}"] .msg-ran-slot`)) slot.replaceWith(ranFold(S.byId[id] || p0)); }, ranWait(p0) + 100); continue; }
       for (const slot of document.querySelectorAll(`.msg[data-key="${CSS.escape(id)}"] .msg-ran-slot`)) { const p = S.byId[id]; if (p) slot.replaceWith(ranFold(p)); }
     }
   }
@@ -587,12 +590,24 @@ function ranFold(p) {
   const e = RAN.get(p.id);
   if (!e || !e.v || !e.v.steps.length) { ranAsk(p); return h("span", { class: "msg-ran-slot", hidden: true }); }
   const r = e.v, n = r.steps.length + (r.more || 0);
+  if (RAN_LIVE_OPEN.has(p.from) && now() - p.t < 3 * MIN) { if (RAN_LIVE_OPEN.get(p.from)) RAN_OPEN.add(p.id); RAN_LIVE_OPEN.delete(p.from); }
   return h("details", { class: "msg-fold msg-ran", open: RAN_OPEN.has(p.id) || null, ontoggle: (ev, d) => { if (ev.target !== d) return; if (d.open) RAN_OPEN.add(p.id); else RAN_OPEN.delete(p.id); } },
     h("summary", null, icon("chevron-right"), `Code it ran · ${n} ${n === 1 ? "step" : "steps"}`),
     h("div", { class: "ran-b" },
       r.more ? h("div", { class: "meta ran-more" }, `${r.more} earlier ${r.more === 1 ? "step" : "steps"} not shown`) : null,
       r.steps.map((s, i) => ranStep(p, s, i))));
 }
+// E42b: the same fold while the agent works, under its draft (or its working line before it writes), one step more as each command runs.
+// Its open or shut state carries over to the reply's fold when the reply lands, so a reader watching the steps keeps them open.
+function ranLiveFold(p, r, run) {
+  const n = r.steps.length + (r.more || 0), name = p.id.slice(6);
+  return h("details", { class: "msg-fold msg-ran", "data-live": "", open: RAN_OPEN.has(p.id) || null, ontoggle: (ev, d) => { if (ev.target !== d) return; if (d.open) RAN_OPEN.add(p.id); else RAN_OPEN.delete(p.id); RAN_LIVE_OPEN.set(name, d.open); } },
+    h("summary", null, icon("chevron-right"), `Code it ran · ${n} ${n === 1 ? "step" : "steps"}${run ? " · running" : ""}`),
+    h("div", { class: "ran-b" },
+      r.more ? h("div", { class: "meta ran-more" }, `${r.more} earlier ${r.more === 1 ? "step" : "steps"} not shown`) : null,
+      r.steps.map((s, i) => ranStep(p, s, i))));
+}
+const RAN_LIVE_OPEN = new Map();   // agent name -> the live fold was opened (true) or shut: its next reply's fold starts the same way
 const RAN_LANG = { python: "Python", node: "JavaScript", shell: "Shell", file: "File" };
 function ranStep(p, s, i) {
   const k = p.id + ":" + i, long = (s.out || "").split("\n").length > 12 && !RAN_STEP_OPEN.has(k);
@@ -603,7 +618,7 @@ function ranStep(p, s, i) {
       s.what ? h("span", { class: "ran-what" }, s.what) : null,
       s.t ? h("span", { class: "meta ran-t" }, clock(s.t * 1e3)) : null),
     h("pre", { class: "ran-code" }, h("code", null, s.code)),
-    s.out ? h("pre", { class: "ran-out", "aria-label": s.err ? "Output, with an error" : "Output" }, h("code", null, out)) : s.lang === "file" ? null : h("div", { class: "meta ran-none" }, "No output"),
+    s.out ? h("pre", { class: "ran-out", "aria-label": s.err ? "Output, with an error" : "Output" }, h("code", null, out)) : s.lang === "file" ? null : h("div", { class: "meta ran-none" }, s.running ? "Running…" : "No output"),
     long ? button(`Show all ${s.out.split("\n").length} lines`, (ev, b) => { RAN_STEP_OPEN.add(k); b.closest(".ran-s").replaceWith(ranStep(p, s, i)); }, { size: "s", kind: "quiet", cls: "ran-all" }) : null);
 }
 
@@ -732,7 +747,7 @@ function devMessage(p, opts) {
     long ? button(moreLabel(p), (e, b) => {
       if (OPEN.has(p.id)) OPEN.delete(p.id); else OPEN.add(p.id);
       b.closest(".msg").querySelector(".md").replaceWith(cut(devBodyEl(p, ws)));
-      b.querySelector("span").textContent = moreLabel(p);
+      b.querySelector("span").textContent = tr(moreLabel(p));
       b.setAttribute("aria-expanded", String(OPEN.has(p.id)));
     }, { kind: "quiet", size: "s", cls: "msg-more", icon: "chevron" }) : null);
 }
@@ -800,11 +815,13 @@ function helperFold(k, opts) {
 
 /** E11: the reply an agent is still writing (/api/live's draft, read from its streamed post command), drawn as its message will be and grown as it is written. */
 export function draftMessage(a) {
-  const t = String(a.draft.text || "").replace(/^(?:[ \t]*@[\w.-]+[,:]?[ \t]+)+/, "");
-  const p = { id: "draft:" + a.name, from: a.name, th: a.draft.thread, t: a.draft.at * 1e3, men: [] };
-  return h("article", { class: "msg", "data-key": p.id, "data-who": "agent", "data-state": "draft", "aria-label": `${who(a.name)}, writing`, "aria-busy": "true" },
+  const t = String(a.draft ? a.draft.text || "" : "").replace(/^(?:[ \t]*@[\w.-]+[,:]?[ \t]+)+/, "");
+  const steps = a.steps || [], run = steps.some(s => s.running);
+  const p = { id: "draft:" + a.name, from: a.name, th: a.draft ? a.draft.thread : null, t: (a.draft ? a.draft.at : steps.length ? steps.at(-1).t || now() / 1e3 : now() / 1e3) * 1e3, men: [] };
+  return h("article", { class: "msg", "data-key": p.id, "data-who": "agent", "data-state": a.draft ? "draft" : "working", "aria-label": `${who(a.name)}, ${a.draft ? "writing" : "working"}`, "aria-busy": "true" },
     S.app.app ? msgAvatar(p, "agent") : null,
     h("div", { class: "msg-c" },
-      h("div", { class: "msg-h" }, h("b", null, who(a.name)), h("span", { class: "msg-end" }, h("span", { class: "meta" }, "writing…"))),
-      h("div", { class: "msg-b" }, markdown(t))));
+      h("div", { class: "msg-h" }, h("b", null, who(a.name)), h("span", { class: "msg-end" }, h("span", { class: "meta" }, a.draft ? "writing…" : run ? "running code…" : "working…"))),
+      a.draft ? h("div", { class: "msg-b" }, markdown(t)) : null,
+      steps.length ? ranLiveFold(p, { steps, more: a.more || 0 }, run) : null));
 }

@@ -232,7 +232,7 @@ let SPEED = null;
 export function speedControl() {
   if (SPEED) return SPEED;
   SPEED = document.createElement("label"); SPEED.className = "ph-speed";
-  SPEED.innerHTML = `<span>Voice speed <b></b></span><input type="range" min="0.6" max="1.6" step="0.05" value="1.05" aria-label="Voice speed">`;
+  SPEED.innerHTML = `<span>${esc(tr("Voice speed"))} <b></b></span><input type="range" min="0.6" max="1.6" step="0.05" value="1.05" aria-label="${esc(tr("Voice speed"))}">`;
   const inp = SPEED.querySelector("input"), b = SPEED.querySelector("b"), show = () => { b.textContent = `${fix((+inp.value), 2)}×`; };
   let t = null;
   inp.oninput = () => { show(); setLiveSpeed(inp.value); clearTimeout(t); t = setTimeout(() => post(`${API}/settings`, { speed: +inp.value }).catch(() => {}), 250); };
@@ -250,16 +250,16 @@ function draw() {
   const show = !C.ended || C.id || C.err;
   const other = !show && LIVE.calls.find(c => c.id !== C.id && !LIVE.hidden.has(c.id));
   C.el.hidden = !show && !other; if (other) return drawOther(other); if (!show) return;
-  const who = C.agent === "the Hive" ? "the Hive" : C.agent;
-  const st = C.err ? C.err : C.state === "connecting" ? "Connecting…" : C.state === "hold" ? `On hold: putting you through to ${esc(C.holdFor || "")}` :
-    C.state === "ended" ? "Call ended" : C.muted ? "Muted" : C.seg ? "Listening…" : C.thinking ? "Thinking…" : isPlaying() ? "Speaking" : "Go ahead, I'm listening";
+  const who = C.agent === "the Hive" ? tr("the Hive") : C.agent;
+  const st = esc(tr(C.err ? C.err : C.state === "connecting" ? "Connecting…" : C.state === "hold" ? `On hold: putting you through to ${C.holdFor || ""}` :
+    C.state === "ended" ? "Call ended" : C.muted ? "Muted" : C.seg ? "Listening…" : C.thinking ? "Thinking…" : isPlaying() ? "Speaking" : "Go ahead, I'm listening"));
   let prev = null;   // a name shows once per run of lines by the same speaker
-  const lines = C.lines.slice(C.partial ? -3 : -4).map(l => { const same = l.who === prev; prev = l.who; return `<div class="ph-line${l.who === "you" ? " ph-you" : ""}">${same ? "" : `<b>${esc(l.who === "you" ? "You" : l.who || "")}</b> `}${esc(l.text)}</div>`; }).join("")
-    + (C.partial ? `<div class="ph-line ph-you ph-partial">${prev === "you" ? "" : "<b>You</b> "}<i>${esc(C.partial)}…</i></div>` : "");
+  const lines = C.lines.slice(C.partial ? -3 : -4).map(l => { const same = l.who === prev; prev = l.who; return `<div class="ph-line${l.who === "you" ? " ph-you" : ""}">${same ? "" : `<b>${esc(l.who === "you" ? tr("You") : l.who || "")}</b> `}${esc(l.text)}</div>`; }).join("")
+    + (C.partial ? `<div class="ph-line ph-you ph-partial">${prev === "you" ? "" : `<b>${esc(tr("You"))}</b> `}<i>${esc(C.partial)}…</i></div>` : "");
   fill(`<div class="ph-top"><span class="ph-dot ${C.state}${C.seg ? " live" : ""}"></span><div><div class="ph-who">${esc(who)}</div><div class="ph-st" aria-live="polite">${st}</div></div></div>
     <div class="ph-lines">${lines}</div>
     ${C.ended ? "" : `<div class="ph-speed-slot"></div>`}
-    <div class="ph-btns">${C.ended ? (C.err ? `<button class="btn" data-a="close">Close</button>` : "") : `<button class="btn ph-mute" data-a="mute" aria-pressed="${C.muted}">${C.muted ? "Unmute" : "Mute"}</button><button class="btn ph-end" data-a="end">Hang up</button>`}</div>`);
+    <div class="ph-btns">${C.ended ? (C.err ? `<button class="btn" data-a="close">${esc(tr("Close"))}</button>` : "") : `<button class="btn ph-mute" data-a="mute" aria-pressed="${C.muted}">${esc(tr(C.muted ? "Unmute" : "Mute"))}</button><button class="btn ph-end" data-a="end">${esc(tr("Hang up"))}</button>`}</div>`);
 }
 function onClick(e) {
   const a = e.target.closest("[data-a]"); if (!a) return;
@@ -278,8 +278,8 @@ function drawRings() {
   if (!RINGS.el) { RINGS.el = document.createElement("div"); RINGS.el.className = "ph-rings"; RINGS.el.setAttribute("aria-live", "assertive"); document.body.append(RINGS.el); RINGS.el.addEventListener("click", onClick); }
   const rs = C.ended ? RINGS.list.filter(r => !RINGS.seen.has(r.id)) : [];
   RINGS.el.hidden = !rs.length;
-  RINGS.el.innerHTML = rs.map(r => `<div class="ph-ring"><span class="ph-dot ringing"></span><div><b>${esc(r.from)} is calling</b><div class="ph-st">${esc(r.why || "")}</div></div>
-    <button class="btn ph-answer" data-a="answer" data-ring="${esc(r.id)}">Answer</button><button class="btn" data-a="decline" data-ring="${esc(r.id)}">Decline</button></div>`).join("");
+  RINGS.el.innerHTML = rs.map(r => `<div class="ph-ring"><span class="ph-dot ringing"></span><div><b>${esc(tr(`${r.from} is calling`))}</b><div class="ph-st">${esc(r.why || "")}</div></div>
+    <button class="btn ph-answer" data-a="answer" data-ring="${esc(r.id)}">${esc(tr("Answer"))}</button><button class="btn" data-a="decline" data-ring="${esc(r.id)}">${esc(tr("Decline"))}</button></div>`).join("");
 }
 async function pollRings() {
   if (!(S.app && S.app.phone) || document.hidden) return;
@@ -311,12 +311,12 @@ export function hangUp(id) {
 }
 function drawOther(c) {
   let prev = null;
-  const lines = c.lines.filter(([w]) => w !== "system").slice(c.partial ? -3 : -4).map(([w, t]) => { const same = w === prev; prev = w; return `<div class="ph-line${w === "person" ? " ph-you" : ""}">${same ? "" : `<b>${esc(w === "person" ? "You" : w)}</b> `}${esc(t)}</div>`; }).join("")
-    + (c.partial ? `<div class="ph-line ph-you ph-partial">${prev === "person" ? "" : "<b>You</b> "}<i>${esc(c.partial)}…</i></div>` : "");
-  const st = LIVE.failed === c.id ? "Couldn't hang up. Try again." : c.state === "hold" ? "On hold" : `On a call, ${Math.max(1, Math.round((Date.now() / 1000 - c.started) / 60))} min · on another device`;
+  const lines = c.lines.filter(([w]) => w !== "system").slice(c.partial ? -3 : -4).map(([w, t]) => { const same = w === prev; prev = w; return `<div class="ph-line${w === "person" ? " ph-you" : ""}">${same ? "" : `<b>${esc(w === "person" ? tr("You") : w)}</b> `}${esc(t)}</div>`; }).join("")
+    + (c.partial ? `<div class="ph-line ph-you ph-partial">${prev === "person" ? "" : `<b>${esc(tr("You"))}</b> `}<i>${esc(c.partial)}…</i></div>` : "");
+  const st = esc(tr(LIVE.failed === c.id ? "Couldn't hang up. Try again." : c.state === "hold" ? "On hold" : `On a call, ${Math.max(1, Math.round((Date.now() / 1000 - c.started) / 60))} min · on another device`));
   fill(`<div class="ph-top"><span class="ph-dot ${esc(c.state)}"></span><div><div class="ph-who">${esc(c.agent)}</div><div class="ph-st">${st}</div></div></div>
     <div class="ph-lines" aria-live="polite">${lines}</div>
-    <div class="ph-btns"><button class="btn" data-a="hide" data-call="${esc(c.id)}">Hide</button><button class="btn ph-end" data-a="hangup" data-call="${esc(c.id)}">Hang up</button></div>`);
+    <div class="ph-btns"><button class="btn" data-a="hide" data-call="${esc(c.id)}">${esc(tr("Hide"))}</button><button class="btn ph-end" data-a="hangup" data-call="${esc(c.id)}">${esc(tr("Hang up"))}</button></div>`);
 }
 async function pollCalls() {
   if (!(S.app && S.app.phone) || document.hidden) return;

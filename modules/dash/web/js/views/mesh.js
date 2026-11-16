@@ -287,9 +287,9 @@ function put(seen, key, tag, cls, x, y, attrs, kids) {
   let el = EL.get(key); const fresh = !el;
   if (fresh) { el = document.createElement(tag); if (tag === "button") el.type = "button"; EL.set(key, el); }
   el.className = cls + (fresh ? " map-in" : "");
-  for (const [k, v] of Object.entries(attrs)) { if (v == null || v === false) el.removeAttribute(k); else el.setAttribute(k, v === true ? "" : v); }
+  for (const [k, v] of Object.entries(attrs)) { if (v == null || v === false) el.removeAttribute(k); else el.setAttribute(k, v === true ? "" : k === "title" || k === "aria-label" ? tr(v) : v); }   // h() would translate these; this patcher must too
   el.style.transform = `translate(${x}px,${y}px)`;
-  el.replaceChildren(...kids.flat().filter(k => k != null && k !== false).map(k => (typeof k === "string" ? document.createTextNode(k) : k)));
+  el.replaceChildren(...kids.flat().filter(k => k != null && k !== false).map(k => (typeof k === "string" ? document.createTextNode(tr(k)) : k)));
   if (fresh) cv.append(el);
   seen.add(key); return el;
 }
@@ -406,7 +406,7 @@ function legend(L) {
     L.nodes.some(n => n.agent && n.agent.warden) ? h("span", null, h("i", { class: "map-g", "data-st": "working", "data-w": "", style: "--r:6px" }), "warden") : null,
     h("span", null, g("ghost"), "also posts here"),
     ...Object.entries(outs).sort((x, y) => y[1] - x[1]).map(([k, n]) => h("span", null, h("span", { class: "map-chip" }, k + " ", h("b", null, String(n)))), ) , Object.keys(outs).length ? h("span", null, "outside posts") : null].filter(Boolean));
-  legendEl.title = L.mode === "lineage" ? "Arrow: who started whom. Bar: share of the cost." : "Thicker: more posts. Bar: share of the cost.";
+  legendEl.title = tr(L.mode === "lineage" ? "Arrow: who started whom. Bar: share of the cost." : "Thicker: more posts. Bar: share of the cost.");
 }
 
 // ---- pointer and keys on the graph ----
@@ -510,7 +510,7 @@ rpHandle.addEventListener("keydown", e => {
 });
 function syncReplay() {
   const a = winStart(), b = now(), v = M.cut == null ? 1 : (M.cut - a) / (b - a || 1), p = (Math.max(0, Math.min(1, v)) * 100).toFixed(2) + "%";
-  rpFill.style.width = p; rpHandle.style.left = p; rpHandle.setAttribute("aria-valuenow", Math.round(v * 100)); rpHandle.setAttribute("aria-valuetext", M.cut == null ? "live" : clock(M.cut));
+  rpFill.style.width = p; rpHandle.style.left = p; rpHandle.setAttribute("aria-valuenow", Math.round(v * 100)); rpHandle.setAttribute("aria-valuetext", M.cut == null ? tr("live") : clock(M.cut));
   rpHandle.toggleAttribute("data-cut", M.cut != null);
   rpChip.textContent = tr(M.cut == null ? "Live" : "At " + clock(M.cut)); rpChip.toggleAttribute("data-cut", M.cut != null);
   rpBack.hidden = M.cut == null;

@@ -1521,12 +1521,6 @@ a.th{color:inherit;text-decoration:underline;text-decoration-color:var(--line-2)
 .fc-more{position:relative}
 .fc[data-misc]{background:transparent;border-style:dashed}
 .fc[data-loading] .skel+.skel{margin-top:8px}
-/* a focus's status bar in its thread: the second sentence folds under More */
-.cm-status-more{display:inline}
-.cm-status-more>summary{display:inline;list-style:none;cursor:pointer;color:var(--ink-3);font-size:var(--fs-meta)}
-.cm-status-more>summary::-webkit-details-marker{display:none}
-.cm-status-more[open]>summary{display:none}
-.cm-status-more>p{margin:2px 0 0}
 /* the thread menu's Focus row and the composer's focus picker */
 .cm-focus-row{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:var(--fs-small);color:var(--ink-2)}
 .cm-focus-sel,.cp-focus{height:var(--ctl-s);max-width:200px;padding:0 6px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface);color:var(--ink);font:inherit;font-size:var(--fs-meta)}
@@ -3462,7 +3456,14 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 @media (max-width:640px){.tm-sec-more{min-height:40px}}
 /* Work tiers (Settings, ui/worktiers.js): a tier's rarely used controls fold under it; the chip on a focus card or thread bar links to Settings. */
 .tier-items{margin:0}
-.tier-it-n{min-width:0;overflow-wrap:anywhere}
+.tier-it-n{min-width:0;overflow-wrap:anywhere;display:flex;align-items:flex-start;gap:var(--s2);cursor:pointer}
+.tier-pick{width:20px;height:20px;margin:1px 0 0;flex:none;accent-color:var(--accent);cursor:pointer}
+.tier-it{cursor:grab}
+.tier-it[data-on]{background:var(--accent-bg)}
+.tier-drop{border-radius:var(--r-s,6px);min-height:44px;transition:box-shadow .1s}
+.tier-drop[data-drop]{box-shadow:0 0 0 2px var(--accent);background:var(--accent-bg)}
+.tier-bar{position:sticky;top:calc(var(--top-h,52px) + var(--s2));z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);padding:var(--s2) var(--s3,12px);margin:0 0 var(--s2);background:var(--surface,var(--bg));border:1px solid var(--accent);border-radius:var(--r-s,6px)}
+.tier-bar select.input{width:200px;max-width:100%}
 .tier-it select.input{width:160px;max-width:100%}
 .tier-more{margin-top:var(--s2)}
 .tier-more>summary{cursor:pointer;color:var(--ink-2);font-size:var(--fs-meta);width:max-content}

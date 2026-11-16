@@ -11,7 +11,7 @@ import { section, block, blocks, button, field, fieldErr, input, invalid, status
 import { act, isBusy } from "./activity.js";
 import { confirm } from "./dialog.js";
 
-const T = { data: null, err: null, at: 0, p: null, say: null, name: "", rename: {}, open: {}, logOpen: false };
+const T = { data: null, err: null, at: 0, p: null, say: null, name: "", rename: {}, open: {}, logOpen: false, sel: new Set(), last: null };
 const READ_EVERY = 30e3;
 
 /** Read /api/work-tiers (at most every 30 s unless forced); `done` redraws. */
@@ -91,16 +91,65 @@ const PAUSES = [["3h", "For 3 hours", () => Math.round(Date.now() / 1e3 + 3 * 36
 const STOPS = [["none", "No stop of its own"], ...[95, 90, 85, 80, 70, 60, 50, 40, 30].map(v => [String(v), `Stop at ${v}% of the week`])];
 
 const KIND = { focus: "Focus", thread: "Thread", job: "Timer" };
+// Moving many at once (the person, 11160903a362): tick rows (Shift picks a run of them) and move them from the bar at the top, or drag a row
+// (or, when it is ticked, every ticked row) onto another tier. A batch is one POST per item in turn, as the server takes one change a call.
+const splitKey = k => { const i = k.indexOf(":"); return [k.slice(0, i), k.slice(i + 1)]; };
+const labelOf = k => { const [kind, x] = splitKey(k); return kind === "focus" ? (focusById(x) ? focusName(x) : x) : x; };
+const holderOf = k => { const [kind, x] = splitKey(k); return tiers().find(t => ((t.holds || {})[kind] || []).includes(x)) || null; };
+const allKeys = () => tiers().flatMap(t => ["focus", "thread", "job"].flatMap(kind => ((t.holds || {})[kind] || []).map(x => `${kind}:${x}`)));
+async function moveMany(keys, to, done) {
+  const un = to === "_unset", tt = tiers().find(z => String(z.id) === to), dest = tt ? tt.name : to;
+  const todo = keys.filter(k => un ? !k.startsWith("focus:") : String((holderOf(k) || {}).id) !== to);
+  if (!todo.length) return;
+  const one = todo.length === 1 ? labelOf(todo[0]) : null, what = one ? (un ? `${one} follows ${todo[0].startsWith("thread:") ? "its focus" : "the default tier"} now.` : `Moved ${one} to ${dest}.`)
+    : un ? `${todo.length} now follow their focus or the default tier.` : `Moved ${todo.length} to ${dest}.`;
+  let n = 0; T.say = null;
+  try {
+    const r = await act("tiers-set", one ? what : `Moving ${todo.length}`, async () => { let last; for (const k of todo) { last = await post("/api/work-tiers", un ? { op: "unset", what: k } : { op: "set", what: k, tier: to }); n++; } return last; }, done, what);
+    if (r === false) return;
+    T.data = r; T.at = Date.now(); T.say = { text: what, tone: "good" }; todo.forEach(k => T.sel.delete(k));
+  } catch (e) { T.say = { text: n ? `Moved ${n} of ${todo.length}, then stopped: ${e.message}` : `Nothing changed: ${e.message}`, tone: "bad" }; loadTiers(done, true); }
+  done();
+}
+const TD = { keys: null, el: null }, TD_TYPE = "text/x-h2-tier";
+const dropMark = el => { if (TD.el && TD.el !== el) TD.el.removeAttribute("data-drop"); TD.el = el; };
+const isTier = e => TD.keys && e.dataTransfer && [...(e.dataTransfer.types || [])].includes(TD_TYPE);
+const dropZone = (id, done) => ({
+  ondragover: (e, el) => { if (!isTier(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; dropMark(el); el.setAttribute("data-drop", "in"); },
+  ondragleave: (e, el) => { if (!el.contains(e.relatedTarget)) { el.removeAttribute("data-drop"); if (TD.el === el) TD.el = null; } },
+  ondrop: (e, el) => { if (!isTier(e)) return; e.preventDefault(); const keys = TD.keys; TD.keys = null; dropMark(null); el.removeAttribute("data-drop"); moveMany(keys, id, done); } });
+
+function pick(key, e, el, done) {
+  const on = e.target.checked, ks = [...el.closest(".tier-items").querySelectorAll("li.tier-it")].map(li => li.getAttribute("data-key"));
+  const a = ks.indexOf(T.last), b = ks.indexOf(key);
+  (e.shiftKey && a >= 0 && b >= 0 ? ks.slice(Math.min(a, b), Math.max(a, b) + 1) : [key]).forEach(k => on ? T.sel.add(k) : T.sel.delete(k));
+  T.last = key; done();
+}
 function itemRow(kind, x, t, done) {
-  const name = kind === "focus" ? focusName(x) : x, label = kind === "focus" && !focusById(x) ? x : name, key = `${kind}:${x}`;
-  return h("li", { class: "lr tier-it", "data-key": key },
+  const name = kind === "focus" ? focusName(x) : x, label = kind === "focus" && !focusById(x) ? x : name, key = `${kind}:${x}`, on = T.sel.has(key);
+  return h("li", { class: "lr tier-it", "data-key": key, "data-on": on ? "" : null, draggable: "true", title: "Drag onto another tier to move it",
+      ondragstart: e => { if (e.target.closest && e.target.closest("select,input,button")) return; TD.keys = on ? [...T.sel] : [key]; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData(TD_TYPE, TD.keys.join("\n")); e.dataTransfer.setData("text/plain", TD.keys.map(labelOf).join(", ")); },
+      ondragend: () => { TD.keys = null; dropMark(null); } },
     h("div", { class: "lr-in frow fsplit" },
-      h("span", { class: "tier-it-n" }, h("span", { class: "muted" }, (kind === "thread" && x.includes("*") ? "Threads" : KIND[kind]) + " "), h("b", null, label)),
+      h("label", { class: "tier-it-n" }, h("input", { type: "checkbox", class: "tier-pick", checked: on, "aria-label": `Select ${label}`, onclick: (e, el) => pick(key, e, el, done) }),
+        h("span", null, h("span", { class: "muted" }, (kind === "thread" && x.includes("*") ? "Threads" : KIND[kind]) + " "), h("b", null, label))),
       h("span", { class: "frow-end" }, h("select", { class: "input", "aria-label": `Move ${label} to`, title: `Move ${label} to another tier`, disabled: isBusy("tiers-set") || null,
-        onchange: e => { const to = e.target.value; if (to === "_unset") return change("unset", { what: key }, done, `${label} follows ${kind === "thread" ? "its focus" : "the default tier"} now.`); const tt = tiers().find(z => String(z.id) === to); change("set", { what: key, tier: to }, done, `Moved ${label} to ${tt ? tt.name : to}.`); } },
+        onchange: e => moveMany([key], e.target.value, done) },
         h("option", { value: "", selected: "" }, "Move to…"),
         tiers().filter(z => z.id !== t.id).map(z => h("option", { value: String(z.id) }, z.name)),
         kind !== "focus" ? h("option", { value: "_unset" }, kind === "thread" ? "Follow its focus" : "Take out of tiers") : null))));
+}
+/** The bar over the tiers while rows are ticked: how many, where to move them, clear. */
+function selBar(done) {
+  const keys = [...T.sel], n = keys.length; if (!n) return null;
+  const anyFocus = keys.some(k => k.startsWith("focus:"));
+  return h("div", { class: "tier-bar", "data-key": "tier-bar", role: "region", "aria-label": "Selected items" },
+    h("b", { "aria-live": "polite" }, `${n} selected`),
+    h("select", { class: "input", "aria-label": "Move selected to", disabled: isBusy("tiers-set") || null, onchange: e => { const v = e.target.value; if (v) moveMany(keys, v, done); } },
+      h("option", { value: "", selected: "" }, "Move selected to…"),
+      tiers().map(z => h("option", { value: String(z.id) }, z.name)),
+      anyFocus ? null : h("option", { value: "_unset" }, "Follow their focus or the default")),
+    button("Clear", () => { T.sel.clear(); T.last = null; done(); }, { size: "s", kind: "quiet" }));
 }
 
 function tierBlock(t, done) {
@@ -114,7 +163,8 @@ function tierBlock(t, done) {
   const items = ["focus", "thread", "job"].flatMap(kind => (holds[kind] || []).slice().sort((a, b) => (kind === "focus" ? focusName(a).localeCompare(focusName(b)) : a.localeCompare(b))).map(x => itemRow(kind, x, t, done)));
   const rn = T.rename[id] ?? t.name;
   return block({ title: t.name + (t.default ? " (default)" : ""), sub: stopText(t), state: statusLabel(k, words, { title: STATE_HINT[k] }), key: "tier-" + id, actions: pauseMenu },
-    items.length ? h("ul", { class: "list tier-items" }, items) : h("p", { class: "field-h" }, t.default ? "Every focus you don't place goes here." : "Nothing is in this tier. Move a focus here from its own tier."),
+    h("div", { class: "tier-drop", "data-key": "drop", ...dropZone(id, done) },
+      items.length ? h("ul", { class: "list tier-items" }, items) : h("p", { class: "field-h" }, t.default ? "Every focus you don't place goes here." : "Nothing is in this tier. Drag something here, or move it from its own tier.")),
     id === OFF ? null : h("details", { class: "tier-more", "data-key": "more", open: T.open[id] ? "" : null, ontoggle: e => { T.open[id] = e.target.open; } }, h("summary", null, "Stop point, name and more"),
     h("div", { class: "frow" },
       h("select", { class: "input", "aria-label": `Stop point for ${t.name}`, title: "Past this share of the week's usage, nothing new in this tier starts", onchange: e => change("stop", { tier: id, pct: e.target.value }, done, `${t.name}: stop point saved.`) },
@@ -134,9 +184,11 @@ function logBlock() {
 
 export function tiersSection(ctx) {
   if (!can("tier")) return null;
-    const done = ctx.update;
+  const done = ctx.update;
+  if (T.data && T.sel.size) { const have = new Set(allKeys()); [...T.sel].forEach(k => { if (!have.has(k)) T.sel.delete(k); }); }
   const body = !T.data ? waiting(T.err, "Reading…", "the tiers")
-    : [h("p", { class: "tier-intro" }, "Every focus, thread and timer sits in a tier. Pause a tier and nothing new in it starts; what is already running finishes. A pause with an end lifts by itself."),
+    : [h("p", { class: "tier-intro" }, "Every focus, thread and timer sits in a tier. Pause a tier and nothing new in it starts; what is already running finishes. A pause with an end lifts by itself. To move several, tick them, or drag a row onto another tier."),
+      selBar(done),
       T.say ? h("p", { class: "fmsg", "data-tone": T.say.tone, role: "status" }, T.say.text) : null,
       blocks(...tiers().map(t => tierBlock(t, done)), logBlock()),
       // An empty name is said beside the box (WCAG 3.3.1, drive_app_errors), and typing a name clears it.

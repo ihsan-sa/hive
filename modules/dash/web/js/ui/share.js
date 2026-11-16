@@ -1,6 +1,6 @@
 // Share this result: one conversation as one page its owner can post. The dash builds it (share.py) and the browser saves it; nothing is uploaded.
 // First a preview with every message and a Remove button on each, and one plain line that what's on the page becomes public if it is posted.
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { jget, post } from "../core/store.js";
 import { button } from "./kit.js";
 import { confirm } from "./dialog.js";
@@ -8,11 +8,14 @@ import { confirm } from "./dialog.js";
 export async function shareDialog(th) {
   let pv;
   try { pv = await jget("/api/share-preview?thread=" + encodeURIComponent(th)); }
-  catch { return confirm({ title: "Share this result", body: ["Nothing to share here yet."], ok: "Close", onOk: () => {} }); }
+  catch { pv = null; }
+  // no reply, or one without its messages (an older dash, a fixture): say so in the window rather than open nothing
+  if (!pv || !Array.isArray(pv.items)) return confirm({ title: "Share this result", body: ["Nothing to share here yet."], ok: "Close", onOk: () => {} });
+  pv.files = pv.files || []; pv.agents = pv.agents || [];
   const gone = new Set(), withFiles = h("input", { type: "checkbox", checked: "" });
   const rows = pv.items.map(i => {
     const text = h("div", { class: "sh-text" }, i.text || (i.files || []).map(f => "File: " + f.name).join(", "));
-    const b = button("Remove", () => { gone.has(i.id) ? gone.delete(i.id) : gone.add(i.id); row.toggleAttribute("data-gone", gone.has(i.id)); b.textContent = gone.has(i.id) ? "Put back" : "Remove"; }, { size: "s", kind: "quiet", title: "Leave this message out of the page" });
+    const b = button("Remove", () => { gone.has(i.id) ? gone.delete(i.id) : gone.add(i.id); row.toggleAttribute("data-gone", gone.has(i.id)); b.textContent = tr(gone.has(i.id) ? "Put back" : "Remove"); }, { size: "s", kind: "quiet", title: "Leave this message out of the page" });
     const row = h("div", { class: "sh-row" }, h("div", { class: "sh-who" }, h("b", null, i.who === "asker" ? "You" : i.who), b), text);
     return row;
   });

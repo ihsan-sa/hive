@@ -1,6 +1,6 @@
 // Equations: source text first, then KaTeX (a local file, loaded the first time an equation nears the screen).
 // A formula KaTeX refuses, or one too long to try, stays as its source with a quiet note.
-import { h, copyText, selecting } from "../core/dom.js";
+import { h, tr, copyText, selecting } from "../core/dom.js";
 import { lazyKind } from "./lazy.js";
 import { askButton } from "./ask.js";
 
@@ -48,7 +48,7 @@ export function equation(tex) {
   return h("div", { class: "rc-eq", "data-own": "", "data-sig": sigOf(tex), tabindex: "-1" }, lz,
     h("span", { class: "rc-eq-a" },
       h("button", { type: "button", class: "rc-t", "aria-label": "Copy this equation's LaTeX", onclick: (e, b) => {
-        copyTex(b, tex); b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy LaTeX"; }, 1400);
+        copyTex(b, tex); b.textContent = tr("Copied"); setTimeout(() => { b.textContent = tr("Copy LaTeX"); }, 1400);
       } }, "Copy LaTeX"),
       askButton(n => "$$" + tex + "$$", "Ask about this equation")));
 }

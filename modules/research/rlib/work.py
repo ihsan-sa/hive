@@ -242,7 +242,7 @@ class Hunt:
         self.angles = spec.get("angles") or ['"{org}" dean artificial intelligence', '"{org}" news release artificial intelligence program']
         for a in self.angles:
             try: a.format(org="x")
-            except (KeyError, IndexError, ValueError) as e: raise ValueError(f"spec angle {a!r} doesn't format: {{org}} is the only slot, and a literal brace is written twice ({e})")
+            except (KeyError, IndexError, ValueError) as e: raise ValueError(f"spec angles: {a!r} doesn't format: {{org}} is the only slot, and a literal brace is written twice ({e})")
         if spec.get("sources") is not None and (not isinstance(spec["sources"], list) or not all(isinstance(x, str) for x in spec["sources"])): raise ValueError("spec sources must be a list of source names")
         self.sources = engines.expand(spec.get("sources") or ["web"])
         self.domains = spec.get("domains") or {}
