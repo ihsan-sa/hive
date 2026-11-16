@@ -241,7 +241,7 @@ function drawNow() {
       l.thread ? h("button", { type: "button", class: "btn fl-rsay", "data-size": "s", "data-kind": "quiet", title: "Say something to whoever is on " + l.name, "aria-label": "Say something to whoever is on " + l.name, onclick: () => say(l, r) }, icon("chat")) : null,
       h("span", { class: "meta fl-rs" }, openW.length ? null : sub, openW.length ? [h("a", { class: "fl-rw", href: threadHref(openW[openW.length - 1].post.th) }, openW.length === 1 ? "waits on you" : openW.length + " wait on you")] : null),
       nx ? h("p", { class: "fl-rx" }, nx) : null))),
-    button(F.fold ? "Show the timeline" : "Hide the timeline", () => { F.fold = !F.fold; F.update(); }, { size: "s", kind: "quiet", cls: "fl-fold" }));
+    Object.assign(button(F.fold ? "Show the timeline" : "Hide the timeline", () => { F.fold = !F.fold; F.update(); }, { size: "s", kind: "quiet", cls: "fl-fold" }), { ariaExpanded: String(!F.fold) }));   // 4.1.2: says its state
   // below the chart: what finished since the person last spoke, within the window; when their last word is older than the window, the window
   since.sort((a, b) => b.t - a.t);
   const inWin = you >= t0, head = inWin ? `Since you last spoke, ${ago(you)}` : `Finished in the last ${F.win}` + (you ? ` (you last spoke ${ago(you)})` : "");
@@ -257,9 +257,9 @@ function drawNow() {
 function tick() {
   F.raf = requestAnimationFrame(tick);
   if (!box.isConnected) return;  // not on the page yet (the app attaches a view after its render): keep the loop, leave() ends it
-  // time is the only motion: one redraw per pixel of time (at least every 5 s), none while the tab is hidden
+  // time is the only motion: one redraw per pixel of time (at least every 5 s), none while the tab is hidden or the screen is still (Settings)
   const t = now(), perPx = WIN[F.win] / F.pw;
-  if (!document.hidden && (t - F.last >= Math.max(5e3, perPx) || F.ver !== S.ver || box.clientWidth !== F.w)) draw();
+  if (!document.hidden && ((t - F.last >= Math.max(5e3, perPx) && !document.documentElement.hasAttribute("data-still")) || F.ver !== S.ver || box.clientWidth !== F.w)) draw();
 }
 
 export default {

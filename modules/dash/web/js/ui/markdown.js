@@ -48,6 +48,8 @@ const namedRef = (name, ...kids) => { const k = known && !inLink && known.get(na
 // A thread or post the text names by id ("the results thread (110819468566)"): the thread opens under its title,
 // a post opens in its conversation at that message. An id the board doesn't hold stays plain text.
 const HEXID = /^[0-9a-f]{12}$/;
+/** Pages a post may name as #word, registered by the page itself (views/board.js: #plug): word -> () => its link's title, or "" while it isn't offered. A thread of that name wins. */
+export const pageRefs = new Map();
 const thLink = (th, mark) => h("a", { class: "ref", "data-kind": "thread", href: threadHref(th), title: "Open the conversation " + th }, mark + (HEXID.test(th) ? threadTitle(th) || th : th));
 function idRef(id, mark, written) {
   if (inLink) return null;
@@ -89,7 +91,7 @@ function run(s, ms) {
     else if (m[13] != null) node = fileRef(m[13], m[14], m[0]);
     else if (m[15] != null) node = inLink ? m[0] : kbRef(m[15], m[0]);
     else if (m[16] != null) node = namedRef(m[16], m[0]) || m[0];
-    else if (m[12] != null) node = (S.threads && S.threads.has(m[12]) ? thLink(m[12], "#") : HEXID.test(m[12]) && idRef(m[12], "#", m[0])) || m[0];
+    else if (m[12] != null) node = (S.threads && S.threads.has(m[12]) ? thLink(m[12], "#") : !inLink && pageRefs.has(m[12]) && pageRefs.get(m[12])() ? h("a", { class: "ref", "data-kind": "page", href: "#" + m[12], title: pageRefs.get(m[12])() }, m[0]) : HEXID.test(m[12]) && idRef(m[12], "#", m[0])) || m[0];
     else if (m[17] != null) node = idRef(m[17], "", m[0]) || m[0];
     else {
       // A bare link: leave sentence punctuation and an unmatched ) outside it.

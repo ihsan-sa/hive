@@ -70,7 +70,7 @@ If WSL 2 is missing it installs it, which needs your approval and a restart; the
 
 ## The app
 
-The app is four depths, each one click down from the last. The **Chat home** says what you want done, what needs you, and where each piece of your work stands (a card per focus). A **focus page** is the whole picture of one of them. A **conversation's two lines**, at its top, say what it is about and where it stands. The **conversation** itself is the detail. Read down only as far as you need.
+The app is four depths, each one click down from the last. The **Chat home** says what you want done, what needs you, and where each piece of your work stands (a row or a card per focus). A **focus page** is the whole picture of one of them. A **conversation's two lines**, at its top, say what it is about and where it stands. The **conversation** itself is the detail. Read down only as far as you need.
 
 When setup is finished, the app offers a short guided tour. It says what to click, highlights it and waits for you. It doesn't press or send anything itself: the one real step is your first job, which you type and can skip. You can leave at any time, and **Take the tour** under **More** starts it again.
 
@@ -84,14 +84,15 @@ If the Hive has stopped starting agents, a band under the bar says why and where
 
 Chat is where you'll spend your time. The left side lists your conversations. Above the list there are three things: **New conversation**, the search box, and the **Show** button (the funnel) beside it, which holds every choice about the list. The button at the left of a conversation's title (or **Ctrl+\\**) hides the whole list so the conversation and its side panel get the full width; press it again to bring the list back, and this browser remembers your choice. The search box looks through every conversation by name or content. Start with `@` to ask a question instead, such as `@where did we get to on the launch?`, and press Enter: an agent answers in one line right there and brings up the conversations that fit.
 
-The home page is four things, top to bottom: the box, one line, one look at where the work went, and a card for each focus.
+The home page is four things, top to bottom: the box, one line, one look at where the work went, and your focuses, as a list or as cards.
 
 - **The box:** what do you want done? Type it and press Start. A **Focus** picker in the box files the new conversation under a focus, so it shows up on that focus's card and page.
 - **One line:** how many things wait on you, or "Nothing needs you". Press it for **Yours**, cut to what waits.
 - **Yours**, at the foot of the Chat list, is every exchange you had, newest first: what you said and everything addressed to you, with a thin line naming the conversation at each change, and a search box that looks only through those. Press any entry to open that message in its conversation.
 - **Needs me**, just under Yours, opens the same page cut to what waits on you, with a count. Each row has **Later**, **Not needed** and **Answer** (Answer opens the side panel, as on the home). Later and Not needed take it out of the count; both are kept further down that page, with **Bring back**. **By focus** groups the list. Asks past their time sit under Stuff to address, out of the count: a day if their work moved on a lot since, two days if it's been quiet.
 - **Where the work went:** two bars, the last 24 hours and the last 7 days, each split by colour into your main focuses and Other, by their share of the Hive's work. Rest the pointer on a part for its numbers; press a part or its name for that focus's page. Simple view leaves it out.
-- **A card per focus:** its name (press it for the focus page, the whole picture), one line on what it is for, who is on it, two small gauges (**Work** and **Cost**: this focus's share of all the Hive's runs and posts, and of its AI spend, today as the bar and the week as the tick; the focus page has the numbers), **Now** (what moves), **Needs you** (the decisions agents have put to you in it), **Lately** (what changed), and its latest conversations. The agents write what the card says; nothing on the home is a raw list of conversations. A **Misc** card comes last, only when something not filed under a focus has been active this week.
+- **The focuses, as a list:** with seven or more of them the home lists them, one row each, grouped by where each one stands: **Needs you** first, then **Blocked**, **At risk**, **On track**, **Waiting on others**, **Paused**, **Done** and **No state yet**. The group is the state the focus's In short opens with, except that a focus goes under Needs you as soon as an ask in it waits on you; its own state is then beside its name. A row is the name (press it for the focus page), the In short sentence, and only what you would act on: how many lines are new to you ("2 new"), how many asks are yours ("1 for you"), how many more may be, and how many agents are working. Conversations not filed under a focus are one last row, **Other**. **List** and **Cards**, beside the heading, switch between the rows and the cards, and this browser remembers your pick; with fewer than seven focuses the cards are what you get.
+- **A card per focus:** its name (press it for the focus page, the whole picture), one line on what it is for, who is on it, two small gauges (**Work** and **Cost**: this focus's share of all the Hive's runs and posts, and of its AI spend, today as the bar and the week as the tick; the focus page has the numbers), then **In short**: one or two sentences from the agents on where the focus stands against what it is for, with its state as the word at the top of the card (on track, at risk, blocked, needs you, waiting on others, paused or done). If you read one thing on a card, read that. Under it are **Now** (what moves), **Needs you** (the decisions agents have put to you in it), **Lately** (what changed), and its latest conversations. A card with an In short shows only a few of its lines, the new ones first, and a link to the rest on the focus page. **A bar at the left edge of a line** means it was written since you last looked at the home, and the head of the section counts the focuses that have such news ("2 with news since you last looked"); a card with no bar says nothing you have not seen. Opening a focus's page counts as reading its card. The agents write what the card says; nothing on the home is a raw list of conversations. An **Other** card comes last, only when something not filed under a focus has been active this week.
 
 Long lists show the first few, with **Show more** under them.
 
@@ -199,7 +200,7 @@ Settings shows one section at a time. The list on the left has **The hive, Accou
 
 ### Pages inside a tab
 
-Some tabs have a row of pages under the top bar. Chat has none: its pages are the links at the foot of its list, and a focus's page opens from its card on the home. **Flow** is in the Agents row.
+Some tabs have a row of pages under the top bar. Chat has none: its pages are the links at the foot of its list, and a focus's page opens from its row or card on the home. **Flow** is in the Agents row.
 
 - **Agents > Now:** who is working and what on.
 - **Agents > All agents:** every agent that has run. Search, filter and sort.
@@ -408,7 +409,7 @@ Agents keep working while you're away, and when one has to stop it comes back by
 
 An agent that keeps dying is tried 3 times, then left, and you're told; a message to it carries it on. An agent you stopped stays stopped.
 
-Back after a while, the home says it in the cards: each focus's **Lately** is what changed and **Needs you** what waits on you. In a terminal, `hive away` gives a 15-line brief of what was made, decided, needs you and broke, and `hive away --full` lists everything.
+Back after a while, the home says it. The list puts the focuses that wait on you first and counts the lines of each that are new to you. In the cards, each focus's **In short** is where it stands, **Lately** is what changed and **Needs you** what waits on you, and a bar marks every line written since you last looked. A focus page opens the same way: its In short, then one sentence on what is new there since you last opened it ("New since you last looked 22h ago: 2 in Now, 1 in Lately; 3 conversations have new messages"), with the same bar on those lines. In a terminal, `hive away` gives a 15-line brief of what was made, decided, needs you and broke, and `hive away --full` lists everything.
 
 Every answer above has a test run on each release. Those tests use a stand-in for Claude with Claude Code's real error words, and a pretended restart. See [Not tested yet](#not-tested-yet) for what hasn't been done for real.
 

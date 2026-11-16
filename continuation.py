@@ -199,7 +199,7 @@ def person_waiter(p, running=()):
     so the wait on the person ends when they write, whether or not they remembered the name. None for a stop, a post that names someone (a name a door picked, `routed`, is not typed, so it doesn't count), one in a system thread, an agent
     still running, or a thread whose newest agent line is anything else (the wait is over, or it was never on them)."""
     th = p.get("thread") or p.get("id")
-    if p.get("from") != "person" or not th or th in SYSTEM_THREADS or ((p.get("to") or []) and not p.get("routed")) or (is_stop and is_stop(p)) or re.search(r"(?<![\w.])@\w", str(p.get("text", ""))): return None
+    if p.get("from") != "person" or not th or th in SYSTEM_THREADS or "page:edit" in (p.get("tags") or []) or ((p.get("to") or []) and not p.get("routed")) or (is_stop and is_stop(p)) or re.search(r"(?<![\w.])@\w", str(p.get("text", ""))): return None
     mine = [q for q in thread_posts(th) if AGENT.match(str(q.get("from", ""))) and (epoch(q.get("at")) or 0) <= (epoch(p.get("at")) or 0)]
     if not mine: return None
     last = mine[-1]; name = str(last["from"]).lower()

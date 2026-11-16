@@ -164,7 +164,7 @@ hive remind at +1h|09:00|"2026-11-20 09:00" TEXT | every "0 8 * * *" TEXT [--to 
 
 ## hive focus
 
-hive focus list | tag THREAD FOCUS [--off] | new ID "name" | link A B | set FOCUS <<'X' | show FOCUS | keeper FOCUS | aim FOCUS "text" | check add|list|done|untick | lint | order ID ID...: foci, the person's view of the work. A thread carries a focus label; each focus has a hand-written summary (## Now, ## Lately bullets, plain words, no ids or paths) that the home shows as a card. The agent posting a result in a focus's thread updates its summary in the same run (core/focus.py)
+hive focus list | tag THREAD FOCUS [--off] | new ID "name" | link A B | set FOCUS <<'X' | lead FOCUS "On track: ..." | show FOCUS | keeper FOCUS | aim FOCUS "text" | check add|list|done|untick | lint | order ID ID...: foci, the person's view of the work. A thread carries a focus label; each focus has a hand-written summary (## Now, ## Lately bullets, plain words, no ids or paths) that the home shows as a card, under its In short (lead: one or two sentences that open with the state, On track, At risk, Blocked, Needs you, Waiting, Paused or Done, and say the one thing that matters now; the person reads it first and often alone). The agent posting a result in a focus's thread updates its summary in the same run, and the In short when the result changes it. The card and the page mark what was written since the person last looked, so change a line only when it says something new (core/focus.py)
 
 ## hive tier
 

@@ -214,7 +214,7 @@ export function copyPress(b, t) {
   b._was ??= { word: word?.textContent, title: b.title };
   const mark = (k, say, why) => {
     delete b.dataset.ok; delete b.dataset.fail; b.dataset[k] = ""; if (word) word.textContent = say; b.title = why; clearTimeout(b._cpT);
-    b._cpT = setTimeout(() => { if (!b.isConnected) return; delete b.dataset[k]; if (word) word.textContent = b._was.word; b.title = b._was.title; }, k === "ok" ? 1400 : 3000);
+    b._cpT = setTimeout(() => { if (!b.isConnected) return; delete b.dataset[k]; if (word) word.textContent = b._was.word; b.title = b._was.title; }, k === "ok" ? 1400 : 20000);   // "Copied" is news; "Couldn't copy" is an error and stays 20 s (WCAG 2.2.1)
   };
   return copyText(t).then(() => mark("ok", "Copied", "Copied"), e => mark("fail", "Couldn't copy", e.message));
 }

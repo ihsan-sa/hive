@@ -14,7 +14,8 @@ const mark = n => { if (over === n) return; if (over) delete over.dataset.fileOv
 function tell(n, text) {
   const home = n.closest("dialog") || document.body, say = document.createElement("p");
   say.className = "drop-say"; say.setAttribute("role", "alert"); say.textContent = text;
-  home.append(say); setTimeout(() => say.remove(), 6000);
+  for (const old of document.querySelectorAll(".drop-say")) old.remove();
+  home.append(say); setTimeout(() => say.remove(), 20000);   // an error is read before it goes: at least 20 s (WCAG 2.2.1), or until the next drop
 }
 /** The file's text, or null with the reason said. A NUL in the first part means it isn't text. */
 async function textOf(n, f) {

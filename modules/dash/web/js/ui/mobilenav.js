@@ -61,7 +61,7 @@ export function mobileNav({ views, current, nav, update }) {
       app ? act("tour", "Take the tour", () => { close(); startTour(); }, "play") : null,
       app && canFeedback() ? act("feedback", "Send feedback", () => { close(); openFeedback(); }, "reply") : null) : null,
     h("nav", { class: "bnav", "data-key": "bar", "aria-label": "Main" }, main.map(tab),
-      h("button", { type: "button", class: "bnav-i", "data-key": "more", "aria-haspopup": "menu", "aria-expanded": String(ST.open), "aria-current": inMore && !ST.open ? "page" : null, onclick: () => { ST.open = !ST.open; update(); } },
+      h("button", { type: "button", class: "bnav-i", "data-key": "more", "aria-label": "More pages", "aria-haspopup": "menu", "aria-expanded": String(ST.open), "aria-current": inMore && !ST.open ? "page" : null, onclick: () => { ST.open = !ST.open; update(); } },
         icon("more"), h("span", { class: "bnav-l" }, "More"))));
 }
 

@@ -375,6 +375,8 @@ def main():
         if not a.post: print(b); return
         if r.get("parked") and not a.force:   # a keeper hand-picking threads posted rounds into a parked ladder every 4 h (fund-rsi, 2026-11-08)
             sys.exit(f"{th} is parked until {r['parked']['until']}: {r['parked']['why'][:120]}\nNo round posted; --force posts one anyway.")
+        if r.get("gated_until") and not r.get("rung") and not a.force:   # every open rung gated to a later date: a round could only write more rungs (improve-survey, 2026-11-16: keeper rounds at 04:03 and 07:03 after the floor fix)
+            sys.exit(f"{th} has no rung before {r['gated_until']}Z (every open rung carries after:). No round posted; --force posts one anyway.")
         cmd = ["hive", "post", "--thread", th] + post_model_args(b, a.model)
         sys.exit(subprocess.run(cmd, input=b, text=True).returncode)
     if a.idle: g["rows"] = [r for r in g["rows"] if r["idle"]]

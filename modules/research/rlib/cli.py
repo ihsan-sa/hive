@@ -83,6 +83,7 @@ def c_hunt(a):
     if a.max_seconds: spec["max_seconds"] = a.max_seconds
     if not (spec.get("orgs") or spec.get("discover")): _err("the spec needs orgs or discover")
     known = list(engines.SOURCES) + list(engines.GROUPS)
+    if spec.get("sources") is not None and not isinstance(spec["sources"], list): _err("spec sources must be a list of source names")
     for sname in spec.get("sources") or []:
         if sname not in known:
             near = difflib.get_close_matches(str(sname), known, n=1)

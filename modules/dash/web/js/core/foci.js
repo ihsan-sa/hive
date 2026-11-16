@@ -3,7 +3,7 @@
 // Every thread is in exactly one focus or in Misc; the home draws one card per focus, the rail groups by them, #focus/<id> is the page.
 // /api/foci is read once here for every page (S.foci), at most every 20 s; the server caches it as long.
 import { h } from "./dom.js";
-import { S, jget, emit, post } from "./store.js";
+import { S, jget, emit, post, can } from "./store.js";
 import { threadParent, isSystemThread, btwParent, isAgent, isRunning, threadTitle, agentLabel, inScope } from "./model.js";
 import { now, DAY, short, fix } from "./format.js";
 import { faded, archived } from "../ui/threadmeta.js";
@@ -24,7 +24,7 @@ export function loadFoci(force) {
     L.p = null; L.failed = !v;
     if (!v) { if (S.foci === undefined) { S.foci = { foci: [], tags: {}, lint: [], failed: true }; emit({ foci: true }); } return S.foci; }
     if (L.want) { if (now() - L.want.at > 60e3 || sameOrder(v.foci, L.want.ids)) L.want = null; else v.foci = arrange(v.foci, L.want.ids); }   // a read that left before the move landed keeps the moved order
-    const sig = x => JSON.stringify(x && [x.tags, (x.moved || []).length && x.moved[0].at, x.foci.map(f => [f.id, f.name, f.summary && f.summary.at, f.checks.map(c => c.id + (c.done ? 1 : 0)).join(), f.brief && [f.brief.at, f.brief.text, f.brief.files]])]);   // the brief too (E37): a saved group instruction shows at once
+    const sig = x => JSON.stringify(x && [x.tags, (x.moved || []).length && x.moved[0].at, x.foci.map(f => [f.id, f.name, f.summary && f.summary.at, f.checks.map(c => c.id + (c.done ? 1 : 0)).join(), f.brief && [f.brief.at, f.brief.text, f.brief.files], f.lead && [f.lead.at, f.lead.text], f.seen && [f.seen.since, f.seen.at], f.summary && f.summary.hidden])]) + (x && x.home_seen ? x.home_seen.since : "");   // the brief too (E37): a saved group instruction shows at once
     if (sig(v) !== sig(S.foci)) { S.foci = v; emit({ foci: true }); }
     return v;
   });
@@ -50,6 +50,72 @@ export function moveFocus(id, { before, step } = {}) {
 /** The foci in the person's order (none until read). */
 export const foci = () => (S.foci && S.foci.foci) || [];
 export const focusById = id => (id ? foci().find(f => f.id === id) || null : null);
+// In short (focus.py set_lead; the person, 11160014bf8b: "I really can't get a good sense of what's going on"): the one or two sentences the agents
+// keep on where a focus stands against its aim, opened with one of seven states. The card and the page say it before any line of the summary.
+const LEAD_TONE = { "on track": "good", "at risk": "warn", blocked: "bad", "needs you": "info", waiting: "quiet", paused: "ended", done: "ended" };
+const LEAD_WORD = { waiting: "waiting on others" };   // bare "waiting" reads as waiting on the reader (SU-3)
+/** A focus's In short: {state (the word shown), key, tone, body, at, since (ms: last written, and since when it says this), from}, or null. */
+export function leadOf(f) {
+  const l = f && f.lead; if (!l || !l.text) return null;
+  const key = l.state || null;
+  return { key, state: key ? LEAD_WORD[key] || key : null, tone: key ? LEAD_TONE[key] || "quiet" : null, body: (key && l.body) || l.text, at: (l.at || 0) * 1e3 || null, since: (l.since || l.at || 0) * 1e3 || null, from: l.from || null,
+    was: l.was && l.was !== key ? LEAD_WORD[l.was] || l.was : null, turned: (l.turned || 0) * 1e3 || null };
+}
+// What is new to the person (focus.py since_seen): the server keeps their looks at the home and at each focus's page, and gives the time the marks
+// count from. null: they never looked, or this is their first visit, and nothing is marked (a page of marks says nothing).
+/** The time (ms) a focus page's "new" marks count from: the person's last look at the page before this visit. */
+export const pageSince = f => (f && f.seen && f.seen.since ? f.seen.since * 1e3 : null);
+/** The same for its home card: the later of their last look at the home before this visit and their last look at the focus's own page. */
+export const cardSince = f => { const hs = S.foci && S.foci.home_seen; return Math.max(hs && hs.since ? hs.since * 1e3 : 0, f && f.seen && f.seen.at ? f.seen.at * 1e3 : 0) || null; };
+/** Whether something of time `t` (ms) is new against the baseline `since` (ms; null marks nothing). */
+export const newSince = (t, since) => !!(since && t && t > since);
+// The look itself. Not from a driven browser (the tests and the screenshot scripts must not write the person's looks) and not from a tab nobody
+// sees. Arriving is a look only once they have stayed SEEN_DWELL: the home is where the app opens, and passing through it on the way to a
+// conversation read nothing (review A3). While they stay, this asks again at most every SEEN_ASK per key, and when the tab comes back.
+const SEEN = { at: {}, key: null, timer: 0 }, SEEN_ASK = 5 * 60e3;
+export const SEEN_DWELL = 4e3;
+const canSee = () => typeof document !== "undefined" && document.visibilityState === "visible" && !(typeof navigator !== "undefined" && navigator.webdriver) && can("post");
+// The server's answer carries the look as it kept it ({at, start, base, since}, focus.py seen_out): the marks here count from the server's
+// clock, never this browser's (review A8), and the page they are on counts as read on its home card at once (cardSince reads seen.at).
+function sendLook(id, key) {
+  SEEN.at[key] = now();
+  return post("/api/focus", id ? { seen: id } : { seen_home: true }).then(r => {
+    if (r && r.ok && r.look && S.foci) { if (id) { const f = focusById(id); if (f) f.seen = r.look; } else S.foci.home_seen = r.look; }
+    return !!(r && r.noted);
+  }, () => false);
+}
+/** Tell the server the person is looking at focus `id`'s page, or at the home (id null). force: a new arrival on the page, not a tick while on it. */
+export function markSeen(id, force) {
+  const key = id || "*home", came = force || SEEN.key !== key; SEEN.key = key;
+  if (!canSee()) return Promise.resolve(false);
+  if (came) {
+    clearTimeout(SEEN.timer);
+    SEEN.timer = setTimeout(() => { SEEN.timer = 0; if (SEEN.key === key && canSee()) sendLook(id, key); }, SEEN_DWELL);
+    return Promise.resolve(false);
+  }
+  if (SEEN.timer || now() - (SEEN.at[key] || 0) < SEEN_ASK) return Promise.resolve(false);
+  return sendLook(id, key);
+}
+/** Stop counting the person as looking (the view was left): a look still waiting out its dwell is dropped. */
+export const seenLeave = () => { SEEN.key = null; clearTimeout(SEEN.timer); SEEN.timer = 0; };
+if (typeof document !== "undefined") {
+  // Back on the tab after being away: that is a look. While they read on, one tick every few minutes keeps the visit's end honest.
+  const again = () => { if (SEEN.key) markSeen(SEEN.key === "*home" ? null : SEEN.key); };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") again(); });
+  for (const ev of ["pointerdown", "keydown", "wheel"]) document.addEventListener(ev, again, { passive: true, capture: true });
+}
+/** The Now lines that read as the person's to do though the agents did not list them under Needs you (focus.py `hidden`), as waiting items:
+ *  the page lists them with what waits, so "nothing waits on you" is never said above a line that says something does. Put-off ones out. */
+export function hiddenAsks(f, { later = false } = {}) {
+  const s = f && f.summary, out = [];
+  for (const i of (s && s.hidden) || []) {
+    const text = (s.now || [])[i]; if (!text || typeof text !== "string") continue;
+    if ((s.needs || []).includes(text)) continue;
+    const w = { th: f.thread || f.id, text, t: ((s.now_at && s.now_at[i]) || s.at || 0) * 1e3 || null, src: "summary", focus: f.id, key: `hid:${f.id}:${text.replace(/\s+/g, " ").slice(0, 120)}`, hidden: true };
+    const e = laterOf(w); if (later ? e && e.what === "later" : !e) out.push(later ? { ...w, later: e } : w);
+  }
+  return out;
+}
 /** The focus a thread is in: its tag, else the focus whose own thread it is, else its parent's, up the chain; null is Misc. */
 export function focusOf(th) {
   const fs = foci(), tags = (S.foci && S.foci.tags) || {};

@@ -128,7 +128,7 @@ const thLink = th => h("a", { class: "map-th", href: threadHref(th), title: thre
 const keep = el => (el.isConnected ? el.cloneNode(false) : el);
 const SVGNS = "http://www.w3.org/2000/svg";
 const OUT_NAME = { person: "you", box: "box", hives: "hives" };
-const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches || document.documentElement.hasAttribute("data-still");   // or Still screen (core/still.js)
 const since = t => (t ? dur(Math.max(0, now() - t)).replace("under a minute", "now") : "");
 const GS = { L: null, nodes: new Map(), sig: "", w: 0, q: "", hits: [], posted: new Map(), busy: new Set(), queued: new Set(), capT: 0, hoverT: 0, h: 0, pin: new Map(), view: { k: 1, x: 0, y: 0, user: false } };
 
@@ -194,7 +194,7 @@ const zoomEl = h("div", { class: "map-zoom", role: "group", "aria-label": "Zoom"
   h("button", { type: "button", class: "btn", "data-size": "s", title: "Zoom in (or Ctrl + wheel, or pinch)", "aria-label": "Zoom in", onclick: () => zoomBy(1.25) }, "+"),
   h("button", { type: "button", class: "btn", "data-size": "s", title: "Zoom out", "aria-label": "Zoom out", onclick: () => zoomBy(0.8) }, "−"),
   h("button", { type: "button", class: "btn", "data-size": "s", title: "Fit the graph to the panel and let dragged nodes go", onclick: () => refit() }, "Fit"));
-const stage = h("div", { class: "map-stage", "data-key": "stage", "data-own": "", "data-sig": "mesh" }, capEl, scroller, zoomEl, legendEl);
+const stage = h("div", { class: "map-stage", "data-key": "stage", "data-own": "", "data-sig": "mesh" }, capEl, zoomEl, scroller, legendEl);   // zoom before the map: drawn over its top, so Tab reaches it first (WCAG 2.4.3)
 const EL = new Map(), SPK = new Map();
 const spG = document.createElementNS(SVGNS, "g"), topG = document.createElementNS(SVGNS, "g"), ringG = document.createElementNS(SVGNS, "g");
 svg.append(ringG, spG, topG);
@@ -394,7 +394,7 @@ function syncGraph(D) {
 function syncCap(D) {
   if (GS.capT > now()) return;
   const n = M.lanes.length, drawn = GS.L ? GS.L.clusters.length : 0;
-  capEl.replaceChildren(D.replay ? "As it was at " + clock(D.t1) : "Right now", h("small", null, ` · ${winName().toLowerCase()}${n > drawn ? ` · ${plural(n - drawn, S.app.app ? "conversation" : "thread")} with no agent drawn` : ""}`));
+  capEl.replaceChildren(h("span", null, D.replay ? "As it was at " + clock(D.t1) : "Right now"), h("small", null, ` · ${winName().toLowerCase()}${n > drawn ? ` · ${plural(n - drawn, S.app.app ? "conversation" : "thread")} with no agent drawn` : ""}`));
   capEl.toggleAttribute("data-cut", D.replay); capEl.removeAttribute("data-post");
 }
 function legend(L) {

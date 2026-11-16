@@ -1293,8 +1293,12 @@ def cmd_foryou(a):
         sys.exit(f"hive foryou close: nothing closed. {gap}.")
     before = waits_say("open_threads")
     away.close_for_yous(ids, os.environ.get("HIVE_NAME", "anon"), a.why.strip())
-    print(f"closed {len(ids)} For you line{'s' if len(ids) != 1 else ''}")
+    print(f"closed {len(ids)} For you line{'s' if len(ids) != 1 else ''}", flush=True)
     if w := waits_say("bar_note", before): print(w, file=sys.stderr, flush=True)
+    try:   # the to-do that put the same step on the person (hive focus check): a hint, never costs the close that was just written
+        import focus
+        for ln in focus.closed_note(ids): print(f"hive foryou close: {ln}", file=sys.stderr, flush=True)
+    except Exception: pass
 
 def status_leaks(line):
     """What in a status bar's line 1 the home card shouldn't show (R16, person 1107151649a6): a bare agent code, a post id, a rung word, a test count. Warns, never blocks."""
@@ -1479,7 +1483,7 @@ sp.add_parser("forget", help="hive forget ID: remove a line from the person's me
 if sys.argv[1:2] in (["remember"], ["forget"]): cmd_memory(sys.argv[1], sys.argv[2:])
 sp.add_parser("remind", help="hive remind at +1h|09:00|\"2026-11-20 09:00\" TEXT | every \"0 8 * * *\" TEXT [--to NAME] [--thread T] | list [--thread T] | rm ID: a reminder or recurring post into the chat that asked (default the thread that woke you), as `remind`, to person by default; the hive-remind timer posts what is due each minute. Use it for any reminder or scheduled job: never write a systemd timer or cron line (core/remind.py)")
 if sys.argv[1:2] == ["remind"]: cmd_remind(argparse.Namespace(rest=sys.argv[2:]))
-sp.add_parser("focus", help="hive focus list | tag THREAD FOCUS [--off] | new ID \"name\" | link A B | set FOCUS <<'X' | show FOCUS | keeper FOCUS | aim FOCUS \"text\" | check add|list|done|untick | lint | order ID ID...: foci, the person's view of the work. A thread carries a focus label; each focus has a hand-written summary (## Now, ## Lately bullets, plain words, no ids or paths) that the home shows as a card. The agent posting a result in a focus's thread updates its summary in the same run (core/focus.py)")
+sp.add_parser("focus", help="hive focus list | tag THREAD FOCUS [--off] | new ID \"name\" | link A B | set FOCUS <<'X' | lead FOCUS \"On track: ...\" | show FOCUS | keeper FOCUS | aim FOCUS \"text\" | check add|list|done|untick | lint | order ID ID...: foci, the person's view of the work. A thread carries a focus label; each focus has a hand-written summary (## Now, ## Lately bullets, plain words, no ids or paths) that the home shows as a card, under its In short (lead: one or two sentences that open with the state, On track, At risk, Blocked, Needs you, Waiting, Paused or Done, and say the one thing that matters now; the person reads it first and often alone). The agent posting a result in a focus's thread updates its summary in the same run, and the In short when the result changes it. The card and the page mark what was written since the person last looked, so change a line only when it says something new (core/focus.py)")
 if sys.argv[1:2] == ["focus"]: cmd_focus(argparse.Namespace(rest=sys.argv[2:]))
 sp.add_parser("tier", help="hive tier [list|set X N|unset X|stop N PCT|pause N... --until WHEN|resume N...|new|rename|drop|default|jobs|why X|install]: work tiers, the person's settings for which work runs: each focus, thread and timer sits in a tier with a usage stop point and an optional pause that lifts by itself; the starter and a gate before each placed timer hold a tier's new work (core/tiers.py). An agent changes them only with --post (the person's post asking)")
 if sys.argv[1:2] == ["tier"]: cmd_tier(argparse.Namespace(rest=sys.argv[2:]))

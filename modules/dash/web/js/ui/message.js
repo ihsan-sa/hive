@@ -210,8 +210,10 @@ function mdIn(t, p) {
 }
 // The pages the chat view shows (posts: what it draws, hidden versions left out), as versions of each other. Parsed again only when they change.
 const PAGES = new Map();
+/** A page the person edited by hand (E43, dash.py page_edit_post): drawn as that page's newest version, asking nobody. */
+export const pageEdit = p => (p.tags || []).includes("page:edit");
 export function chatPages(th, posts) {
-  const items = posts.filter(p => !p.ev && p.from !== "person" && /(`{3,}|~{3,})\s*html/i.test(p.text || "")).map(p => [p.id, chatText(p)]);
+  const items = posts.filter(p => !p.ev && (p.from !== "person" || pageEdit(p)) && /(`{3,}|~{3,})\s*html/i.test(p.text || "")).map(p => [p.id, chatText(p)]);
   const sig = items.map(([id, t]) => id + ":" + t.length).join(",");
   if (PAGES.get(th) === sig) return;
   PAGES.set(th, sig); if (PAGES.size > 50) PAGES.delete(PAGES.keys().next().value);
@@ -450,6 +452,7 @@ function appMessage(p, opts) {
       files.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f))) : null,
       tagChips(p),
       split ? didFold(p, split) : null,
+      kind === "agent" ? ranFold(p) : null,
       wordButton(p),
       messageReceipt(p),
       versionBar(p, opts),
@@ -553,6 +556,55 @@ function didFold(p, s) {
   return h("details", { class: "msg-fold", open: DID_OPEN.has(p.id) || null, ontoggle: (e, d) => { if (e.target !== d) return; if (d.open) DID_OPEN.add(p.id); else DID_OPEN.delete(p.id); } },
     h("summary", null, icon("chevron-right"), `What it did · ${s.steps} ${s.steps === 1 ? "step" : "steps"}`),
     h("div", { class: "msg-fold-b" }, mdIn(s.fold, p)));
+}
+
+// "Code it ran" (everyday E42, GAPS row 4: you never see it run): the commands and code files the reply's run ran before it wrote this,
+// each with its output, folded under the answer. /api/ran reads them from the run's session log; one read asks for every reply drawn at once.
+const RAN = new Map(), RAN_OPEN = new Set(), RAN_STEP_OPEN = new Set();
+let ranQ = null;
+function ranAsk(p) {
+  const e = RAN.get(p.id);
+  if (e && (e.v === null || e.v.steps.length || now() - p.t > 3 * MIN || now() - e.at < 15e3)) return;   // a reply just sent may beat its log: ask again in 15 s for its first 3 minutes
+  RAN.set(p.id, { v: e ? e.v : null, at: now(), busy: true });
+  if (!ranQ) { ranQ = new Map(); queueMicrotask(ranFetch); }
+  ranQ.set(p.id, p.t);
+}
+async function ranFetch() {
+  const q = [...ranQ]; ranQ = null;
+  for (let i = 0; i < q.length; i += 40) {
+    const part = q.slice(i, i + 40);
+    let v = {};
+    try { v = await jget(`/api/ran?ids=${part.map(x => x[0]).join(",")}&at=${part.map(x => Math.floor(x[1] / 1e3)).join(",")}`); } catch (e) { v = null; }
+    for (const [id] of part) {
+      const r = v && v[id] && Array.isArray(v[id].steps) ? v[id] : { steps: [] };
+      RAN.set(id, { v: r, at: now() });
+      if (!r.steps.length) continue;
+      for (const slot of document.querySelectorAll(`.msg[data-key="${CSS.escape(id)}"] .msg-ran-slot`)) { const p = S.byId[id]; if (p) slot.replaceWith(ranFold(p)); }
+    }
+  }
+}
+function ranFold(p) {
+  const e = RAN.get(p.id);
+  if (!e || !e.v || !e.v.steps.length) { ranAsk(p); return h("span", { class: "msg-ran-slot", hidden: true }); }
+  const r = e.v, n = r.steps.length + (r.more || 0);
+  return h("details", { class: "msg-fold msg-ran", open: RAN_OPEN.has(p.id) || null, ontoggle: (ev, d) => { if (ev.target !== d) return; if (d.open) RAN_OPEN.add(p.id); else RAN_OPEN.delete(p.id); } },
+    h("summary", null, icon("chevron-right"), `Code it ran · ${n} ${n === 1 ? "step" : "steps"}`),
+    h("div", { class: "ran-b" },
+      r.more ? h("div", { class: "meta ran-more" }, `${r.more} earlier ${r.more === 1 ? "step" : "steps"} not shown`) : null,
+      r.steps.map((s, i) => ranStep(p, s, i))));
+}
+const RAN_LANG = { python: "Python", node: "JavaScript", shell: "Shell", file: "File" };
+function ranStep(p, s, i) {
+  const k = p.id + ":" + i, long = (s.out || "").split("\n").length > 12 && !RAN_STEP_OPEN.has(k);
+  const out = long ? s.out.split("\n").slice(0, 12).join("\n") : s.out;
+  return h("div", { class: "ran-s", "data-err": s.err ? "" : null },
+    h("div", { class: "ran-h" },
+      h("span", { class: "ran-lang" }, s.lang === "file" ? s.file || "File" : RAN_LANG[s.lang] || s.lang),
+      s.what ? h("span", { class: "ran-what" }, s.what) : null,
+      s.t ? h("span", { class: "meta ran-t" }, clock(s.t * 1e3)) : null),
+    h("pre", { class: "ran-code" }, h("code", null, s.code)),
+    s.out ? h("pre", { class: "ran-out", "aria-label": s.err ? "Output, with an error" : "Output" }, h("code", null, out)) : s.lang === "file" ? null : h("div", { class: "meta ran-none" }, "No output"),
+    long ? button(`Show all ${s.out.split("\n").length} lines`, (ev, b) => { RAN_STEP_OPEN.add(k); b.closest(".ran-s").replaceWith(ranStep(p, s, i)); }, { size: "s", kind: "quiet", cls: "ran-all" }) : null);
 }
 
 // The hover toolbar (.msg-tools): Reply, Copy text, and … for Quote, Copy link, Open in Yours and Details. Nothing edits or takes back a sent message.

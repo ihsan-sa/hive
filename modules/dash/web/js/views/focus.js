@@ -13,13 +13,13 @@ import { simpleOn, plainName } from "../core/simple.js";
 import { button, empty, statusWord, section, waiting } from "../ui/kit.js";
 import { agentRef } from "../ui/refs.js";
 import { openPreview, fileHref } from "../ui/preview.js";
-import { loadFoci, fociFailed, focusById, focusOf, threadsOf, needsOf, askedOf, agentsOf, stateOf, pills, plainPills, needSource, scrub, threadLine, focusName, MISC, FOCI_EVERY, activityOf, shareOf, fractionWords, pct, usd } from "../core/foci.js";
+import { loadFoci, fociFailed, focusById, focusOf, threadsOf, needsOf, askedOf, agentsOf, stateOf, pills, plainPills, needSource, scrub, threadLine, focusName, MISC, FOCI_EVERY, activityOf, shareOf, fractionWords, pct, usd, leadOf, pageSince, newSince, hiddenAsks, markSeen } from "../core/foci.js";
 import { waitingLater } from "../core/needs.js";
 import { archived } from "../ui/threadmeta.js";
 import { draft, answer } from "../ui/composer.js";
-import { inChat, chatEscape, chatLeave, answerer, summaryWait, sumLines, lineText, flat, liftIn, updatedAt, rowDot, markEl } from "./comms.js";
+import { inChat, chatEscape, chatLeave, answerer, summaryWait, sumLines, lineText, flat, liftIn, updatedAt, rowDot, markEl, newMark, leadWord } from "./comms.js";
 import { quickIs, laterButtons, setLater } from "../ui/quick.js";
-import { when } from "../ui/when.js";
+import { when, exact } from "../ui/when.js";
 import { yoursPosts, yoursText } from "../core/yours.js";
 import { railSay } from "../core/foci.js";
 import { jump } from "../ui/message.js";
@@ -28,7 +28,7 @@ import { uploadFile } from "../core/upload.js";
 
 const idOf = arg => (arg === "misc" ? null : arg);
 const say = t => (simpleOn() ? plainPills(t) : pills(t));
-const FP = { more: false, yours: 3, mine: false, sent: [], brief: null };   // sent: what the steer box sent from this page, with its state   // the Quiet and archived conversations, shown on asking (this page only)
+const FP = { more: false, yours: 3, mine: false, sent: [], brief: null, typed: {} };   // typed: the steer box's unsent words per focus, kept for the session (WCAG 3.3.7)   // sent: what the steer box sent from this page, with its state   // the Quiet and archived conversations, shown on asking (this page only)
 
 /** Start a new conversation already tagged with this focus: the composer carries the tag and posts it with the first message. */
 export function newIn(id) { draft(null).focus = id || ""; go("comms", "~new"); }
@@ -36,7 +36,7 @@ export function newIn(id) { draft(null).focus = id || ""; go("comms", "~new"); }
 // The page, v3 (designs/ui-redesign-v3/V3-HANDOFF.md 3b): a header with the state and aim, then a main column (Needs you first, Now,
 // To do, Lately, Conversations) and a side column (Agents, Activity). Every line full length: the card clamps, the page doesn't.
 const head = (title, note, more) => h("div", { class: "fp-h" }, h("h2", null, title), note ? h("span", { class: "sec-n" }, note) : null, more || null);
-const sec = (key, cls, title, note, ...kids) => h("section", { class: ["fp-sec", cls], "data-key": "fp-" + key, "aria-label": title }, head(title, note), ...kids);
+const sec = (key, cls, title, note, ...kids) => h("section", { class: ["fp-sec", cls], "data-key": "fp-" + key, "aria-label": title, tabindex: "-1" }, head(title, note), ...kids);
 
 function threadRow(r) {
   const line = threadLine(r.th), d = S.threads.get(r.th), dot = rowDot(r.th);
@@ -63,24 +63,53 @@ const todoSec = (checks, id, ctx) => {
   return [open.length ? null : h("p", { class: "fp-calm" }, "Everything on the list is done."), todoList([...open, ...fin], id, ctx)];   // done ones inline, struck through, last
 };
 
-const tl = (kind, lines) => h("ol", { class: "fp-tl" }, lines.map((l, i) => h("li", { class: "fp-ev", "data-kind": kind, "data-key": kind + ":" + l.text.slice(0, 80) }, when(l.at, "t") || h("span"), h("span", { class: "fp-ev-x" }, lineText(l.text)))));
+// A line written since the person last looked at this page is marked (core/foci.js pageSince): a bar on the row, "New:" for a screen reader.
+const tl = (kind, lines, since) => h("ol", { class: "fp-tl" }, lines.map(l => { const nw = newSince(l.at, since);
+  return h("li", { class: "fp-ev", "data-kind": kind, "data-new": nw ? "" : null, "data-key": kind + ":" + l.text.slice(0, 80) }, when(l.at, "t") || h("span"), h("span", { class: "fp-ev-x" }, nw ? newMark() : null, lineText(l.text))); }));
+
+/** In short (core/foci.js leadOf): where the focus stands against its aim, in the agents' one or two sentences. First on the page, before any list. */
+function shortSec(lead, since) {
+  if (!lead) return null;
+  const nw = newSince(lead.since, since);
+  return h("section", { class: "fp-sec fp-short", "data-key": "fp-short", "data-new": nw ? "" : null, "aria-label": "In short" },
+    head("In short", null, h("span", { class: "fp-by meta" }, lead.from ? ["by ", simpleOn() ? plainName(lead.from) : agentRef(lead.from, { pill: true }), " \u00b7 "] : null, when(lead.at, "t"))),
+    h("p", { class: "fp-short-x" }, nw ? newMark() : null, lineText(lead.body, { topic: false })));
+}
+/** A part of the since line takes the reader to its section and puts the keyboard there: Lately sits under the conversations, a long way down a busy page. */
+const toSec = (key, text) => h("button", { type: "button", class: "linkbtn fp-jump", "data-to": key, onclick: (e, el) => {
+  const s = el.closest(".fp")?.querySelector(`[data-key="fp-${key}"]`); if (!s) return;   // el: the button (a delegated handler's event has the document as currentTarget)
+  s.focus({ preventScroll: true }); s.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); } }, text);
+/** What changed on the page since the person last looked, in one line, so a page they know says so and a page with news says where it is.
+ *  Nothing on a first visit (since null): a page of marks says nothing. n: {lead, now, lately, asks, convs}. */
+function sinceLine(since, n) {
+  if (!since) return null;
+  const parts = [n.lead ? "the In short" : null, n.asks ? toSec("needs", plural(n.asks, "thing") + " for you") : null, n.now ? toSec("now", `${n.now} in Now`) : null, n.lately ? toSec("lately", `${n.lately} in Lately`) : null].filter(Boolean);
+  const convs = n.convs ? [toSec("convs", plural(n.convs, "conversation")), ` ${n.convs === 1 ? "has" : "have"} new messages`] : null;
+  // One sentence with the time in it, said once: "New since you last looked 22h ago: 2 in Now; 3 conversations have new messages."
+  const at = h("time", { datetime: new Date(since).toISOString(), title: "You last looked " + exact(since) }, ago(since));
+  const list = parts.flatMap((x, i) => i ? [", ", x] : [x]);
+  const said = parts.length ? ["New since you last looked ", at, ": ", list, convs ? ["; ", convs] : null, "."]
+    : convs ? ["Nothing new in the summary since you last looked ", at, "; ", convs, "."] : ["Nothing new here since you last looked ", at, "."];
+  return h("p", { class: "fp-since", "data-key": "fp-since", "data-new": parts.length ? "" : null }, said);
+}
 
 /** One waiting item on the page: the whole row a button that opens the quick-answer panel; a plain row where this address can't post. */
-function askRow(w, src, ctx) {
+function askRow(w, src, ctx, since) {
   const open = answerer(w), lf = liftIn(w.text), th = lf.th || (w.src !== "summary" && S.threads.has(w.th) ? w.th : null);
   const d = w.post && S.threads.get(w.th), p = d ? d.posts.find(x => x.id === w.post) : null, by = (w.st && w.st.who) || (p && p.from) || null;
   const body = [h("span", { class: "fp-ask-x" }, flat(lineText(lf.text))),
     h("span", { class: "fp-ask-m" }, h("span", null, th ? threadTitle(th) : src), by && by !== "person" ? (simpleOn() ? h("span", null, "· " + plainName(by)) : h("span", null, "· ", flat(agentRef(by, { pill: true })))) : null, w.t ? h("span", null, "· ", when(w.t, "t")) : null),
   ];
-  const key = w.key || w.th + ":" + (w.post || w.src);
-  if (!open) return h("li", { "data-key": key }, h("div", { class: "fp-ask" }, body));
-  return h("li", { "data-key": key, class: "fp-ask-li" }, h("button", { type: "button", class: "fp-ask", "aria-haspopup": "dialog", "aria-expanded": String(quickIs(w)), title: "Answer: " + w.text, onclick: open }, body),
+  const key = w.key || w.th + ":" + (w.post || w.src), nw = newSince(w.t, since) ? "" : null;
+  if (nw === "") body[0].prepend(newMark());
+  if (!open) return h("li", { "data-key": key, "data-new": nw }, h("div", { class: "fp-ask" }, body));
+  return h("li", { "data-key": key, class: "fp-ask-li", "data-new": nw }, h("button", { type: "button", class: "fp-ask", "aria-haspopup": "dialog", "aria-expanded": String(quickIs(w)), title: "Answer: " + w.text, onclick: open }, body),
     h("div", { class: "fp-ask-b" }, laterButtons(w), h("button", { type: "button", class: "btn cm-need-a", "data-size": "s", "aria-haspopup": "dialog", onclick: open }, "Answer")));
 }
 
 /** Later (the person, 1108133400fb): what they put off here, out of the home and its count, each with Bring back. */
 function laterSec(id, ctx) {
-  const ls = waitingLater().filter(w => (w.focus || focusOf(w.th) || null) === (id || null) || (w.later && w.later.focus === id));
+  const ls = [...waitingLater().filter(w => (w.focus || focusOf(w.th) || null) === (id || null) || (w.later && w.later.focus === id)), ...hiddenAsks(focusById(id), { later: true })];
   if (!ls.length) return null;
   return section({ title: `Later · ${ls.length}`, key: "fp-later:" + (id || "misc"), fold: true },
     h("ul", { class: "fp-later" }, ls.map(w => h("li", { class: "fp-later-i", "data-key": "l:" + (w.key || w.th + (w.post || "")) },
@@ -94,7 +123,7 @@ export const replyWait = (p, id) => ({ th: p.th, post: p.id, text: yoursText(p),
 /** Steer the whole focus: a message to its own conversation, for whoever keeps it (the same path as answering the summary's asks). */
 function steer(f, el, ctx) {
   const text = el.value.trim(); if (!text) return;
-  FP.sent.push({ f: f.id, it: answer(f.thread || f.id, text, { to: f.id }) }); el.value = ""; ctx.update();
+  FP.sent.push({ f: f.id, it: answer(f.thread || f.id, text, { to: f.id }) }); el.value = ""; delete FP.typed[f.id]; ctx.update();
 }
 const sentWord = it => (it.state === "failed" ? "Couldn't send" : it.state === "sent" ? "Sent" : "Sending…");
 const STEER_SAYS = "Goes to the focus's own conversation, for whoever keeps it. To steer one piece of work, reply to it below.";
@@ -106,7 +135,7 @@ function steerBox(f, ctx) {
   return h("div", { class: "fp-steer", "data-key": "fp-steer" },
     mine.length ? h("ul", { class: "fp-steer-o", "aria-live": "polite" }, mine.map(({ it }) => h("li", { "data-key": "o" + it.lid, "data-state": it.state },
       h("span", null, it.text), h("span", { class: "meta" }, sentWord(it))))) : null,
-    h("textarea", { class: "input fp-steer-in", rows: 2, placeholder: "Message the whole focus…", "aria-label": "Message the whole focus", title: STEER_SAYS,
+    h("textarea", { class: "input fp-steer-in", rows: 2, placeholder: "Message the whole focus…", "aria-label": "Message the whole focus", title: STEER_SAYS, value: FP.typed[f.id] || "", oninput: (e, n) => { FP.typed[f.id] = (n || e.target).value; },
       onkeydown: (e, n) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !matchMedia("(max-width: 699px)").matches) { e.preventDefault(); steer(f, n || e.target, ctx); } } }),
     h("div", { class: "fp-steer-a" },
       button("Send", e => steer(f, e.target.closest(".fp-steer").querySelector(".fp-steer-in"), ctx), { kind: "primary", size: "s", cls: "fp-steer-s" })));
@@ -204,7 +233,12 @@ function page(ctx) {
   const st = stateOf(id), rows = threadsOf(id), active = rows.filter(r => r.active && !archived(r.th)), quiet = rows.filter(r => !r.active && !archived(r.th)), arch = rows.filter(r => archived(r.th));
   const ag = agentsOf(id), needs = needsOf(id), live = needs.filter(w => w.src !== "summary"), asked = askedOf(id), sum = f.summary, checks = f.checks || [], done = checks.filter(c => finished(c));
   const now = sumLines(sum, "now"), lately = sumLines(sum, "lately"), up = updatedAt(f, rows), name = focusName(f);
-  const waits = [...asked.map((t, i) => summaryWait(f, i, t)), ...live];
+  // In short and what is new to the person (core/foci.js): the lead's state is the page's word, as on the card; the Now lines that read as
+  // theirs to do (the server's `hidden`) list under Needs you after the asks the agents listed, so the page never says nothing waits above one.
+  const lead = f.misc ? null : leadOf(f), since = f.misc ? null : pageSince(f), hid = f.misc ? [] : hiddenAsks(f);
+  const waits = [...asked.map((t, i) => summaryWait(f, i, t)), ...hid, ...live];
+  const fresh = { lead: lead && newSince(lead.since, since) ? 1 : 0, now: now.filter(l => newSince(l.at, since)).length, lately: lately.filter(l => newSince(l.at, since)).length, asks: waits.filter(w => newSince(w.t, since)).length,
+    convs: since ? rows.filter(r => { const d = S.threads.get(r.th); return d && d.last > since && d.posts.some(p => p.t > since && p.from !== "person"); }).length : 0 };
   // Agents as the chat's pills, each with how long it has been on and its own one line (the me command), never bare codes.
   const pill = n => (simpleOn() ? h("b", null, plainName(n)) : agentRef(n, { pill: true }));
   const agRow = n => { const o = agentOn(n), t = o && scrub(o.text), s = S.lastSess[n];
@@ -224,7 +258,7 @@ function page(ctx) {
   return h("div", { class: "page fp", "data-key": "fp:" + (id || "misc") },
     h("header", { class: "fp-hd" },
       h("div", { class: "fp-hd-t" },
-        f.misc ? null : h("div", { class: "fp-state" }, statusWord(st.tone, st.word), ag.now.length && !simpleOn() ? h("span", { class: "fc-ag" }, ag.now.slice(0, 4).map(n => agentRef(n, { pill: true }))) : null),
+        f.misc ? null : h("div", { class: "fp-state" }, lead && lead.state ? leadWord(lead, since, st.key === "moving" || st.moving) : statusWord(st.tone, st.word), ag.now.length && !simpleOn() ? h("span", { class: "fc-ag" }, ag.now.slice(0, 4).map(n => agentRef(n, { pill: true }))) : null),
         h("h1", { class: "fp-title" }, name),
         h("p", { class: "fp-aim" }, f.misc ? "Conversations not filed under a focus." : f.aim || null),
         simpleOn() ? null : h("p", { class: "fp-meta" }, meta)),
@@ -233,12 +267,14 @@ function page(ctx) {
     h("div", { class: "fp-grid" },
       // The main column (the Nov 8 handoff §3.3, the box kept where the person put it): Needs you, Now, To do, For you here and the box, Conversations, Lately.
       h("div", { class: "fp-main" },
-        waits.length ? h("section", { class: "fp-sec fp-needs", "data-key": "fp-needs", "aria-label": "Needs you" }, head("Needs you", String(waits.length)),
-          h("ul", null, waits.map(w => askRow(w, w.src === "summary" ? "From the summary" : needSource(w), ctx))))
+        shortSec(lead, since),
+        f.misc ? null : sinceLine(since, fresh),
+        waits.length ? h("section", { class: "fp-sec fp-needs", "data-key": "fp-needs", "aria-label": "Needs you", tabindex: "-1" }, head("Needs you", String(waits.length)),
+          h("ul", null, waits.map(w => askRow(w, w.hidden ? "Reads as yours, from Now" : w.src === "summary" ? "From the summary" : needSource(w), ctx, since))))
           : f.misc ? null : h("p", { class: "fp-calm", "data-key": "fp-calm" }, h("span", { class: "st", "data-tone": "quiet", "aria-hidden": "true" }), "Nothing waits on you here."),
         laterSec(id, ctx),
-        f.misc ? null : h("section", { class: "fp-sec", "data-key": "fp-now", "aria-label": "Now" }, head("Now", null, sum && sum.from ? h("span", { class: "fp-by meta" }, "by ", simpleOn() ? plainName(sum.from) : agentRef(sum.from, { pill: true }), sum.at ? ` \u00b7 ${ago(sum.at * 1e3)}` : null) : null),
-          now.length ? tl("now", now) : h("p", { class: "fp-calm" }, sum ? "Nothing listed as moving." : "No summary yet. The agents on this focus write one as they work; until then, its conversations below show what runs.")),
+        f.misc ? null : h("section", { class: "fp-sec", "data-key": "fp-now", "aria-label": "Now", tabindex: "-1" }, head("Now", null, sum && sum.from ? h("span", { class: "fp-by meta" }, "by ", simpleOn() ? plainName(sum.from) : agentRef(sum.from, { pill: true }), sum.at ? ` \u00b7 ${ago(sum.at * 1e3)}` : null) : null),
+          now.length ? tl("now", now, since) : h("p", { class: "fp-calm" }, sum ? "Nothing listed as moving." : "No summary yet. The agents on this focus write one as they work; until then, its conversations below show what runs.")),
         f.misc ? null : sec("todo", null, "To do", checks.length ? (allDone ? null : `${checks.filter(finished).length} of ${checks.length} done`) : null,
           checks.length ? todoSec(checks, id, ctx) : h("p", { class: "fp-calm" }, "Nothing on the to-do list here.")),
         yoursSec(f, ctx),
@@ -247,7 +283,7 @@ function page(ctx) {
           extra ? [FP.more ? h("ul", { class: "list", "data-dense": "", "data-key": "fp-quiet" }, [...quiet, ...arch].map(threadRow)) : null,
             h("p", { class: "fp-more" }, h("button", { type: "button", class: "btn", "data-kind": "quiet", "data-size": "s", "aria-expanded": String(FP.more), onclick: () => { FP.more = !FP.more; ctx.update(); } },
               FP.more ? "Show only the active ones" : [quiet.length ? `Quiet (${quiet.length})` : null, quiet.length && arch.length ? " and " : null, arch.length ? `${quiet.length ? "archived" : "Archived"} (${arch.length})` : null]))] : null),
-        f.misc || !lately.length ? null : sec("lately", null, "Lately", null, tl("lately", lately))),
+        f.misc || !lately.length ? null : sec("lately", null, "Lately", null, tl("lately", lately, since))),
       f.misc ? null : h("aside", { class: "fp-side", "aria-label": "Who and how much" },
         briefSec(f, ctx),
         agents,
@@ -257,7 +293,8 @@ function page(ctx) {
 
 export default {
   id: "focus", label: "Focus", tab: false,
-  enter(ctx) { if (!ctx.arg) { location.hash = "#comms"; return; } loadFoci(true).then(() => ctx.update()); },
+  // Arriving is a look (core/foci.js markSeen): the marks count from the look before this visit, and the focus's home card counts as read from now.
+  enter(ctx) { if (!ctx.arg) { location.hash = "#comms"; return; } const id = idOf(ctx.arg); if (id) markSeen(id, true); loadFoci(true).then(() => ctx.update()); },
   leave: chatLeave, escape: chatEscape,
   poll: { every: FOCI_EVERY, async run(ctx) { await loadFoci(); ctx.update(); } },
   render(ctx) {

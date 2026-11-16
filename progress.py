@@ -803,11 +803,11 @@ def window(t0, t1, log, posts, items):
          "improvements_landed": len(landed), "improvements_judged": len(judged), "improvements_sized": sum(1 for e in landed if e.get("check") and e.get("gain") is not None and not e.get("unsized")), "reviews_independent": sum(1 for e in landed if indep_review(e)), **for_you_numbers(posts, t0, t1),
          "held": sum(1 for e in judged if e.get("status") == "held"), "reverted": sum(1 for e in judged if e.get("status") == "reverted"),
          "asks_done": asks_done_in(t0, t1), **leftovers_flow(items, t0, t1), "rsi_rounds": len(rsi), "rsi_wins": sum(1 for r in rsi if r.get("verdict") == "win"),
-         "core_commits": commits_in(t0, t1), **outcomes_in(t0, t1), **kb_numbers(t0, t1),
+         "core_commits": commits_in(t0, t1), **outcomes_in(t0, t1, posts), **kb_numbers(t0, t1),
          "model_steps_up": model_steps(posts, t0, t1, "up"), "model_steps_down": model_steps(posts, t0, t1, "down")}
     return w
 
-def outcomes_in(t0, t1):
+def outcomes_in(t0, t1, posts=None):
     """From ~/outcomes.jsonl (core/outcomes.py): of the runs graded in the window, the share that delivered what their post asked, and how many were silent though named."""
     try:
         spec = importlib.util.spec_from_file_location("outcomes", CORE / "outcomes.py"); oc = importlib.util.module_from_spec(spec); spec.loader.exec_module(oc)
@@ -815,7 +815,7 @@ def outcomes_in(t0, t1):
     except Exception: return {"outcomes_graded": 0, "outcome_delivered_pct": None, "outcomes_silent": None, "outcomes_nothing": None, "outcomes_intent_only": None}
     if not s["outcomes_graded"]: return {"outcomes_graded": 0, "outcome_delivered_pct": None, "outcomes_silent": None, "outcomes_nothing": None, "outcomes_intent_only": None}  # no grades, so no count: "0 -> 11, worse" on the grader's first day was a false verdict
     out = {k: s[k] for k in ("outcomes_graded", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_intent_only")}
-    try: out.update(oc.followups(jsonl(HOME / "outcomes.jsonl"), t0, t1))   # R39: of the handed-on/promised/long-job misses, the share whose work came within 6 h
+    try: out.update(oc.followups(jsonl(HOME / "outcomes.jsonl"), t0, t1, board=posts))   # R39: of the handed-on/promised/long-job misses, the share whose work came within 6 h
     except Exception: pass
     return out
 

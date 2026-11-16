@@ -13,6 +13,7 @@ import { topBar } from "./ui/shell.js";
 import { mobileNav, setView } from "./ui/mobilenav.js";
 import views, { APP_NAV, SIMPLE_NAV } from "./views/index.js";
 import { simpleOn } from "./core/simple.js";
+import "./core/still.js";   // sets html[data-still] before the first paint of a view (Settings > This device > Still screen)
 import { resume, setViews, watch } from "./deck/control.js";
 import { offer as offerDeckTour } from "./deck/tour.js";
 import { offerTour } from "./ui/tour.js";
@@ -53,7 +54,7 @@ const clip = s => (s.length > 60 ? s.slice(0, 59).trimEnd() + "…" : s);
 const shown = e => e.getClientRects().length > 0;
 // Skip to content (WCAG 2.4.1): the first Tab stop on every page. It doesn't use href="#main": that would be taken as a route.
 main.tabIndex = -1;
-const skip = Object.assign(document.createElement("a"), { className: "skip-link", href: "#", textContent: "Skip to content" });
+const skip = h("a", { class: "skip-link", href: "#" }, "Skip to content");   // through h(), so the language setting reaches it
 skip.addEventListener("click", e => { e.preventDefault(); main.focus(); });
 document.body.prepend(skip);
 const h1 = document.body.insertBefore(Object.assign(document.createElement("h1"), { id: "screen-h1", className: "vh" }), main);

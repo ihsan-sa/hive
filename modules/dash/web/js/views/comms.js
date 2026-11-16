@@ -11,7 +11,7 @@ import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../cor
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
 import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
 import { workBar, workBarHeld } from "../ui/workbar.js";
-import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci, workingIn } from "../core/foci.js";
+import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci, workingIn, leadOf, cardSince, newSince, hiddenAsks, markSeen as lookAt, seenLeave } from "../core/foci.js";
 import { newIn } from "./focus.js";
 import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
@@ -24,7 +24,7 @@ import { MN, onMail } from "../core/mailnew.js";
 import { heldRoom } from "../core/room.js";
 import { bar as skBar, button, empty, icon, input, list, scrim, seg, skeleton, statusDot, statusWord } from "../ui/kit.js";
 import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
-import { message, messageHead, messageReceipt, localMessage, draftMessage, markWords, pollDelivered, marksSig, delivery, onJump, helperFolds, chatPages } from "../ui/message.js";
+import { message, messageHead, messageReceipt, localMessage, draftMessage, markWords, pollDelivered, marksSig, delivery, onJump, helperFolds, chatPages, pageEdit } from "../ui/message.js";
 import { chatView } from "../rich/artifact.js";
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
 import { openQuick, quickOpen, closeQuick, quickPanel, laterButtons } from "../ui/quick.js";
@@ -85,9 +85,8 @@ const store = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* thi
 const C = { view: (() => { try { const v = localStorage.getItem(VIEW_KEY); return v === "recent" ? v : "focus"; } catch (e) { return "focus"; } })(),
   hideFaded: (() => { try { return localStorage.getItem(HIDE_KEY) !== "0"; } catch (e) { return true; } })(),   // on unless the person turned it off (2026-11-08)
   err: "", imp: false, conv: undefined, q: "", show: null, commsNew: true, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, find: false, strip: false };
-let errTimer = 0;
 /** A change to a conversation (pin, star, archive) is shown at once; when the server refuses it the list goes back, and this says why for a few seconds. */
-const tryMeta = (th, patch, ctx) => setMeta(th, patch).catch(e => { C.err = "Couldn't save that: " + (e && e.message || "the server didn't answer") + "."; clearTimeout(errTimer); errTimer = setTimeout(() => { C.err = ""; ctx.update(); }, 8000); ctx.update(); });
+const tryMeta = (th, patch, ctx) => setMeta(th, patch).catch(e => { C.err = "Couldn't save that: " + (e && e.message || "the server didn't answer") + "."; ctx.update(); });   // the error stays until its Close: no clock (WCAG 2.2.1)
 // What the message list holds. matched grows as posts arrive; pend is what sync() still has to append.
 const L = { key: null, src: null, seen: 0, matched: [], pend: [], evs: new Set(), rebuild: true, keep: false, shown: 0, day: "", prev: null, names: new Set(), opts: null,
   box: null, out: null, jump: null, unseen: 0, outSig: "", ro: null, stuck: true, heads: "", near: new Set(), io: null, tl: null, tlSig: "", tlConv: null, saved: null, ctx: null, jumpTo: null, marked: "" };
@@ -116,8 +115,8 @@ const hay = p => (p.lc ??= [p.text, p.from, ...(p.files || []).map(f => f.name)]
 const hit = (p, w) => (w.startsWith("tag:") && w.length > 4 ? (p.tags || []).some(t => (w.includes(":", 4) ? t.toLowerCase() === w.slice(4) : t.toLowerCase().split(":").slice(1).join(":") === w.slice(4))) : hay(p).includes(w));
 
 // What to show: any of For you, Updates and Agent comms, as a mask of SHOW bits. Kept in this browser. Searching ignores it, so a hidden message can still be found.
-// The stored number also carries COMMS_NEW while Agent comms has never been on in this browser (C.commsNew): until then the app look leaves its chip out (E10), and after that
-// the chip stays, on or off. A choice saved before 2026-11-15 has no such mark, so its chip is drawn: someone who has already chosen has seen it.
+// The stored number also carries COMMS_NEW while Agent comms has never been on in this browser (C.commsNew): it once hid the chip (E10); since
+// 2026-11-16 the chip is always drawn (showChips) and the mark is only kept so stored choices read the same.
 const SHOW_KEY = "hive.comms.kinds", OLD_KEY = "hive.comms.show", OLD = { you: SHOW.you, updates: SHOW.you | SHOW.updates, all: SHOW.ALL }, COMMS_NEW = 8;
 function showMask() {
   if (simpleOn()) return SHOW.you | SHOW.updates;   // fixed: there's no Show bar here
@@ -245,7 +244,7 @@ function versioned(items) {
   if (!V.old) {   // Edit on your last message (its files go with the edit); Retry on the last reply once nothing of yours follows it.
     // Either works while the reply is still being written: the starter stops that run and hands the agent the new ask (E12d).
     const posts = out.filter(p => !p.ev && !p.retry_of), li = posts.findLastIndex(p => p.from === "person"), lastMe = posts[li];
-    V.edit = lastMe ? lastMe.id : null;
+    V.edit = lastMe && !pageEdit(lastMe) ? lastMe.id : null;   // a page edited by hand is changed with the page's own Edit (E43)
     const after = posts.slice(li + 1).filter(p => isAgent(p.from)), lastAg = after.at(-1);
     if (lastAg && !V.wait) { V.retry = lastAg.id; V.retryRoot = (V.info.get(after[0].id) || {}).root || after[0].id; }
   }
@@ -339,7 +338,7 @@ function syncOut(c, box) {
   if (grew || L.stuck) { box.scrollTop = box.scrollHeight; L.stuck = true; }
 }
 
-// E11: a reply still being written shows under the messages and grows each poll (1.5 s); it goes once the post is on the board.
+// E11: a reply still being written shows under the messages and grows each read (0.1-0.2 s while it is written, E11b/E41; else the 1.5 s poll); it goes once the post is on the board.
 function syncDrafts(c, box) {
   const th = c.thread; if (!th || !L.drafts) return;
   const posted = a => (S.threads.get(th)?.posts || []).some(p => p.from === a.name && p.t > now() - 10 * MIN && String(p.text || "").includes(a.draft.text.trim().slice(0, 60)));
@@ -357,12 +356,18 @@ function syncDrafts(c, box) {
  *  so the reply's first words show as they are written rather than at the next 1.5 s poll. */
 function waitingReply(th) {
   const ps = S.threads.get(th)?.posts || [], last = ps[ps.length - 1], out = outFor(th).filter(x => x.state !== "failed").pop();
+  if (last && pageEdit(last)) return false;   // a page edited by hand asks nobody (E43)
   const t = Math.max(out ? out.t : 0, last && last.from === "person" ? last.t : 0);
   return t > now() - MIN && !(last && last.from !== "person" && last.t >= t);
 }
+/** E41: a reply is being written in this chat right now (the last fast read had one, or the 1.5 s poll saw one): keep reading it
+ *  fast to its last word, so a long reply, or a second post in the same run, streams instead of growing in 1.5 s steps. */
+function draftLive(th) {
+  return !!(L.fast && L.fast.th === th && L.fast.ds.length) || (S.live ? S.live.agents : []).some(a => a.alive !== false && a.draft && a.draft.thread === th);
+}
 function fastDrafts(th) {
   if (!th || !can("read") || L.fastTh === th) return;   // its loop runs (L.fastTh is cleared only by the loop that owns it)
-  if (!waitingReply(th)) { if (L.fast && L.fast.th === th) L.fast = null; return; }
+  if (!waitingReply(th) && !draftLive(th)) { if (L.fast && L.fast.th === th) L.fast = null; return; }
   clearTimeout(L.fastTimer); L.fastTh = th;
   const tick = async () => {
     L.fastTimer = null;
@@ -372,6 +377,7 @@ function fastDrafts(th) {
     try { const ds = await jget("/api/drafts?thread=" + encodeURIComponent(th)); if (L.fastTh === th && L.th === th) { L.fast = { th, ds: Array.isArray(ds) ? ds : [] }; syncDrafts({ thread: th }, L.box); } } catch (e) { /* the 1.5 s poll still carries drafts */ }
     if (L.fastTh !== th) return;   // another thread opened: its own loop runs
     if (waitingReply(th)) L.fastTimer = setTimeout(tick, 100);   // E11d: 0.1 s, not 0.3: only while a chat waits for its first reply (a few seconds), and the read is cached per out file
+    else if (draftLive(th)) L.fastTimer = setTimeout(tick, 200);   // E41: 0.2 s while a draft grows (the model's text arrives every 0.2 s or less; a read costs under 1 ms)
     else { L.fast = null; L.fastTh = null; }
   };
   L.fastTimer = setTimeout(tick, 0);
@@ -947,9 +953,9 @@ const tmetaSig = () => Object.entries(S.threadMeta || {}).map(([k, v]) => k + (v
 function showChips(ctx) {
   const mask = showMask();
   const group = h("div", { class: "tm-show", role: "group", "aria-label": "Show", title: showSays(mask) },
-    // E10 (ae6a2, 1110232186c2): in the app look Agent comms is off by default and means nothing to a newcomer, so its chip is left out until it has been on once in this browser
-    // (the title menu's Show N hidden turns it on). From then on it stays, on or off: drawn only while on, it vanished under the click that turned it off (the person, 11151632fb95)
-    SHOW_PARTS.filter(([b]) => !(app() && b === SHOW.comms && !(mask & b) && C.commsNew)).map(([b, l, t]) => h("button", { type: "button", class: "tm-chip", "data-show": KIND_NAME[b], "aria-pressed": String(!!(mask & b)), title: (mask & b ? "Hide " : "Show ") + t,
+    // All three, always. E10 (1110232186c2) once left Agent comms out until it had been on in this browser; the person then found it missing on every new address
+    // (a fresh Hive, 1116002301a8), and simple mode offers no Show N hidden to bring it back, so the chip is drawn from the start (it stays off by default).
+    SHOW_PARTS.map(([b, l, t]) => h("button", { type: "button", class: "tm-chip", "data-show": KIND_NAME[b], "aria-pressed": String(!!(mask & b)), title: (mask & b ? "Hide " : "Show ") + t,
       onclick: () => setShow(showMask() ^ b, ctx) }, h("i", { "aria-hidden": "true" }), l)),
     mask ? null : h("p", { class: "meta tm-show-says" }, showSays(mask)));
   return app() ? h("div", { class: "tm-showwrap" }, group) : group;
@@ -1039,11 +1045,27 @@ function keepScroll(at) {
 const HOME_NOW = 3, HOME_NEEDS = 2, HOME_LATELY = 2, HOME_THREADS = 4, MISC_THREADS = 6, HOME_AGENTS = 4;   // two asks on a card, the rest behind All (R6 review)
 // The card and the page, v3 (designs/ui-redesign-v3/V3-HANDOFF.md 3a, 3b): what needs the person first, then a time-first timeline, compact rows.
 /** A summary line as {text, at (ms)}: a line is a string (its time is the summary's) or {text, at} once the summary keeps a time per line. */
-export const sumLine = (x, sum) => typeof x === "string" ? { text: x, at: ((sum && sum.at) || 0) * 1e3 || null } : { text: (x && x.text) || "", at: ((x && x.at) || (sum && sum.at) || 0) * 1e3 || null };
-export const sumLines = (sum, k) => ((sum && sum[k]) || []).map(x => sumLine(x, sum)).filter(l => l.text);
+export const sumLine = (x, sum, at) => typeof x === "string" ? { text: x, at: ((at || (sum && sum.at) || 0) * 1e3) || null } : { text: (x && x.text) || "", at: ((x && x.at) || at || (sum && sum.at) || 0) * 1e3 || null };
+/** The lines of part k ("now", "lately"), each with its own time (focus.py now_at: when the line was first written, not when the summary was
+ *  last rewritten) and its place i in the summary (the server's `hidden` indexes count every line, so the empty ones are dropped after). */
+export const sumLines = (sum, k) => ((sum && sum[k]) || []).map((x, i) => ({ ...sumLine(x, sum, sum[k + "_at"] && sum[k + "_at"][i]), i })).filter(l => l.text);
+// "Box logins: all four are dead" opens with what it is about. That topic in bold lets ten lines be scanned for the one that matters
+// (the person, 11160014bf8b: too much to read without the context). Only a short label counts: up to six words before the colon, a bracket
+// of refs aside; a date ("11-16:") or a sentence that happens to hold a colon stays plain.
+const TOPIC = /^([A-Z0-9][^:\n]{1,70}?)(\s*\([^()\n]{0,60}\))?:\s+(?=\S)/;
+/** {key, rest} when a line opens with a short topic and a colon ("Topic: ..." or "Topic (#thread): ..."), else null. */
+export function topicOf(text) {
+  const t = String(text || ""), m = TOPIC.exec(t); if (!m) return null;
+  const key = m[1].trim();
+  if (!/[A-Za-z]/.test(key) || key.length > 48 || key.split(/\s+/).length > 6 || /[.!?;]\s|https?$|[@#`]/.test(key)) return null;
+  return { key, rest: t.slice(key.length) };
+}
 /** A line in running text: agents as the app's agent pill (V3 rule: no agent code outside a pill), a #thread as a quiet link (no square), so a sentence doesn't fill with chips. */
-export function lineText(text, { pill = true } = {}) {   // pill: false draws an agent code as bold mono in the sentence (the Nov 8 handoff §1.5)
-  if (simpleOn()) return plainPills(text);
+export function lineText(text, { pill = true, topic = true } = {}) {   // pill: false draws an agent code as bold mono in the sentence (the Nov 8 handoff §1.5)
+  if (topic) text = scrub(text);   // ids out first: a step id ("IM-3: …") or a post id is not what the line is about
+  const tp = topic ? topicOf(text) : null;
+  if (tp) return [h("b", { class: "ln-k" }, tp.key), ...lineText(tp.rest, { pill, topic: false })];
+  if (simpleOn()) return [].concat(plainPills(text));
   return pills(text).map(x => x && x.nodeType === 1 && x.dataset.kind === "thread" ? h("a", { class: "th", href: x.getAttribute("href"), title: x.title }, x.textContent)
     : x && x.nodeType === 1 && x.dataset.kind === "agent" ? (pill && x.classList.add("pill"), x) : x);
 }
@@ -1112,7 +1134,33 @@ function cardRow(r) {
 }
 // A card line names a file, not its path: "`projects/x/build/cut.mp4`" reads "cut.mp4" (home_plain: the cards show no file path). The title keeps the whole line.
 const fileNames = t => t.replace(/`?(?:~\/|\/home\/[^\s`/]+\/)?(?:projects|kb|modules|core)\/(?:[^\s`]*\/)?([^\s`/]+)`?/g, "$1");
-const cardEv = kind => l => h("li", { class: "fc-ev", "data-kind": kind, "data-key": kind + ":" + l.text.slice(0, 80) }, when(l.at, "t"), h("span", { class: "fc-ev-x", title: l.text }, lineText(labelCodes(fileNames(l.text)), { pill: false })));
+/** The mark on what is new to the person since they last looked (core/foci.js cardSince, pageSince): read out as "New:", drawn as a bar by the row's data-new. */
+export const newMark = () => h("span", { class: "vh" }, "New: ");
+const cardEv = (kind, since) => l => { const nw = newSince(l.at, since);
+  return h("li", { class: "fc-ev", "data-kind": kind, "data-new": nw ? "" : null, "data-key": kind + ":" + l.text.slice(0, 80) }, when(l.at, "t"), h("span", { class: "fc-ev-x", title: l.text }, nw ? newMark() : null, lineText(labelCodes(fileNames(l.text)), { pill: false }))); };
+// With an In short the card leads with it and gives the lines less room: two of Now and one of Lately, the ones new to the person first in line for
+// the room (their order kept). The page has every line.
+const LEAD_NOW = 2, LEAD_LATELY = 1, LEAD_OLD = 36 * 3600e3;
+/** n lines for a card: in their own order, but when not all fit, the ones new to the person take the room first. */
+function pickLines(lines, n, since) {
+  if (lines.length <= n) return lines;
+  const fresh = lines.filter(l => newSince(l.at, since)).slice(0, n), keep = new Set(fresh);
+  for (const l of lines) { if (keep.size >= n) break; keep.add(l); }
+  return lines.filter(l => keep.has(l));
+}
+/** An In short's state as the card's and the page's word. Two things keep it honest (review C1, C2): a word said more than LEAD_OLD ago is drawn
+ *  muted with its age beside it, since "on track" from two days back is a memory, not a reading; and while the change is new to the person
+ *  (`since`: their last look), the state it had before is said after it ("was on track"). moving: agents are on the focus now. */
+export function leadWord(lead, since, moving) {
+  const old = !!lead.at && Date.now() - lead.at > LEAD_OLD, turned = !!lead.was && newSince(lead.turned, since);
+  const title = (old ? `In short, said ${ago(lead.at)} and not since: ${lead.state}` : `In short: ${lead.state}`) + (turned ? `, was ${lead.was}` : "") + (moving ? ", and agents are on it now" : "");
+  return [statusWord(old ? "quiet" : lead.tone, lead.state, title, old ? "fc-st fc-st-old" : "fc-st"),
+    turned ? h("span", { class: "fc-was", "data-key": "fc-was" }, "was " + lead.was) : null,
+    old ? h("span", { class: "fc-short-t", "data-key": "fc-said" }, "said ", when(lead.at, "t")) : null];
+}
+/** How many things on a focus's card are new to the person (core/foci.js cardSince): its In short, and every Now and Lately line, drawn on the card or not. */
+export const cardNews = f => { const since = f && !f.misc ? cardSince(f) : null, lead = since ? leadOf(f) : null;
+  return since ? (lead && newSince(lead.since, since) ? 1 : 0) + [...sumLines(f.summary, "now"), ...sumLines(f.summary, "lately")].filter(l => newSince(l.at, since)).length : 0; };
 const cardRows = (rows, n) => rows.length ? h("div", { class: "fc-cv" }, h("ul", { class: "fc-rows", "aria-label": "Conversations" }, rows.slice(0, n).map(cardRow))) : null;
 /** The card's … menu: move it earlier or later (the keyboard's drag), and a new conversation. */
 function cardMenu(f, id, ctx) {
@@ -1136,25 +1184,38 @@ function focusCard(f, ctx) {
   const st = stateOf(id), sum = f.summary, ag = agentsOf(id), asked = askedOf(id), nd = needsOf(id), n = Math.max(nd.length, asked.length);
   const dnd = focusDnd(id, ctx), now = sumLines(sum, "now"), lately = sumLines(sum, "lately");
   const pillsOf = ag.now.length ? ag.now : [];
-  return h("article", { class: "fc", "data-key": "fc:" + id, "data-state": st.key, "data-needs": asked.length ? "" : null, ...dnd.drop },
+  // The In short (core/foci.js leadOf): its state is the card's word, and the live one ("moving", "needs you") is said by the agent pills beside it
+  // and the Needs you block under it. What is new to the person since they last looked at the home or this focus's page is marked.
+  const lead = leadOf(f), since = cardSince(f), leadNew = !!lead && newSince(lead.since, since), hid = hiddenAsks(f);
+  const nNow = lead ? LEAD_NOW : HOME_NOW, nLately = lead ? (now.length ? LEAD_LATELY : HOME_LATELY) : HOME_LATELY;
+  const more = Math.max(0, now.length - nNow) + Math.max(0, lately.length - nLately);   // with or without an In short: a card never drops lines without saying so
+  const shown = [...pickLines(now, nNow, since), ...pickLines(lately, nLately, since)], moreNew = more ? [...now, ...lately].filter(l => newSince(l.at, since) && !shown.includes(l)).length : 0;
+  const word = lead && lead.state ? leadWord(lead, since, st.key === "moving" || st.moving) : statusWord(st.tone, st.word);
+  return h("article", { class: "fc", "data-key": "fc:" + id, "data-state": st.key, "data-lead": lead ? lead.key || "" : null, "data-needs": asked.length ? "" : null, ...dnd.drop },
     h("header", { class: "fc-hd", ...dnd.grab },
       h("a", { class: "fc-name", href: page, title: focusName(f) + (f.aim ? ": " + f.aim : ""), draggable: dnd.grab.draggable ? "false" : null }, focusName(f)),
       // + and … sit where the time was and show on hover or focus (the Nov 8 handoff §1.4); the time ends the lead line.
       h("span", { class: "fc-tools" }, can("post") ? button("New conversation in " + focusName(f), () => newIn(id), { kind: "icon", size: "s", icon: "plus", cls: "fc-new" }) : null,
         can("post") ? cardMenu(f, id, ctx) : null),
-      h("div", { class: "fc-lead" }, statusWord(st.tone, st.word), simpleOn() || !can("tier") ? null : focusTierChip(id),
+      h("div", { class: "fc-lead" }, word, simpleOn() || !can("tier") ? null : focusTierChip(id),
         pillsOf.length ? h("span", { class: "fc-ag" }, pillsOf.slice(0, HOME_AGENTS).map(a => simpleOn() ? null : agentRef(a, { pill: true })),
           !simpleOn() && pillsOf.length > HOME_AGENTS ? h("span", { class: "pill pill-more", title: pillsOf.slice(HOME_AGENTS).join(", ") }, "+" + (pillsOf.length - HOME_AGENTS)) : null) : null,
         when(up, "t", "updated"))),
+    lead ? h("p", { class: "fc-short", "data-new": leadNew ? "" : null, "data-key": "fc-short", title: lead.body }, leadNew ? newMark() : null, lineText(labelCodes(fileNames(lead.body)), { pill: false, topic: false })) : null,
     // Needs you: the summary's own asks (the person's rule), at most two; the count and All N from the one list.
     asked.length ? h("section", { class: "fc-ask", "aria-label": "Needs you" },
       h("h3", { class: "fc-ask-h" }, h("span", { class: "st", "data-tone": "info", "aria-hidden": "true" }), `Needs you · ${n}`, n > HOME_NEEDS ? h("a", { href: page }, `All ${n}`) : null),
       h("ul", null, asked.slice(0, HOME_NEEDS).map((t, i) => askItem(f, i, t)))) : null,
     !asked.length && nd.length ? h("p", { class: "fc-ask fc-ask-n" }, h("span", { class: "st", "data-tone": "info", "aria-hidden": "true" }), h("a", { href: page }, `${nd.length} wait${nd.length === 1 ? "s" : ""} on you in its conversations`)) : null,
+    // A Now line that reads as the person's to do though no ask is listed (focus.py `hidden`): the card points at it, the page lists it under Needs you.
+    // Beside listed asks too ("2 more…"), so the card never counts fewer things than the page lists under Needs you (review C6).
+    hid.length ? h("p", { class: "fc-ask fc-ask-n fc-ask-h2", "data-key": "fc-hid" }, h("span", { class: "st", "data-tone": "info", "aria-hidden": "true" }),
+      h("a", { href: page }, asked.length || nd.length ? `${hid.length} more line${hid.length === 1 ? "" : "s"} here may be yours` : hid.length === 1 ? "1 line here may be yours to act on" : `${hid.length} lines here may be yours to act on`)) : null,
     now.length || lately.length ? h("div", { class: "fc-tl" },
-      now.length ? h("ol", { "aria-label": "Now" }, now.slice(0, HOME_NOW).map(cardEv("now"))) : null,
-      lately.length ? h("ol", { class: "fc-lately", "aria-label": "Lately" }, lately.slice(0, HOME_LATELY).map(cardEv("lately"))) : null)
-      : h("p", { class: "fc-none" }, sum ? "Nothing listed as moving." : "No summary yet. The agents on it write one as they work."),
+      now.length ? h("ol", { "aria-label": "Now" }, pickLines(now, nNow, since).map(cardEv("now", since))) : null,
+      lately.length ? h("ol", { class: "fc-lately", "aria-label": "Lately" }, pickLines(lately, nLately, since).map(cardEv("lately", since))) : null,
+      more ? h("a", { class: "fc-more-l", href: page, "data-key": "fc-more-l" }, `${more} more line${more === 1 ? "" : "s"}`, moreNew ? `, ${moreNew} new` : null) : null)
+      : lead ? null : h("p", { class: "fc-none" }, sum ? "Nothing listed as moving." : "No summary yet. The agents on it write one as they work."),
     cardRows(rows, HOME_THREADS));
 }
 /** Needs you on the home (the hand-off's Home, R7b S5): each thing that waits, from the same list as the count above it and the Chat badge,
@@ -1244,6 +1305,62 @@ const waitsHeld = px => h("div", { class: "cm-hwait", "data-key": "waits-held", 
   h("div", { class: "cm-hwait-b" }, [0, 1, 2].map(i => h("div", { class: "cm-hwait-r", "data-key": "r" + i }, skBar(WAIT_W[i], 12), skBar("34%")))));
 const fociHeld = (room, barPx) => [workBarHeld(barPx), h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h", "data-wait": "" }, skBar("84px", 11)),
   h("div", { class: "cm-foci", "data-key": "foci", style: room }, WAIT_W.map((w, i) => h("div", { class: "skel-card cm-fwait", "data-key": "w" + i }, skBar("40%", 12), skBar(w, 11), skBar("84%"), skBar("62%"))))];
+/** Beside "Focuses": how many of them say something new since the person last looked at the home, with the bar that marks the new lines on
+ *  their cards (so the bar is explained where it is first met). Nothing before their second visit: there is no look to count from. */
+function fociNews(fs) {
+  const hs = S.foci && S.foci.home_seen; if (!hs || !hs.since) return null;
+  const n = fs.filter(f => cardNews(f)).length;
+  return h("span", { class: "cm-foci-new", "data-key": "foci-new", "data-new": n ? "" : null }, n ? h("i", { "aria-hidden": "true" }) : null,
+    n ? `${n} with news since you last looked` : "Nothing new since you last looked", h("span", { class: "sec-n" }, " \u00b7 ", when(hs.since * 1e3, "t")));
+}
+// The home's Focuses as a list (the person, 11160014bf8b: "I really can't get a good sense of what's going on"; nineteen cards were five screens
+// of equal weight). One row a focus, under what its In short says, the ones that wait on the person first: the In short in full, and beside the
+// name what is new to them since they looked, what waits on them and how many agents are on it. The cards are one click away and the choice is
+// kept in this browser; with fewer than LIST_FROM focuses the cards fit a screen and stay the default. Suite: drive_home_list.
+const FOCI_VIEW_KEY = "hive.home.foci", FOCI_DRAWN_KEY = "hive.home.foci.drawn", LIST_FROM = 7;
+const viewRead = k => { try { const v = localStorage.getItem(k); return v === "list" || v === "cards" ? v : null; } catch (e) { return null; } };
+const FV = { pick: viewRead(FOCI_VIEW_KEY), drawn: viewRead(FOCI_DRAWN_KEY) };
+const fociView = () => FV.pick || (foci().length >= LIST_FROM ? "list" : "cards");
+// The groups in the order the person reads them: what is theirs, what is in trouble, what is fine, what is set down. "" holds a focus with no In
+// short and one whose In short opens with no state.
+const FL_GROUPS = [["needs you", "Needs you", "info"], ["blocked", "Blocked", "bad"], ["at risk", "At risk", "warn"], ["on track", "On track", "good"], ["waiting", "Waiting on others", "quiet"], ["paused", "Paused", "ended"], ["done", "Done", "ended"], ["", "No state yet", "quiet"]];
+function focusRow(f) {
+  const id = f.id || null, page = href("focus", id || "misc"), rows = activeThreads(id).filter(r => !archived(r.th)), up = updatedAt(f, rows);
+  if (f.misc) return h("li", { class: "fl-r", "data-key": "fl:misc", "data-misc": "" },
+    h("div", { class: "fl-top" }, h("a", { class: "fl-name", href: page }, "Other"), h("div", { class: "fl-m" }, when(up, "t"))),
+    h("p", { class: "fl-short fl-none" }, `${plural(rows.length, "conversation")} not filed under a focus`));
+  const lead = leadOf(f), since = cardSince(f), news = cardNews(f), working = agentsOf(id).now.length, asked = askedOf(id), nd = needsOf(id), hid = hiddenAsks(f);
+  const listed = Math.max(nd.length, asked.length), mine = listed + hid.length, now = sumLines(f.summary, "now"), name = focusName(f);
+  // Its state is the group's heading; the row says only what the heading can't: that the word is old, or what it was before it turned.
+  const old = !!lead && !!lead.state && !!lead.at && Date.now() - lead.at > LEAD_OLD, turned = !!lead && !!lead.was && newSince(lead.turned, since);
+  const body = lead ? h("p", { class: "fl-short", title: lead.body }, lineText(labelCodes(fileNames(lead.body)), { pill: false, topic: false }))
+    : now.length ? h("p", { class: "fl-short fl-none", title: now[0].text }, lineText(labelCodes(fileNames(now[0].text)), { pill: false, topic: false }))
+    : h("p", { class: "fl-short fl-none" }, f.summary ? "Nothing listed as moving." : "No summary yet. The agents on it write one as they work.");
+  return h("li", { class: "fl-r", "data-key": "fl:" + id, "data-new": news ? "" : null, "data-lead": lead ? lead.key || "" : null },
+    h("div", { class: "fl-top" },
+      h("a", { class: "fl-name", href: page, title: name + (f.aim ? ": " + f.aim : "") }, name),
+      h("div", { class: "fl-m" },
+        turned ? h("span", { class: "fl-was", "data-key": "fl-was" }, "was " + lead.was) : null,
+        old ? h("span", { class: "fl-was", "data-key": "fl-said", title: `In short, said ${ago(lead.at)} and not since` }, "said ", when(lead.at, "t")) : null,
+        news ? h("a", { class: "fl-new", "data-key": "fl-new", href: page, title: `${plural(news, "thing")} here ${news === 1 ? "is" : "are"} new since you last looked` }, `${news} new`) : null,
+        mine ? h("a", { class: "fl-you", "data-key": "fl-you", href: page, title: listed && hid.length ? `${listed} asked of you, and ${plural(hid.length, "more line")} that may be yours` : listed ? `${plural(listed, "thing")} asked of you` : `${plural(hid.length, "line")} here may be yours to act on` },
+          h("span", { class: "st", "data-tone": "info", "aria-hidden": "true" }), listed ? `${mine} for you` : `${mine} may be yours`) : null,
+        working ? h("span", { class: "fl-ag", "data-key": "fl-ag", title: `${plural(working, "agent")} working on it now` }, h("span", { class: "st", "data-tone": "good", "data-live": "", "aria-hidden": "true" }), `${working} working`) : null,
+        when(up, "t", "updated"))),
+    body);
+}
+function fociList(fs) {
+  const of = f => (f.misc ? "misc" : (leadOf(f) || {}).key || "");
+  const group = ([key, head, tone]) => { const g = fs.filter(f => of(f) === key); if (!g.length) return null;
+    return h("section", { class: "fl-g", "data-key": "flg:" + key, "data-state": key || "none" },
+      h("h3", { class: "fl-gh" }, h("span", { class: "sw", "data-tone": tone }, h("span", { class: "st", "data-tone": tone, "aria-hidden": "true" }), h("span", null, head)), h("span", { class: "fl-gn" }, h("span", { class: "vh" }, ", "), String(g.length), h("span", { class: "vh" }, g.length === 1 ? " focus" : " focuses"))),
+      h("ul", { class: "fl-rows" }, g.map(focusRow))); };
+  const misc = fs.filter(f => f.misc);
+  return [FL_GROUPS.map(group), misc.length ? h("section", { class: "fl-g", "data-key": "flg:misc", "data-state": "misc", "aria-label": "Not in a focus" }, h("ul", { class: "fl-rows" }, misc.map(focusRow))) : null];
+}
+/** List or Cards, beside the Focuses heading: the person's pick, kept in this browser. */
+const fociPick = (view, ctx) => seg([["list", "List", "One row a focus, under what its In short says"], ["cards", "Cards", "A card a focus, with its lines and conversations"]], view,
+  v => { FV.pick = v; store(FOCI_VIEW_KEY, v); ctx.update(); }, { label: "Show the focuses as" });
 function fociGrid(ctx, settled) {
   const px = heldRoom("home-foci", ".cm-foci", { settled }), room = px ? `min-height:${px}px` : null;   // the cards gain lines as the waits arrive
   // A failed first read leaves an empty stand-in (core/foci.js): say so, not "no focus" (the person, 110901516bcd: cards gone after a dash restart).
@@ -1252,7 +1369,7 @@ function fociGrid(ctx, settled) {
   if (S.foci === undefined || S.foci.failed && fociFailed()) return h("p", { class: "meta cm-foci-msg" }, "Couldn't read the focuses. It keeps trying.");
   const fs = fociOrder();
   if (!fs.length) return h("p", { class: "meta cm-foci-msg" }, "No focus yet. Agents make one when work has a goal; every conversation is in the list on the left.");
-  return [workBar(S.foci.activity), h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h" }, h("h2", { class: "sec-t" }, "Focuses"), h("span", { class: "sec-n" }, String(fs.length)), h("a", { href: href("flow") }, "Flow")),
+  return [workBar(S.foci.activity), h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h" }, h("h2", { class: "sec-t" }, "Focuses"), h("span", { class: "sec-n" }, String(fs.length)), fociNews(fs), h("a", { href: href("flow") }, "Flow")),
     h("div", { class: "cm-foci", "data-key": "foci", style: room }, fs.map(f => focusCard(f, ctx)))];
 }
 /** #comms/~archived: every archived conversation, newest first, each with Bring back (the person, 11081454b6bd). Archived by hand or by age (ui/threadmeta.js). */
@@ -1333,8 +1450,9 @@ export default {
   badge: () => { if (!app() || !S.live) return null; if (!simpleOn()) { loadFoci(); loadNeedsYou(); } if (!needsKnown()) return null; const n = needsN(); return n ? String(n) : null; },
   poll: { every: 3000, run: async ctx => { if (await pollDelivered()) ctx.update(); } },
   escape: () => { if (closeQuick()) return; if (C.menu || C.find) { C.menu = null; if (!C.q.trim()) C.find = false; L.ctx && L.ctx.update(); return; } if (!cancelReply() && asideOpen()) closeAside(); },
-  enter: () => { C.arrived = true; },
-  leave: () => { clearTimeout(qTimer); C.menu = null; C.find = false; L.newTh = undefined; opened = ""; },
+  // The home is where the focus cards are: arriving on it is the person's look at them (core/foci.js markSeen; never from a driven browser).
+  enter: ctx => { C.arrived = true; const c = conversation(ctx && ctx.arg); if (app() && c.home && !c.list && !c.archived) lookAt(null, true); },
+  leave: () => { clearTimeout(qTimer); C.menu = null; C.find = false; L.newTh = undefined; opened = ""; seenLeave(); },
   render(ctx) {
     if (!S.live) return h("div", { class: "page" }, S.failed ? empty("Couldn't read the conversations. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     const cv = conversation(ctx.arg);
@@ -1369,7 +1487,7 @@ export function chatPlace(place, view) {
 }
 // Functions, not consts: focus.js reads them while this module, which imports it, is still loading.
 export function chatEscape() { if (closeQuick()) return; if (C.menu) { C.menu = null; L.ctx && L.ctx.update(); } }
-export function chatLeave() { clearTimeout(qTimer); C.menu = null; C.find = false; L.newTh = undefined; }
+export function chatLeave() { clearTimeout(qTimer); C.menu = null; C.find = false; L.newTh = undefined; seenLeave(); }
 
 /** The layout: the rail, and in the other pane the home, a conversation, or what pane brings (a focus). */
 function frame(ctx, c, pane) {
@@ -1395,7 +1513,7 @@ function frame(ctx, c, pane) {
         post && c.thread ? composer({ thread: c.thread, update: ctx.update, top: app() ? strip(c.thread) : null }) : null,
         post && c.all ? h("p", { class: "cm-hint meta", "data-key": "hint" }, "To start something new, use New conversation.") : null]);
     return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home && !c.list ? "" : null, "data-list": c.list ? "" : null, "data-side": sideHid && c.arg ? "hidden" : null, style: `--cm-w:${sideW}px` },
-      h("nav", { class: "cm-side", "aria-label": app() ? "Conversations" : "Threads" }, grip(),
+      h("nav", { class: "cm-side", "aria-label": app() ? "Conversations" : "Threads" },
         h("div", { class: "cm-filters" },
           // R14: the phone's way to the rail. Home has one row that opens it as a page; that page has a way back (css/phone.css shows these only there).
           app() && c.home && !c.list ? h("a", { class: "cm-listbtn only-phone", href: href("comms", "~list"), "data-key": "listbtn" }, icon("search"), h("span", null, "Conversations"), h("span", { class: "meta" }, "search, filter, by focus"), icon("chevron-right")) : null,
@@ -1410,8 +1528,9 @@ function frame(ctx, c, pane) {
           app() && c.list && !simpleOn() ? viewBar(ctx) : null,
           simpleOn() ? null : showMenu(ctx),   // always open (the person, 110819287bb8: "always show the filters"), no button to open it
           app() ? brought() : null,
-          C.err ? h("p", { class: "fmsg", "data-tone": "bad", role: "alert" }, C.err) : null),
-        h("div", { class: "cm-tl", "data-own": "", "data-sig": "own", tabindex: "-1" })),
+          C.err ? h("p", { class: "fmsg", "data-tone": "bad", role: "alert" }, C.err, " ", button("Close", () => { C.err = ""; ctx.update(); }, { size: "s", kind: "quiet" })) : null),
+        h("div", { class: "cm-tl", "data-own": "", "data-sig": "own", tabindex: "-1" }),
+        grip()),   // last, so Tab reaches it after the list it sits on the right edge of (WCAG 2.4.3)
       h("section", { class: "cm-convo", "aria-label": "Conversation", ...(post && c.thread ? dropZone(c.thread) : {}) },
         convo,
         !c.thread ? quickPanel(ctx.update) : null,

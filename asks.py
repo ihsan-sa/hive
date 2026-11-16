@@ -452,6 +452,7 @@ def person_posts(posts, since=""):
     out = []
     for p in posts:
         if str(p.get("from", "")).lower() != "person" or p.get("at", "") <= since: continue
+        if "page:edit" in (p.get("tags") or []): continue   # a page the person edited by hand in the web app (everyday E43): nothing asked
         text = FROM.sub("", str(p.get("text", ""))).strip()
         if not text or ACK.match(text): continue
         out.append({**p, "clean": text})

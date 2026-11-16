@@ -150,13 +150,29 @@ def foci():
 
 
 def timers():
-    """[{unit, service, next}] for every user timer (next: epoch or None when stopped)."""
+    """[{unit, service, next, state}] for every user timer. next: epoch, or None when it has no next fire. state is the
+    timer's own: "stopped" (inactive: stopped by hand), "running" (its run is going now; the next fire is set when it ends),
+    "done" (a one-off that has fired) or "waiting". A missing next alone doesn't mean stopped (a777c, r47f-judges)."""
     try:
         out = subprocess.run(["systemctl", "--user", "list-timers", "--all", "-o", "json"], capture_output=True, text=True, timeout=30).stdout
-        return [{"unit": t["unit"], "service": t.get("activates") or t["unit"].replace(".timer", ".service"),
-                 "next": (t["next"] / 1e6) if t.get("next") else None} for t in json.loads(out or "[]")]
+        ts = [{"unit": t["unit"], "service": t.get("activates") or t["unit"].replace(".timer", ".service"),
+               "next": (t["next"] / 1e6) if t.get("next") else None} for t in json.loads(out or "[]")]
     except Exception:
         return []
+    st = {}
+    try:
+        units = [t["unit"] for t in ts]
+        out = subprocess.run(["systemctl", "--user", "show", "-p", "Id,ActiveState,SubState", "--", *units], capture_output=True, text=True, timeout=30).stdout if units else ""
+        for blk in out.strip().split("\n\n"):
+            kv = dict(l.split("=", 1) for l in blk.splitlines() if "=" in l)
+            if kv.get("Id"): st[kv["Id"]] = kv
+    except Exception:
+        pass
+    for t in ts:
+        kv = st.get(t["unit"], {})
+        t["state"] = ("stopped" if kv.get("ActiveState") in ("inactive", "failed") else "running" if kv.get("SubState") == "running" and not t["next"]
+                      else "done" if kv.get("SubState") == "elapsed" else "waiting" if kv else "unknown")
+    return ts
 
 
 def when_arg(s, now=None):
@@ -350,8 +366,9 @@ def cmd_jobs(a, d):
             tt = tier(d, tid)
             st = f"tier {tid} {tt['name'] if tt else '?'}: {state_text(d, tt) if tt else 'unknown tier, runs as default'}"
             if not gated: st += " (NOT GATED: run `hive tier install`)"
-        nxt = when(t["next"]) if t["next"] else "stopped by hand"
-        rows.append({"job": job, "tier": tid, "state": st, "next": nxt, "gated": gated})
+        ts_ = t.get("state")
+        nxt = when(t["next"]) if t["next"] else {"running": "running now", "done": "done (one-off)", "stopped": "stopped by hand"}.get(ts_, "no next fire")
+        rows.append({"job": job, "tier": tid, "state": st, "next": nxt, "timer": ts_, "gated": gated})
     if a.json: print(json.dumps(rows, indent=1)); return
     w = max((len(r["job"]) for r in rows), default=10)
     for r in rows: print(f"{r['job']:<{w}}  {r['next']:<17}  {r['state']}")

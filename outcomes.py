@@ -133,17 +133,38 @@ def switch_only(run, mine, log):
     ids = {p.get("id") for p in mine}
     return any(r.get("event") == "start" and r.get("name") == run["name"] and ids & set(r.get("woke") or [r.get("post")]) for r in log)
 
+NOTICE_MAX = 300   # a job-done notice is short: "heavy: `cmd` finished rc 0 after 76m13s.", "PR 357 CI finished: test=success, ..."
+
+def job_notice(p, name):
+    """The agent's own short post addressed only to itself, with no model or effort: a job it started telling it the job is done (`heavy --notify`,
+    a CI or sim watcher). Graded on its own, the run it wakes asked nothing (2 of the 7 long-job misses never closed in R40's window, 11-14 to 11-15)."""
+    to = p.get("to") if isinstance(p.get("to"), list) else str(p.get("to") or "").replace(",", " ").split()
+    return bool(p and to) and p.get("from") == name and not (p.get("model") or p.get("effort")) and all(str(x).lstrip("@") == name for x in to) \
+        and len(re.sub(r"@\w+", "", str(p.get("text") or "")).strip()) <= NOTICE_MAX
+
+def carried(post, name): return switch_post(post, name) or job_notice(post, name)
+
 def origin(run, post, log, by_id, hops=5):
     """For a run woken by its own switch post: the post that woke the run which made the switch, with the switch line under it. The grade is then against
-    what was asked, not against "Switching to sonnet: ...", which the model read as asking nothing (4 of 8 such runs were not_asked up to 2026-11-11)."""
-    first, said = post, []
-    while post and switch_post(post, run["name"]) and hops:
-        hops -= 1; said.append(str(post.get("text", "")))
-        prev = [r for r in runs(log) if r["name"] == run["name"] and r["key"] != run["key"] and r["started"] <= post.get("at", "")
-                <= (dt.datetime.fromisoformat(r["ended"]) + dt.timedelta(seconds=TAIL_S)).isoformat(timespec="seconds")]
-        post = by_id.get(prev[-1]["post"]) if prev else None
-    if not said or not post or switch_post(post, run["name"]): return first   # not a switch, or the ask can't be found: graded on the waking post, as before
-    return {**post, "text": str(post.get("text", "")) + "".join(f"\n(the agent then switched model or effort and carried on in this run; its switch line: {clip(t, 300)})" for t in reversed(said))}
+    what was asked, not against "Switching to sonnet: ...", which the model read as asking nothing (4 of 8 such runs were not_asked up to 2026-11-11).
+    For a run woken by its own job notice (`job_notice`): back through the agent's earlier runs in that thread, past its own posts (more notices, its
+    "done, next rung" posts), to the last one woken by someone else: that post's ask is what the job was for (R40, hive-meta, 2026-11-16)."""
+    first, said, name, rs = post, [], run["name"], None
+    notice = bool(post) and job_notice(post, name)
+    if notice: hops = 40   # a CI loop chains many notices and step posts: a732a went 14 deep from one keeper round (11-15)
+    while post and (switch_post(post, name) or (notice and post.get("from") == name)) and hops:
+        sw = switch_post(post, name); hops -= 1; said.append((sw, str(post.get("text", ""))))
+        rs = rs if rs is not None else [r for r in runs(log) if r["name"] == name and r["key"] != run["key"]]
+        if sw:
+            prev = [r for r in rs if r["started"] <= post.get("at", "") <= (dt.datetime.fromisoformat(r["ended"]) + dt.timedelta(seconds=TAIL_S)).isoformat(timespec="seconds")]
+            post = by_id.get(prev[-1]["post"]) if prev else None
+        else:   # the run before this post in its thread: the one that started the job, or posted the step this one carries on
+            prev = [r for r in rs if r["started"] < post.get("at", "") and r["thread"] == post.get("thread")]
+            post = by_id.get(max(prev, key=lambda r: r["started"])["post"]) if prev else None
+    if not said or not post or carried(post, name) or (notice and post.get("from") == name): return first   # the ask can't be found: graded on the waking post, as before
+    lines = [f"\n(the agent then switched model or effort and carried on in this run; its switch line: {clip(t, 300)})" if sw else
+             f"\n(the agent carried this on over later runs; this run was woken by its own post, a job's done notice or its next step: {clip(t, 300)})" for sw, t in reversed(said)]
+    return {**post, "text": str(post.get("text", "")) + "".join(lines[-3:])}   # the latest few, the waking post last
 
 def limit_times(log):
     """session, and ("name", agent) -> times of the starter's `limited` events: a run stopped on a usage limit, to be resumed at the reset.
@@ -239,7 +260,7 @@ Grades:
   nothing    it posted, but no delivery and no handover: status only, questions back, or the wrong thing
   not_asked  the post asked this agent nothing concrete (a thread update, an acknowledgement, a hand-off to someone else)
 
-Judge only against what the post asked, not whether the work was good. A post that says "stop" or "thanks" and a short reply is not_asked; so is a chase ("???", "hello?", "status?", "done yet?", "did you do it", a note that a wait is due) answered with where things stand, and a post asking for work the person had put on hold, answered by pointing to that hold. Reply with JSON only:
+Judge only against what the post asked, not whether the work was good. A post that says "stop" or "thanks" and a short reply is not_asked; so is a chase ("???", "hello?", "status?", "done yet?", "did you do it", a note that a wait is due) answered with where things stand, and a post asking for work the person had put on hold, answered by pointing to that hold. A memguard post that killed the agent's job asks it to rerun the job or say why it needs no rerun: a reply with a concrete reason none is needed (the result is already in hand, the job was superseded or finished its purpose, a smaller check replaces it, done) is delivered; "it retries by itself" is delivered only if the run shows the retry is set up. Reply with JSON only:
 {"grades":[{"run":"<RUN key>","grade":"delivered|partial|nothing|not_asked","why":"<at most 20 words>"}]}
 
 One more job, on delivered and partial runs only. If a post by the agent holds a fact another agent could use months from now in other work, add to that run's grade:
@@ -330,8 +351,8 @@ def cmd_grade(a):
     root, lims = roots(log, by_id), limit_times(log)
     for r in todo:
         post, mine, after = posts_of(r, posts, by_id)
-        ask = origin(r, post, log, by_id) if post and switch_post(post, r["name"]) else post   # resumed after a switch: graded on the ask the switch carried over
-        r = {**r, **({"root": root[r["key"]]} if root.get(r["key"], r["key"]) != r["key"] else {}), **({"completion_wake": True} if completion_wake(r, by_id, mine, ticks) else {}), **({"self_wake": True} if post and self_wake(r, post) else {}), **({"round": True} if ask and ROUND.search(str(ask.get("text", ""))[:80]) else {})}   # marks for the spot-check and the step-up; the grade doesn't look at them
+        ask = origin(r, post, log, by_id) if post and carried(post, r["name"]) else post   # resumed after a switch or woken by its own job notice: graded on the ask carried over
+        r = {**r, **({"root": root[r["key"]]} if root.get(r["key"], r["key"]) != r["key"] else {}), **({"completion_wake": True} if completion_wake(r, by_id, mine, ticks) else {}), **({"self_wake": True} if post and self_wake(r, post) else {}), **({"round": True} if ask and ROUND.search(str((post if ask is not post and job_notice(post, r["name"]) else ask).get("text", ""))[:80]) else {})}   # marks for the spot-check and the step-up; the grade doesn't look at them
         sw = switch_only(r, mine, log)
         post = ask
         g = "not_asked" if sw else "not_run" if not_run(r, mine, lims) else mechanical(r, post, mine)
@@ -420,7 +441,9 @@ MISS_CAUSES = [
     ("handed-on", r"hand(ed|s)?\b.{0,60}\b(to|over)\b|delegat|builder|re-handed|brief"),
     ("promised", r"promised|said it will|only planned|deferred|not yet (built|installed)|no file delivered"),
     ("rung-not-passed", r"not ticked|stays blocked|not passable|not passed|not yet reached|blocked on|check (still )?(red|failed)|split off|couldn't finish"),
-    ("long-job", r"render|build (unfinished|not finished|configured)|still running|in progress|not (yet )?finished|queued|rerun|pending|in local bar|not merged|nothing merged"),
+    # R40e: pending / in progress / not finished / queued count only beside a job word ("session 2 still pending" is leftover work, not a job)
+    ("long-job", r"render|build (unfinished|not finished|configured)|still running|rerun|in local bar|not merged|nothing merged"
+                 r"|^(?=.*\b(jobs?|(?<!this )(?<!of )(?<!the )runs?|CI|builds?|harden|\w*sims?|bars?|bench|film|requeued)\b).*\b(pending|in progress|not (yet )?finished|queued)\b"),
 ]
 FOLLOW = ("handed-on", "promised", "long-job")
 FOLLOW_H = 6
@@ -431,22 +454,40 @@ def miss_cause(r):
         if re.search(rx, r.get("why") or "", re.I): return name
     return None
 
-def followups(rows, t0, t1, hours=FOLLOW_H, t=None):
+def posted_in(board):
+    """(agent, thread) -> times of that agent's posts there, for followups(): a cross-thread long-job close must show up in the miss's thread."""
+    out = {}
+    for p in board or ():
+        if p.get("from") and p.get("thread") and p.get("at"): out.setdefault((p["from"], p["thread"]), []).append(p["at"])
+    return out
+
+def closes(m, r, c, posted):
+    """Does delivered run r close miss m (cause c)? Same agent in the same thread; for a handed-on miss also the same agent anywhere or a
+    run it woke (the builder). For a long-job miss, the same agent in another thread only if that run also posted in the miss's thread
+    (R40c/R40d: a7d1b answering a new ask and a732a acknowledging a kill elsewhere were false closes; afcfa's rerun reported back in its thread)."""
+    if c == "handed-on" and r.get("from") == m.get("name"): return True
+    if r.get("name") != m.get("name"): return False
+    if r.get("thread") == m.get("thread") or c == "handed-on": return True
+    if c != "long-job": return False
+    s0, s1 = r.get("started") or "", r.get("ended") or r.get("at") or "9999"
+    def iso(x): return dt.datetime.fromisoformat(x.replace("Z", "+00:00"))
+    return any(iso(s0) <= iso(x) <= iso(s1) for x in posted.get((m.get("name"), m.get("thread")), ()))
+
+
+def followups(rows, t0, t1, hours=FOLLOW_H, t=None, board=None):
     """Of the handed-on, promised and long-job misses that started in [t0, t1) and whose `hours` have run out (or that closed sooner),
-    the share closed within `hours`: a later delivered run by the same agent in the same thread, or, for a handed-on miss, by the same
-    agent anywhere or by a run it woke. An upper bound (the later run may have answered another ask). Misses still inside their
-    `hours` are pending and left out, so the newest hours of a window don't read as never."""
+    the share closed within `hours` by a later delivered run (see closes(); a long-job close in another thread needs `board`).
+    An upper bound (the later run may have answered another ask). Misses still inside their `hours` are pending and left out,
+    so the newest hours of a window don't read as never."""
     t = t or now()
     def ts(x): return dt.datetime.fromisoformat(x.replace("Z", "+00:00"))
     done = sorted((r for r in rows if r.get("grade") == "delivered" and r.get("started")), key=lambda r: r["started"])
-    closed = judged = 0
+    posted = posted_in(board); closed = judged = 0
     for m in rows:
         c = miss_cause(m)
         if c not in FOLLOW or not (t0 <= (m.get("started") or "") < t1): continue
         e0 = ts(m.get("ended") or m["started"]); lim = e0 + dt.timedelta(hours=hours)
-        hit = any(e0 <= ts(r["started"]) <= lim and r is not m and
-                  ((r.get("name") == m.get("name") and (r.get("thread") == m.get("thread") or c == "handed-on")) or (c == "handed-on" and r.get("from") == m.get("name")))
-                  for r in done)
+        hit = any(e0 <= ts(r["started"]) <= lim and r is not m and closes(m, r, c, posted) for r in done)
         if hit: closed += 1; judged += 1
         elif t >= lim: judged += 1
     return {"followup_misses": judged, "followup_closed_pct": round(100.0 * closed / judged, 1) if judged else None}

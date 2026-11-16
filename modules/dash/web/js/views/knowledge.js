@@ -54,7 +54,7 @@ function search(ctx) {
   const q = K.q.trim();
   if (q.length < 2) { K.res = null; return; }
   K.timer = setTimeout(async () => {
-    try { const r = await jget("/api/kb/search?q=" + encodeURIComponent(q)); if (K.q.trim() === q) K.res = r; }
+    try { const r = await jget("/api/kb/search?q=" + encodeURIComponent(q)); if (K.q.trim() === q) K.res = { names: [], hits: [], ...r }; }   // a reply without one of the lists still draws (no crash on the way back)
     catch (e) { K.res = { q, names: [], hits: [], failed: e.message }; }
     ctx.update();
   }, 250);
