@@ -12,6 +12,10 @@ POST = re.compile(r"\b(hive|hive)\s+post\b")
 WEB = re.compile(r"\b(curl|wget)\b[^|;&]*?https?://(?!(localhost|127\.[\d.]+|\[::1\]|0\.0\.0\.0)(?![\w.-]))", re.S)
 
 
+# E47: a counted answer built on web reads must quote a page that states the count, or finish the tally with code.
+HEDGE = re.compile(r"\b(on my count|by my count|my (own )?(count|tally)|my rough count|a tie on my)\b|\b(about|roughly|around|approximately|nearly)\s+\d[\d,]*\s+(\w+\s+)?(each|laureates?|prizes?|winners?|people|countries|times|medals?|wins?|titles?)\b", re.I)
+
+
 def web_reads(transcript):
     """Tool uses since the agent's last post that read the outside web."""
     reads = []
@@ -33,10 +37,21 @@ def main():
         if d.get("tool_name") != "Bash": return 0
         cmd = (d.get("tool_input") or {}).get("command") or ""
         if not POST.search(cmd) or "--done-quiet" in cmd: return 0
+        if HEDGE.search(cmd) and web_reads(d["transcript_path"]):
+            return once(cmd + "#count", "This post gives a count as \"about N\" or \"on my count\". For a counting question, quote a page that states each number "
+                        "(cite it with a footnote) or finish the tally with code, then give exact numbers, say what was counted and as of which year, and make the numbers agree with each other. "
+                        "If the number truly is approximate at the source, send the same post again and it goes through.")
         if "[^" in cmd: return 0  # a footnote; a bare or inline link alone draws no Sources list
         if not web_reads(d["transcript_path"]): return 0
     except Exception:
         return 0
+    return once(cmd, "This post has no sources, but you read web pages for it. Cite each fact from a page with a footnote: "
+                "`...fact.[^1]` in the text and `[^1]: [Page title](https://...)` at the end, one link per note, for the pages you "
+                "actually opened. If nothing in it came from the web, send the same post again and it goes through.")
+
+
+def once(cmd, note):
+    """Refuse this exact post once (exit 2 with the note); the same post again goes through."""
     seen = Path(os.environ.get("TMPDIR") or "/tmp") / "cc-cite-hook"
     key = hashlib.sha256(cmd.encode()).hexdigest()[:16]
     try:
@@ -45,9 +60,7 @@ def main():
         (seen / key).touch()
     except OSError:
         return 0
-    print("This post has no sources, but you read web pages for it. Cite each fact from a page with a footnote: "
-          "`...fact.[^1]` in the text and `[^1]: [Page title](https://...)` at the end, one link per note, for the pages you "
-          "actually opened. If nothing in it came from the web, send the same post again and it goes through.", file=sys.stderr)
+    print(note, file=sys.stderr)
     return 2
 
 
