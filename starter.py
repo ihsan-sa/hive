@@ -2505,6 +2505,7 @@ def main():
         for n, r in ([] if hold else list(st.get("resume", {}).items())):  # resume limit-stopped sessions first, same name and session
             if (not login and not provider_of(c, r.get("model"))) or n in alive or len(alive) >= (c.get("max_sessions") or float("inf")): continue
             if paced(c, st, n, [{"from": r.get("from")}]): continue
+            if r.get("from") != "person" and tier_held(c, r.get("thread")): continue  # its tier is paused or off: it waits like a new post would (a4cd7 resumed into the paused voice-board tier on a login move, 2026-11-16)
             own, limits = r.get("login"), st.get("limits")
             if not provider_of(c, r.get("model")) and time.time() < r.get("reset", 0) and scope_held(limits, own, r.get("model")) \
                     and (ask := next((p["model"] for p in reversed(st["pending"].get(n, [])) if p.get("model") in MODELS

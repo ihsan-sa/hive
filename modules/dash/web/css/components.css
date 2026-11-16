@@ -516,6 +516,7 @@ table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 .dlg-err[data-ok]{color:var(--ink)}
 .dlg-a{display:flex;justify-content:flex-end;gap:var(--s2);margin-top:var(--s3)}
 .dlg label.opt{display:flex;gap:8px;align-items:baseline;padding:4px 0;cursor:pointer}
+.kbw-facts{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:var(--s2) 0}.kbw-facts dt{color:var(--ink-3)}.kbw-facts dd{margin:0;min-width:0;overflow-wrap:anywhere}.kbw-step{font-size:var(--fs-small);color:var(--ink-3)}.sec[data-key="kb-wipe"]>.row{margin-top:var(--s3)}.sec[data-key="kb-wipe"]>.fmsg{margin-top:var(--s2)}
 
 /* ---- system page (the style guide) ---- */
 .swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:var(--s3)}

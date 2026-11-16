@@ -15,7 +15,7 @@ The web page is web/ next to this file (ui.html, the previous page, is at /old);
   hive-dash serve [--port P] web UI on http://127.0.0.1:P/ (loopback only; default 8077)
   hive-dash --json          the snapshot as JSON
 """
-import base64, email.utils, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time, zlib
+import base64, email.utils, errno, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time, zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -957,6 +957,435 @@ def kill_run(r):
 
 
 def now_iso(): return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# ---- Wipe the knowledge base (Settings > Wipe the knowledge base; person's ask k2264, thread kb-wipe) ----
+# Nothing is deleted: every top-level entry of ~/kb but the two kept files is renamed into ~/.hive/kb-copies/<id>/kb/ (0700), with
+# wipe.json beside it, and Put back merges a copy into ~/kb again without overwriting anything. The GET answers the facts the dialog
+# shows and a one-use token; the POST needs that token, the typed phrase and every tick. Tests: test_kb_wipe.py, drive_kb_wipe.mjs.
+KB_DIR, KB_COPIES = HOME / "kb", STATE / "kb-copies"
+KB_KEEP = ("priorities.md", "direction.md")   # the person's order of work and standing directions stay where every agent reads them
+KB_HOLD = ("history",)   # made again empty after a wipe: core/kb.py's `kb miss` appends to kb/history/failed-lookups.md without making the folder
+KB_TICKS = ("hive", "lose", "space")
+KB_TOKEN_FROM, KB_TOKEN_TO = 15, 600   # a token works from 15 s to 10 min after the facts were shown
+KB_FRESH_S = 900   # from outside, the full sign-in must be this recent
+KB_WIPE_LOCK = threading.Lock()
+kb_wipe_tokens = {}   # token -> (sign-in key, issued at)
+KB_COPY_ID = re.compile(r"\d{8}-\d{6}(-\d{1,3})?")
+
+
+def kb_user():
+    """The account this Hive runs as: two Hives can share one machine, so the machine's name alone doesn't say which."""
+    try: return pwd.getpwuid(os.getuid()).pw_name
+    except KeyError: return str(os.getuid())
+
+
+def kb_wipe_name():
+    """The name the person types: the Hive's own name from Settings, else its account and machine."""
+    return brand_view().get("name") or f"{kb_user()}@{os.uname().nodename}"
+
+
+def kb_tree_size(p):
+    """(files, bytes) under p, links counted as files and never followed."""
+    try:
+        st = os.lstat(p)
+        if not stat.S_ISDIR(st.st_mode): return 1, st.st_size
+    except OSError: return 0, 0
+    n = b = 0
+    for d, sub, files in os.walk(p):
+        for f in files + [s for s in sub if os.path.islink(os.path.join(d, s))]:
+            try: n += 1; b += os.lstat(os.path.join(d, f)).st_size
+            except OSError: pass
+    return n, b
+
+
+def kb_wipe_entries():
+    """The top-level names a wipe moves, or raises ValueError with why there is nothing to do or it mustn't be done."""
+    if os.path.islink(KB_DIR): raise ValueError("the knowledge base folder is a link to somewhere else, so it isn't wiped from here")
+    if not KB_DIR.is_dir(): raise ValueError("there is no knowledge base folder")
+    if os.path.islink(STATE) or os.path.islink(KB_COPIES): raise ValueError("the folder for copies is a link to somewhere else")
+    names = sorted(e for e in os.listdir(KB_DIR) if e not in KB_KEEP)
+    if not [e for e in names if not (e in KB_HOLD and os.path.isdir(KB_DIR / e) and not os.path.islink(KB_DIR / e) and not os.listdir(KB_DIR / e))]:
+        raise ValueError("there is nothing in the knowledge base but the files that stay")
+    STATE.mkdir(parents=True, exist_ok=True)
+    if os.stat(KB_DIR).st_dev != os.stat(STATE).st_dev: raise ValueError("the knowledge base is on another disk from the folder for copies, so it can't be moved in one step")
+    return names
+
+
+def kb_running():
+    """Names of the agents running now: they may be reading or writing notes as the wipe moves them."""
+    return sorted({r.get("name") for r in (jload(f, {}) or {} for f in RUN.glob("*.json")) if isinstance(r, dict) and r.get("name") and alive(r.get("pid"))})
+
+
+def kb_wipe_plan(key, issue=True):
+    """What the dialog shows before anything is sent, and a one-use token for this sign-in (none when issue is False: it must sign in again first)."""
+    now = time.time()
+    for t, (_, at) in list(kb_wipe_tokens.items()):
+        if now - at > KB_TOKEN_TO: kb_wipe_tokens.pop(t, None)
+    while len(kb_wipe_tokens) >= 50: kb_wipe_tokens.pop(next(iter(kb_wipe_tokens)))
+    name = kb_wipe_name()
+    plan = {"name": name, "host": os.uname().nodename, "user": kb_user(), "home": str(HOME), "phrase": f"wipe {name}", "keep": [k for k in KB_KEEP if (KB_DIR / k).is_file()],
+            "ticks": list(KB_TICKS), "agents": kb_running(), "wait": KB_TOKEN_FROM, "valid": KB_TOKEN_TO, "busy": KB_WIPE_LOCK.locked(), "copies": kb_copies()}
+    try: names = kb_wipe_entries()
+    except (ValueError, OSError) as e: plan["refuse"] = str(e); return plan
+    n = b = 0
+    for e in names:
+        x, y = kb_tree_size(KB_DIR / e); n += x; b += y
+    plan.update(entries=len(names), files=n, bytes=b)
+    if issue: tok = secrets.token_urlsafe(24); kb_wipe_tokens[tok] = (key, now); plan["token"] = tok
+    return plan
+
+
+def kb_take_token(tok, key, now=None):
+    """True if tok was issued to this sign-in and is inside its window. It is used up either way."""
+    got = kb_wipe_tokens.pop(tok, None) if isinstance(tok, str) else None
+    if not got: return False
+    k, at = got; age = (now or time.time()) - at
+    return hmac.compare_digest(str(k), str(key)) and KB_TOKEN_FROM <= age <= KB_TOKEN_TO
+
+
+KB_FORGET_WAIT = 20   # seconds the answer waits for the search index; on 2026-11-16 the refresh after a wipe of the Hive's 551 indexed notes took 0.7 s
+KB_SEARCH_LATE = "Search hasn't caught up yet: for a while it may answer as if this hadn't happened."   # true after a wipe and after a put back, and whether the refresh is late or failed (the next `kb find` refreshes again)
+
+
+def kb_forget(wait=None):
+    """Drop every cached view of the notes, then bring the search index up to date, so kb find and recall stop returning moved notes.
+    refresh() drops each indexed file that is gone, and recall keeps only paths still in the index, so this covers both.
+    Never raises, and never holds the answer for more than `wait` seconds: the refresh runs in its own thread (it waits for the index's
+    lock, which a first build elsewhere can hold for minutes) and finishes there. `kb find` refreshes at each call of its own anyway.
+    Returns None when search is up to date, else the words the window shows."""
+    try:
+        with kb_index_lock: kb_index_memo.update(t=0, items=[], more=False)
+        kb_map_memo.update(t=0, v=None); kb_hist_memo.update(t=0, head="", v=None); kb_tool_memo["fresh"] = 0
+        mod = kb_tool()
+        if not mod: return None if not (HOME / "core" / "kb.py").is_file() else KB_SEARCH_LATE   # no search tool, so no index to go stale
+        out = {}
+        def run():
+            try:
+                c = mod.connect()
+                try: mod.refresh(c, force=True)
+                finally: c.close()
+                kb_tool_memo["fresh"] = time.time(); out["ok"] = True
+            except Exception as e: out["err"] = type(e).__name__
+        t = threading.Thread(target=run, daemon=True); t.start(); t.join(KB_FORGET_WAIT if wait is None else wait)
+        return None if out.get("ok") else KB_SEARCH_LATE
+    except Exception: return KB_SEARCH_LATE
+
+
+def kb_note(event, text, extra):
+    """One line in the dash log and one plain post on the board (to nobody, so it wakes no agent). True if both were written; never raises."""
+    ok = True
+    try:
+        with LOG.open("a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps({"at": now_iso(), "event": event, **extra}) + "\n")
+    except (OSError, TypeError, ValueError): ok = False
+    try:
+        p = {"id": datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now_iso(), "from": "dash", "to": [], "thread": "dash", "text": text}
+        with BOARD.open("a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(p) + "\n")
+    except (OSError, TypeError, ValueError): ok = False
+    return ok
+
+
+def kb_record(d, info):
+    """Write a copy's wipe.json, whole or not at all (a temp file, then a rename). True if written; never raises."""
+    try:
+        t = d / "wipe.json.tmp"; t.write_text(json.dumps(info, indent=1)); os.replace(t, d / "wipe.json")
+        return True
+    except (OSError, TypeError, ValueError): return False
+
+
+def kb_record_read(d):
+    """(a copy's wipe.json as a dict, whether a new one may be written). A record that is there but can't be read is the only word on
+    what that wipe moved, so before anything writes over it it is kept beside itself under another name; when even that can't be done
+    the answer is ({}, False) and the caller leaves the file as it is. Never raises."""
+    p = d / "wipe.json"
+    try: raw = p.read_bytes()
+    except FileNotFoundError: return {}, True
+    except OSError: return {}, False
+    try:
+        w = json.loads(raw)
+        if isinstance(w, dict): return w, True
+    except Exception: pass
+    try: os.link(p, d / f"wipe.json.unreadable-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(2)}", follow_symlinks=False); return {}, True
+    except OSError: return {}, False
+
+
+def kb_wipe_tell(d, info, late=False, recorded=True):
+    """Tell the agents about a wipe: one line in the dash log and one on the board, then mark the copy's record so kb_mend doesn't
+    write it again. Before the search refresh, which can take its whole wait: the line says nothing about search. True if both were written."""
+    n, b, failed = info.get("moved_files") or 0, info.get("moved_bytes") or 0, info.get("error")
+    of = len(info.get("entries") or []) - len(info.get("gone") or [])
+    noted = kb_note("kb_wiped", f"The person wiped the knowledge base from the dashboard: {n} file{'s' if n != 1 else ''} ({kb_size_words(b)}) "
+            f"{'were' if n != 1 else 'was'} moved into a private copy, which Settings can put back. "
+            + ("The person's priorities and standing directions stay. " if info.get("kept") else "")
+            + ("It stopped part way, so some notes are still in place. " if failed else "")
+            + "This was done on purpose, so don't restore the notes from a backup or from the copy: if they are wanted again, the person puts the copy back from Settings."
+            + (f" (This line is late: the wipe was at {info.get('at')}, and the line couldn't be written then.)" if late else ""),
+            {"id": info.get("id"), "files": n, "bytes": b, "moved": len(info.get("moved") or []), "of": of, "by": info.get("by"),
+             "stopped": failed, "recorded": recorded, **({"late": True} if late else {})})
+    if noted: info["noted"] = True; kb_record(d, info)
+    return noted
+
+
+def kb_mend():
+    """Finish what a wipe left undone when the dashboard stopped in the middle of one. Call under KB_WIPE_LOCK and the lock file (a
+    record still "moving" belongs to whoever holds them): at the start, and before each wipe or put back. A record still "moving"
+    becomes "stopped" with what its copy holds now, and a wipe that never got its line on the board gets it. True if a record changed; never raises."""
+    changed = False
+    try: ds = sorted(x for x in KB_COPIES.iterdir() if KB_COPY_ID.fullmatch(x.name) and x.is_dir() and not x.is_symlink())
+    except OSError: return changed
+    for d in ds:
+        try:
+            k = d / "kb"
+            if not k.is_dir() or k.is_symlink(): continue
+            w = jload(d / "wipe.json")
+            if not isinstance(w, dict) or w.get("id") != d.name: continue   # no record, or one that can't be read: nothing here to go on, so it is left as it is
+            if w.get("state") == "moving":
+                moved = sorted(os.listdir(k))
+                if not moved:   # it stopped before the first note moved, so nothing happened: take the empty copy away as kb_wipe does (rmdir removes only an empty folder)
+                    try: os.unlink(d / "wipe.json"); os.rmdir(k); os.rmdir(d)
+                    except OSError: pass
+                    continue
+                n = b = 0
+                for e in moved:
+                    x, y = kb_tree_size(k / e); n += x; b += y
+                # What it meant to move and is still in place says whether it finished (a folder the wipe makes again empty isn't one of them).
+                rest = [e for e in (w.get("entries") or []) if isinstance(e, str) and e not in moved and os.path.lexists(KB_DIR / e)
+                        and not (e in KB_HOLD and os.path.isdir(KB_DIR / e) and not os.path.islink(KB_DIR / e) and not os.listdir(KB_DIR / e))]
+                w.update(moved=moved, moved_files=n, moved_bytes=b, state="stopped" if rest else "done", error="the dashboard stopped while it was moving the notes" if rest else None, noted=False)
+                if not kb_record(d, w): continue
+                changed = True
+                for e in KB_HOLD:
+                    try: (KB_DIR / e).mkdir(exist_ok=True)
+                    except OSError: pass
+            if w.get("state") in ("done", "stopped") and w.get("moved") and not w.get("noted") and os.listdir(k):
+                changed = kb_wipe_tell(d, w, late=True) or changed
+        except Exception: pass
+    return changed
+
+
+def kb_mend_start():
+    """The mend at the start, off the main thread. It is skipped while another dash holds the lock file: a wipe is running there."""
+    try:
+        with KB_WIPE_LOCK:
+            if not KB_COPIES.is_dir(): return
+            with open(STATE / "kb-wipe.lock", "a") as lk:
+                try: fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError: return
+                changed = kb_mend()
+        if changed: kb_forget()
+    except Exception: pass
+
+
+def kb_rename_new(src, dst):
+    """rename(src, dst) that never replaces: FileExistsError when dst is there (renameat2 with RENAME_NOREPLACE). Raises OSError where
+    the system or the disk can't do that, since a plain rename could replace a note an agent wrote at that name a moment ago."""
+    import ctypes
+    fn = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+    if fn is None: raise OSError(errno.ENOSYS, "this system can't move a file without the risk of replacing one")
+    if fn(-100, os.fsencode(src), -100, os.fsencode(dst), 1) != 0:   # AT_FDCWD twice, RENAME_NOREPLACE
+        e = ctypes.get_errno(); raise OSError(e, os.strerror(e), str(src))
+
+
+def kb_size_words(b):
+    return f"{b / 2**20:.1f} MB" if b >= 2**20 else f"{max(1, round(b / 1024))} KB" if b else "0 KB"
+
+
+def kb_wipe(by):
+    """Move the notes aside. Call under KB_WIPE_LOCK. Two halves, so the answer is never wrong about whether notes moved:
+    until the first rename every failure is a ValueError (the handler answers 409 and the window says nothing was moved); from the
+    first rename on nothing raises, and what moved is always answered (files and bytes count only what moved)."""
+    try:
+        names = kb_wipe_entries()
+        KB_COPIES.mkdir(mode=0o700, parents=True, exist_ok=True); os.chmod(KB_COPIES, 0o700)
+        base = datetime.now().strftime("%Y%m%d-%H%M%S"); cid = base
+        for i in range(2, 1000):
+            try: (KB_COPIES / cid).mkdir(mode=0o700); break
+            except FileExistsError: cid = f"{base}-{i}"
+        else: raise ValueError("couldn't make a folder for the copy")
+        d = KB_COPIES / cid; os.chmod(d, 0o700); (d / "kb").mkdir(mode=0o700)
+        sizes = {e: kb_tree_size(KB_DIR / e) for e in names}
+        info = {"id": cid, "at": now_iso(), "by": by, "host": os.uname().nodename, "user": kb_user(), "home": str(HOME), "name": kb_wipe_name(), "entries": names,
+                "files": sum(x for x, _ in sizes.values()), "bytes": sum(y for _, y in sizes.values()), "kept": [k for k in KB_KEEP if (KB_DIR / k).exists()], "state": "moving"}
+        if not kb_record(d, info): raise ValueError("couldn't write the copy's record")
+    except OSError as x: raise ValueError(f"couldn't get the copy ready: {x.strerror or x}")
+    moved, gone, failed = [], [], None
+    for e in names:
+        try: os.rename(KB_DIR / e, d / "kb" / e); moved.append(e)
+        except OSError as x:
+            if isinstance(x, FileNotFoundError) and not os.path.lexists(KB_DIR / e) and os.path.isdir(d / "kb"): gone.append(e); continue   # an agent removed or renamed it since the list was read: there is nothing to move, so go on
+            failed = f"{e}: {x.strerror or x}"; break
+    if not moved:   # still nothing moved: take the empty folder for the copy away again (rmdir removes only an empty one), then say so
+        try: os.unlink(d / "wipe.json"); os.rmdir(d / "kb"); os.rmdir(d)
+        except OSError: pass
+        raise ValueError(f"the first note couldn't be moved ({failed})" if failed else "the notes were gone before they could be moved")
+    for e in KB_HOLD:
+        try: (KB_DIR / e).mkdir(exist_ok=True)
+        except OSError: pass
+    n, b = sum(sizes[e][0] for e in moved), sum(sizes[e][1] for e in moved)
+    info.update(moved=moved, gone=gone, moved_files=n, moved_bytes=b, state="done" if not failed else "stopped", error=failed, noted=False)
+    recorded = kb_record(d, info)
+    noted = kb_wipe_tell(d, info, recorded=recorded)   # the agents hear of it first: the search refresh below can take its whole wait, and kb_mend writes this line if the dash stops before it
+    search = kb_forget()
+    return {"ok": not failed, "id": cid, "files": n, "bytes": b, "moved": len(moved), "of": len(names) - len(gone), "stopped": failed, "search": search, "noted": noted}
+
+
+def kb_copies():
+    """The copies a wipe left that still hold something, newest first."""
+    out = []
+    try: ds = sorted((x for x in KB_COPIES.iterdir() if KB_COPY_ID.fullmatch(x.name) and x.is_dir() and not x.is_symlink()), reverse=True)
+    except OSError: return out
+    for d in ds:
+        k = d / "kb"
+        try: left = [e for e in os.listdir(k)] if k.is_dir() and not k.is_symlink() else []
+        except OSError: left = []
+        if not left: continue
+        w = jload(d / "wipe.json", {}) or {}
+        n, b = 0, 0
+        for e in left:
+            x, y = kb_tree_size(k / e); n += x; b += y
+        out.append({"id": d.name, "at": w.get("at"), "files": n, "bytes": b, "phrase": f"put back {d.name}", "back": w.get("back"),
+                    "state": w.get("state") if w.get("state") in ("moving", "done", "stopped") else None, "error": w.get("error") if isinstance(w.get("error"), str) else None})
+    return out
+
+
+def kb_move_dir(src, dst):
+    """Move a folder of the copy to dst by one rename, whatever its own mode, and return how many files are in it.
+    A folder that goes to another parent has its ".." rewritten, which needs the right to write in the folder itself: one without
+    it (mode 0555, say) fails with EACCES however writable both parents are. And one that can't be listed (0000) would count as no
+    files. It is a folder of the private copy, so when one of its owner's rights is missing it gets all three for the count and the
+    one rename, and its own mode back where it lands (or where it was, when the rename fails). Only this folder's mode changes,
+    never one that is in the knowledge base already. A folder that isn't ours to change is counted and moved as far as the system
+    lets it be, and the rename raises what stops it."""
+    mode = None
+    try:
+        st = os.lstat(src)
+        if stat.S_ISDIR(st.st_mode) and st.st_mode & 0o700 != 0o700:
+            m = stat.S_IMODE(st.st_mode); os.chmod(src, m | 0o700); mode = m
+    except OSError: pass
+    try: n = kb_tree_size(src)[0]; os.rename(src, dst)
+    except OSError:
+        if mode is not None:
+            try: os.chmod(src, mode)
+            except OSError: pass
+        raise
+    if mode is not None:
+        try:
+            if not os.path.islink(dst): os.chmod(dst, mode)
+        except OSError: pass
+    return n
+
+
+def kb_shut(p):
+    """Whether p is a folder of ours that takes no new name: its owner lacks the right to write in it or to go into it."""
+    try: st = os.lstat(p)
+    except OSError: return False
+    return stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid() and st.st_mode & 0o300 != 0o300
+
+
+KB_DEEP = 200   # folders inside folders that a put back merges; past it an entry stays in the copy (each level is two calls deep here)
+
+
+def kb_drop_name(src):
+    """Take away the copy's name for a note that is in the knowledge base already (the same file is at both names)."""
+    try: os.unlink(src)
+    except OSError as x: raise OSError(x.errno, f"it is back, but its name in the copy couldn't be removed ({x.strerror or x})") from None
+
+
+def kb_merge(src, dst, t, depth=0):
+    """Move src into dst, never over anything: a name already at dst stays in the copy (its path goes in t["clash"]). t counts the
+    files moved ("n") and the files left behind a clash ("left") as it goes, and t["any"] says something moved at all (an empty
+    folder counts no file).
+    It never raises. An entry that can't move stays in the copy, and its path with the system's reason goes in t["stuck"] (the first
+    20 of them; t["stuck_n"] counts them all). The entries beside it still go, so one that never can move doesn't hold the rest back.
+    When the reason is that the folder it goes into is read-only, it says that in plain words: a put back changes no mode in the
+    knowledge base, so making that folder writable is for whoever made it read-only."""
+    try: kb_merge_one(src, dst, t, depth)
+    except OSError as x:
+        t["stuck_n"] += 1
+        why = x.strerror or str(x)
+        if x.errno in (errno.EACCES, errno.EPERM) and kb_shut(dst.parent):
+            why = "the knowledge base folder is read-only" if dst.parent == KB_DIR else "its folder in the knowledge base is read-only"
+        if len(t["stuck"]) < 20: t["stuck"].append(f"{dst.relative_to(KB_DIR)}: {why}")
+
+
+def kb_merge_one(src, dst, t, depth=0):
+    """One entry of kb_merge; an OSError it raises is that entry's own (kb_merge writes it down and goes on).
+    A file goes by a hard link and then an unlink: unlike a rename, a link can't replace a note an agent wrote at that name a moment
+    ago. A folder that isn't there yet goes by one rename, which can only ever replace an empty folder. Where hard links aren't
+    allowed, a file goes by a rename that refuses to replace (kb_rename_new). When the same file is at both names (a put back that
+    stopped between its link and its unlink), it is back already and only the copy's name goes.
+    A read-only folder in the copy would stop both ways out of it (a rename of the folder itself, kb_move_dir; an unlink or a rename
+    of what is in it), and every later try at the same place, so it gets the owner's rights for the move and its own mode back after.
+    A folder that is in both places is merged entry by entry, KB_DEEP folders down at most."""
+    real_dir = lambda p: os.path.isdir(p) and not os.path.islink(p)
+    if not os.path.lexists(dst):
+        if real_dir(src):
+            try: t["n"] += kb_move_dir(src, dst); t["any"] = True; return
+            except OSError as x:
+                if x.errno not in (errno.ENOTEMPTY, errno.EEXIST, errno.ENOTDIR): raise   # else something appeared there just now: merge into it, or leave it, below
+        else:
+            try: os.link(src, dst, follow_symlinks=False)
+            except FileExistsError: pass   # a note appeared there just now: a clash, below
+            except OSError:
+                try: kb_rename_new(src, dst)
+                except FileExistsError: pass   # the same
+                else: t["n"] += 1; t["any"] = True; return
+            else: t["n"] += 1; t["any"] = True; kb_drop_name(src); return
+    if real_dir(src) and real_dir(dst):
+        if depth >= KB_DEEP: raise OSError(errno.ELOOP, f"it is more than {KB_DEEP} folders deep")   # else a tree deep enough ends in a RecursionError, half way through
+        mode = None
+        try:
+            m = stat.S_IMODE(os.lstat(src).st_mode)
+            if m & 0o700 != 0o700: os.chmod(src, m | 0o700); mode = m
+        except OSError: pass   # not ours to change: the listing or the moves below say what stays
+        try:
+            for e in sorted(os.listdir(src)): kb_merge(src / e, dst / e, t, depth + 1)
+        finally:
+            try: os.rmdir(src)
+            except OSError:
+                if mode is not None:   # something stays in it, so it stays as it was
+                    try: os.chmod(src, mode)
+                    except OSError: pass
+        return
+    try: same = not real_dir(src) and os.path.samestat(os.lstat(src), os.lstat(dst))
+    except OSError: same = False
+    if same: kb_drop_name(src); t["n"] += 1; t["any"] = True; return
+    t["clash"].append(str(dst.relative_to(KB_DIR))); t["left"] += max(1, kb_tree_size(src)[0])
+
+
+def kb_put_back(cid, by):
+    """Merge one copy back into ~/kb. Call under KB_WIPE_LOCK. As kb_wipe, the answer is never wrong about whether notes moved:
+    when nothing at all came back and something couldn't move, it is a ValueError (the window says nothing was put back); once
+    anything is back nothing raises, and the answer says how many came back, the first entry that couldn't move ("stopped", its
+    exact path and the reason) and how many couldn't ("stuck"). It goes through every entry whatever happens to one of them. What
+    didn't come back is still in the copy, which stays listed."""
+    if not isinstance(cid, str) or not KB_COPY_ID.fullmatch(cid): raise ValueError("no such copy")
+    if os.path.islink(KB_DIR) or os.path.islink(STATE) or os.path.islink(KB_COPIES): raise ValueError("a folder here is a link to somewhere else")
+    d = KB_COPIES / cid; k = d / "kb"
+    if not k.is_dir() or k.is_symlink() or d.is_symlink(): raise ValueError("no such copy")
+    try:
+        KB_DIR.mkdir(exist_ok=True)
+        names = sorted(os.listdir(k))
+        if os.stat(KB_DIR).st_dev != os.stat(k).st_dev: raise ValueError("the knowledge base is on another disk from the copy, so it can't be put back from here")
+    except OSError as x: raise ValueError(f"couldn't read the copy or the knowledge base folder: {x.strerror or x}")
+    if not names: raise ValueError("there is nothing left in this copy")
+    t = {"n": 0, "left": 0, "clash": [], "any": False, "stuck": [], "stuck_n": 0}
+    for e in names: kb_merge(k / e, KB_DIR / e, t)
+    n, left, stuck = t["n"], t["left"], t["stuck_n"]
+    stopped = t["stuck"][0] if stuck else None
+    if stuck and not t["any"]:   # t["any"], not n: an empty folder that went back counts no file, and "nothing was put back" would be wrong
+        raise ValueError(f"no note could go back ({stopped}, and {stuck - 1} more)" if stuck > 1 else f"no note could go back ({stopped})")
+    w, may = kb_record_read(d)
+    w["back"] = (w["back"] if isinstance(w.get("back"), list) else []) + [{"at": now_iso(), "by": by, "files": n, "left": left, "stopped": stopped, "stuck": stuck}]
+    recorded = may and kb_record(d, w)
+    noted = kb_note("kb_put_back", f"The person put a wiped knowledge base back from the dashboard: {n} file{'s' if n != 1 else ''} returned"
+            + (f", and {left} stayed in the copy because a note of the same name is there now." if left else ".")
+            + (f" {stuck} entr{'ies' if stuck != 1 else 'y'} couldn't be moved, so {'they are' if stuck != 1 else 'it is'} still in the copy." if stuck else ""),
+            {"id": cid, "files": n, "left": left, "by": by, "stopped": stopped, "stuck": stuck, "recorded": recorded})
+    search = kb_forget()
+    return {"ok": not stuck, "id": cid, "files": n, "left": left, "clash": t["clash"][:20], "stopped": stopped, "stuck": stuck, "search": search, "noted": noted}
 
 
 def peer_uid(addr):
@@ -2359,8 +2788,8 @@ GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/export": "config", "/api/modules": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
-           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
-POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
+           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/kb/wipe": "files", "/api/kb/copies": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
+POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/kb/wipe": "files", "/api/kb/putback": "files", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/side-ask": "post", "/api/door": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/voice": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
@@ -5623,6 +6052,7 @@ def serve(port):
 
         route, can, signed, signer, mode, full_left, secrets_on, simple = "open", OPEN_CAN, False, None, None, 0, False, False
         email = ""   # the signed claim's email on the outside route: a door's people file is checked against it
+        full_iat = signin_key = None
 
         def deny(self, code, why):
             self.send(json.dumps({"error": why}).encode(), "application/json", status=code)
@@ -5631,7 +6061,7 @@ def serve(port):
             """Sets route, can and signed for this request, or answers it and returns False. Checked on every request."""
             web = web_cfg()
             if web is None: return True  # the open dash: no web.json here, as on a site that hasn't set one up
-            self.route, self.can, self.signed, self.signer, self.simple, self.email = "refused", (), False, None, False, ""; self.own_site = False
+            self.route, self.can, self.signed, self.signer, self.simple, self.email = "refused", (), False, None, False, ""; self.own_site = False; self.full_iat = self.signin_key = None
             if web.get("broken"): self.deny(500, "web.json is missing or can't be read, so nothing is served. Fix or delete it, then run hive web --setup"); return False
             hd = {k.lower(): v for k, v in self.headers.items()}
             route = route_of(hd, self.client_address[0], port, web)
@@ -5653,11 +6083,12 @@ def serve(port):
                 names = web.get("simple")
                 self.simple = isinstance(names, list) and str(claims.get("email") or "").strip().lower() in {str(n).lower() for n in names}
                 (self.can, self.mode, self.full_left), self.signed = allowed, True
+                self.full_iat = claims.get("iat"); self.signin_key = hashlib.sha256(json.dumps([self.email, claims.get("iat"), claims.get("aud"), claims.get("sub")], default=str).encode()).hexdigest()
                 # web.json "add_logins": sign-ins that may also sign the Hive in to its accounts, for someone who owns the account but shouldn't have full. Only ever adds that one cap; a bad value means no.
                 names = web.get("add_logins")
                 if isinstance(names, list) and "logins" not in self.can and str(claims.get("email") or "").strip().lower() in {str(n).lower() for n in names}: self.can = (*self.can, "logins")
             elif has_session(hd.get("cookie"), web, port):
-                self.can, self.signed = CAPS, True
+                self.can, self.signed = CAPS, True; self.signin_key = "local"
             sites = (web.get("outside") or {}).get("sites")
             self.secrets_on = secrets_allowed(web, site=route == "outside" and isinstance(sites, dict) and site_key(hd.get("host")) in {site_key(k) for k in sites})
             if not self.secrets_on: self.can = tuple(c for c in self.can if c != "secrets")  # off unless web.json says so, or this is a consumer install; no route can set it
@@ -5676,6 +6107,61 @@ def serve(port):
             """The owner's full sign-in: outside in full mode, or the local session. The board page's bridge and the doors need it."""
             return (getattr(self, "route", None) == "outside" and getattr(self, "mode", None) == "full") or (getattr(self, "route", None) == "local" and self.signed)
 
+        def kb_wipe_may(self):
+            """Who may wipe the knowledge base or put a copy back: a full sign-in with both the files and settings rights, on this
+            Hive's own name (not a site's), from this user's connection (as Kill), from this page. None if allowed, else why not."""
+            if not self.full_signin() or not {"files", "config"} <= set(self.can): return "this needs a full sign-in with the files and settings rights"
+            if self.route == "outside" and not getattr(self, "own_site", False): return "this isn't offered on a site's own name"
+            if not may_kill(os.getuid() if self.client_address[0] == "unix" else peer_uid(self.client_address)): return "this connection belongs to another user on the machine"
+            if self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin": return "request from another site"
+            return None
+
+        def kb_fresh_left(self):
+            """Seconds left before this sign-in is too old for a wipe: from outside, 15 minutes after the Access sign-in. None on the
+            local route: its cookie is the secret and carries no time, so its age can't be told."""
+            if self.route != "outside": return None
+            iat = getattr(self, "full_iat", None)
+            if not isinstance(iat, (int, float)) or isinstance(iat, bool): return 0
+            return int(max(0, min(KB_FRESH_S, iat + KB_FRESH_S - time.time())))
+
+        def kb_wipe_get(self, path):
+            why = self.kb_wipe_may()
+            if why: return self.deny(403, why)
+            if path == "/api/kb/copies": return self.send(json.dumps({"copies": kb_copies(), "busy": KB_WIPE_LOCK.locked()}).encode(), "application/json")   # busy: one is running now, so the list isn't final (kbwipe.js waits)
+            fresh = self.kb_fresh_left()
+            plan = kb_wipe_plan(self.signin_key, issue=fresh != 0); plan["fresh_left"] = fresh
+            if fresh == 0: plan["signin"] = True
+            return self.send(json.dumps(plan).encode(), "application/json")
+
+        def kb_wipe_post(self, path, d):
+            """POST /api/kb/wipe {token, phrase, ticks} and /api/kb/putback {id, confirm}."""
+            J = "application/json"
+            why = self.kb_wipe_may()
+            if why: return self.deny(403, why)
+            by = "the person, from the dashboard" + (" (from outside)" if self.route == "outside" else "")
+            ok = path == "/api/kb/wipe" and kb_take_token(d.get("token"), self.signin_key)   # used up whatever follows: a refused try shows the facts again
+            if self.kb_fresh_left() == 0:   # put back too: from outside, both need a recent sign-in
+                return self.send(json.dumps({"error": "this sign-in is more than 15 minutes old, so sign in again first", "signin": True}).encode(), J, status=403)
+            if path == "/api/kb/wipe":
+                if not ok: return self.deny(409, "the window was open for less than 15 seconds or more than 10 minutes, or was used already, so open it again")
+                if d.get("phrase") != f"wipe {kb_wipe_name()}": return self.deny(400, "the typed words don't match")
+                t = d.get("ticks")
+                if not isinstance(t, dict) or set(t) != set(KB_TICKS) or any(t[k] is not True for k in KB_TICKS): return self.deny(400, "every box must be ticked")
+            elif not isinstance(d.get("id"), str) or d.get("confirm") != f"put back {d['id']}": return self.deny(400, "the typed words don't match")
+            if not KB_WIPE_LOCK.acquire(blocking=False): return self.deny(409, "a wipe or a put back is already running")
+            try:
+                STATE.mkdir(parents=True, exist_ok=True)
+                with open(STATE / "kb-wipe.lock", "a") as lk:   # and across processes: a second dash, or a test's
+                    try: fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except OSError: return self.deny(409, "a wipe or a put back is already running")
+                    kb_mend()   # a wipe the dash stopped in the middle of is settled first, so this one starts from records that are true
+                    res = kb_wipe(by) if path == "/api/kb/wipe" else kb_put_back(d["id"], by)
+            except ValueError as e: return self.deny(409, str(e))
+            except OSError as e: return self.deny(409, f"couldn't take the lock for this ({e.strerror or e})")   # only the lock file can raise this: kb_wipe and kb_put_back raise ValueError before a move and nothing after one
+            finally: KB_WIPE_LOCK.release()
+            live_c.t = 0
+            return self.send(json.dumps(res).encode(), J)
+
         def app_info(self):
             web = web_cfg() or {}
             info = {"route": self.route, "can": list(self.can), "app": self.route != "open", "brand": brand_view()}
@@ -5686,6 +6172,7 @@ def serve(port):
             if self.route != "open" and "post" in self.can and "files" in self.can and (self.route != "outside" or self.mode == "full"):
                 ds = {x["page"]: n for n, x in doors().items() if door_for(n, self.route, self.email)}
                 if ds: info["doors"] = ds   # project page -> door name: the preview relays that page's calls (preview/render.js)
+            if self.full_signin() and {"files","config"} <= set(self.can) and (self.route == "local" or getattr(self,"own_site",False)): info["kb_wipe"] = True
             if self.mode: info.update(mode=self.mode, full_left=self.full_left)
             if self.signer: info["signer"] = self.signer
             if self.simple: info["simple"] = True
@@ -5715,6 +6202,7 @@ def serve(port):
                 if not self.signed: return self.deny(401, "sign in: run hive web")
                 need = GET_CAP.get(u.path) or ("read" if u.path.startswith("/files/") else "post" if u.path.startswith("/api/phone/") else None)
                 if need and need not in self.can: return self.deny(403, f"this route doesn't allow {need}")
+            if u.path in ("/api/kb/wipe", "/api/kb/copies"): return self.kb_wipe_get(u.path)
             if u.path.startswith("/api/phone/"): return self.phone(u)
             if display and shown[1] == "/dual-screen":
                 self.send_response(302); self.send_header("Location", "/dual-screen/1" + (shown[2] or "")); self.send_header("Content-Length", "0"); self.end_headers(); return
@@ -6004,6 +6492,7 @@ def serve(port):
                 try: res = approval_answer(d)
                 except ValueError as e: return self.deny(400, str(e))
                 return self.send(json.dumps(res).encode(), "application/json")
+            if u.path in ("/api/kb/wipe", "/api/kb/putback"): return self.kb_wipe_post(u.path, d)
             if u.path == "/api/kill":  # the one switch that can't be undone: more checks than the others
                 if not may_kill(os.getuid() if self.client_address[0] == "unix" else peer_uid(self.client_address)) or self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin":
                     return self.send_error(403)
@@ -6043,6 +6532,7 @@ def serve(port):
     threading.Thread(target=warm_progress, daemon=True).start()
     threading.Thread(target=lambda: (proj_c.get()), daemon=True).start()
     threading.Thread(target=SETUP.get, daemon=True).start()  # so the first page after a restart doesn't pay for it
+    threading.Thread(target=kb_mend_start, daemon=True).start()  # a wipe this dash was stopped in the middle of: its record and its line on the board
     srv = ThreadingHTTPServer(("127.0.0.1", port), H)  # loopback only: never opens the machine
     srv.daemon_threads = True
     cfg = web_cfg() or {}; sock = (cfg.get("outside") or {}).get("socket")
