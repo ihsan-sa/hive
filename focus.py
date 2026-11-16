@@ -96,7 +96,7 @@ GROUP_FILES = HOME / "files" / "groups"
 WINDOWS = {"day": 86400, "week": 7 * 86400}   # the home card's gauge: each focus's share of the hive's work over the last day and week
 # What reads as agent talk on the person's pages. Each: (name, regex, what to do instead).
 JARGON = [
-    ("post id", re.compile(r"\b[0-9a-f]{12}\b"), "say what the post said, or drop it"),
+    ("post id", re.compile(r"(?<!#)\b[0-9a-f]{12}\b"), "say what the post said, or drop it"),   # "#11160014bf8b" is a conversation the page draws by its title, not a post id
     ("path", re.compile(r"(?:^|[\s(`])(?:~/|/home/|[\w.-]+/)[\w./-]+\.(?:py|js|mjs|md|sh|json|html|css|ts|txt|yaml|yml|toml)\b"), "name the thing in words, not its file"),
     ("rung id", re.compile(r"\b(?:R\d[a-z]?|rung\s+\w+|prop\d+|[A-Z]\d\.\d)\b"), "say what the step does"),
     ("test name", re.compile(r"\b(?:drive|test)_\w+(?:\.mjs|\.py)?\b"), "say what was checked"),

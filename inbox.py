@@ -91,6 +91,7 @@ def fmt(p):
     return (f"[{p.get('id')}] {str(p.get('at', ''))[:19]} {p.get('from')}{' -> ' + to if to else ''} "
             f"(thread {p.get('thread')})" + tags + (f" replying to {p['reply_to']}" if p.get("reply_to") else "") + "\n  " + str(p.get("text", "")).replace("\n", "\n  ")
             + "".join(f"\n  file: {f.get('path')}" for f in p.get("files") or [])
+            + ("\n  (Files attached to the person's ask: read them and answer from them, not from another thread's totals; if they differ from earlier numbers, say so. Never show a raw 12-hex thread or post id in the reply.)" if p.get("files") and p.get("from") == "person" else "")
             + ("\n  (The person pressed Interrupt on this: read it before carrying on. If a command you were waiting on was stopped, that was for this; run it again only if this still wants it.)" if p.get("interrupt") else ""))
 
 WORD = re.compile(r"[a-z][a-z0-9-]{3,}")
