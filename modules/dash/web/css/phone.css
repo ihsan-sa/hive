@@ -9,8 +9,8 @@
       have a back button at top left and no bars.
    3. Nothing covers what it's about. Menus and dialogs rise from the bottom as sheets over a dim layer.
    4. 40px controls, 44px rows, 16px text in inputs (no zoom on focus), safe areas respected.
-   The root states, set from JS on the body: data-view (the page; "thread" in a conversation), data-kb=open (the keyboard is up),
-   data-strip=open (the status strip shows both lines). A container query can't style its own container, so what sits on
+   The root states, set from JS on the body: data-view (the page; "thread" in a conversation) and data-kb=open (the keyboard is up).
+   A container query can't style its own container, so what sits on
    html and body (the bar's room, scroll padding) is in the @media block at the end, at the same 700px. */
 
 #mnav,.only-phone{display:none}
@@ -109,20 +109,6 @@
   .cm-title{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .cm-head .btn[data-kind=icon]{min-width:40px;min-height:40px}
   .cm-strip{padding:4px var(--s4) 6px}
-  /* the status bar (R15): both lines show, the first on one row and the second on two at most, and More (a 36px row) opens the rest; a tap on the bar shows
-     every word and who wrote it. It is a block of its own over the posts (flex:none), never squeezed under them. */
-  .cm-status{flex:none}
-  .cm-strip[data-fold]{cursor:pointer}
-  .cm-strip[data-fold] .cm-strip-a,.cm-strip[data-fold] .cm-strip-b{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
-  .cm-strip[data-fold] .cm-strip-a{-webkit-line-clamp:1}
-  .cm-strip[data-fold] .cm-strip-m{display:none}
-  .cm-status-more>summary,.cm-status-more[open]>summary{display:flex;align-items:center;min-height:36px;color:var(--ink-2);font-weight:var(--w-med)}
-  .cm-status-more[open]>summary{font-size:0}
-  .cm-status-more[open]>summary::after{content:"Less";font-size:var(--fs-meta)}
-  .app[data-strip=open] .cm-strip[data-fold] .cm-strip-a,.app[data-strip=open] .cm-strip[data-fold] .cm-strip-b,.cm-strip[data-fold]:has(.cm-status-more[open]) :is(.cm-strip-a,.cm-strip-b){display:block;-webkit-line-clamp:none}
-  .app[data-strip=open] .cm-strip[data-fold] .cm-strip-m{display:block}
-  .app[data-kb=open] .cm-strip[data-fold] .cm-strip-a,.app[data-kb=open] .cm-strip[data-fold] .cm-strip-m,.app[data-kb=open] .cm-strip[data-fold] .cm-status-more{display:none}
-  .app[data-kb=open] .cm-strip[data-fold] .cm-strip-b{-webkit-line-clamp:1}
   /* press and hold a message: its tools (mobilenav.js sets data-held) */
   .msg[data-held]>.msg-tools{display:flex;opacity:1;pointer-events:auto}
   .msg[data-held]{background:var(--tint)}

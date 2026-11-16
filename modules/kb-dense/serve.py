@@ -28,6 +28,7 @@ SEED_DB = os.path.expanduser(os.environ.get("KB_DENSE_SEED_DB", "~/projects/kb-s
 REFRESH = float(os.environ.get("KB_DENSE_REFRESH", 180))   # seconds between looks at the live index
 BATCH = int(os.environ.get("KB_DENSE_BATCH", 8)); DUTY = float(os.environ.get("KB_DENSE_DUTY", 1.0))  # sleep DUTY x the batch time after each batch
 MAXMAPS = 4; PERDOC = 2; DEEP = 200
+RAM = os.environ.get("KB_DENSE_RAM", "1") != "0"   # hold the vectors in memory (see Store._map); 0 = the old file map
 PFX = "Represent this sentence for searching relevant passages: "
 
 def log(*a): print(time.strftime("%H:%M:%S"), *a, file=sys.stderr, flush=True)
@@ -44,7 +45,20 @@ class Store:
         with open(self.k, "rb") as f: keys = np.frombuffer(f.read(n * 8), dtype=np.int64)
         self.row = {int(k): i for i, k in enumerate(keys)}; self.n = n; self._map()
     def _map(self):
-        self.mm = np.memmap(self.v, dtype=np.float16, mode="r", shape=(self.n, DIM)) if self.n else np.zeros((0, DIM), np.float16)
+        """the vectors as one array in the process's own memory, not a file map: under machine-wide memory pressure the
+        page cache of vec.f16 is dropped between searches and a cold scan reads 161 MB from disk (951 ms against the 450 ms
+        wait, a1278 2026-11-16); anonymous memory stays put under the unit's MemorySwapMax=0. Grows with room to spare and
+        copies in only the rows added since the last call."""
+        if not RAM:
+            self.mm = np.memmap(self.v, dtype=np.float16, mode="r", shape=(self.n, DIM)) if self.n else np.zeros((0, DIM), np.float16); return
+        have = getattr(self, "_have", 0); buf = getattr(self, "_buf", None)
+        if buf is None or len(buf) < self.n:
+            new = np.empty((max(self.n + 65536, int(self.n * 1.25)), DIM), np.float16)
+            if have: new[:have] = buf[:have]
+            buf = self._buf = new
+        if self.n > have:
+            src = np.memmap(self.v, dtype=np.float16, mode="r", shape=(self.n, DIM)); buf[have:self.n] = src[have:self.n]; del src
+        self._have = self.n; self.mm = buf[:self.n]
     def add(self, keys, E):
         """E: float16 (len(keys), DIM) -> the rows they got"""
         with self.lock:

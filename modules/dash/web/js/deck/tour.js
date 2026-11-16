@@ -26,7 +26,7 @@ function deckSide(s, x) {
     + box("hotcue" + s, x + 62, 207, 37, 16, "HOT") + box("beatloop" + s, x + 103, 207, 37, 16, "LOOP") + box("beatjump" + s, x + 144, 207, 37, 16, "JUMP") + box("sampler" + s, x + 185, 207, 37, 16, "SMPL")
     + pads;
 }
-const DRAWING = `<svg ${svgNS} viewBox="0 0 660 302" class="dt-deck" role="img" aria-label="Drawing of the DDJ-FLX4 with the control to use lit">
+const DRAWING = `<svg ${svgNS} viewBox="0 0 660 302" class="dt-deck" role="img" aria-label="${tr("Drawing of the DDJ-FLX4 with the control to use lit")}">
   <rect class="dt-body" x="1" y="1" width="658" height="300" rx="10"/>
   ${deckSide("L", 6)}
   ${deckSide("R", 424)}
@@ -169,7 +169,7 @@ function flip() {
   st.right = st.bottom = "auto";
 }
 function drag(handle) {
-  handle.title = "Drag to move, or click to send it to the other side of the screen";
+  handle.title = tr("Drag to move, or click to send it to the other side of the screen");
   handle.addEventListener("pointerdown", ev => {
     if (ev.target.closest("button")) return;
     const r = win.getBoundingClientRect(), z = parseFloat(document.documentElement.style.zoom) || 1, dx = ev.clientX - r.left, dy = ev.clientY - r.top;

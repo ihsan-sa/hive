@@ -1,7 +1,7 @@
 // A Touchstone block (.s1p to .s4p text) as magnitude and phase against frequency, drawn by plot.js. Parsing is in touchstone_parse.js.
 import { figure } from "./figure.js";
 import { splitPanels, yRange, mount } from "./plot.js";
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 
 import { parseTouchstone } from "./touchstone_parse.js";
 
@@ -26,7 +26,7 @@ export function touchstoneFigure(code, { lang, title }) {
       const build = () => { c.panels = splitPanels(phase ? mags.concat(phs) : mags); for (const q of c.panels) q.range = yRange(q.series.flatMap(x => x.vals)) || [-1, 1]; };
       build();
       const m = mount(c);
-      const btn = h("button", { type: "button", class: "rc-t", onclick: (e, n) => { phase = !phase; n.textContent = phase ? "Hide phase" : "Show phase"; n.ariaPressed = String(phase); build(); m.redraw(); }, "aria-pressed": "false" }, "Show phase");
+      const btn = h("button", { type: "button", class: "rc-t", onclick: (e, n) => { phase = !phase; n.textContent = tr(phase ? "Hide phase" : "Show phase"); n.ariaPressed = String(phase); build(); m.redraw(); }, "aria-pressed": "false" }, "Show phase");
       return { own: h("div", null, m.wrap, h("div", { class: "rc-paramsn" }, btn, h("span", null, `${N}-port, ${d.r} Ω, ${d.f.length} points`))) };
     },
   });

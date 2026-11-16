@@ -1,7 +1,7 @@
 // A voice memo (or any audio file) in a message: a play button, a waveform you can click to seek, and the time, played in place.
 // The card is data-own, so a re-render never rebuilds it and playback carries on. The bars are drawn from the file's own samples
 // (decoded in the browser the first time it is shown; a file too big or undecodable keeps a flat row of bars).
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { icon } from "./kit.js";
 
 export const VOICE = /^voice-.*\.(webm|ogg|oga|opus|m4a|mp4|wav|mp3)$|\.(mp3|wav|ogg|oga|opus|m4a|aac|flac|weba)$/i;
@@ -34,7 +34,7 @@ export function voiceMemo(url, name, meta, size, { key, on, open } = {}) {
     bars.forEach((b, i) => b.classList.toggle("on", i < n));
     time.textContent = audio.duration && (audio.currentTime || !audio.paused) ? mmss(audio.currentTime) + " / " + mmss(audio.duration) : audio.duration ? mmss(audio.duration) : "0:00";
   };
-  const state = () => { btn.replaceChildren(icon(audio.paused ? "play" : "pause")); btn.title = audio.paused ? "Play" : "Pause"; card.dataset.playing = audio.paused ? "" : "1"; };
+  const state = () => { btn.replaceChildren(icon(audio.paused ? "play" : "pause")); btn.title = tr(audio.paused ? "Play" : "Pause"); card.dataset.playing = audio.paused ? "" : "1"; };
   const seek = e => { const r = wave.getBoundingClientRect(); if (audio.duration) audio.currentTime = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * audio.duration; paint(); };
   btn.onclick = e => { e.stopPropagation(); if (audio.paused) { document.querySelectorAll(".vm audio").forEach(a => a !== audio && a.pause()); audio.play().catch(() => {}); } else audio.pause(); };
   wave.onclick = e => { e.stopPropagation(); seek(e); };

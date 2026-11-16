@@ -600,4 +600,120 @@ export function threadState(th, read) {
   if (ask && !(read && read(ask))) return { key: "foryou", label: "new reply for you", who: ask.from, post: ask };
   return { key: "done", label: last ? "done" : "", who: last ? last.name : null };
 }
+// ---- where a conversation stands: its summary read against the needs list and what is happening now ----
+// An agent ends its summary (`status`) with one state line: "Waiting: ...", "Done: ...", "Needs the person: ...", "Blocked: ...", "Told to stop: ...".
+// The head used to show the summary's first line, which says what the conversation is about (its title says that already), and hid the state line.
+const ST_RE = /^(needs the person|blocked|waiting|done|told to stop):\s*(.*)$/i, ST_TAG = /\s*\(a[0-9a-f]{4,5}\)/g;
+// "Waiting on others", the focus overview's word for it (comms.js FO_GROUPS): a bare "Waiting" can read as waiting on the person, which is "Needs you".
+const ST_KIND = { "needs the person": ["asks", "Needs you"], blocked: ["stuck", "Blocked"], waiting: ["quiet", "Waiting on others"], done: ["done", "Done"], "told to stop": ["ended", "Stopped"] };
+/** How long a summary's "Needs the person:" line counts as an open ask (needs.js NEEDS_FOR is this). */
+export const ASK_FOR = 7 * DAY;
+/**
+ * A summary's text as {lines, about, state, last}. The one reader of a state line: the needs list (needs.js standLine) and the head (threadStand) both
+ * use it, so they can't disagree about whether a summary asks.
+ * state is the LAST non-blank line when it starts with a state label and a colon ({kind, key, word, tail, line, full}), or null: a label further up is a
+ * note the agent wrote on the way, not where the conversation stands. tail is the line's words without the label and without the agent's name tag
+ * ("(a1b2c)"); line is the line as written; full and last are it without the tag. about is every other line.
+ */
+export function stRead(text) {
+  const lines = String(text || "").split("\n").map(l => l.trim()).filter(Boolean), at = lines.length - 1;
+  const last = at < 0 ? "" : lines[at].replace(ST_TAG, "").trim(), m = ST_RE.exec(last);
+  if (!m) return { lines, about: lines, state: null, last };
+  const kind = m[1].toLowerCase(), [key, word] = ST_KIND[kind];
+  return { lines, about: lines.slice(0, at), state: { kind, key, word, tail: m[2].trim(), line: lines[at], full: last }, last };
+}
+const RUN_WORD = { working: "Working", quiet: "Working quietly", queue: "Waiting its turn", queued: "Starting" };
+// A conversation that is on the needs list but out of the count (needs.js waitOf): the head's word, why it isn't counted, and its label as a second fact.
+const OFF_COUNT = { later: ["Later", "You put this off", "Later"], older: ["Asked earlier", "In Stuff to address", "Asked earlier"], moot: ["Not needed", "You said it isn't needed", "Not needed"] };
+// An entry that asks nothing (an unread reply written for the person, needs.js "foryou") is not "asked": past its time it reads "For you".
+const OFF_FORYOU = ["For you", "In Stuff to address", "Earlier"];
+const sameWords = (a, b) => String(a || "").replace(/\s+/g, " ").trim() === String(b || "").replace(/\s+/g, " ").trim();
+/**
+ * Where a conversation stands, for its head: {key (a STATUS key), word, text, also, why, dup, more, lines, at, from, since, running, bare}, or null when it
+ * has neither a summary nor a place on the needs list. word + text is the one line to read and also a second, quieter fact; why is set when the
+ * conversation is on the needs list but out of the count ("You put this off"), for the places that show no second fact (a phone's line under the title);
+ * more is every summary line that text doesn't already say in full; since counts the messages after the summary; bare means there is no summary, only
+ * the list's entry.
+ *
+ * waits is the conversation's own entry on the needs list (needs.js waitOf: {where: "now"|"older"|"later"|"moot", text, src, st}) or null. The head says
+ * "Needs you" exactly when the count has the conversation, in the list's words (for a run that broke: "Failed" or "Stuck", which says what to do about
+ * it), so the head, the rail's group and the badge can't disagree. Read alone, a summary got it wrong both ways (the board on 2026-11-16: of 8 summaries
+ * ending "Needs the person:", 2 were answered, put off or dropped and not in the count, and 2 counted conversations had a newer summary saying Done or
+ * Waiting).
+ * After that, what is true now leads: a summary is a note from when it was written, and an agent that started or failed since then is newer than it.
+ */
+export function threadStand(th, read, waits) {
+  if (!th) return null;
+  const r = S.threadStatus && S.threadStatus[th], has = !!(r && String(r.text || "").trim());
+  if (!has && !waits) return null;
+  const d = S.threads.get(th), at = has ? (r.at || 0) * 1e3 : 0, sr = stRead(has ? r.text : ""), b = sr.state, live = threadState(th, read);
+  // a summary opens with what the conversation is about, which its title says already: that line is a second fact only when it is the whole summary
+  const first = sr.about[0] || "", detail = sr.about.length > 1 ? sr.about.at(-1) : "", only = sr.about.at(-1) || "";
+  const Name = n => { const l = (n && agentLabel(n)) || "the agent"; return CODE_NAME.test(l) ? l : capFirst(l); };
+  // since: the messages after the summary. you: the person's own last message after it (the store's lastYou also counts the mail box and the other Hives,
+  // which are not the person answering). back: an agent's last message after that.
+  let since = 0, you = null, back = null;
+  if (d && has) for (let i = d.posts.length - 1; i >= 0 && d.posts[i].t > at; i--) { const p = d.posts[i]; since++; if (!you) { if (p.from === "person") you = p; else if (!back && isAgent(p.from)) back = p; } }
+  // used: the summary line that text is (a state line's words after its label count as that line)
+  // dup: the second fact is one of the lines in more (or the summary's ask, re-worded), so the open summary doesn't say it twice
+  const out = (key, word, text, also, used, why = "") => {
+    const more = sr.lines.filter(l => l !== used); also = also && also !== text && also !== used ? also : "";
+    return { key, word, text: text || "", also, why, dup: !!also && (more.includes(also) || /^Asked: /.test(also)), more, lines: sr.lines, at, from: has ? r.from : "", since, running: !!RUN_WORD[live.key], bare: !has };
+  };
+  const asked = !!b && b.key === "asks";
+  // trouble: the list has it because its run broke, and the run is still broken (the list and the head read the same threadState, so they agree)
+  const counted = !!waits && waits.where === "now", trouble = waits && waits.st && (waits.st.key === "failed" || waits.st.key === "stuck") && live.key === waits.st.key ? live.key : "";
+  const wtext = waits ? String(waits.text || "").trim() : "", foryou = !!(waits && waits.st && waits.st.key === "foryou");
+  const off = waits && !counted ? (waits.where === "older" && foryou ? OFF_FORYOU : OFF_COUNT[waits.where] || OFF_COUNT.older) : null;
+  // an entry out of the count, as the second fact: its words, or (a run that broke says its own words already) why it isn't counted. A row the list
+  // built from a message ("A0001 asks: ...") says who and what by itself, so it follows "Earlier: ", not a second "asked".
+  const offAlso = off ? (wtext && !trouble ? `${waits.where === "older" && waits.src === "live" ? "Earlier" : off[2]}: ${wtext}` : off[1]) : "";
+  // 1. the count has it as something to answer or read: the list's words lead, whatever the summary says
+  if (counted && !trouble) {
+    const text = wtext || (asked && b.tail) || `${Name(live.who)} waits for your answer`, same = asked && sameWords(text, b.tail);
+    // the summary's own ask, when it words it differently, is the second fact; else its state line (a newer Done or Waiting), else what it is on
+    return out("asks", "Needs you", text, asked ? (same || !b.tail ? detail : `Asked: ${b.tail}`) : b ? b.line : detail, same ? b.line : undefined);
+  }
+  // 2. an agent stopped answering
+  if (live.key === "stuck") return out("stuck", "Stuck", String(live.label || "").replace(/^stuck:\s*/, "") || `${Name(live.who)} stopped answering`, offAlso || (b ? b.line : detail));
+  // 3. an agent is on it now: the list doesn't count a conversation an agent is working in, so an ask in the summary is the second fact
+  if (RUN_WORD[live.key]) {
+    // A run that began before the summary wrote it on the way and is still going; one that began after it came back to the conversation.
+    const run = (runsByThread().get(th) || []).find(a => a.name === live.who), began = run && run.since ? run.since * 1e3 : 0;
+    const w = RUN_WORD[live.key], again = live.key === "queued" ? "about to carry on from the summary" : !began ? "on it now" : began > at ? "on it again since the summary" : "still on it after the summary";
+    if (asked) return out(live.key, w, you ? "carrying on after your reply" : again, offAlso || (b.tail ? `Asked: ${b.tail}` : detail));
+    // "Waiting: on my test run" from an agent that is running is its own note of what it is on; Done, Blocked and Told to stop are from before this run
+    if (b && b.kind === "waiting") return b.tail ? out(live.key, w, b.tail, offAlso || detail, b.line) : out(live.key, w, only, offAlso, only);
+    if (b) return out(live.key, w, again, offAlso || b.line);
+    return out(live.key, w, first, offAlso || detail, first);
+  }
+  // 4. the last run ended badly: the list has it, or it happened after the summary was written, so the summary can't know
+  if ((live.key === "failed" && (trouble === "failed" || (live.t || 0) > at)) || (live.key === "limited" && (live.t || 0) > at)) {
+    // a state line written after the failure is the newer word and follows it; else why the count doesn't have it, else the summary's state
+    const simple = simpleOn(), also = b && at > (live.t || 0) ? b.line : offAlso || (b ? b.line : detail);
+    return live.key === "limited" ? out("limited", "Paused", simple ? "taking a break; it carries on by itself" : `stopped at a usage limit ${ago(live.t)}; it carries on by itself`, also)
+      : out("failed", "Failed", simple ? "ran into a problem; a message makes it try again" : `stopped with an error ${ago(live.t)}; a message wakes it to try again`, also);
+  }
+  // 5. on the list but out of the count: put off, said not needed, or old enough to sit in Stuff to address
+  if (off) {
+    if (b && !asked) return b.tail ? out(b.key, b.word, b.tail, offAlso, b.line) : out(b.key, b.word, only, offAlso, only);
+    const text = wtext || (asked ? b.tail : "");
+    return out("quiet", off[0], text, off[1], asked && sameWords(text, b.tail) ? b.line : undefined, off[1]);
+  }
+  // 6. not on the list: the summary's state line is the newest word. One that asks is no longer open: the person answered, it was dropped as obsolete,
+  //    it is over a week old, or (the simple look) the list doesn't read summaries.
+  if (asked) {
+    if (you) {
+      // what happened to the reply: an agent wrote back, or a run began after it and wrote nothing, or nothing at all
+      const last = S.lastByThread[th], ran = !!(last && (last.start || 0) > you.t);
+      const then = back ? `${Name(back.from)} wrote back ${ago(back.t)}` : ran ? `${Name(last.name)} picked it up and has written nothing back yet` : "not picked up yet";
+      return out("quiet", "You replied", then, b.tail ? `Asked: ${b.tail}` : detail);
+    }
+    // "earlier" only when it is: a summary written within the week asks now, whatever the reason the count doesn't have it
+    const word = now() - at < ASK_FOR ? "Asked" : "Asked earlier";
+    return b.tail ? out("quiet", word, b.tail, detail, b.line) : out("quiet", word, only, "", only);
+  }
+  if (b) return b.tail ? out(b.key, b.word, b.tail, detail, b.line) : out(b.key, b.word, only, "", only);
+  return out("done", "Quiet", first, detail, first);
+}
 export { DAY, HOUR };

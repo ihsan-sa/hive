@@ -12,8 +12,10 @@ const stateOf = k => { let s = ST.get(k); if (!s) { ST.set(k, s = { open: false,
 
 const CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; form-action 'none'; base-uri 'none'";
 const HELPER = `<script>(()=>{const up=m=>parent.postMessage(Object.assign({hive:1},m),"*");`
-  + `const size=()=>up({type:"height",px:Math.ceil(document.documentElement.getBoundingClientRect().height)});`
-  + `addEventListener("load",size);new ResizeObserver(size).observe(document.documentElement);`
+  + `const fit=()=>{const d=document.documentElement,s=d.style;s.zoom="";const w=d.scrollWidth,v=d.clientWidth;`
+  + `if(v>0&&w>v+1)s.zoom=Math.max(.4,v/w).toFixed(3)};`
+  + `const size=()=>{fit();const d=document.documentElement,h=Math.ceil(d.getBoundingClientRect().height);d.style.overflowX="hidden";d.style.overflowY=h>1200?"auto":"hidden";up({type:"height",px:h})};`
+  + `addEventListener("load",size);addEventListener("resize",size);new ResizeObserver(size).observe(document.documentElement);`
   + `window.hive={params:values=>up({type:"params",values})};})();<\/script>`;
 const isDark = () => {
   const c = getComputedStyle(document.documentElement).colorScheme;
@@ -143,7 +145,7 @@ function drawArtifact(code, title, st, box, ver) {
     frame.setAttribute("sandbox", "allow-scripts");
     frame.setAttribute("referrerpolicy", "no-referrer");
     frame.setAttribute("allow", "");
-    frame.title = title || "Interactive page";
+    frame.title = title || tr("Interactive page");
     const dark = isDark();
     frame.style.colorScheme = dark ? "dark" : "light";
     frame.style.height = (st.px || 240) + "px";
@@ -195,7 +197,7 @@ function drawArtifact(code, title, st, box, ver) {
       bar.hidden = false;
       if (c.at < n - 1) {   // an older copy: the page changed later in this chat
         if (code !== ver.code) swap(ver.code);
-        nav.hidden = true; say.textContent = `Version ${c.at + 1} of ${n}. This page was changed later in this chat; the newest version is further down.`;
+        nav.hidden = true; say.textContent = tr(`Version ${c.at + 1} of ${n}. This page was changed later in this chat; the newest version is further down.`);
         return;
       }
       cur = pick == null || pick >= n ? n - 1 : pick;
@@ -205,7 +207,7 @@ function drawArtifact(code, title, st, box, ver) {
       say.textContent = tr(cur === n - 1 ? "Newest version of this page." : `An older version (${cur + 1} of ${n}), as it was then.`);
     }
     function swap(c) {   // show another version in this same frame; Ask and View source follow it
-      code = ver.shown = c; card.lastChild.textContent = `Interactive page, ${size(code.length / 1024)}. It runs sealed off from this dashboard and your login, with its network blocked.`;
+      code = ver.shown = c; card.lastChild.textContent = tr(`Interactive page, ${size(code.length / 1024)}. It runs sealed off from this dashboard and your login, with its network blocked.`);
       st.values = null; vals.hidden = true; vals.textContent = "";
       for (const s of box.querySelectorAll(".rc-fig-src")) s.textContent = c;
       if (frame) { destroy(); if (st.open) build(); }
@@ -223,7 +225,7 @@ function drawArtifact(code, title, st, box, ver) {
       const done = () => { ed?.remove(); ed = null; edit.focus(); };
       const save = async b => {
         const c = ta.value.replace(/\s+$/, "");
-        if (!c.trim()) { err.textContent = "Not saved: the page is empty."; err.hidden = false; return; }
+        if (!c.trim()) { err.textContent = tr("Not saved: the page is empty."); err.hidden = false; return; }
         if (c === code.replace(/\s+$/, "")) return done();
         b.disabled = true; err.hidden = true;
         for (const k of [c, c + "\n"]) stateOf(sigOf("html\0" + k)).open = true;   // the new copy opens running

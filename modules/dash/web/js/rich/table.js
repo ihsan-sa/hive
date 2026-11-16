@@ -1,5 +1,5 @@
 // A csv or tsv fence as a table: sort, filter, copy, download, ask about a row. Cells only ever go in as text.
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { figure } from "./figure.js";
 import { askQuote } from "./ask.js";
 import { sigOf } from "./math.js";
@@ -52,7 +52,7 @@ export function drawTable(rows, title, api, st) {
       ...head.map((_, c) => h("td", { "data-t": numeric[c] ? null : "" }, x.r[c] ?? "")),
       h("td", null, h("button", { type: "button", class: "rc-t rc-ask", "aria-label": `Ask about row ${x.i + 1}`, onclick: (e, b) => askQuote(b, head.map((t, c) => `${t}: ${x.r[c] ?? ""}`).join(", "), `${title || "table"}, row ${x.i + 1}`) }, "Ask")))));
     more.hidden = list.length <= st.shown;
-    more.textContent = `Show ${Math.min(PAGE, list.length - st.shown)} more of ${list.length - st.shown} rows`;
+    more.textContent = tr(`Show ${Math.min(PAGE, list.length - st.shown)} more of ${list.length - st.shown} rows`);
   }
   more.onclick = () => { st.shown += PAGE; paint(); };
   api.filter = q => { st.q = q; st.shown = PAGE; paint(); };

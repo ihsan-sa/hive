@@ -2165,6 +2165,8 @@ def tidier(c, st, alive, login):
         log(event="tidy-clean" if due.returncode == 1 else "tidy-failed"); return
     out = due.stdout if len(due.stdout) <= 3500 else due.stdout[:3500].rsplit("\n- ", 1)[0] + "\n(cut off here: `python3 -I ~/core/tidy.py due --all` lists the rest)"
     post("@new Tidy audit: read ~/core/tidy.md and follow it. Missed since the last pass:\n" + out, ["new"], "tidy", c.get("tidy_model", "sonnet"))
+    try: subprocess.run([sys.executable, "-I", str(CORE / "hive"), "fade", "tidy", "--why", "internal housekeeping, nothing for the person"], capture_output=True, text=True, timeout=20, cwd=str(HOME))  # E51: a newcomer's chat list holds only their own chats
+    except (OSError, subprocess.TimeoutExpired): pass
     log(event="tidy", n=due.stdout.count("\n- ") + 1)
 
 def backup(c, st):

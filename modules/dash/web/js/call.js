@@ -1,7 +1,9 @@
 // The one-tap call page (/call/): a home-screen app for the phone. The call itself is ui/phone.js (its card has Mute and Hang up);
 // this adds the Call button, the recent-calls list from the phone service, and a chat pane on the board thread "phone-chat".
+import "./core/lang.js";   // first, as in app.js: without it tr() is a no-op and the call page stays English
 import { S, jget, post, loadApp } from "./core/store.js";
 import { LOC } from "./core/format.js";
+import { tr } from "./core/dom.js";
 import { startCall, end, phoneInit, phoneReady, inCall } from "./ui/phone.js";
 
 const $ = id => document.getElementById(id);
@@ -11,9 +13,12 @@ const open = new Set();
 
 async function boot() {
   await loadApp();
+  // call.html is static English: its words go through the same table (the section headings, the buttons, the box's placeholder, the tab title)
+  for (const el of document.querySelectorAll("#cp h2, #cp button")) el.textContent = tr(el.textContent);
+  $("cp-text").placeholder = tr($("cp-text").placeholder); document.title = tr(document.title);
   phoneInit();
   const b = $("cp-call");
-  if (!phoneReady()) { $("cp-msg").textContent = !(S.app && S.app.phone) ? "The call service isn't running, or this sign-in can't call." : "This browser can't use the microphone here."; }
+  if (!phoneReady()) { $("cp-msg").textContent = tr(!(S.app && S.app.phone) ? "The call service isn't running, or this sign-in can't call." : "This browser can't use the microphone here."); }
   else { b.disabled = false; }
   b.onclick = () => { if (!inCall()) startCall({}); };
   recent(); chat(); setInterval(recent, 10000); setInterval(chat, 4000);
@@ -36,9 +41,9 @@ async function recent(force) {
     if (sig === lastRecent && !force) return; lastRecent = sig;
     $("cp-recent").innerHTML = r.calls.length ? r.calls.map(c => {
       const when = new Date(c.started * 1000).toLocaleString(LOC, { weekday: "short", hour: "numeric", minute: "2-digit" }), mins = Math.max(1, Math.round((c.ended - c.started) / 60));
-      const tr = open.has(c.id) ? `<div class="cp-tr">${esc(c.lines.map(([s, t]) => `${s === "person" ? "You" : s}: ${t}`).join("\n"))}</div>` : "";
-      return `<div><div class="cp-row"><div data-open="${esc(c.id)}"><b>${esc(c.agent)}</b><small>${esc(when)} · ${mins} min · transcript</small></div><button data-call="${esc(c.agent)}">Call</button></div>${tr}</div>`;
-    }).join("") : `<small>No calls yet.</small>`;
+      const lines = open.has(c.id) ? `<div class="cp-tr">${esc(c.lines.map(([s, t]) => s === "system" ? `· ${tr(t)}` : `${s === "person" ? tr("You") : s}: ${t}`).join("\n"))}</div>` : "";
+      return `<div><div class="cp-row"><div data-open="${esc(c.id)}"><b>${esc(c.agent)}</b><small>${esc(when)} · ${esc(tr(`${mins} min · transcript`))}</small></div><button data-call="${esc(c.agent)}">${esc(tr("Call"))}</button></div>${lines}</div>`;
+    }).join("") : `<small>${esc(tr("No calls yet."))}</small>`;
   } catch {}
 }
 let lastChat = "";
@@ -49,8 +54,8 @@ async function chat() {
     if (sig === lastChat) return; const box = $("cp-chat"), stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 30; lastChat = sig;
     box.innerHTML = r.posts.length ? r.posts.map(p => {
       const files = (p.files || []).map(f => { const m = /files\/([0-9a-f]{12})\//.exec(f.path || ""); return m ? `<div><a href="/files/${m[1]}/${encodeURIComponent(f.name)}" target="_blank">${esc(f.name)}</a></div>` : ""; }).join("");
-      return `<div class="cp-post${p.from === "person" ? " me" : ""}"><small>${esc(p.from === "person" ? "You" : p.from)} · ${esc(new Date(p.at).toLocaleTimeString(LOC, { hour: "numeric", minute: "2-digit" }))}</small>${link(p.text)}${files}</div>`;
-    }).join("") : `<small>Agents can send you links and files here: hive post --thread phone-chat</small>`;
+      return `<div class="cp-post${p.from === "person" ? " me" : ""}"><small>${esc(p.from === "person" ? tr("You") : p.from)} · ${esc(new Date(p.at).toLocaleTimeString(LOC, { hour: "numeric", minute: "2-digit" }))}</small>${link(p.text)}${files}</div>`;
+    }).join("") : `<small>${esc(tr("Agents can send you links and files here: hive post --thread phone-chat"))}</small>`;
     if (stick) window.scrollTo(0, document.body.scrollHeight);
   } catch {}
 }

@@ -4,6 +4,9 @@
 // NAMES are kept as they are on purpose: product and model names, sizes, a command and a path read the same in any language,
 // so they are not "English left" and are not marked lang="en".
 const NAMES = ["Astra", "Fable 5.2", "Alt+Shift+S", "Hive", "Hive", "Claude", "Codex", "Haiku 5.5", "Opus 5.5", "Sonnet 5.5", "Aa", "npm install -g @openai/codex", "~/projects/project/file.txt", "two small gaps the route check passed on rerun"];
+// a length from format.js dur(): "21h", "5m" and "2d" read the same; only its words change
+const AGO = a => a === "just now" ? "ahora mismo" : a.replace(/^(\d+(?:,\d)?|\d+\.\d)(s|m|h|d) ago$/, (_, n, u) => `hace ${n.replace(".", ",")} ${{ s: "s", m: "min", h: "h", d: "d" }[u]}`);
+const DUR = d => d === "under a minute" ? "menos de un minuto" : d;
 export default {
   ...Object.fromEntries(NAMES.map(n => [n, n])),
   "A key starts nothing on its own: an agent uses it when a post names it, as --model NAME:MODEL. Every run costs money on that key, so set a spending limit with the provider.":
@@ -336,8 +339,127 @@ export default {
   "Money, credentials and the network still need your yes.": "El dinero, las credenciales y la red siguen necesitando tu sí.",
   "It spends your usage": "Gasta tu uso",
   "New agents stop at 95% of your week.": "Los agentes nuevos paran al 95% de tu semana.",
+  // TOP: the top bar (shell.js topBar: the status pills and their titles, the "More views" menu with each page's line, the Look items)
+  // and what sits in it on a screen (the chat's Show chips); product-test rung "Spanish in the top bar".
+  "Agents: what each is doing": "Agentes: qué hace cada uno",
+  // the phone's bottom bar (mobilenav.js) and its More sheet
+  "Main": "Principal",
+  "More pages": "Más páginas",
+  "agents running now: open Agents": "agentes en marcha ahora: abrir Agentes",
+  "Can't reach the Hive, so this can't say what agents are doing: open Agents": "No se llega al Hive, así que esto no puede decir qué hacen los agentes: abrir Agentes",
+  "Not connected": "Sin conexión",
+  "No agents working": "Ningún agente trabajando",
+  "agent working": "agente trabajando",
+  "Every account is past its usage line": "Todas las cuentas pasaron su línea de uso",
+  "Every account is past its usage line: agents wait, your own messages still start one": "Todas las cuentas pasaron su línea de uso: los agentes esperan, tus propios mensajes aún arrancan uno",
+  "How much of your Claude account's weekly limit is left": "Cuánto queda del límite semanal de tu cuenta de Claude",
+  "Voice call with the Hive. Ask it anything, or ask to be put through to whoever is working on something.": "Llamada de voz con el Hive. Pregúntale lo que quieras, o pide que te pase con quien esté trabajando en algo.",
+  "Close menu": "Cerrar menú",
+  "Theme": "Tema",
+  "Follows your system setting": "Sigue el ajuste de tu sistema",
+  "Leave full screen": "Salir de pantalla completa",
+  "how busy the computer is": "lo ocupado que está el ordenador",
+  "how much is left, and when it comes back": "cuánto queda, y cuándo vuelve",
+  "every exchange you had, newest first": "cada intercambio que tuviste, lo más nuevo primero",
+  "make designs with Claude Design": "hacer diseños con Claude Design",
+  "every message agents sent you": "cada mensaje que te enviaron los agentes",
+  "how the notes grew, linked and changed, from what was recorded": "cómo crecieron, se enlazaron y cambiaron las notas, según lo registrado",
+  "files and links from your conversations": "archivos y enlaces de tus conversaciones",
+  "every agent, in spawn order: search, filter, sort": "cada agente, en orden de arranque: buscar, filtrar, ordenar",
+  "what is owed, what landed, and whether the hive is getting better": "lo pendiente, lo que llegó, y si el Hive va mejorando",
+  "everything that happened, in order: messages, starts and ends, and every tool call": "todo lo que pasó, en orden: mensajes, arranques y finales, y cada llamada a una herramienta",
+  "the work by goal, moving: runs, hand-offs, what waits on you, what comes next": "el trabajo por objetivo, en marcha: ejecuciones, traspasos, lo que te espera, lo que viene",
+  "what each agent is doing": "qué hace cada agente",
+  "notes, modules, scripts and files": "notas, módulos, scripts y archivos",
+  "accounts, modules, access": "cuentas, módulos, acceso",
+  "when each agent ran": "cuándo funcionó cada agente",
+  "where the agents are: a graph of threads and the agents working in them": "dónde están los agentes: un grafo de los hilos y los agentes que trabajan en ellos",
+  "what waits on you, and what got done": "lo que te espera, y lo que se hizo",
+  "flash a board on this laptop's USB, set it up and test it, and let agents use its console": "grabar una placa por el USB de este portátil, configurarla y probarla, y dejar que los agentes usen su consola",
+  "the root warden, which does the machine jobs agents can't: whether it is running, what it ran and how each job ended, and its logs": "el guardián root, que hace los trabajos de máquina que los agentes no pueden: si está en marcha, qué ejecutó, cómo acabó cada trabajo, y sus registros",
+  "Show your messages, what agents ask or tell you, and each job's result": "Mostrar tus mensajes, lo que los agentes te preguntan o te dicen, y el resultado de cada trabajo",
+  "Show agents' progress updates": "Mostrar los avances de los agentes",
+  "Show agent comms: agents talking to each other and the hive's own notices": "Mostrar lo de los agentes: los agentes hablando entre sí y los avisos del propio Hive",
+  "Hide agent comms: agents talking to each other and the hive's own notices": "Ocultar lo de los agentes: los agentes hablando entre sí y los avisos del propio Hive",
+  // TROUBLE: the band under the top bar when something is wrong (shell.js band, simpleBits); product-test rung "Spanish when something is wrong"
+  "Can't reach your Hive.": "No se llega a tu Hive.",
+  "Trying again every few seconds; your typing is kept.": "Se vuelve a intentar cada pocos segundos; lo que escribes se guarda.",
+  "Your Hive isn't running right now, so it won't answer yet.": "Tu Hive no está en marcha ahora, así que aún no contestará.",
+  "Can't reach the server yet": "Aún no se llega al servidor",
+  // HAND: words the code writes straight onto an element (el.title =, textContent =, setAttribute), now through tr(); test/hand_set_words.mjs,
+  // product-test rung "Spanish in words set by hand"
+  "The call service isn't running, or this sign-in can't call.": "El servicio de llamadas no está en marcha, o con esta sesión no se puede llamar.",
+  "This browser can't use the microphone here.": "Este navegador no puede usar el micrófono aquí.",
+  "Drag to move, or click to send it to the other side of the screen": "Arrastra para moverlo, o haz clic para mandarlo al otro lado de la pantalla",
+  "Interactive page": "Página interactiva",
+  "Not saved: the page is empty.": "No se guardó: la página está vacía.",
+  "Couldn't draw this, so this is the source.": "No se pudo dibujar, así que aquí está el código fuente.",
+  "Copy LaTeX": "Copiar LaTeX",
+  "That isn't a link to a Slack message. In Slack, open the message's ⋯ menu and choose Copy link.": "Eso no es un enlace a un mensaje de Slack. En Slack, abre el menú ⋯ del mensaje y elige Copiar enlace.",
+  "Put back": "Volver a poner",
+  "Play": "Reproducir",
+  "Arrow: who started whom. Bar: share of the cost.": "Flecha: quién inició a quién. Barra: parte del coste.",
+  "Thicker: more posts. Bar: share of the cost.": "Más gruesa: más mensajes. Barra: parte del coste.",
+  "live": "en vivo",
+  // HTML: the call screens' words, built into innerHTML strings (ui/phone.js, call.js, call.html); test/hand_set_words.mjs scans those too.
+  "Voice speed": "Velocidad de la voz",
+  "Connecting…": "Conectando…",
+  "Call ended": "Llamada terminada",
+  "Muted": "Silenciado",
+  "Listening…": "Escuchando…",
+  "Thinking…": "Pensando…",
+  "Speaking": "Hablando",
+  "Go ahead, I'm listening": "Adelante, te escucho",
+  "Mute": "Silenciar",
+  "Unmute": "Activar sonido",
+  "Hang up": "Colgar",
+  "Decline": "Rechazar",
+  "Hide": "Ocultar",
+  "On hold": "En espera",
+  "Couldn't hang up. Try again.": "No se pudo colgar. Inténtalo de nuevo.",
+  "The browser didn't allow the microphone.": "El navegador no permitió el micrófono.",
+  "No microphone found on this device.": "No se encontró ningún micrófono en este dispositivo.",
+  "Call": "Llamar",
+  "No calls yet.": "Aún no hay llamadas.",
+  "Recent calls": "Llamadas recientes",
+  "Message the Hive": "Escribe al Hive",
+  "Call the Hive": "Llamar al Hive",   // the call page's big button and its title (call.html)
+  "the Hive": "el Hive",
+  "Agents can send you links and files here: hive post --thread phone-chat": "Los agentes pueden enviarte enlaces y archivos aquí: hive post --thread phone-chat",
   __patterns: [
-    [/^(\d+(?:\.\d+)?) ([KMGT]B)$/, "$1 $2"],   // a size reads the same in Spanish
+    // HTML (see above): the call screens' words with a name or a number in them
+    [/^(.+) is calling$/, "$1 te está llamando"],
+    [/^On hold: putting you through to (.*)$/, "En espera: te paso con $1"],
+    [/^On a call, (\d+) min · on another device$/, "En una llamada, $1 min · en otro dispositivo"],
+    [/^(\d+) min · transcript$/, "$1 min · transcripción"],
+    // HAND (see above): the hand-set words with a number in them
+    [/^Version (\d+) of (\d+)\. This page was changed later in this chat; the newest version is further down\.$/, "Versión $1 de $2. Esta página se cambió más adelante en este chat; la versión más nueva está más abajo."],
+    [/^Interactive page, (under 1|\d+) kB\. It runs sealed off from this dashboard and your login, with its network blocked\.$/, (_, n) => `Página interactiva, ${n === "under 1" ? "menos de 1" : n} kB. Funciona aislada de este panel y de tu sesión, con la red bloqueada.`],
+    [/^Show the first (\d+)$/, "Mostrar las primeras $1"],
+    [/^changed (just now|\d+(?:[.,]\d)?[smhd] ago)$/, (_, a) => `cambió ${AGO(a)}`],
+    [/^Show all · ([\d,]+) characters$/, (_, n) => `Mostrar todo · ${n.replace(/,/g, ".")} caracteres`],   // a long message (ui/message.js moreLabel)
+    [/^(\d+) new messages? ↓$/, (_, n) => n === "1" ? "1 mensaje nuevo ↓" : `${n} mensajes nuevos ↓`],
+    // the top bar (shell.js): the home link with the Hive's name, the usage pill's title and its "out in" note, a page open under More
+    [/^Home: (.+)$/, "Inicio: $1"], [/^Now: (.+)$/, "Ahora: $1"],
+    [/^· out in (.+)$/, (_, d) => `· se acaba en ${DUR(d)}`],
+    [/^More views \((.+) is open\)$/, "Más vistas ($1 está abierta)"],
+    [/^(\d+) for you$/, "$1 para ti"],
+    [/^Left on the accounts in use now \((.*)\): (\d+)% of this week(?:, (\d+)% of the 5-hour window)?(?:\. At (this week's average|the last 6 hours') pace it runs out in about ((?:\d,\d|[^,])+), (.+?)|(\. At this pace it lasts until the week resets))?(?:\. All accounts together: (\d+)% left)?\. Open Usage$/,
+      (_, names, w, f, how, d, at, lasts, all) => `Queda en las cuentas en uso ahora (${names}): ${w}% de esta semana` + (f ? `, ${f}% de la ventana de 5 horas` : "")
+        + (how ? `. Al ritmo ${how === "this week's average" ? "medio de esta semana" : "de las últimas 6 horas"} se acaba en unas ${DUR(d)}, ${at}` : lasts ? ". A este ritmo dura hasta que la semana se reinicia" : "")
+        + (all ? `. Todas las cuentas juntas: queda ${all}%` : "") + ". Abrir Uso"],
+    [/^(\d+(?:\.\d+)?) ([KMGT]B)$/, "$1 $2"],
+    // the band when something is wrong (shell.js band): the age of what is shown, the simple view's stop line, and simpleBits' "lost contact" (format.js lostText, ago)
+    [/^What you see is from (.+)\.$/, "Lo que ves es de las $1."],
+    [/^Lost contact, last (news|data) (.+)$/, (_, w, a) => `Sin contacto, ${w === "news" ? "últimas noticias" : "últimos datos"} ${AGO(a)}`],
+    [/^Your Hive has used up its allowance for now and is taking a break\.( What you send still gets an answer\.)?(?: It comes back (.+)\.)? Nothing is lost\.$/,
+      (_, own, at) => "Tu Hive ha gastado su asignación por ahora y se toma un descanso." + (own ? " Lo que envías sigue recibiendo respuesta." : "") + (at ? ` Vuelve el ${at}.` : "") + " No se pierde nada."],   // a size reads the same in Spanish
+    // a call's own lines in its transcript on the call page (phone.py writes them as "system"; call.js puts them through tr)
+    [/^transferred to (.+?): (.+)$/, "transferida a $1: $2"],
+    [/^calling (.+?): (.+)$/, (_, n, w) => `llamando a ${n === "a new agent on this thread" ? "un agente nuevo en este hilo" : n}: ${w}`],
+    [/^no new agent picked up in (\d+)s; the front desk answered$/, "ningún agente nuevo contestó en $1 s; contestó la recepción"],
+    [/^(.+) never picked up; message left on the board$/, "$1 no contestó; se dejó un mensaje en el tablero"],
+    [/^(.+) picked up$/, "$1 contestó"],
     // settings' "Delete all…" window (settings.js memory block), built with the number of lines
     [/^All (\d+) lines? go: new chats won't be given any of them\. The chats where you said them still have them, as does the Hive's backup, and an agent can still find them there\.$/, (_, n) => `${n === "1" ? "Se va la línea" : `Se van las ${n} líneas`}: los chats nuevos no recibirán ninguna. Los chats donde las dijiste aún las tienen, igual que la copia de seguridad del Hive, y un agente aún puede encontrarlas allí.`],
   ],

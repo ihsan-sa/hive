@@ -1,7 +1,7 @@
 // Data table. Columns are data: {label, key | render(row), num, mono, wrap, clip, width}. clip: takes the spare width and ellipsizes; give the cell a title.
 // Grid rows, not <table> (HANDOFF "Shared DOM changes" 6, R7b S8): one --cols on the table, every row a subgrid of it, so the columns line up.
 // Below 640px of container a row stacks: its lead cell (the first `lead` column, else the first non-mono `clip` one, else the first) as the title, each other cell a line with its column's name (css/components.css .tg).
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { button, empty } from "./kit.js";
 // fold: {n, id}: past n rows the rest hide behind "Show all" (R10 6); which tables are open is kept here by id, so a poll's redraw keeps it open.
 const OPEN = new Set();
@@ -21,6 +21,6 @@ export function table({ columns, rows, key, empty: none = "Nothing here.", capti
     fold && rows.length > fold.n + 2 ? h("div", { class: "tbl-fold" }, button(folded ? `Show all ${rows.length}` : `Show the first ${fold.n}`, (e, b) => {
       const w = b.closest(".tblw"), open = !OPEN.has(fold.id); open ? OPEN.add(fold.id) : OPEN.delete(fold.id);
       w.querySelectorAll(".tb>.tr").forEach((tr, i) => { tr.hidden = !open && i >= fold.n; }); open ? w.removeAttribute("data-fold") : w.setAttribute("data-fold", fold.n);
-      b.textContent = open ? `Show the first ${fold.n}` : `Show all ${rows.length}`;
+      b.textContent = tr(open ? `Show the first ${fold.n}` : `Show all ${rows.length}`);
     }, { kind: "quiet", size: "s" })) : null);
 }

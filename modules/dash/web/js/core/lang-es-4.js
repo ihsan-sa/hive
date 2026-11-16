@@ -3,7 +3,7 @@
 const pl = (n, one, many) => (n === "1" ? one : many);
 // A focus's state (its In short), said of a focus: "el enfoque" is masculine, a conversation is not, so "blocked" has a word of its own here.
 const FST = { "on track": "va bien", "at risk": "en riesgo", blocked: "bloqueado", "needs you": "te necesita", "waiting on others": "esperando a otros", paused: "en pausa", done: "hecho" };
-const fwas = w => (w === "needed you" ? "antes te necesitaba" : w === "was on track" ? "antes iba bien" : "antes " + (FST[w.slice(4)] || w.slice(4)));
+const fwas = w => (w === "no longer needs you" ? "ya no te necesita" : w === "was on track" ? "antes iba bien" : "antes " + (FST[w.slice(4)] || w.slice(4)));
 export default {
   "to you": "para ti",
   "Lately learned": "Aprendido últimamente",
@@ -530,7 +530,7 @@ export default {
   "at risk": "en riesgo",
   "waiting on others": "esperando a otros",
   "focus: blocked": "bloqueado",
-  "needed you": "antes te necesitaba",
+  "no longer needs you": "ya no te necesita",
   "Nothing new": "Nada nuevo",
   "since you last looked": "desde tu última visita",
   "Blocked": "Bloqueado",
@@ -562,7 +562,7 @@ export default {
   "One row per focus, a piece of your work with a goal, under where it stands: the ones that wait on you come first. Each row is the focus in a sentence or two. Click a focus name for the whole picture; Cards, beside the heading, shows every focus with its lines.": "Una fila por enfoque, una parte de tu trabajo con un objetivo, agrupadas según cómo va cada uno: los que te esperan van primero. Cada fila es el enfoque en una o dos frases. Haz clic en el nombre de un enfoque para verlo entero; Tarjetas, junto al título, muestra cada enfoque con sus líneas.",
   __patterns: [
     // The home's list of focuses, the In short and what is new since the last look
-    [/^In short(?:, said (.+?) ago and not since)?: (.+?)(?:, (was .+?|needed you))?(, and agents are on it now)?$/, (_, t, st, w, m) => `En pocas palabras${t ? `, dicho hace ${t} y no desde entonces` : ""}: ${FST[st] || st}${w ? ", " + fwas(w) : ""}${m ? ", y hay agentes en ello ahora" : ""}`],
+    [/^In short(?:, said (.+?) ago and not since)?: (.+?)(?:, (was .+?|no longer needs you))?(, and agents are on it now)?$/, (_, t, st, w, m) => `En pocas palabras${t ? `, dicho hace ${t} y no desde entonces` : ""}: ${FST[st] || st}${w ? ", " + fwas(w) : ""}${m ? ", y hay agentes en ello ahora" : ""}`],
     [/^was (on track|at risk|blocked|waiting on others|paused|done)$/, w => fwas(w)],
     [/^(\d+) more lines? here may be yours$/, (_, n) => `${n} ${pl(n, "línea más de aquí puede ser para ti", "líneas más de aquí pueden ser para ti")}`],
     [/^(\d+) lines? here may be yours to act on$/, (_, n) => `${n} ${pl(n, "línea de aquí puede ser para ti", "líneas de aquí pueden ser para ti")}`],
@@ -579,6 +579,7 @@ export default {
     [/^· (\d+(?:[.,]\d)?[smhd]) ago$/, "· hace $1"],
     [/^(\d+) lines? of the scoreboard got worse\.$/, (_, n) => `${n} ${pl(n, "línea del marcador empeoró", "líneas del marcador empeoraron")}.`],
     [/^Show (\d+) more$/, "Mostrar $1 más"],
+    [/^Show (\d+) more of (\d+) rows$/, "Mostrar $1 más de $2 filas"],   // a chat table (rich/table.js), before the "Show <name>" pattern below takes it
     [/^(\d+) like this$/, "$1 parecidos"],
     [/^(\d+) exchanges? in (\d+) conversations?$/, (_, e, c) => `${e} ${pl(e, "intercambio", "intercambios")} en ${c} ${pl(c, "conversación", "conversaciones")}`],
     [/^(\d+) recent, (\d+) older, in (\d+) conversations?$/, (_, r, o, c) => `${r} ${pl(r, "reciente", "recientes")}, ${o} ${pl(o, "anterior", "anteriores")}, en ${c} ${pl(c, "conversación", "conversaciones")}`],
@@ -707,7 +708,7 @@ export default {
     [/^for (.+)$/, "para $1"],
     [/^(\d+) min (\d+) s$/, "$1 min $2 s"],
     [/^(.+)'s cost per (.+?) from (.+) to (.+): (.+) in all$/, "Coste de $1 por $2 del $3 al $4: $5 en total"],   // E18r: agent.js chart label
-    [/^Left on the accounts in use now \((.+?)\): (\d+)% of this week([\s\S]*)\. Open Usage$/, (_, w, p, rest) => `Libre en las cuentas en uso ahora (${w}): ${p}% de esta semana${rest}. Abrir Uso`],
+    // the usage pill's title (shell.js appBits) is in lang-es-5.js, whole: this one left its middle in English
     // E18w
     [/^Agent ([a-z][\w-]*)$/, "Agente $1"],
     [/^(\d+) running · (\d+) (threads?|conversations?)(?: · (.+))?$/, (_, r, n, w, c) => `${r} en marcha · ${n} ${w.startsWith("t") ? pl(n, "hilo", "hilos") : pl(n, "conversación", "conversaciones")}${c ? " · " + c : ""}`],

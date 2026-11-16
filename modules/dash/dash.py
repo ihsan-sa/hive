@@ -221,6 +221,8 @@ def logins():
     five = jload(STATE / "usage_5h.json", {}) or {}
     resets = jload(STATE / "usage_resets.json", {}) or {}
     off, lines = paused_logins(), login_limits()
+    scoped = jload(STATE / "usage_scoped.json", {}) or {}
+    held = (jload(STATE / "starter.json", {}) or {}).get("limits") or {}
     out = []
     for l in c.get("logins") or []:
         p = str(Path(l).expanduser())
@@ -228,17 +230,36 @@ def logins():
         lv, at = LIVE.get(p), used.get("_checked")
         if lv and lv["at"] > (at or 0):  # the dashboard's own reading (every 30 s at best) is newer than the starter's (every 5 min)
             used, five, resets, at = {**used, p: lv["weekly"]}, {**five, p: lv["five"]}, {**resets, p: lv["resets"]}, lv["at"]
+            if lv.get("scoped") is not None: scoped = {**scoped, p: lv["scoped"]}
         out.append({"name": names.get(p) or Path(p).name.removeprefix(".claude-").lstrip("."), "path": p, "weekly": used.get(p),
                     "five": five.get(p) if isinstance(five, dict) else None, "paused": p in off, "read_at": at, "gap": USAGE_GAP.get(p), "read_error": USAGE_ERR.get(p),
                     "resets": (resets.get(p) if isinstance(resets, dict) else None) or {}, "plan": plan_of(p),
                     # no 5-hour limit on this plan: the usage API's five_hour is null on a successful read (cc0 shows 0.0)
                     "no_five_hour": isinstance(resets, dict) and p in resets and (resets[p].get("has_five_hour") is False
                                     or ("has_five_hour" not in resets[p] and isinstance(five, dict) and five.get(p) is None)),
+                    # a model's own weekly share inside the weekly limit (Fable's), and the models the starter holds on it now
+                    "scoped": scoped.get(p) if isinstance(scoped.get(p), dict) else {},
+                    "held_models": sorted(k.partition("#")[2] for k, v in held.items() if isinstance(k, str) and k.startswith(p + "#")
+                                          and isinstance(v, (int, float)) and v > time.time()),
                     "stop": {"weekly": mine.get("weekly"), "five_hour": mine.get("five_hour"), "global": c.get("usage_stop_pct")}})
     return out
 
 
 LIVE = {}  # {login path: {"at", "weekly", "five", "resets"}}: the dashboard's own usage readings, see live_usage()
+
+
+def scoped_shares(r):
+    """{family: {"percent", "resets"}} from a usage reply's limits[] rows of kind weekly_scoped (Fable's own weekly bar), as the starter reads them."""
+    out = {}
+    for row in (r or {}).get("limits") or []:
+        if not isinstance(row, dict) or row.get("kind") != "weekly_scoped" or not isinstance(row.get("percent"), (int, float)): continue
+        name = str((((row.get("scope") or {}).get("model") or {}).get("display_name")) or "").lower()
+        fam = next((f for f in ("fable", "opus", "sonnet") if f in name), None)
+        if not fam: continue
+        try: at = datetime.fromisoformat(row["resets_at"]).timestamp() if row.get("resets_at") else None
+        except (TypeError, ValueError): at = None
+        out[fam] = {"percent": row["percent"], "resets": at}
+    return out
 
 
 USAGE_ERR = {}  # {login path: why the last read failed}
@@ -267,7 +288,7 @@ def live_usage(base=30, most=900):
                 ep = lambda w: datetime.fromisoformat(w["resets_at"]).timestamp() if w and w.get("resets_at") else None
                 w, f = r.get("seven_day") or {}, r.get("five_hour")
                 LIVE[p] = {"at": time.time(), "weekly": w.get("utilization"), "five": (f or {}).get("utilization"),
-                           "resets": {"weekly": ep(w), "five_hour": ep(f), "has_five_hour": f is not None}}
+                           "resets": {"weekly": ep(w), "five_hour": ep(f), "has_five_hour": f is not None}, "scoped": scoped_shares(r)}
                 gap = max(base, gap * 0.9); USAGE_ERR.pop(p, None)
             except urllib.error.HTTPError as e:
                 if e.code == 429:
@@ -993,16 +1014,19 @@ def limit_hold(st):
     held = [(st.get("limits") or {}).get(l, 0) for l in every]
     return min(held) if held and min(held) > time.time() and not st.get("auth_told") else None
 
-def drafts_in(thread):
-    """The posts live agents are writing in this thread right now: cheap, as activity() is kept per out file until it changes."""
+def drafts_in(thread, steps=False):
+    """The posts live agents are writing in this thread right now: cheap, as activity() is kept per out file until it changes.
+    STEPS (E42b, ?steps=1): each run working in this thread also brings the code it has run since its last post, with or without a draft."""
     if not thread: return []
     got = []
     for f in sorted(RUN.glob("*.json")):
         r = jload(f, {}) or {}
         if not alive(r.get("pid")): continue
         d = activity(r.get("out"))["draft"]
-        if d and d["thread"] == thread: got.append({"name": r.get("name", f.stem), "draft": {**d, "thread": thread}})   # a post with no --thread opens a new conversation: it is not a reply in the one the agent runs in (person 111311262b35)
-    return got
+        d = {**d, "thread": thread} if d and d["thread"] == thread else None   # a post with no --thread opens a new conversation: it is not a reply in the one the agent runs in (person 111311262b35)
+        ran = ran_live(r.get("out")) if steps and r.get("thread") == thread else {"steps": []}
+        if d or ran["steps"]: got.append({"name": r.get("name", f.stem), "draft": d, **({"steps": ran["steps"], "more": ran["more"]} if steps else {})})
+    return [g for g in got if g["draft"] or g.get("steps")] if steps else [g for g in got if g["draft"]]
 
 def live():
     """The cheap part, polled by the web page: who is running and what the starter holds. No board parse."""
@@ -1505,27 +1529,41 @@ def _ran_clip(s, n=4000):
 
 
 def _ran_parse(p):
+    """{"calls": [...], "posts": {post id: call index}} for a session log. Read on from where the last read stopped (E42b: the open
+    chat reads a live run's steps every 0.5 s, and its log grows by streamed pieces many times a second)."""
     try: st = p.stat(); key = (st.st_mtime, st.st_size)
     except OSError: return None
     hit = _ran_files.get(str(p))
     if hit and hit[0] == key: return hit[1]
-    calls, idx, res = [], {}, {}
-    for e in jlines(p, 64 * 1024 * 1024):
+    v = hit[1] if hit and hit[1]["off"] <= st.st_size else None
+    if v is None: v = {"calls": [], "posts": {}, "idx": {}, "off": None}
+    calls, idx, posts = v["calls"], v["idx"], v["posts"]
+    try:
+        with open(p, "rb") as f:
+            if v["off"] is None:
+                f.seek(0, 2); n = f.tell(); f.seek(max(0, n - 64 * 1024 * 1024))
+                if n > 64 * 1024 * 1024: f.readline()   # drop a partial line
+            else: f.seek(v["off"])
+            start = f.tell(); data = f.read()
+    except OSError: return None
+    cut = data.rfind(b"\n") + 1   # a line still being written is read next time
+    v["off"] = start + cut
+    for ln in data[:cut].splitlines():
+        if ln.startswith(b'{"type":"stream_event"') or ln.startswith(b'{"type":"system"'): continue   # the bulk of a live log, and never a call
+        try: e = json.loads(ln)
+        except Exception: continue
         t = e.get("type")
         if t == "assistant":
             for c in (e.get("message") or {}).get("content") or []:
-                if isinstance(c, dict) and c.get("type") == "tool_use":
-                    idx[c.get("id")] = len(calls); calls.append({"name": c.get("name"), "in": c.get("input") or {}, "t": ts(e.get("timestamp"))})
+                if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("id") not in idx:
+                    idx[c.get("id")] = len(calls); calls.append({"name": c.get("name"), "in": c.get("input") or {}, "t": ts(e.get("timestamp")), "out": "", "err": False, "done": False})
         elif t == "user":
             for c in _blocks((e.get("message") or {}).get("content")):
                 if c.get("type") == "tool_result" and c.get("tool_use_id") in idx:
-                    res[idx[c["tool_use_id"]]] = (_ran_text(c), bool(c.get("is_error")))
-    posts = {}
-    for i, c in enumerate(calls):
-        c["out"], c["err"] = res.get(i, ("", False))
-        if c["name"] == "Bash" and _POST_CMD.search(str(c["in"].get("command") or "") + "\n"):
-            for pid in _RAN_ID.findall(c["out"][:400]): posts.setdefault(pid, i)
-    v = {"calls": calls, "posts": posts}
+                    i = idx[c["tool_use_id"]]; k = calls[i]
+                    k["out"], k["err"], k["done"] = _ran_text(c), bool(c.get("is_error")), True
+                    if k["name"] == "Bash" and _POST_CMD.search(str(k["in"].get("command") or "") + "\n"):
+                        for pid in _RAN_ID.findall(k["out"][:400]): posts.setdefault(pid, i)
     if len(_ran_files) > 64: _ran_files.pop(next(iter(_ran_files)))
     _ran_files[str(p)] = (key, v)
     return v
@@ -1538,7 +1576,8 @@ def _ran_step(c):
         cmd = str(i.get("command") or "")
         if not cmd.strip() or _POST_CMD.search(cmd + "\n") or _ran_word(cmd) in RAN_SKIP: return None
         lang = "python" if _ran_word(cmd).startswith("python") else "node" if _ran_word(cmd) == "node" else "shell"
-        return {"what": short(i.get("description") or "", 160), "lang": lang, "code": redact(_ran_clip(cmd)), "out": redact(_ran_clip(c["out"])), "err": c["err"], "t": c["t"]}
+        return {"what": short(i.get("description") or "", 160), "lang": lang, "code": redact(_ran_clip(cmd)), "out": redact(_ran_clip(c["out"])), "err": c["err"], "t": c["t"],
+                **({} if c.get("done", True) else {"running": True})}
     if c["name"] in ("Write", "Edit"):
         fp = str(i.get("file_path") or "")
         if Path(fp).suffix.lower() not in RAN_EXT: return None
@@ -1569,6 +1608,27 @@ def ran_for(pid, who=None, at=None, limit=30):
         steps = [s for s in (_ran_step(c) for c in v["calls"][start:end]) if s]
         return {"steps": steps[-limit:], "more": max(0, len(steps) - limit)}
     return {"steps": []}
+
+
+_ran_live = {}   # out file -> ((mtime, size), result): the steps of a live run, kept until its log changes
+
+
+def ran_live(out, limit=30):
+    """E42b: {"steps": [...], "more": N} the code a live run has run since its last post (a step with no result yet is "running").
+    The same calls, cut the same way, as the fold ran_for() gives the post it writes next, so what showed live is what stays."""
+    p = Path(out or "")
+    try: st = p.stat(); key = (st.st_mtime, st.st_size)
+    except OSError: return {"steps": []}
+    hit = _ran_live.get(str(p))
+    if hit and hit[0] == key: return hit[1]
+    v = _ran_parse(p)
+    if not v: return {"steps": []}
+    start = max(v["posts"].values(), default=-1) + 1
+    steps = [s for s in (_ran_step(c) for c in v["calls"][start:]) if s]
+    r = {"steps": steps[-limit:], "more": max(0, len(steps) - limit)}
+    if len(_ran_live) > 64: _ran_live.pop(next(iter(_ran_live)))
+    _ran_live[str(p)] = (key, r)
+    return r
 
 
 def _blocks(c):
@@ -5766,7 +5826,7 @@ def serve(port):
                 if self.route != "open": lv["starter"] = starter_up()  # read every 1.5 s with the rest: a stop or restart shows in ~2 s, not at /api/app's next 15 s read
                 self.send(json.dumps(lv, default=str).encode(), J)
             elif u.path == "/api/drafts":   # E11b: polled every 0.1 s (E11d) by an open thread awaiting its reply, so the first words show without the 1.5 s live poll
-                self.send(json.dumps(drafts_in((q.get("thread") or [""])[0]) if self.route != "outside" or self.mode == "full" else []).encode(), J)
+                self.send(json.dumps(drafts_in((q.get("thread") or [""])[0], (q.get("steps") or [""])[0] == "1") if self.route != "outside" or self.mode == "full" else []).encode(), J)
             elif u.path == "/api/jobs":
                 self.send(json.dumps(jobs_for(jobs_c.get(), self.route != "outside" or self.mode == "full"), default=str).encode(), J)
             elif u.path in ("/api/board", "/api/log"):

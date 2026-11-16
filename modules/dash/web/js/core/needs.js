@@ -9,14 +9,14 @@
 // faded, a system thread, or one the summary dropped as obsolete until the thread said something newer.
 // /api/needs-you is read once here, every five minutes, for every page that wants it (S.needsYou).
 import { S, jget, emit } from "./store.js";
-import { threadState, isSystemThread, btwParent, displayText, agentLabel } from "./model.js";
+import { threadState, isSystemThread, btwParent, displayText, agentLabel, stRead, ASK_FOR } from "./model.js";
 import { seen } from "./inbox.js";
 import { simpleOn } from "./simple.js";
 import { firstSentence, mdPlain, now, DAY, MIN } from "./format.js";
 import { faded, archived, meta as tmeta } from "../ui/threadmeta.js";
 import { APP_NAV } from "./nav.js";
 
-export const NEEDS_FOR = 7 * DAY, NEEDS_EVERY = 5 * MIN;
+export const NEEDS_FOR = ASK_FOR, NEEDS_EVERY = 5 * MIN;
 const LISTS = ["waiting", "stale", "held", "nobody", "done", "states", "built", "stalled", "decided"];
 /** The summary file as the pages read it: every list present, and a file with no waiting list is "absent" (not written yet). */
 // A file missing a list must not crash a page: fill the lists. No file, an empty one, or one that says so is "absent".
@@ -40,12 +40,9 @@ export function loadNeedsYou(force) {
   return L.p;
 }
 
-/** A status bar's last line, split into its state word and the words after it, without the agent's name tag. */
-export function standLine(text) {
-  const l = String(text || "").split("\n").filter(Boolean), last = (l[l.length - 1] || "").replace(/\s*\(a[0-9a-f]{4,5}\)/g, "").trim();
-  const m = last.match(/^(Done|Blocked|Needs the person|Waiting|Told to stop):\s*/i);
-  return { word: m ? m[1].toLowerCase() : "", line: m ? last.slice(m[0].length) : last, full: last };
-}
+/** A status bar's last line, split into its state word and the words after it, without the agent's name tag. Read by model.js stRead, the one reader
+ *  of a state line, so the list and the conversation's head can't disagree about whether a summary asks. */
+export function standLine(text) { const r = stRead(text), b = r.state; return { word: b ? b.kind : "", line: b ? b.tail : r.last, full: r.last }; }
 /** Whether the person has said something in the thread since t. */
 export function answeredSince(th, t) { const d = S.threads.get(th); if (!d) return false; for (let i = d.posts.length - 1; i >= 0; i--) { const p = d.posts[i]; if (p.t <= t) return false; if (p.from === "person") return true; } return false; }
 const theirs = d => !simpleOn() || d.posts.some(p => p.from === "person");
@@ -111,10 +108,10 @@ function waitingOnNow() {
   if (!simpleOn()) {
     const rest = [];
     // A later Done or Told to stop on the thread doesn't settle a row: a For you line waits until they answer it (answeredSince) or an agent drops it (brief.dropped). A thread with a live busy agent is out above.
-    for (const w of (v && v.waiting) || []) { const t = w && w.at ? Date.parse(w.at) : 0; if (w && !w.stale && w.thread && open(w.thread)) rest.push({ th: w.thread, text: w.action || "", t, src: "file", post: w.post || null }); }
+    for (const w of (v && v.waiting) || []) { const t = w && w.at ? Date.parse(w.at) : 0; if (w && !w.stale && w.thread && open(w.thread)) rest.push({ th: w.thread, text: w.action || "", t, src: "file", post: w.post || null, ...(w.confirmed ? { seenAt: Date.parse(w.confirmed) } : {}) }); }
     for (const th of Object.keys(st)) { const s = standLine(st[th].text), t = st[th].at * 1e3; if (s.word === "needs the person" && now() - t < NEEDS_FOR && open(th)) rest.push({ th, text: s.line, t, src: "bar" }); }
     rest.sort((a, b) => b.t - a.t);
-    for (const w of rest) if (!answeredSince(w.th, w.t)) take(w);   // once they've answered since, it's not waiting on them
+    for (const w of rest) if (!answeredSince(w.th, Math.max(w.t, w.seenAt || 0))) take(w);   // once they've answered since, it's not waiting on them; an ask the register re-read since (confirmed) counts from that read
   }
   foldSameAct(out, v && v.brief && v.brief.needs);
   return out.filter(w => !w.foldedIn).sort((a, b) => b.t - a.t);
@@ -177,6 +174,15 @@ export const needsSplit = () => { const w = waitingOn(), recent = w.filter(x => 
 /** Whether this thread is on the list: the rail's Needs you group and the one count read the same answer. */
 /** Does this conversation itself wait on the person (a live ask, a Needs line, a state word)? A focus summary's asks belong to the focus and show on its card, not here. */
 export const waitsOn = th => waitingNow().some(w => (w.th === th || (w.also || []).includes(th)) && w.src !== "summary");
+/** This conversation's own place on the list, for its head (model.js threadStand): {where: "now" | "older" | "later" | "moot", text, src, st, t}, or null when it isn't on it.
+ *  where is "now" exactly when waitsOn(th) is true, so the head and the count can't disagree. A conversation folded into another's row (one act settles both) is where
+ *  that row is and answers with its own words. A focus summary's asks belong to the focus, not here. */
+export function waitOf(th) {
+  const w = all().find(x => x.src !== "summary" && (x.th === th || (x.also || []).includes(th)));
+  if (!w) return null;
+  const e = laterOf(w), own = w.th === th ? w : (w.folded || []).find(x => x.th === th) || w;
+  return { where: e ? (e.what === "moot" ? "moot" : "later") : isOlder(w) ? "older" : "now", text: own.text || w.text || "", src: own.src, st: own.st || null, t: own.t || w.t || 0 };
+}
 // Where the full list is read: the Needs you page, when this build has one (an installed Hive hasn't; the simple look lists the live ones on the home).
 // The literal "#needs", not href("needs"): the export removes every line with that call.
 const hasNeeds = () => Object.values(APP_NAV.groups || {}).some(g => g.includes("needs")) || !!(APP_NAV.belongs && APP_NAV.belongs.needs) || (APP_NAV.more || []).includes("needs");

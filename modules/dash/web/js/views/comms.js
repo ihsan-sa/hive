@@ -9,11 +9,11 @@
 import { h, morph, tr } from "../core/dom.js";
 import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
-import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
+import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitOf, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
 import { workBar, workBarHeld } from "../ui/workbar.js";
 import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci, workingIn, leadOf, cardSince, newSince, hiddenAsks, markSeen as lookAt, seenLeave } from "../core/foci.js";
 import { newIn } from "./focus.js";
-import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, fresh7, asksQuestion, fileInfo } from "../core/model.js";
+import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadStand, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
 import { href, threadHref, go, parse } from "../core/router.js";
 import { yoursSearch, yoursText } from "../core/yours.js";
@@ -84,7 +84,7 @@ const VIEW_KEY = "hive.comms.view", HIDE_KEY = "hive.comms.hidefaded";
 const store = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* this page only */ } };
 const C = { view: (() => { try { const v = localStorage.getItem(VIEW_KEY); return v === "recent" ? v : "focus"; } catch (e) { return "focus"; } })(),
   hideFaded: (() => { try { return localStorage.getItem(HIDE_KEY) !== "0"; } catch (e) { return true; } })(),   // on unless the person turned it off (2026-11-08)
-  err: "", imp: false, conv: undefined, q: "", show: null, commsNew: true, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, find: false, strip: false };
+  err: "", imp: false, conv: undefined, q: "", show: null, commsNew: true, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, more: null, find: false, strip: false };
 /** A change to a conversation (pin, star, archive) is shown at once; when the server refuses it the list goes back, and this says why for a few seconds. */
 const tryMeta = (th, patch, ctx) => setMeta(th, patch).catch(e => { C.err = "Couldn't save that: " + (e && e.message || "the server didn't answer") + "."; ctx.update(); });   // the error stays until its Close: no clock (WCAG 2.2.1)
 // What the message list holds. matched grows as posts arrive; pend is what sync() still has to append.
@@ -310,7 +310,7 @@ function paint(box, ctx) {
 function setJump() {
   if (!L.jump) return;
   L.jump.hidden = !L.unseen;
-  L.jump.textContent = L.unseen ? `${plural(L.unseen, "new message")} ↓` : "";
+  L.jump.textContent = L.unseen ? tr(`${plural(L.unseen, "new message")} ↓`) : "";
 }
 function flash(box, el) {
   // a short message sits a third down; a tall one starts near the top so it reads from its first line
@@ -341,11 +341,13 @@ function syncOut(c, box) {
 // E11: a reply still being written shows under the messages and grows each read (0.1-0.2 s while it is written, E11b/E41; else the 1.5 s poll); it goes once the post is on the board.
 function syncDrafts(c, box) {
   const th = c.thread; if (!th || !L.drafts) return;
-  const posted = a => (S.threads.get(th)?.posts || []).some(p => p.from === a.name && p.t > now() - 10 * MIN && String(p.text || "").includes(a.draft.text.trim().slice(0, 60)));
+  const posted = a => a.draft && (S.threads.get(th)?.posts || []).some(p => p.from === a.name && p.t > now() - 10 * MIN && String(p.text || "").includes(a.draft.text.trim().slice(0, 60)));
   const fast = L.fast && L.fast.th === th ? L.fast.ds : [];   // E11b: the 0.3 s read is newer than the 1.5 s one
-  const ds = [...fast.map(f => ({ ...(S.running?.get(f.name) || {}), name: f.name, draft: f.draft })),
-    ...(S.live ? S.live.agents : []).filter(a => a.alive !== false && a.draft && a.draft.thread === th && !fast.some(f => f.name === a.name))].filter(a => !posted(a));
-  const sig = ds.map(a => a.name + ":" + a.draft.text.length).join();
+  // E42b: a fast read also brings the code each run here has run since its last post (steps), with or without a draft
+  const ds = [...fast.map(f => ({ ...(S.running?.get(f.name) || {}), name: f.name, draft: f.draft, steps: f.steps || [], more: f.more || 0 })),
+    ...(S.live ? S.live.agents : []).filter(a => a.alive !== false && a.draft && a.draft.thread === th && !fast.some(f => f.name === a.name))]
+    .map(a => posted(a) ? { ...a, draft: null } : a).filter(a => a.draft || (a.steps && a.steps.length));
+  const sig = ds.map(a => a.name + ":" + (a.draft ? a.draft.text.length : "-") + ":" + (a.steps || []).map(s => (s.running ? "r" : "d") + (s.out || "").length).join("/")).join();
   if (sig === L.draftSig) return;
   const stick = atEnd(box) || L.stuck; L.draftSig = sig;
   L.drafts.replaceChildren(...ds.map(draftMessage));
@@ -363,22 +365,27 @@ function waitingReply(th) {
 /** E41: a reply is being written in this chat right now (the last fast read had one, or the 1.5 s poll saw one): keep reading it
  *  fast to its last word, so a long reply, or a second post in the same run, streams instead of growing in 1.5 s steps. */
 function draftLive(th) {
-  return !!(L.fast && L.fast.th === th && L.fast.ds.length) || (S.live ? S.live.agents : []).some(a => a.alive !== false && a.draft && a.draft.thread === th);
+  return !!(L.fast && L.fast.th === th && L.fast.ds.some(d => d.draft)) || (S.live ? S.live.agents : []).some(a => a.alive !== false && a.draft && a.draft.thread === th);
+}
+/** E42b: an agent is working on this chat (its run is for this thread): read its steps every 0.5 s, so each command shows as it runs. */
+function workingHere(th) {
+  return (S.live ? S.live.agents : []).some(a => a.alive !== false && a.thread === th) || !!(L.fast && L.fast.th === th && L.fast.ds.length);
 }
 function fastDrafts(th) {
   if (!th || !can("read") || L.fastTh === th) return;   // its loop runs (L.fastTh is cleared only by the loop that owns it)
-  if (!waitingReply(th) && !draftLive(th)) { if (L.fast && L.fast.th === th) L.fast = null; return; }
+  if (!waitingReply(th) && !draftLive(th) && !workingHere(th)) { if (L.fast && L.fast.th === th) { L.fast = null; syncDrafts({ thread: th }, L.box); } return; }
   clearTimeout(L.fastTimer); L.fastTh = th;
   const tick = async () => {
     L.fastTimer = null;
     if (L.fastTh !== th) return;
     if (!L.box || !L.box.isConnected) { L.fastTh = null; return; }
     if (L.th !== th) { L.fast = null; L.fastTh = null; return; }   // the person opened another conversation: this one's reply must not be typed out there (person 11131127c75f)
-    try { const ds = await jget("/api/drafts?thread=" + encodeURIComponent(th)); if (L.fastTh === th && L.th === th) { L.fast = { th, ds: Array.isArray(ds) ? ds : [] }; syncDrafts({ thread: th }, L.box); } } catch (e) { /* the 1.5 s poll still carries drafts */ }
+    try { const ds = await jget("/api/drafts?steps=1&thread=" + encodeURIComponent(th)); if (L.fastTh === th && L.th === th) { L.fast = { th, ds: Array.isArray(ds) ? ds : [] }; syncDrafts({ thread: th }, L.box); } } catch (e) { /* the 1.5 s poll still carries drafts */ }
     if (L.fastTh !== th) return;   // another thread opened: its own loop runs
     if (waitingReply(th)) L.fastTimer = setTimeout(tick, 100);   // E11d: 0.1 s, not 0.3: only while a chat waits for its first reply (a few seconds), and the read is cached per out file
     else if (draftLive(th)) L.fastTimer = setTimeout(tick, 200);   // E41: 0.2 s while a draft grows (the model's text arrives every 0.2 s or less; a read costs under 1 ms)
-    else { L.fast = null; L.fastTh = null; }
+    else if (workingHere(th)) L.fastTimer = setTimeout(tick, 500);   // E42b: 0.5 s while an agent works here, for its steps (the read is cached per log size)
+    else { L.fast = null; L.fastTh = null; syncDrafts({ thread: th }, L.box); }
   };
   L.fastTimer = setTimeout(tick, 0);
 }
@@ -743,7 +750,7 @@ function syncThreads(c, ctx) {
   const tree = sections(rows, ctx, { dense: true, empty: simpleOn() ? "No conversations yet. Start one with New conversation." : S.threads.size ? (app() ? "Nothing here for you yet. The rest is agents talking among themselves." : "Nothing here with what Show has on. Turn on Agent comms to see all of them.") : app() ? "No conversations yet. Start one with New." : "No threads." });
   if (tl.firstChild) morph(tl.firstChild, tree); else tl.append(tree);
   const fb = document.querySelector("#main .cm-foldall");   // the list is built after the bar, so the bar's word catches up here
-  if (fb) { fb.hidden = foldNone(); if (fb.title !== foldWord()) fb.title = foldWord(); }
+  if (fb) { fb.hidden = foldNone(); const w = tr(foldWord()); if (fb.title !== w) fb.title = w; }   // set by hand, so through tr as h() would
   if (fresh) { const cur = tl.querySelector("[aria-current]"); if (cur) { const r = cur.getBoundingClientRect(), b = tl.getBoundingClientRect(); if (r.top < b.top || r.bottom > b.bottom) tl.scrollTop += r.top - b.top - 40; } }
 }
 
@@ -760,26 +767,36 @@ const d0 = th => { const d = S.threads.get(th); return d && d.posts[0] ? d.posts
 function lastMine(th) { const d = S.threads.get(th); if (!d) return null; for (let i = d.posts.length - 1; i >= 0; i--) if (d.posts[i].from === "person") return d.posts[i]; return null; }
 const notBuilt = () => h("span", { class: "nb", title: "Designed, not built yet: the server needs to do this" }, "not built yet");
 
-/** The two lines an agent (or the status refresher) wrote with `hive status`: what the thread is about, where it stands. */
-const lastAt = th => { const d = S.threads.get(th), p = d && d.posts.at(-1); return p ? p.t : 0; };
-const moreOpen = new Set();   // threads whose status "More" is open: a redraw (a new post) keeps it open (R15)
-const stOpen = new Set();   // threads whose summary popover is open (Nov 8 §8.4)
+/**
+ * Where the conversation stands, in its head (the person, 11160014bf8b: "tell me what I need to know when"). An agent's summary (`hive status`) opens with
+ * what the conversation is about, which its title says already, and ends with its state line ("Waiting: ...", "Needs the person: ..."), which the head
+ * used to cut off. threadStand() reads the summary against the needs list and what is happening now; the bar leads with that state as a mark and a word,
+ * then the one line, and opens to the whole summary. It says "Needs you" exactly when the one count has the conversation (needs.js waitOf), in the list's
+ * words, so a conversation on the list has a bar even before an agent wrote it a summary.
+ */
+const stOpen = new Set();   // threads whose summary is open (Nov 8 §8.4): a redraw (a new post) keeps it open
+const stand = th => inConversation(th, () => threadStand(th, seen, waitOf(th)));   // not held back until the count is known: like the rail's Needs you group, it settles as the reads land
+const stAge = s => `updated ${ago(s.at)}${s.since ? ` · ${plural(s.since, "message")} since` : ""}`, stBy = s => `Summary by ${s.from}`;   // whole lines, so the language table can match them (lang-es-6.js)
 function statusBar(th) {
-  const r = th && S.threadStatus && S.threadStatus[th]; if (!r) return null;
-  const [a, ...rest] = r.text.split("\n");
-  // Nov 8 §8.4: one muted line in the head beside the title; clicking it opens the whole summary as a popover under the head.
-  const open = stOpen.has(th);
+  const s = th && stand(th); if (!s) return null;
+  const open = stOpen.has(th), r = (S.threadStatus || {})[th];
   if (can("tier") && !simpleOn()) loadTiers(L.ctx && L.ctx.update);
   const tierChip = can("tier") && !simpleOn() ? threadTierChip(th, focusOf(th)) : null;
-  return h("div", { class: "cm-status cm-strip", "data-key": "status", "data-fold": "", "data-open": open ? "" : null, role: "note", "aria-label": "Thread status" },
-    h("b", { class: "cm-strip-a", role: "button", tabindex: "0", "aria-expanded": String(open), title: open ? "Hide the summary" : "Show the whole summary",
+  return h("div", { class: "cm-status cm-strip", "data-key": "status", "data-open": open ? "" : null, "data-state": s.key, "data-tone": status(s.key).tone, role: "note", "aria-label": "Where it stands" },
+    h("b", { class: "cm-strip-a", role: "button", tabindex: "0", "aria-expanded": String(open), title: s.bare ? (open ? "Show less" : "Show all of it") : open ? "Hide the summary" : "Show the whole summary",
       onclick: e => { e.stopPropagation(); open ? stOpen.delete(th) : stOpen.add(th); L.ctx && L.ctx.update(); },
-      onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } } }, a), rest.length ? h("span", { class: "cm-strip-b" }, rest[0]) : null,
-    rest.length > 1 ? h("details", { class: "cm-status-more", open: moreOpen.has(th) || null, ontoggle: (e, n) => { if (e.target === n) n.open ? moreOpen.add(th) : moreOpen.delete(th); } }, h("summary", null, "More"), h("p", null, rest.slice(1).join(" "))) : null,
+      onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } } },
+      // the state and its one line stay together; the second fact is dropped first when the row is short (chat.css)
+      h("span", { class: "cm-st-main" }, statusDot(s.key, { live: s.running }), h("span", { class: "cm-st-w" }, s.word), s.text ? h("span", { class: "cm-st-t" }, " · ", s.text) : null),
+      // data-dup: the open summary says this line already, so it shows only while the bar is closed
+      s.also ? h("span", { class: "cm-st-also", "data-dup": s.dup ? "" : null }, s.also) : null),
+    s.more.length ? h("span", { class: "cm-strip-b" }, s.more.map(l => h("span", { class: "cm-st-l" }, l))) : null,
     // The work tier, only when it isn't its focus's (a9179, rung WT-1): the focus card already says the focus's.
     tierChip,
+    // bare: on the list with no summary yet, so there is no age and nothing to reply about; the conversation's own messages say the rest
+    s.bare ? null : h("span", { class: "meta cm-st-age", title: stBy(s) }, stAge(s)),
     // One agent named per conversation (R6 review): the strip names who is on it; the summary's author is on hover.
-    h("span", { class: "meta cm-status-m cm-strip-m", title: "Summary by " + r.from }, `updated ${ago(r.at * 1e3)}${lastAt(th) ? " · last post " + ago(lastAt(th)) : ""}`,
+    s.bare ? null : h("span", { class: "meta cm-status-m cm-strip-m", title: stBy(s) }, stAge(s),
       can("post") ? h("button", { type: "button", class: "cm-status-r", title: "Reply about this summary", onclick: () => quoteRef(th, { who: r.from, where: "summary", text: r.text }) }, "Reply") : null));
 }
 
@@ -874,12 +891,14 @@ function openRowMenu(b, th, ctx) {
   m.querySelector(".menu-i")?.focus();
 }
 
-// §8.4 phone: the head shows only the summary's first line, under the title; the rest of it opens with the title's menu (hidden above 699 px).
+// §8.4 phone: the head shows where it stands in one line under the title; the title's menu says it in full, with the rest of the summary (hidden above 699 px). Its own scroll box (chat.css), so a long summary doesn't push the menu's rows off the sheet.
 function stMenu(th) {
-  const r = th && S.threadStatus && S.threadStatus[th]; if (!r) return null;
-  const rest = r.text.split("\n").slice(1).filter(l => l.trim());
-  return rest.length ? h("div", { class: "cm-menu-st", role: "note", "aria-label": "Where it stands" }, rest.map(l => h("p", null, l)),
-    h("p", { class: "meta", title: "Summary by " + r.from }, "updated " + ago(r.at * 1e3))) : null;
+  const s = th && stand(th); if (!s) return null;
+  return h("div", { class: "cm-menu-st", role: "note", "aria-label": "Where it stands", "data-state": s.key, "data-tone": status(s.key).tone },
+    h("p", { class: "cm-menu-st-a" }, statusDot(s.key, { live: s.running }), h("b", null, s.word), s.text ? " · " : null, s.text || null),
+    s.also && !s.dup ? h("p", { class: "cm-menu-st-also" }, s.also) : null,   // the second fact, unless the summary's lines below say it
+    s.more.map(l => h("p", null, l)),
+    s.bare ? null : h("p", { class: "meta", title: stBy(s) }, stAge(s)));
 }
 function titleMenu(c, n, d, off, ctx) {
   const th = c.thread, full = th && app() && !simpleOn(), mine = can("post");
@@ -974,6 +993,8 @@ function viewBar(ctx) {
       title: C.hideFaded ? `Show the ${nFaded} marked Likely not needed again` : `Hide the ${nFaded} conversations marked Likely not needed`,
       onclick: () => { C.hideFaded = !C.hideFaded; store(HIDE_KEY, C.hideFaded ? "1" : "0"); ctx.update(); } }, h("i", { "aria-hidden": "true" }), "Hide not needed"));
 }
+// The phone's line under the title: the state, why the count doesn't have it when it is on the list but out of it ("You put this off": the bar says that as its second fact, and this line has no room for one), then the one line.
+const titleSub = th => { const s = th && stand(th); return s ? h("span", { class: "cm-title-sub", "data-state": s.key, "data-tone": status(s.key).tone }, statusDot(s.key, { live: s.running }), h("b", null, s.word), s.why ? " · " : null, s.why || null, s.text ? " · " : null, s.text || null) : null; };
 function head(c, ctx) {
   if (c.thread && app()) import("../ui/preview.js").then(m => m.autoFiles(c.thread));
   const d = c.thread && S.threads.get(c.thread), n = L.matched.length, off = maskFor(c) !== SHOW.ALL && !C.q.trim() ? L.src.length - n : 0;
@@ -981,16 +1002,16 @@ function head(c, ctx) {
   const people = simpleOn() || !c.thread ? [] : threadPeople(c.thread).filter(m => m !== "person");
   const who = simpleOn() || c.thread ? [] : c.agent ? [...new Set(S.posts.filter(p => p.from === c.agent).map(p => p.th))].slice(-14).map(t => threadRef(t)) : [];
   const find = C.find || !!C.q.trim();
+  const more = !!c.thread && C.more === c.thread;   // the folded tools are open (chat.css shows the More button under 600 px only)
   requestAnimationFrame(watchHead);
-  return h("header", { class: "cm-head", "data-key": "head", "data-find": find ? "" : null, "data-tight": headTight ? "" : null },
+  return h("header", { class: "cm-head", "data-key": "head", "data-find": find ? "" : null, "data-tight": headTight ? "" : null, "data-more": more ? "" : null },
     h("div", { class: "cm-tt", "data-dev": app() ? null : "" },
       sideBtn(),
       h("a", { class: "btn cm-back", href: href("comms"), "data-kind": "icon", "aria-label": app() ? "Chats" : "Threads", title: app() ? "Chats" : "Threads" }, icon("chevron-left")),
       c.thread && app() && !simpleOn() ? threadCrumb(c.thread) : null,
       h("button", { type: "button", class: "cm-title-b", "data-hid": off > 0 && !simpleOn() ? "" : null, title: off > 0 && !simpleOn() ? `${off} hidden: open for the way to show them` : null, "aria-haspopup": "true", "aria-expanded": String(C.menu === "title"), onclick: e => { e.stopPropagation(); C.menu = C.menu === "title" ? null : "title"; ctx.update(); } },
         h("h1", { class: "cm-title" }, title), icon("chevron-down"),
-        c.thread && S.threadStatus?.[c.thread] ? h("span", { class: "cm-title-sub" }, S.threadStatus[c.thread].text.split("\n")[0]) : null),   // §8.4 phone: the summary's first line under the title
-      statusBar(c.thread),
+        titleSub(c.thread)),   // §8.4 phone: where it stands, under the title
       h("span", { class: "meta cm-count" }, (C.q.trim() ? plural(n, "match", "matches") : plural(n, app() ? "message" : "post")) + (d ? ` · since ${stamp(d.first)}` : "")),
       c.thread && !app() && title !== c.thread ? h("span", { class: "cm-id" }, h("code", { class: "meta", title: "Its id on the board" }, c.thread), copyButton(c.thread)) : null),
     h("div", { class: "cm-tools" },
@@ -1001,7 +1022,10 @@ function head(c, ctx) {
         onclick: () => { C.find = !find; if (!C.find) C.q = ""; ctx.update(); if (C.find) queueMicrotask(() => document.querySelector(".cm-find")?.focus()); } }, icon("search")),
       c.thread && SH.get(c.thread)?.map && Object.values(SH.get(c.thread).map).some(x => x.show !== "full") ? h("button", { type: "button", class: "btn cm-showall", "data-size": "s", "aria-pressed": String(showAll(c.thread)), title: "Show every message in full, not shortened to one line", "aria-label": "All: show every message", onclick: () => { setShowAll(c.thread, !showAll(c.thread)); L.rebuild = true; L.keep = true; ctx.update(); } }, h("span", { class: "cm-sa-l" }, "Show every message"), h("span", { class: "cm-sa-s", "aria-hidden": "true" }, "All")) : null,
       c.thread ? button("Files", () => import("../ui/preview.js").then(m => m.openFiles()), { kind: "icon", icon: "folder", cls: "cm-files", title: "Files: this conversation's and the projects'" }) : null,
-      c.thread ? asideBtn(c.thread, ctx) : null),
+      c.thread ? asideBtn(c.thread, ctx) : null,
+      c.thread ? h("button", { type: "button", class: "btn cm-more-b", "data-kind": "icon", "aria-label": "More tools", title: "More tools", "aria-expanded": String(more),
+        onclick: e => { e.stopPropagation(); C.more = more ? null : c.thread; ctx.update(); } }, icon("more")) : null),
+    statusBar(c.thread),   // where it stands: its own row under the title and the tools (hidden on a phone, where the title's sub line says it)
     C.menu === "title" || (C.menu === "asides" && c.thread) ? scrim(() => { C.menu = null; ctx.update(); }) : null,
     C.menu === "title" ? titleMenu(c, n, d, off, ctx) : null,
     C.menu === "asides" && c.thread ? asideMenu(c.thread) : null,
@@ -1151,8 +1175,11 @@ function pickLines(lines, n, since) {
 /** A focus's state word in the interface language. A language that says a focus's state differently from a conversation's (Spanish: "bloqueado",
  *  "bloqueada") keeps the focus's word under "focus: <state>" (core/lang-es-4.js); without one it is the plain word. */
 const focusState = s => { const k = "focus: " + s, t = tr(k); return t === k ? s : t; };
-/** The state an In short had before it turned, as words: "was at risk", and "needed you" (never "was needs you"). */
-const wasWord = w => (w === "needs you" ? "needed you" : "was " + w);
+/** The state an In short had before it turned, as words: "was at risk", and "no longer needs you" (never 'was needs you'; and not 'needed you',
+ *  which readers of a List row, where the tag stands alone under its group's heading, took for a focus that might still need them: the lab's
+ *  readings 20261116-0820, -0851 and -0917, 5 of 12 readers of a copy where nothing waited). The two phrases the app never shows are in single
+ *  quotes so test/lang_left.mjs, which reads every double-quoted string in js/, does not list them as English left. */
+const wasWord = w => (w === "needs you" ? "no longer needs you" : "was " + w);
 /** An In short's state as the card's and the page's word. Two things keep it honest (review C1, C2): a word said more than LEAD_OLD ago is drawn
  *  muted with its age beside it, since "on track" from two days back is a memory, not a reading; and while the change is new to the person
  *  (`since`: their last look), the state it had before is said after it ("was on track"). moving: agents are on the focus now. */
@@ -1481,10 +1508,10 @@ export default {
   tab: true,
   badge: () => { if (!app() || !S.live) return null; if (!simpleOn()) { loadFoci(); loadNeedsYou(); } if (!needsKnown()) return null; const n = needsN(); return n ? String(n) : null; },
   poll: { every: 3000, run: async ctx => { if (await pollDelivered()) ctx.update(); } },
-  escape: () => { if (closeQuick()) return; if (C.menu || C.find) { C.menu = null; if (!C.q.trim()) C.find = false; L.ctx && L.ctx.update(); return; } if (!cancelReply() && asideOpen()) closeAside(); },
+  escape: () => { if (closeQuick()) return; if (C.menu || C.find) { C.menu = null; if (!C.q.trim()) C.find = false; L.ctx && L.ctx.update(); return; } if (C.more) { C.more = null; L.ctx && L.ctx.update(); return; } if (!cancelReply() && asideOpen()) closeAside(); },
   // The home is where the focus cards are: arriving on it is the person's look at them (core/foci.js markSeen; never from a driven browser).
   enter: ctx => { C.arrived = true; const c = conversation(ctx && ctx.arg); if (app() && c.home && !c.list && !c.archived) lookAt(null, true); },
-  leave: () => { clearTimeout(qTimer); C.menu = null; C.find = false; L.newTh = undefined; opened = ""; seenLeave(); },
+  leave: () => { clearTimeout(qTimer); C.menu = null; C.more = null; C.find = false; L.newTh = undefined; opened = ""; seenLeave(); },
   render(ctx) {
     if (!S.live) return h("div", { class: "page" }, S.failed ? empty("Couldn't read the conversations. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     const cv = conversation(ctx.arg);
@@ -1518,8 +1545,8 @@ export function chatPlace(place, view) {
     escape: e => { chatEscape(); return escape && escape(e); } };
 }
 // Functions, not consts: focus.js reads them while this module, which imports it, is still loading.
-export function chatEscape() { if (closeQuick()) return; if (C.menu) { C.menu = null; L.ctx && L.ctx.update(); } }
-export function chatLeave() { clearTimeout(qTimer); C.menu = null; C.find = false; L.newTh = undefined; seenLeave(); }
+export function chatEscape() { if (closeQuick()) return; if (C.menu || C.more) { C.menu = null; C.more = null; L.ctx && L.ctx.update(); } }
+export function chatLeave() { clearTimeout(qTimer); C.menu = null; C.more = null; C.find = false; L.newTh = undefined; seenLeave(); }
 
 /** The layout: the rail, and in the other pane the home, a conversation, or what pane brings (a focus). */
 function frame(ctx, c, pane) {

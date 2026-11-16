@@ -7,9 +7,10 @@
 // 3. Inside a tile, content is whole items in priority order (the children of its [data-fit] element). After each render the items that
 //    don't fit whole are hidden, and the tile's head says how many. Canvases (Mesh) and the Timeline fill their box and report the same way.
 // So a bigger size shows fewer, larger rows and a smaller size shows more; nothing is ever cut in half.
+import "../core/lang.js";   // first, as in app.js and call.js: without it h() and tr() leave the wall display in English (product-test rung "Spanish on the display page")
 import { S, start, subscribe } from "../core/store.js";
 import { brandIcon, brandMark } from "../core/brand.js";
-import { h, mount, delegate } from "../core/dom.js";
+import { h, mount, delegate, tr } from "../core/dom.js";
 import { LOC } from "../core/format.js";
 import { agentState, inUse, runway, threadTitle, limitStop } from "../core/model.js";
 import { clock, dur, now } from "../core/format.js";
@@ -31,6 +32,7 @@ const L = picked.length ? evenLayout(picked) : LAYOUTS[page] || LAYOUTS["single-
 const ids = [...new Set(L.areas.join(" ").split(" "))];
 
 root.dataset.theme = path.endsWith("/dark") ? "dark" : "light";
+document.title = tr(document.title);
 
 // ---- size ----
 const SIZE = "displaySize:" + page;

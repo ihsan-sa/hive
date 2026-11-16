@@ -15,6 +15,12 @@ WEB = re.compile(r"\b(curl|wget)\b[^|;&]*?https?://(?!(localhost|127\.[\d.]+|\[:
 # E47: a counted answer built on web reads must quote a page that states the count, or finish the tally with code.
 HEDGE = re.compile(r"\b(on my count|by my count|my (own )?(count|tally)|my rough count|a tie on my)\b|\b(about|roughly|around|approximately|nearly)\s+\d[\d,]*\s+(\w+\s+)?(each|laureates?|prizes?|winners?|people|countries|times|medals?|wins?|titles?)\b", re.I)
 
+# E49: a tutor reply must not call a wrong attempt "close" when the number is far off.
+CLOSE = re.compile(r"\b(you['\u2019]?re|you are|that['\u2019]?s|it['\u2019]?s) (very |pretty |so |quite |really )?(close|almost there|nearly there|not far off)\b|\b(close|so close),? but\b|\bnot quite,? but\b", re.I)
+
+# E50: a routine process note ("didn't watch it play", "from memory, didn't open pages") reads as the agent's note to itself.
+SELFAUDIT = re.compile(r"\b(did not|didn['\u2019]?t|have not|haven['\u2019]?t|never) (watch(ed)?|see|seen|click(ed)?|open(ed)?) (it|the (chart|animation|page|pages)) ?(play|run|drawn|being drawn|render(ed)?)?\b|\bfrom memory, (did not|didn['\u2019]?t) open\b|\bI did not watch it\b", re.I)
+
 
 def web_reads(transcript):
     """Tool uses since the agent's last post that read the outside web."""
@@ -37,6 +43,16 @@ def main():
         if d.get("tool_name") != "Bash": return 0
         cmd = (d.get("tool_input") or {}).get("command") or ""
         if not POST.search(cmd) or "--done-quiet" in cmd: return 0
+        if SELFAUDIT.search(cmd):
+            r = once(cmd + "#audit", "This post ends with a note about how you checked (\"didn't watch it play\", \"didn't open the pages\"). The reader takes it as your note to yourself. "
+                     "Drop it. If something specific could be broken and the person needs to know (a button you could not press, a number you could not look up), say that in one plain clause aimed at them, "
+                     "e.g. \"I haven't tried the Pause button; tell me if it doesn't work.\" If it truly matters, send the same post again and it goes through.")
+            if r: return r
+        if CLOSE.search(cmd):
+            r = once(cmd + "#close", "This post tells someone their answer is \"close\" or \"almost there\". Work out the gap first: only say close if their number is within about 1% of the right one. "
+                     "If it is further off, say plainly that it is not right, name the mistake, and let them see the correct steps (the year-by-year numbers) before or instead of any praise. "
+                     "If it really is close, send the same post again and it goes through.")
+            if r: return r
         if HEDGE.search(cmd) and web_reads(d["transcript_path"]):
             return once(cmd + "#count", "This post gives a count as \"about N\" or \"on my count\". For a counting question, quote a page that states each number "
                         "(cite it with a footnote) or finish the tally with code, then give exact numbers, say what was counted and as of which year, and make the numbers agree with each other. "

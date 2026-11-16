@@ -1,7 +1,7 @@
 // A code block: the frame (language, title, Wrap, Copy), then its lines. The tree a poll builds holds only plain text; lines,
 // numbers and colours are added once the block nears the screen, and Prism (local, by language) only when one needs it.
 // Prism's tokenize() is walked into nodes here: its HTML output is never used. Copy always gives the exact source.
-import { h, copyText } from "../core/dom.js";
+import { h, tr, copyText } from "../core/dom.js";
 import { lazyKind } from "./lazy.js";
 import { sigOf } from "./math.js";
 import { askQuote } from "./ask.js";
@@ -127,7 +127,7 @@ export function codeBlock(lang, title, code) {
           pre.toggleAttribute("data-wrap", on); b.setAttribute("aria-pressed", String(on));
         } }, "Wrap"),
         h("button", { type: "button", class: "rc-t", "aria-label": "Copy this code", onclick: (e, b) => {
-          copyText(pre._src).then(() => { b.dataset.ok = ""; b.textContent = "Copied"; setTimeout(() => { delete b.dataset.ok; b.textContent = "Copy"; }, 1400); }, () => {});
+          copyText(pre._src).then(() => { b.dataset.ok = ""; b.textContent = tr("Copied"); setTimeout(() => { delete b.dataset.ok; b.textContent = tr("Copy"); }, 1400); }, () => {});
         } }, "Copy"))),
     lz, more);
 }

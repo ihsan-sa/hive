@@ -61,7 +61,7 @@ async function drawFig(lz) {
     lz.dataset.failed = ""; box.dataset.failed = "";
     const srcB = box.querySelector("[data-src]"); srcB?.setAttribute("hidden", "");
     box.querySelectorAll("[data-zoom]").forEach(b => b.setAttribute("hidden", ""));
-    note.hidden = false; note.textContent = "Couldn't draw this, so this is the source." + (why ? " " + String(why).slice(0, 180) : "");
+    note.hidden = false; note.textContent = tr("Couldn't draw this, so this is the source.") + (why ? " " + String(why).slice(0, 180) : "");
     if (keep) lz.replaceChildren(lz._source); lz.style.minHeight = "";
   };
   let out;
@@ -126,7 +126,7 @@ export function figure(spec) {
           st.src = b.getAttribute("aria-pressed") !== "true"; showSource(b.closest(".rc-fig"), lz, st.src);
         } }, "Source"),
         h("button", { type: "button", class: "rc-t", "aria-label": "Copy this drawing's source", onclick: (e, b) => {
-          copyText(spec.src).then(() => { b.dataset.ok = ""; b.textContent = "Copied"; setTimeout(() => { delete b.dataset.ok; b.textContent = "Copy"; }, 1400); }, () => {});
+          copyText(spec.src).then(() => { b.dataset.ok = ""; b.textContent = tr("Copied"); setTimeout(() => { delete b.dataset.ok; b.textContent = tr("Copy"); }, 1400); }, () => {});
         } }, "Copy"),
         askButton(() => spec.ask?.() || "```" + spec.kind + "\n" + spec.src + "\n```", "Ask about this drawing", spec.title || spec.kind))),
     lz,
