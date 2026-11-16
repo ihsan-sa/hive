@@ -533,11 +533,28 @@ def dismiss_shown(d):
 CHECKLIST = STATE / "checklist.json"   # needs_you.CHECKS: {"items": [...]}; agents write it with `hive summary check`
 
 FOCUS_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,60}")
-def focus_do(d, full=True):
+def focus_do(d, full=True, driven=False):
     """POST /api/focus: put a thread in a focus ({thread, focus}) or take it out ({thread, off: true}); focus.py keeps the record (hive focus tag).
     {order: [focus ids]} sets the order the foci show in, rail and home alike (hive focus order).
     {brief: {focus, text?, files?: [upload refs], drop?: [names]}}: the group's own instructions and files, given to every chat in it (E37, hive focus brief).
+    {seen: "<focus id>"} or {seen_home: true}: the person is looking at that focus's page, or at the home (hive focus seen); the answer's
+    `look` is the record now ({at, start, base, since}), which the page takes as it is, so no browser's clock is in it. The pages
+    mark what is newer than their last look, so only the owner's look counts: a limited sign-in's is answered and not kept, and nor is one
+    from a browser a script drives (driven: the tests and the agents' screenshots sign in as the owner; the page holds back too, core/foci.js canSee).
     full: the sign-in may change settings; a group's instructions steer every agent in it, so a limited one can't."""
+    if "seen" in d or d.get("seen_home"):
+        home = d.get("seen_home") is True; key = None if home else str(d.get("seen") or "").lower()   # the home is its own key: a focus may be called home
+        if not home and not FOCUS_ID.fullmatch(key): raise ValueError("bad focus")
+        if not full or driven: return {"ok": True, "seen": key, "home": home, "noted": False}
+        r = subprocess.run(["nice", "-n", "15", sys.executable, "-I", str(HOME / "core" / "focus.py"), "seen", "--home" if home else key, "--json"], capture_output=True, text=True, timeout=30, env={**os.environ, "HIVE_NAME": "person"})
+        if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
+        try: out = json.loads(r.stdout)
+        except ValueError: out = {}
+        noted, look = out.get("noted") is True, out.get("seen") if isinstance(out.get("seen"), dict) else None   # not noted: one record a minute at most, and nothing changed
+        # The look goes into the held list as it is: a fresh read of every focus took 2 to 9 s, and each look made the next page wait on one (review, 2026-11-16).
+        if noted and look: foci_c.patch(lambda v: foci_look(v, None if home else key, look))
+        elif noted: foci_c.t = 0
+        return {"ok": True, "seen": key, "home": home, "noted": noted, "look": look}
     if "brief" in d:
         if not full: raise ValueError("only a full sign-in can change a group's instructions")
         x = d.get("brief") if isinstance(d.get("brief"), dict) else {}
@@ -1459,6 +1476,101 @@ def agent_feed(name, limit=70):
 
 
 
+# ---- everyday E42: the code a reply ran, shown folded under it (GAPS row 4: "the user never sees it run") ----
+# A post's run is the agent's session log that holds the tool result printing the post's id (`hive post` prints it). The steps are the
+# Bash calls (and code files written) after the run's previous post and before this one, less the hive's own plumbing (hive, kb).
+RAN_SKIP = {"hive", "kb", "sleep", "true", ":", "hive"}
+RAN_EXT = {".py", ".js", ".mjs", ".ts", ".sh", ".r", ".jl", ".rb", ".go", ".rs", ".c", ".cc", ".cpp", ".sql", ".m", ".pl", ".lua"}
+_RAN_LEAD = re.compile(r"^\s*(?:cd\s+(?:\"[^\"]*\"|'[^']*'|\S+)\s*(?:&&|;)\s*|[A-Za-z_][A-Za-z0-9_]*=\S*\s+|heavy\s+(?:--quick\s+|timeout\s+\d+\s+)?|timeout\s+\d+\s+|nice\s+)+")
+_RAN_ID = re.compile(r"\b[0-9a-f]{12}\b")
+_ran_files = {}   # session log -> ((mtime, size), {"calls": [...], "posts": {post id: call index}})
+
+
+def _ran_word(cmd):
+    """The command's first real word: past cd, env settings, heavy and timeout."""
+    m = _RAN_LEAD.match(cmd or ""); rest = (cmd or "")[m.end():] if m else (cmd or "")
+    w = rest.split(None, 1)
+    return Path(w[0]).name if w else ""
+
+
+def _ran_text(c):
+    c = c.get("content") if isinstance(c, dict) else c
+    if isinstance(c, list): c = "\n".join(str(x.get("text", "")) for x in c if isinstance(x, dict) and x.get("type") == "text")
+    return c if isinstance(c, str) else ""
+
+
+def _ran_clip(s, n=4000):
+    s = str(s or "")
+    return s if len(s) <= n else s[: n * 3 // 4] + f"\n… ({len(s) - n} characters left out) …\n" + s[-n // 4:]
+
+
+def _ran_parse(p):
+    try: st = p.stat(); key = (st.st_mtime, st.st_size)
+    except OSError: return None
+    hit = _ran_files.get(str(p))
+    if hit and hit[0] == key: return hit[1]
+    calls, idx, res = [], {}, {}
+    for e in jlines(p, 64 * 1024 * 1024):
+        t = e.get("type")
+        if t == "assistant":
+            for c in (e.get("message") or {}).get("content") or []:
+                if isinstance(c, dict) and c.get("type") == "tool_use":
+                    idx[c.get("id")] = len(calls); calls.append({"name": c.get("name"), "in": c.get("input") or {}, "t": ts(e.get("timestamp"))})
+        elif t == "user":
+            for c in _blocks((e.get("message") or {}).get("content")):
+                if c.get("type") == "tool_result" and c.get("tool_use_id") in idx:
+                    res[idx[c["tool_use_id"]]] = (_ran_text(c), bool(c.get("is_error")))
+    posts = {}
+    for i, c in enumerate(calls):
+        c["out"], c["err"] = res.get(i, ("", False))
+        if c["name"] == "Bash" and _POST_CMD.search(str(c["in"].get("command") or "") + "\n"):
+            for pid in _RAN_ID.findall(c["out"][:400]): posts.setdefault(pid, i)
+    v = {"calls": calls, "posts": posts}
+    if len(_ran_files) > 64: _ran_files.pop(next(iter(_ran_files)))
+    _ran_files[str(p)] = (key, v)
+    return v
+
+
+def _ran_step(c):
+    """A tool call as a step to show, or None for one that isn't code (the hive's own plumbing, reading, searching)."""
+    i = c["in"]
+    if c["name"] == "Bash":
+        cmd = str(i.get("command") or "")
+        if not cmd.strip() or _POST_CMD.search(cmd + "\n") or _ran_word(cmd) in RAN_SKIP: return None
+        lang = "python" if _ran_word(cmd).startswith("python") else "node" if _ran_word(cmd) == "node" else "shell"
+        return {"what": short(i.get("description") or "", 160), "lang": lang, "code": redact(_ran_clip(cmd)), "out": redact(_ran_clip(c["out"])), "err": c["err"], "t": c["t"]}
+    if c["name"] in ("Write", "Edit"):
+        fp = str(i.get("file_path") or "")
+        if Path(fp).suffix.lower() not in RAN_EXT: return None
+        code = i.get("content") if c["name"] == "Write" else i.get("new_string")
+        return {"what": ("Wrote " if c["name"] == "Write" else "Changed ") + Path(fp).name, "lang": "file", "file": Path(fp).name,
+                "code": redact(_ran_clip(code)), "out": "", "err": c["err"], "t": c["t"]}
+    return None
+
+
+def ran_for(pid, who=None, at=None, limit=30):
+    """{"steps": [...], "more": N} for the code the run that wrote post PID ran before writing it; {"steps": []} when none or not found.
+    WHO is the post's author (the board's word wins over the caller's), AT its time (a hint for which logs to look in)."""
+    if not re.fullmatch(r"[0-9a-f]{12}", pid or ""): return {"steps": []}
+    who = INDEX.authors.get(pid) or who or ""
+    if not AGENT_CODE.fullmatch(who.lower()): return {"steps": []}
+    try: fs = sorted((HOME / "sessions").glob(who + "-*.jsonl"), key=lambda q: q.stat().st_mtime)
+    except OSError: return {"steps": []}
+    if at: fs = [q for q in fs if q.stat().st_mtime >= float(at) - 5][:4]
+    else: fs = fs[-4:]
+    for q in fs:
+        try:
+            with open(q, "rb") as fh: fh.seek(0, 2); n = fh.tell(); fh.seek(max(0, n - 64 * 1024 * 1024)); has = pid.encode() in fh.read()
+        except OSError: continue
+        if not has: continue
+        v = _ran_parse(q)
+        if not v or pid not in v["posts"]: continue
+        end = v["posts"][pid]; start = max([i for i in v["posts"].values() if i < end], default=-1) + 1
+        steps = [s for s in (_ran_step(c) for c in v["calls"][start:end]) if s]
+        return {"steps": steps[-limit:], "more": max(0, len(steps) - limit)}
+    return {"steps": []}
+
+
 def _blocks(c):
     """A message's content as a list of blocks: a bare string is one text block."""
     return [{"type": "text", "text": c}] if isinstance(c, str) else [b for b in c or [] if isinstance(b, dict)]
@@ -1808,8 +1920,9 @@ class Cached:
 
 class CachedStale(Cached):
     """For an answer that's slow to get and rarely changes: past `ttl` the old answer goes out while a new one is read behind it,
-    so no request waits. Only the first read waits, and a read after .t = 0, which is how a change asks for the truth."""
-    busy = False
+    so no request waits. Only the first read waits, and a read after .t = 0, which is how a change asks for the truth.
+    A change that is known exactly goes in with patch() instead, and then nobody waits at all."""
+    busy, stamp = False, 0
 
     def get(self):
         with self.lock:
@@ -1820,11 +1933,21 @@ class CachedStale(Cached):
             return self.v
 
     def refresh(self):
+        stamp = self.stamp
         try:
             v = self.fn()
             with self.lock:
-                if self.t: self.v, self.t = v, time.time()  # .t = 0 meanwhile: what was just read may predate the change
+                if self.t and stamp == self.stamp: self.v, self.t = v, time.time()  # .t = 0 or a patch meanwhile: what was just read may predate the change (the next get reads again)
         finally: self.busy = False
+
+    def patch(self, fn):
+        """Put a change that is known exactly into the held answer (fn(old) gives the new one), so the next request neither waits on a
+        fresh read nor gets the answer from before the change. With nothing held, or a patch that fails, the next get reads the truth."""
+        with self.lock:
+            self.stamp += 1
+            if self.v is None or not self.t: return
+            try: self.v = fn(self.v)
+            except Exception: self.t = 0
 
 PROGRESS = CachedStale(progress_state, 300)  # the Progress page's data (progress_state above)
 
@@ -2172,7 +2295,7 @@ WEB = STATE / "web.json"
 INSTALLED = HOME / ".hive-installed"
 FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcountry", "cf-visitor", "cdn-loop", "x-forwarded-for",
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
-GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/work-tiers": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
+GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read", "/api/ran": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/work-tiers": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/export": "config", "/api/modules": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
@@ -2881,6 +3004,33 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
         except (ValueError, OSError, subprocess.SubprocessError): pass   # it stays in Misc, where the title menu can file it
     return {"id": pid, "thread": thread or pid, "said": short(r.stderr.replace("hive post: ", "", 1), 300)}
 
+
+PAGE_NOTE = "(web app, page edited by hand: nothing to answer. If asked to change this page again, start from this version.) Edited this page by hand."
+PAGE_TITLE = re.compile(r'[^"\n]{1,120}')
+
+def page_edit_post(page, thread, limited=False):
+    """POST /api/post with page {code, title}: the person edited a page (an html block) by hand (everyday E43). The server builds the post itself: a note,
+    then the code in a backtick fence longer than any backtick run in it, so every @ in the code is inside code for hive, the starter and the inbox (their CODE
+    regex). It names nobody and goes unsigned via "web-notice" with the tag page:edit, so no agent wakes, no ask is filed (core/asks.py) and no wait ends
+    (core/continuation.py person_waiter); the chat draws it as the page's newest version (chatPages), with the old one behind the arrows."""
+    if not isinstance(page, dict): raise ValueError("the page wasn't sent")
+    code, title = str(page.get("code") or ""), page.get("title")
+    if not code.strip(): raise ValueError("the page is empty")
+    if len(code) > 2**19: raise ValueError("the page is too big to post")
+    if not thread or not THREAD_NAME.fullmatch(str(thread)): raise ValueError("a page is edited in its conversation")
+    title = str(title).strip() if title else ""
+    if title and not PAGE_TITLE.fullmatch(title): title = ""
+    run = max([len(m) for m in re.findall(r"`+", code)] + [2])
+    fence = "`" * max(3, run + 1)
+    info = "html" + (f' title="{title}"' if title else "")
+    text = f"{PAGE_NOTE}\n\n{fence}{info}\n{code.rstrip()}\n{fence}"
+    # The fence is longer than any backtick run in the code, and the chat's markdown (ui/markdown.js FENCE) honours that; but hive, the starter and the inbox
+    # mask code with a lazy ```.*?``` (same as MENTION_CODE), so ``` inside the code can expose an @name to them: calls_someone sees what they would.
+    if calls_someone(text): raise ValueError("the page names an agent with the at sign where the Hive would read it as a call (often after a ``` inside the code); change that @name and save again")
+    cmd = [str(HIVE_BIN), "post", "--as", PERSON, "--thread", str(thread), "--tag", "page:edit"]
+    r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), "HIVE_POST_VIA": "limited" if limited else "web-notice"}, cwd=str(HOME), timeout=60)
+    if r.returncode: raise ValueError(short(r.stderr, 300) or "the post failed")
+    return {"id": r.stdout.strip(), "thread": str(thread), "said": short(r.stderr.replace("hive post: ", "", 1), 300)}
 
 # @question in the Chat side search: a normal agent in the hidden thread `side`, answering in one line and bringing threads up with `hive show`.
 # Posted as dash, not person: it's not an ask to register or a post the agent owes the person a chat reply on (asks.py, inbox.waker). The same agent
@@ -3609,6 +3759,15 @@ def foci_costs(act, usage):
             elif isinstance(act.get("misc"), dict): act["misc"][w]["cost"] += c
             if isinstance(act.get("total"), dict): act["total"][w]["cost"] += c
     return act
+
+def foci_look(v, key, look):
+    """The held /api/foci answer `v` with the person's look `look` ({at, start, base, since}: focus.py seen --json) at focus `key`, or at the home (None)."""
+    d = json.loads(v)
+    if key is None: d["home_seen"] = look
+    else:
+        for f in d.get("foci") or []:
+            if f.get("id") == key: f["seen"] = look
+    return json.dumps(d).encode()
 
 def foci_bytes():
     """core/focus.py json: the foci (labels, hand-written summaries, to-do, lint) the home's cards are built from (2026-11-07),
@@ -5649,6 +5808,11 @@ def serve(port):
                 self.send(foci_c.get(), J)
             elif u.path == "/api/agent-status":
                 self.send(json.dumps(agent_status()).encode(), J)
+            elif u.path == "/api/ran":   # everyday E42: ?ids=A,B (with &at=T1,T2 as hints): the code each post's run ran, by post id
+                ids, ats = q.get("ids", [""])[0].split(",")[:40], q.get("at", [""])[0].split(",")
+                full = self.route != "outside" or self.mode == "full"
+                hint = lambda i: float(ats[i]) if i < len(ats) and re.fullmatch(r"\d+(\.\d+)?", ats[i]) else None
+                self.send(json.dumps({x: ran_for(x, at=hint(i)) if full else {"steps": []} for i, x in enumerate(ids) if x}).encode(), J)
             elif u.path == "/api/agent-work":
                 self.send(json.dumps(agent_work(q.get("name", [""])[0], self.route != "outside" or self.mode == "full")).encode(), J)
             elif u.path == "/api/agent-input":
@@ -5723,14 +5887,15 @@ def serve(port):
                 except ValueError as e: return self.deny(400, str(e))
             if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/starter", "/api/module", "/api/voice", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
                 try:
-                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True, edit_of=d.get("edit_of"), retry_of=d.get("retry_of"), files_from=d.get("files_from"), focus=d.get("focus"))
+                    if u.path == "/api/post" and isinstance(d.get("page"), dict): res = page_edit_post(d.get("page"), d.get("thread"), limited="config" not in self.can)
+                    elif u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True, edit_of=d.get("edit_of"), retry_of=d.get("retry_of"), files_from=d.get("files_from"), focus=d.get("focus"))
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
                     elif u.path == "/api/shown": res = dismiss_shown(d)
                     elif u.path == "/api/loadtime": res = record_loadtime(d, self.route)
                     elif u.path == "/api/opened": res = record_opened(d, self.route)
                     elif u.path == "/api/checklist": res = checklist_do(d)
-                    elif u.path == "/api/focus": res = focus_do(d, full="config" in self.can)
+                    elif u.path == "/api/focus": res = focus_do(d, full="config" in self.can, driven="Headless" in (self.headers.get("User-Agent") or ""))
                     elif u.path == "/api/feedback": res = send_feedback(d)
                     elif u.path == "/api/feedback-draft-done": res = feedback_draft_done(d)
                     elif u.path == "/api/issue-link": res = issue_link(d)

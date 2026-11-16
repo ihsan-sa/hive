@@ -902,6 +902,8 @@ rc-lazy[data-mode=inline]{display:inline}
 .rc-artc[hidden]{display:none}
 .rc-artv{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s3);padding:var(--s2) var(--s3);border-bottom:1px solid var(--line);color:var(--ink-2);font-size:var(--fs-small)}
 .rc-artv[hidden]{display:none}
+.rc-arted{padding:var(--s2) var(--s3);border-top:1px solid var(--line)}
+.rc-arted-t{font-family:var(--mono,ui-monospace,monospace);font-size:13px;line-height:1.45;tab-size:2;white-space:pre;overflow:auto;min-height:12em}
 .rc-art .rc-paramsn{padding:var(--s2) var(--s3);border-top:1px solid var(--line)}
 .rc-art .rc-paramsn[hidden]{display:none}
 .rc-artgo{height:30px;padding:0 var(--s4);border:0;border-radius:var(--r-s);background:var(--ink);color:var(--on-ink);font-size:var(--fs-small);font-weight:var(--w-med);cursor:pointer}
@@ -3489,3 +3491,45 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .fp-brief .fp-brief-f{list-style:none;padding:0;margin:6px 0;display:grid;gap:4px}
 .fp-brief .fp-brief-f li{overflow-wrap:anywhere}
 .fp-brief .fp-brief-add{margin:4px 0 8px;cursor:pointer;display:inline-flex}
+
+/* ───────────── In short, and what is new to the person (core/foci.js leadOf, cardSince, pageSince; the person, 11160014bf8b) ─────────────
+   A card and a focus page lead with the agents' one or two sentences on where the focus stands; the state they open with is the word at the
+   top. What was written since the person last looked carries one ink bar at its left edge (the row's data-new; "New:" is in its text for a
+   screen reader). Ink, not amber: amber says "yours to act on", and a new line is only news. Rows side by side join into one bar. */
+/* position:relative keeps the row's hidden "New:" word (.vh, absolute) inside the row: loose, it sat below the fold of the home's scroller and
+   made the whole page 100px taller than a phone screen, which gave the page a scrollbar and the quick-answer sheet a narrower width. */
+[data-new]:is(.fc-short,.fc-ev,.fp-ev,.fp-short,.fp-since){position:relative;margin-left:-10px;padding-left:10px;box-shadow:inset 2px 0 0 var(--ink)}
+@media (forced-colors:active){[data-new]:is(.fc-short,.fc-ev,.fp-ev,.fp-short,.fp-since){padding-left:8px;border-left:2px solid CanvasText}}
+.fc-st{max-width:100%}
+.fc-short{font-size:var(--fs-body);line-height:1.45;color:var(--ink);text-wrap:pretty;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:8;overflow:hidden}
+/* Beside the state word: what the state was before, while that change is new to the person, and the age of a word said more than a day and a
+   half ago (the word itself then drawn muted: an old "on track" is a memory, not a reading). Both in the lead line's own quiet type. */
+.fc-short-t,.fc-was{font-size:var(--fs-meta);color:var(--ink-3);white-space:nowrap}
+.fc-short-t .when{font-size:inherit;color:inherit}
+.fc-st-old{color:var(--ink-3);font-weight:var(--w-reg,400)}
+.fc-short .ref,.fc-short .pill.ref{background:none;box-shadow:none;padding:0;border:0;height:auto;font-family:var(--mono);font-size:inherit;font-weight:var(--w-bold);color:var(--ink)}
+:root:not([data-dev]) .fc-short .ref{font-family:var(--font)}
+.fc-short a.th,.fp-short-x a.th{color:inherit;text-decoration:underline;text-decoration-color:var(--line-2);text-underline-offset:2px}
+.ln-k{font-weight:var(--w-bold);color:var(--ink)}          /* "Box logins: ..." opens with what it is about: the topic in bold lets ten lines be scanned */
+.fc-ev[data-new] .fc-ev-x,.fp-ev[data-new] .fp-ev-x{color:var(--ink)}
+.fc-more-l{position:relative;justify-self:start;margin:2px 0 0 56px;font-size:var(--fs-meta);color:var(--ink-3)}
+.fc-more-l::after{content:"";position:absolute;inset:-6px -4px}   /* a 24 px tap area on the small link (WCAG 2.5.8) */
+.fc-more-l:hover{color:var(--ink)}
+@media (max-width:640px){.fc-more-l{display:flex;align-items:center;min-height:40px;margin-top:0}.fc-more-l::after{content:none}}   /* a thumb needs 40 px (R18) */
+/* the Focuses head on the home: how many changed since the last look, with the same bar */
+.cm-foci-new{display:inline-flex;align-items:baseline;gap:6px;min-width:0;font-size:var(--fs-meta);color:var(--ink-3)}
+.cm-foci-new[data-new]{color:var(--ink)}
+.cm-foci-new>i{align-self:center;flex:none;width:2px;height:12px;background:var(--ink)}
+/* the focus page: In short first, then one line on what changed since the last look */
+.fp-short-x{margin:0;font-size:var(--fs-lead);line-height:1.5;color:var(--ink);max-width:var(--measure);text-wrap:pretty;overflow-wrap:anywhere}
+.fp-short-x .ref{font-size:inherit}
+.fp-since{margin:0;font-size:var(--fs-small);color:var(--ink-3)}
+.fp-since[data-new]{color:var(--ink)}
+.fp-short+.fp-since{margin-top:calc(var(--s3) - var(--s6))}   /* it belongs to the In short above it, not to the list below */
+.fp-jump{position:relative;color:inherit}   /* a part of the since line that goes to its section */
+.fp-jump::after{content:"";position:absolute;inset:-6px 0}   /* a 24 px tap area on a word in small text (WCAG 2.5.8) */
+.fp-jump:hover{color:var(--link)}
+.fp-sec[tabindex]{scroll-margin-top:var(--s3)}
+.fp-sec[tabindex]:focus:not(:focus-visible){outline:0}
+.fp-needs li[data-new]{position:relative;box-shadow:inset 2px 0 0 var(--ink)}
+@media (forced-colors:active){.fp-needs li[data-new]{border-left:2px solid CanvasText}}

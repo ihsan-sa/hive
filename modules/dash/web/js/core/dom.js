@@ -18,17 +18,27 @@ function set(e, props) {
 // The interface language (core/lang.js): a lookup for the app's own words, applied as elements are built, so a re-render never flips them back.
 let lang = null;
 const LANG_ATTRS = new Set(["placeholder", "title", "aria-label"]);
-export const setLang = f => { lang = f; };
+/** f looks a string up; en, when given, says whether a string that came back unchanged is one of the app's own words with no
+ *  translation yet (core/lang-left.js), so it's marked lang="en" and a screen reader doesn't read English with a Spanish voice
+ *  (WCAG 3.1.2). Words agents and the person write aren't in that list, so they're left alone. */
+export const setLang = (f, en) => { lang = f; enLeft = en || null; };
+let enLeft = null;
+const NOSPAN = new Set(["OPTION", "TEXTAREA", "TITLE", "STYLE", "SCRIPT"]);   // text only inside: the mark goes on the element
 /** The same lookup for words set outside h() (setAttribute, textContent, title =). */
 export const tr = t => lang && typeof t === "string" ? lang(t) : t;
 let textMap = null;
 /** Optional display rewrite for every text node (the names easter egg). */
 export const setTextMap = f => { textMap = f; };
-function add(e, kids) {
+function add(e, kids, only = kids.length === 1) {
   for (const c of kids) {
     if (c == null || c === false || c === true) continue;
-    if (Array.isArray(c)) add(e, c);
-    else e.append(c.nodeType ? c : document.createTextNode(textMap ? textMap(lang ? lang(String(c)) : String(c)) : lang ? lang(String(c)) : String(c)));
+    if (Array.isArray(c)) { add(e, c, only && c.length === 1); continue; }
+    if (c.nodeType) { e.append(c); continue; }
+    const s = String(c), t = lang ? lang(s) : s, n = document.createTextNode(textMap ? textMap(t) : t);
+    if (enLeft && t === s && enLeft(s)) {
+      if (only || NOSPAN.has(e.tagName) || e.namespaceURI === SVGNS) { if (!e.hasAttribute("lang")) e.setAttribute("lang", "en"); e.append(n); }
+      else { const w = document.createElement("span"); w.setAttribute("lang", "en"); w.append(n); e.append(w); }
+    } else e.append(n);
   }
 }
 

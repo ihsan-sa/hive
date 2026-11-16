@@ -78,6 +78,9 @@ export function openPanel(kind, name) {
 
 /** A view's piece in the panel: draw() returns its node (drawn again on each store change); href is where it lives as a full page. */
 export function openSheet(name, label, draw, href) { show("sheet", name, label, draw, href); }
+/** Is this sheet the one in the panel? redrawSheet() draws it again for a view whose state changes outside the store (the board's console); focus stays put. */
+export const sheetOpen = name => P.kind === "sheet" && P.name === name;
+export function redrawSheet(name) { if (sheetOpen(name)) render(false); }
 
 export function closePanel() {
   if (!P.root) return;

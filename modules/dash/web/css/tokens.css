@@ -112,6 +112,11 @@
   /* The Map's running agents keep their slow soft ring, no movement of the dot (the person, 2026-11-03; css/map.css map-breathe). */
   .map-ag:not([data-ghost]):not([data-ended])>.map-g::after{animation-duration:2.4s!important;animation-iteration-count:infinite!important}}
 
+/* Still screen (Settings > This device; core/still.js, WCAG 2.2.2): the person's own stop for everything that moves by itself, the Map's
+   rings included. Busy states still show by their label and glyph. */
+:root[data-still] *,:root[data-still] *::before,:root[data-still] *::after{animation-duration:0s!important;animation-iteration-count:1!important;animation-delay:0s!important;transition-duration:0s!important;transition-delay:0s!important}
+:root[data-still] .page .seg{animation-duration:auto!important}
+
 /* developer look: same system, denser */
 :root[data-dev]{
   --row:32px; --row-tight:28px; --ctl:28px; --ctl-s:24px;

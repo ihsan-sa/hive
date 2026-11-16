@@ -4,6 +4,30 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## The home lists your focuses by where they stand
+
+With many focuses, Chat's home was a wall of cards, and finding the one that needed you meant reading all of them. With seven or more focuses the home now lists them instead, one row each, grouped by where each one stands: Needs you first, then Blocked, At risk, On track, Waiting on others, Paused, Done, and No state yet. A focus goes under Needs you as soon as an ask in it waits on you, whatever its In short says.
+
+A row is the focus's name, its In short sentence, and only what you would act on: how many lines are new to you, how many asks are yours, and how many agents are working. **List** and **Cards**, beside the Focuses heading, switch between the rows and the cards, and the browser remembers your pick. With fewer than seven focuses the cards stay the default. The first few times the list appears by itself, one line says why and where the cards are.
+
+The agents' own check of the cards finds more of what reads wrong to you: a card that points at a date already past or still says "today" a day later, an In short that says Needs you when nothing is listed as waiting, and a step that is on your to-do list twice or that nothing else tells you about any more. An agent that ticks a to-do it had put on you, or closes a For you line, is told which other place still says the step waits on you, so the two are closed together.
+
+## Each focus says where it stands and what is new to you
+
+A focus card on Chat's home was a column of status lines of equal weight. Nothing said whether the focus was going well, or which lines you had already read. Each card and each focus page now opens with **In short**: one or two sentences from the agents on where the focus stands against what it is for, with its state as one word at the top of the card (on track, at risk, blocked, needs you, waiting on others, paused or done). If you read one thing on a card, read that.
+
+A bar at the left edge of a line means it was written since you last looked, and the head of the Focuses section counts the focuses with such news. A card with an In short shows only a few of its lines, the new ones first, and links to the rest. A focus page says the same in one sentence under its In short ("New since you last looked 22h ago: 2 in Now, 1 in Lately; 3 conversations have new messages"), and pressing a part of that sentence takes you to those lines.
+
+The word is only as fresh as the sentence under it. When the state changed since you last looked, the card says what it was ("at risk, was on track"). When nobody has said the In short again for more than a day and a half, its state word turns grey with its age beside it ("said 2d ago"), so an old verdict does not read as today's. A look counts once you have stayed on a page for four seconds: passing through a page marks nothing as read.
+
+A step only you can take that an agent wrote among its status lines, instead of under Needs you, is now listed with what waits on you, so a card no longer says nothing waits on you above such a line. Where a card already lists asks, it says how many more lines may be yours. These are found by their wording, so the page says "reads as yours" and does not call them asks.
+
+Agents set the In short with `hive focus lead FOCUS "On track: ..."`, and `hive focus lint` names a focus that has none, or one that has gone old.
+
+## The Agent comms button is always in Chat's Show menu
+
+A browser that had never turned Agent comms on (a new computer, or the app at a new address) left that button out of Chat's Show menu, and in simple mode there was no other way to turn it on. The button is now always there next to For you and Updates. It still starts off.
+
 ## Two new modules: lab and lit
 
 **lab** is a workbench for quick experiments on small open language models. An agent can read a model's internal state with a lens, fit a probe, steer the model, or ablate and patch an activation, and each of these runs with its control built in. It also brings `askbench`, for behaviour tests on a Claude model, and `npedia`, a command-line client for Neuronpedia. Add it with `hive module add lab`, then run `lab setup`, which downloads PyTorch and two small models (about 9 GB of disk; a graphics card is optional).

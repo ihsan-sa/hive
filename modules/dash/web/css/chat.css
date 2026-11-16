@@ -195,6 +195,7 @@
 .cm-msgs .msg[data-who=me]>.msg-b,.cm-msgs .msg[data-who=me]>.msg-q,.cm-msgs .msg[data-who=me]>.msg-files{max-width:min(78%,560px)}
 .msg[data-who=me]>.msg-b{padding:10px 16px;border-radius:var(--r-xl);background:var(--sunken);box-shadow:none}
 .msg[data-who=me][data-cont]>.msg-b{border-top-right-radius:var(--r-xl)}
+.cm-msgs .msg[data-who=me]>.msg-c:has(.rc-art),.cm-msgs .msg[data-who=me]>.msg-c>.msg-b:has(.rc-art){width:100%;max-width:100%;box-sizing:border-box}   /* E43: a page you edited by hand runs at full chat width, not squeezed into a bubble */
 .msg[data-who=me][data-state=failed]>.msg-b{box-shadow:inset 0 0 0 1px var(--bad)}
 
 /* ==== 3. Reading ==== */
@@ -282,6 +283,23 @@
 .msg-fold>summary .ic{width:12px;height:12px;transition:transform var(--dur,.15s) var(--ease,ease)}
 .msg-fold[open]>summary .ic{transform:rotate(90deg)}
 .msg-fold-b{margin-top:6px;padding:10px 12px;border-radius:var(--r-m);background:var(--sunken);font:12px/1.6 var(--mono);color:var(--ink-2);white-space:pre-wrap;overflow-x:auto}
+/* everyday E42: "Code it ran", each step's code and its output under the reply */
+.ran-b{margin-top:6px;display:grid;gap:10px;min-width:0}
+.ran-s{min-width:0;border:1px solid var(--line);border-radius:var(--r-m);overflow:hidden;background:var(--surface)}
+.ran-s[data-err]{border-color:color-mix(in oklab,var(--bad) 45%,var(--line))}
+.ran-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;padding:6px 10px;color:var(--ink-2)}
+.ran-lang{font:600 11px/1.4 var(--mono);color:var(--ink)}
+.ran-what{flex:1 1 12em;min-width:0}
+.ran-t{margin-left:auto}
+.ran-code,.ran-out{margin:0;padding:8px 10px;font:12px/1.55 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:24em;overflow:auto}
+.ran-code{background:var(--sunken);color:var(--ink)}
+.ran-out{border-top:1px solid var(--line);color:var(--ink-2)}
+.ran-out::before{content:"Output";display:block;font:600 10px/1.6 var(--sans,inherit);letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
+.ran-s[data-err] .ran-out{color:var(--bad)}
+.ran-s[data-err] .ran-out::before{content:"Output · error"}
+.ran-none{padding:4px 10px 6px;border-top:1px solid var(--line)}
+.ran-all{margin:4px 6px 6px}
+.ran-more{padding:0 2px}
 /* helper conversations folded to one line */
 .cm-helper{width:100%;max-width:var(--chat-col);margin:var(--s4,16px) auto 0;padding-left:40px;box-sizing:border-box}
 .cm-helper>summary{display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;padding:8px 10px;margin-left:-10px;border-radius:var(--r-m);font-size:var(--fs-small);color:var(--ink-2);min-width:0}

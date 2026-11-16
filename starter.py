@@ -1218,6 +1218,8 @@ def pick_login(c, u, limits=None, stop=None, model=False):
           and time.time() >= (limits or {}).get(k, 0) and (model is False or not (scope_held(limits, k, model) or share_full(k, model)))]
     return min(ok)[2] if ok else None
 
+APP_CG = f"/sys/fs/cgroup/user.slice/user-{os.getuid()}.slice/user@{os.getuid()}.service/app.slice"
+
 def under_pressure(c, posts=()):
     """Why a new run should wait a moment, or None. This paces starts, it is not a cap: the run still starts once the
     machine can take it, however many are running (2026-11-02: 44 starts in 20 min took swap to full and load to 292).
@@ -1236,6 +1238,13 @@ def under_pressure(c, posts=()):
     avail -= len(recent_starts) * c.get("start_reserve_mb", 400)
     if avail < c.get("start_min_avail_mb", 3000): return f"{avail} MB available"
     if stall >= c.get("start_max_stall", 20): return f"memory stall {stall:.0f}%"
+    # app.slice at its own MemoryHigh is throttled and swapping even when the host shows memory free (2026-11-16)
+    try:
+        cg = Path(APP_CG)
+        cur, hi = int((cg / "memory.current").read_text()), (cg / "memory.high").read_text().strip()
+        if hi != "max" and (int(hi) - cur) // 2**20 - len(recent_starts) * c.get("start_reserve_mb", 400) < c.get("start_min_app_room_mb", 1500):
+            return f"app.slice has {(int(hi) - cur) // 2**20} MB under its limit"
+    except (OSError, ValueError): pass
     return None
 
 def paced(c, st, n, posts):
@@ -1629,6 +1638,32 @@ def memory_note(first):
         return memory.note(first)
     except Exception: return ""
 
+def page_edit_note(name, first, tail=1048576):
+    """everyday E43b: the person's hand edits of a page in this thread (web app Edit, tag page:edit) made after this agent's last post there, so a
+    follow-up ("make it faster") starts from their version. On the first E43b run the woken agent read `hive read | tail -15`, never saw the edit,
+    and rebuilt the page from its own page.html, dropping the person's change. "" when there is none. Never stops a start."""
+    try:
+        tid = first.get("thread", first["id"])
+        with open(BOARD, "rb") as f:
+            f.seek(max(0, f.seek(0, 2) - tail)); lines = f.read().decode("utf-8", "replace").splitlines()
+        edits, mine = {}, False
+        for l in lines:
+            if tid not in l: continue
+            try: p = json.loads(l)
+            except ValueError: continue
+            if p.get("thread", p.get("id")) != tid: continue
+            if str(p.get("from", "")).lower() == name: edits, mine = {}, True   # only edits after this agent's last post in the thread
+            elif "page:edit" in (p.get("tags") or []):
+                txt = str(p.get("text", ""))
+                m = re.search(r'```+html[^\n]*?title="([^"\n]*)"', txt) or re.search(r"<title>([^<\n]{1,80})</title>", txt, re.I)
+                edits[m.group(1).strip() if m else ""] = p["id"]   # the newest edit of each page
+        if not edits: return ""
+        which = "; ".join(f"post {i}" + (f' ("{t}")' if t else "") for t, i in list(edits.items())[-3:])
+        since = " since your last post here" if mine else ""
+        return (f"\n\nThe person edited a page by hand in this chat{since}: {which}. If you change that page, start from the code "
+                f"in that post (`hive read --id {list(edits.values())[-1]}`), not from your own copy or an earlier file, and keep their changes.")
+    except Exception: return ""
+
 def group_note(first, fresh=True):
     """The block an agent starting in a group's thread gets: the group's instructions, then its files (inlined on a fresh start up to
     GROUP_INLINE_MAX characters in all, else listed by path). "" when the thread is in no group or the group has neither."""
@@ -1870,6 +1905,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
         prompt += ahead["recall"].result() + ahead["neighbours"].result()
     if kind != "warden": prompt += group_note(first, fresh=not resume)
     if kind != "warden": prompt += memory_note(first)
+    if kind != "warden": prompt += page_edit_note(name, first)
     if (k := next((p["continue"] for p in posts if p.get("continue")), None)):
         prompt += guarded("wake_note", k, first.get("thread"), bool(heir_of)) or ""
     fb = next((p["fallback"] for p in posts if p.get("fallback")), None)

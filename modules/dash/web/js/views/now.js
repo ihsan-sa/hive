@@ -169,7 +169,7 @@ export default {
       const header = pageHeader({ state, title, lead, subnav: pageNav() });
       const main = run.length ? section({}, agentRows(run, states, t, waits)) : null;   // the header already says nobody is working: no "None." box under it
       const hrs = tierHours(t - DAY, t), tot = Object.values(hrs).reduce((a, b) => a + b, 0) || 1;
-      const more = h("details", { class: "now-more", open: V.more || null, ontoggle: (e, n) => { if (e.target === n) V.more = n.open; } }, h("summary", null, "Details"),
+      const more = h("details", { class: "now-more", open: V.more || null, ontoggle: (e, n) => { if (e.target === n) V.more = n.open; } }, h("summary", null, "Hive activity, last 24 hours"),
         h("p", { class: "meta" }, [`${plural(lastHour, "post")} in the last hour`, queuedPosts.length ? `${queuedPosts.length} waiting to start` : null, S.usage ? `${money(spendSince(t - DAY))} of work in 24h, at list prices` : null].filter(Boolean).join(" · ")),
         section({ title: "How it's working as a hive", note: "last 24 hours" }, stats(hiveFigures(t))),
         cols(...activityCharts(t)),   // "Agents at work" would draw the same line as "running at once": one chart, not two

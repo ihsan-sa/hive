@@ -3,6 +3,7 @@ import { status as st } from "../core/status.js";
 import { h } from "../core/dom.js";
 import { S, can, built, jget, needsAccount, post, loadApp, said, fullEnded, unreached, kept, keep, KEPT_NOTE } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
+import { stillOn, setStill } from "../core/still.js";
 import { oneKeyOn, setOneKey } from "../core/onekey.js";
 import { deviceFingerprint } from "../core/sign.js";
 import { notifyBlocked, notifyOn, notifySupported, notifyTest, pushOn, pushSupported, setNotify, setPush } from "../core/notify.js";
@@ -22,6 +23,9 @@ import { MODELS, POWER, accountsData, codexPart, forget, keysPart, loadPage, mod
 import { forgetSecrets, secretParts, secretsLost } from "./secrets.js";
 
 // Everything the person is typing lives here, so a poll never loses it.
+// T: words typed here and not saved yet (the style, the Hive name). enter() clears F; T lasts the session, so coming back to Settings shows them
+// again instead of asking for them a second time (WCAG 3.3.7). A value the Hive now holds drops out of T when the page is built.
+const T = {};
 const F = { bad: {}, badIn: {}, cfg: null, ed: null, mods: null, say: {}, newLogin: "", url: "", busy: {}, access: null, saved: null, flash: {}, was: {}, lost: false, kept: {} };
 // A switch that saved says so beside it for 1.5 s.
 const flash = (k, update) => { F.flash[k] = Date.now(); setTimeout(() => { if (Date.now() - (F.flash[k] || 0) >= 1400) { delete F.flash[k]; update(); } }, 1500); };
@@ -46,6 +50,7 @@ async function loadCfg(ctx) {
   F.ed ||= { max: F.cfg.max_sessions ?? "", kpe: F.cfg.keeper_every_s || 10800, au: F.cfg.auto_update !== false, bud: F.cfg.max_budget_usd ?? "", day: F.cfg.max_daily_usd ?? "", style: F.cfg.answer_style || "" };
   F.saved ||= { max: F.ed.max, bud: F.ed.bud, day: F.ed.day, style: F.ed.style };
   // A number typed when full mode ended comes back after the sign-in, in its box and marked not saved (store.js keep).
+  if (fresh && T.style != null) { if (T.style.trim() !== String(F.saved.style).trim()) F.ed.style = T.style; else delete T.style; }
   if (fresh && can("config")) for (const k of ["max", "bud", "day"]) { const v = kept("set." + k); if (v != null && String(v) !== String(F.saved[k])) { F.ed[k] = v; F.kept[k] = true; } else if (v != null && String(v) === String(F.saved[k])) keep("set." + k, null); }
   ctx.update();
 }
@@ -130,6 +135,8 @@ function viewSection(ctx) {
   return section({ title: "This device", note: "this browser only", level: 1 },
     blocks(block({ title: "Simple view", key: "simple", sub: on ? "On: you see a chat, and your Hive talks to you in plain words." : "Off: you see every tab, and what the agents say to each other. Turn it on for just a chat and what's been made, with agents told to use plain words.",
       actions: button(on ? "Show everything" : "Turn on simple view", () => { setSimple(!on); ctx.update(); }, { size: "s" }) }),
+    block({ title: "Still screen", key: "still", sub: stillOn() ? "On: nothing moves by itself, not the live dots, the Map's rings or the loading shimmer." : "Off: live agents breathe, the Map shows each post, and loading shimmers. Turn it on to stop everything that moves by itself.",
+      actions: button(stillOn() ? "Let things move" : "Stop all motion", () => { setStill(!stillOn()); ctx.update(); }, { size: "s" }) }),
     langBlock(), keysBlock(ctx), voiceBlock(ctx), notifyBlock(ctx), pushBlock(ctx), phoneBlock(ctx), signBlock(ctx)));
 }
 // Voice calls and memos: where they stand on this install (dash.py voice_view, projects/everyday/VOICE.md V1). The build runs in the
@@ -196,7 +203,7 @@ function voiceBlock(ctx) {
 function langBlock() {
   const cur = getLang();
   return block({ title: "Language", key: "lang", sub: "The words on the screens. Agents answer in the language you write in, whatever this says.",
-    actions: LANGS.map(([code, name]) => button(name, () => chooseLang(code), { size: "s", ...(code === cur ? { kind: "primary" } : {}) })) });
+    actions: LANGS.map(([code, name]) => { const b = button(name, () => chooseLang(code), { size: "s", ...(code === cur ? { kind: "primary" } : {}) }); b.lang = code; return b; }) });   // each name in its own language, marked so (WCAG 3.1.2)
 }
 // One-key shortcuts (WCAG 2.1.4, core/onekey.js): ?, F and / act on one key press with nothing held; this turns them off here.
 function keysBlock(ctx) {
@@ -278,11 +285,11 @@ function pushBlock(ctx) {
 // The name saves when you leave the box; a picture saves as soon as it's picked. Every tab and page picks them up from /api/app.
 const LOGO_MAX = 2 * 2 ** 20;
 function brandBlocks(ctx) {
-  F.name ??= brandName() || "";
+  if (T.name != null && T.name.trim() === (brandName() || "")) delete T.name;
+  F.name ??= T.name ?? brandName() ?? "";
   const done = async (work, ok, mark) => {
-    try { await work(); await loadApp(); if (mark) { say("brand", ""); flash(mark, ctx.update); } else say("brand", ok, "good"); }
-    catch (e) { say("brand", e.message, "bad"); }
-    F.name = brandName() || "";
+    try { await work(); await loadApp(); if (mark) { say("brand", ""); flash(mark, ctx.update); } else say("brand", ok, "good"); if (T.name == null || T.name.trim() === (brandName() || "")) { delete T.name; F.name = brandName() || ""; } }   // the box shows what the Hive now holds; words it didn't take stay
+    catch (e) { say("brand", e.message, "bad"); }   // a refused save keeps the typed name in the box
     ctx.update();
   };
   const saveName = () => {
@@ -305,7 +312,7 @@ function brandBlocks(ctx) {
   const file = h("input", { type: "file", accept: "image/png,image/jpeg,image/gif,image/webp,image/svg+xml", hidden: true, class: "brand-pick", onchange: (e, n) => { pick(n.files[0]); n.value = ""; } });
   return [
     block({ title: "Name", key: "name", sub: "Shown in the top bar and the browser tab. Empty uses the default.",
-      actions: [savedMark("Name"), input({ type: "text", maxlength: 40, placeholder: DEFAULT_NAME, "aria-label": "Hive name", value: F.name, oninput: (e, n) => { F.name = n.value; }, onchange: saveName, onfocusout: saveName })] }),
+      actions: [savedMark("Name"), input({ type: "text", maxlength: 40, placeholder: DEFAULT_NAME, "aria-label": "Hive name", value: F.name, oninput: (e, n) => { F.name = T.name = n.value; }, onchange: saveName, onfocusout: saveName })] }),
     block({ title: "Logo", sub: "Shown next to the name and as the tab's icon. PNG, JPEG, GIF, WebP or SVG, up to 2 MB. A square picture works best.",
       actions: [logo ? h("img", { class: "brand-logo set-logo", src: logo, alt: "Current logo", "data-key": "preview" }) : h("span", { class: "set-logo set-logo-none", "aria-hidden": "true" }), file,
         button(logo ? "Replace" : "Upload", (e, n) => n.parentNode.querySelector(".brand-pick").click(), { size: "s" }),
@@ -404,7 +411,7 @@ function hiveSection(ctx) {
     blocks(
       block({ title: "How I want answers", sub: "Every chat follows this from its next reply, like \"short answers, metric units, no bullet lists\". Saves when you leave the box.", key: "answer-style", actions: savedMark("How I want answers") },
         h("textarea", { class: "input set-style", rows: 3, maxlength: 2000, "aria-label": "How I want answers", placeholder: "Anything every answer should follow", value: E.style,
-          oninput: (e, n) => { E.style = n.value; }, onchange: saveStyle, onfocusout: saveStyle })),
+          oninput: (e, n) => { E.style = T.style = n.value; }, onchange: saveStyle, onfocusout: saveStyle })),
       memory,
       // E34 (GAPS row 19): every chat as plain text with its files, in one zip, made by the server (/api/export).
       can("config") ? block({ title: "Download my chats", sub: "Every chat as plain text with its files, in one zip. A big Hive takes a minute.", key: "export",
@@ -624,7 +631,7 @@ function accessSection(ctx) {
       if (both) throw new Error(`${both} is on both lists. Keep it on one.`);
       say("access", "");
       await act("access", "Saving who can reach this from outside", () => post("/api/access", { can: o.caps.filter(c => A.can.has(c)), hosts: words(A.hosts), access: { team: A.team, aud: A.aud, emails: words(A.emails) }, ...(named ? { people } : {}) }), ctx.update);
-      say("access", "Saved.", "good");
+      say("access", "Saved.", "good"); F.accessTyped = false;
     }
     catch (e) { say("access", e.message, "bad"); }
     ctx.update();
@@ -649,18 +656,18 @@ function accessSection(ctx) {
       }
       say("sites", "");
       await act("sites", "Saving the names with their own sign-in", () => post("/api/access", { sites }), ctx.update);
-      say("sites", "Saved.", "good");
+      say("sites", "Saved.", "good"); F.accessTyped = false;
     }
     catch (e) { say("sites", e.message, "bad"); }
     ctx.update();
   };
-  const rowTxt = (r, label, k, ph) => field(label, input({ placeholder: ph, value: r[k], oninput: (e, n) => { r[k] = n.value; } }));
+  const rowTxt = (r, label, k, ph) => field(label, input({ placeholder: ph, value: r[k], oninput: (e, n) => { r[k] = n.value; F.accessTyped = true; } }));
   const siteRows = R.map((r, i) => h("div", { class: "fgrid", "data-key": "site-" + i },
     rowTxt(r, "Hostname", "host", "h3.example.com"), rowTxt(r, "Access team domain", "team", "yourteam.cloudflareaccess.com"),
     rowTxt(r, "Application audience", "aud", "the Access application's AUD tag"), rowTxt(r, "Allowed emails", "emails", "optional: only these emails"),
     rowTxt(r, "People with full access", "full", "you@example.com"), rowTxt(r, "People with limited access", "limited", "friend@example.com"),
     button("Remove", () => { R.splice(i, 1); ctx.update(); }, { kind: "quiet" })));
-  const txt = (label, k, ph) => field(label, input({ placeholder: ph, value: A[k], oninput: (e, n) => { A[k] = n.value; } }));
+  const txt = (label, k, ph) => field(label, input({ placeholder: ph, value: A[k], oninput: (e, n) => { A[k] = n.value; F.accessTyped = true; } }));
   const sites = Object.keys(o.sites || {}), names = [...sites, ...o.hosts.filter(x => !sites.includes(x))];
   return section({ title: "Access from outside", level: 1, note: "only changeable from this machine" },
     h("p", null, statusLabel(names.length ? "working" : "off", names.length ? "Set up" : "Off"), " ", names.length ? "These names can reach this Hive from the internet, through Cloudflare, once their tunnel is up:" : "Only this computer can open this Hive. You need this only to reach it from a phone or another machine."),
@@ -700,7 +707,7 @@ function navDots(ctx) {
 
 export default {
   id: "settings", label: "Settings", about: "accounts, modules, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.lost = false; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
+  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.lost = false; F.name = null; F.saved = null; if (!F.accessTyped) F.access = null;   /* unsaved access edits stay for the session (3.3.7) */ F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
   },
   back(ctx) { loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update); },   // what enter reads, without enter's clearing: what the person is typing stays
   leave() { F.goTo = null; clearInterval(upTimer); upTimer = null; clearTimeout(voiceTimer); voiceTimer = null; forget(); forgetSecrets(); },

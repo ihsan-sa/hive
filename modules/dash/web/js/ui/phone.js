@@ -219,7 +219,8 @@ async function events(id) {
 export function end(tell = true) {
   if (tell && C.id && !C.ended) post(`${API}/call/${C.id}/end`, {}).catch(() => {});
   C.ended = true; C.state = "ended"; C.partial = ""; clearTimeout(C.holdT); holdStop(); micStop();
-  setTimeout(() => { if (C.ended) { C.id = null; C.err = ""; draw(); } }, C.err ? 6000 : 2500);   // the error goes too: it kept the card up for good, with no button (round 18)
+  // Left alone the card goes by itself (round 18: it sat over the ⋯ menu for good), but an error is read first: its Close, or 20 s (WCAG 2.2.1).
+  const err = C.err, n = C.endN = (C.endN || 0) + 1; setTimeout(() => { if (C.ended && C.endN === n) { C.err = ""; C.id = null; draw(); } }, err ? 20000 : 2500);
   draw();
 }
 

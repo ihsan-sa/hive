@@ -67,7 +67,7 @@ function sentNote() {   // Sending ends the overlay: the person is back on the p
     : h("div", { class: "fb-sent", role: "status" }, h("span", null, "Sent. An agent in your Hive will read it."),
         button("Open the conversation", null, { href: threadHref("feedback"), size: "s" }), button("Close", () => note.remove(), { size: "s", kind: "quiet" }));
   note.querySelector("a")?.addEventListener("click", () => note.remove());
-  document.body.append(note); setTimeout(() => note.remove(), 10000);
+  document.body.append(note); addEventListener("hashchange", () => note.remove(), { once: true });   // it holds a link: no clock (WCAG 2.2.1); Close, or going to another page
 }
 
 /** An agent drafted feedback (hive feedback-draft): open the window with its words in, once. The person edits and presses Send, or closes it; either clears the draft. */

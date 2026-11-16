@@ -26,7 +26,7 @@ export function touchstoneFigure(code, { lang, title }) {
       const build = () => { c.panels = splitPanels(phase ? mags.concat(phs) : mags); for (const q of c.panels) q.range = yRange(q.series.flatMap(x => x.vals)) || [-1, 1]; };
       build();
       const m = mount(c);
-      const btn = h("button", { type: "button", class: "rc-t", onclick: (e, n) => { phase = !phase; n.textContent = phase ? "Hide phase" : "Show phase"; build(); m.redraw(); } }, "Show phase");
+      const btn = h("button", { type: "button", class: "rc-t", onclick: (e, n) => { phase = !phase; n.textContent = phase ? "Hide phase" : "Show phase"; n.ariaPressed = String(phase); build(); m.redraw(); }, "aria-pressed": "false" }, "Show phase");
       return { own: h("div", null, m.wrap, h("div", { class: "rc-paramsn" }, btn, h("span", null, `${N}-port, ${d.r} Ω, ${d.f.length} points`))) };
     },
   });

@@ -4,7 +4,7 @@
 
 The top bar answers the two usual questions on every page: how many agents are working, and how much of the week is used. The number on **Chat** says how many things need you.
 
-If you only do one thing, look at the Chat home page: the line under the box says how many things wait on you, and each card in the grid under it says what moves (**Now**), what waits on you (**Needs you**) and what changed (**Lately**). Press a card's name for the whole picture of that focus; a conversation's two lines at its top say where it stands. The list on the left groups the same way with **By focus** in the **Show** menu; **By recency** puts the newest first.
+If you only do one thing, look at the Chat home page: the line under the box says how many things wait on you, and your focuses are under it: as a list, one row each with the ones that wait on you first, or as cards that say what moves (**Now**), what waits on you (**Needs you**) and what changed (**Lately**); **List** and **Cards** beside the heading switch. Press a focus's name for the whole picture of it; a conversation's two lines at its top say where it stands. The list on the left groups the same way with **By focus** in the **Show** menu; **By recency** puts the newest first.
 
 ## See what agents are doing
 

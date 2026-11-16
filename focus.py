@@ -12,22 +12,45 @@ them that an agent writes, so it stays in plain words: no rung ids, post ids, pa
   hive focus link A B [--off]           two foci that depend on each other (the GTM focus needs the mech lab's result)
   hive focus relate FOCUS thread|agent|file X --why "..." [--off]   a thread, agent or file that bears on a focus without being in
                                       it (a result post that touched another focus: relate it there); the focus's json lists them as relations
-  hive focus set FOCUS <<'X'            the summary, markdown on stdin: `## Now` bullets (what is being done, who, where: @agent and
-                                      #thread become pills), `## Lately` bullets (decisions, turns, what changed) and, only when a
-                                      decision really needs the person, `## Needs you` bullets (one line each, with the #thread):
-                                      the home card shows those and nothing else under Needs you. Agents decide by default and say
-                                      `Decided:` in the result instead. Plain words, high level relative to the focus. Lint runs
-                                      and prints what it flags; it never refuses
-  hive focus show FOCUS                 the summary as set
-  hive focus reader FOCUS               how far away the person is: when they last wrote in the focus and how often this week.
+  hive focus lead FOCUS ["text"]        In short: the one or two sentences the person reads first, on the home card and at the top of
+                                      the focus page, for someone who reads nothing else (the person, 2026-11-16: "I can't get a
+                                      good sense of what's going on"). It opens with the state and a colon, then says the one thing
+                                      that matters now, measured against the focus's aim: "On track: ...", "At risk: ...",
+                                      "Blocked: ...", "Needs you: ...", "Waiting: ...", "Paused: ..." or "Done: ...". The text
+                                      comes as arguments or on stdin (a quoted heredoc); without one it prints what is set. It is
+                                      kept apart from the lines, so a `set` that leaves it out keeps it; whoever changes what it
+                                      says rewrites it, and the same text again says it still holds. --off takes it away
+  hive focus set FOCUS <<'X'            the summary, markdown on stdin: `## Now` bullets (what is being done, who, where: @agent
+                                      and #thread become pills; at most seven, each opening with its topic and a colon), `## Lately`
+                                      bullets (decisions, turns, what changed) and, when something only the person can do or decide
+                                      is open, `## Needs you` bullets (one line each, with the #thread): the page shows those as
+                                      waiting on them, so never leave such a thing inside a Now line. Agents decide by default and
+                                      say `Decided:` in the result instead. An `## In short` part on top is taken as the lead (hive
+                                      focus lead). Plain words, high level relative to the focus. Lint runs and prints what it
+                                      flags; it never refuses
+  hive focus show FOCUS                 the summary as set, In short on top
+  hive focus reader FOCUS               how far away the person is: when they last wrote in the focus, how often this week, when
+                                      they last opened its page and how many of the card's lines are newer than that.
                                       Write the card for that distance: someone a day away needs what was done and found since,
                                       someone a week away needs where it stands and why. `set` and the stop reminder print it too
   hive focus aim FOCUS "text"           one line on what the focus is for (the name isn't always enough: the person, 2026-11-07);
                                       shown under the name on the home card and at the top of the focus page. Without one, the
                                       text after the thread on the focus's priorities line is used
-  hive focus check add FOCUS "text" | list FOCUS | done ID... | untick ID...   the focus page's to-do list
+  hive focus check add FOCUS "text" | list FOCUS | done ID... | untick ID...   the focus page's to-do list. A step only the
+                                      person can do starts "For you:"; ticking one names every place that still tells them
+                                      it waits (its For you line, an ask, a status bar, the card's Needs you), to close with it
   hive focus lint [FOCUS] [--json]      what reads wrong: ids, paths, rung words, test names, long bullets, a summary older than
-                                      the focus's newest result post (stale), a focus with threads and no summary (missing)
+                                      the focus's newest result post (stale), a focus with threads and no summary (missing), no
+                                      In short (no lead), one with no state word, one too long or days older than the lines under
+                                      it, more than seven Now bullets, a Now line that reads as something only the person can do
+                                      (hidden ask), a date that has gone by since the line was written (past date), "today" or
+                                      "tomorrow" in a line over a day and a half old (says today), an In short that says Needs
+                                      you over a focus where nothing waits on them (needs nothing), a For you to-do that no open
+                                      For you line, ask or status bar says (to-do off the list), the same For you to-do twice
+                                      (to-do twice)
+  hive focus seen FOCUS | --home        the person looked at the focus's page, or at the home (the dashboard writes it; an agent
+                                      can't): the page marks what is new since the look before, and `reader` tells the writer how
+                                      long ago that was
   hive focus order ID ID ...            the order foci show in (rail, home, this list): the listed ones first, the rest after in
                                       their usual order; the newest order wins (the dash's drag writes it). --reset: back to default
   hive focus moved [--since 2d]         threads moved between foci lately, newest first (from, to, who, when; up to a week back);
@@ -40,7 +63,7 @@ them that an agent writes, so it stays in plain words: no rung ids, post ids, pa
 
 The duty (time-invariant, no cleanup pulses): the agent that posts a result in a thread that is in a focus updates the focus's
 summary in the same run. The inbox hook says so once when it sees the result post and an older summary.
-Records go to ~/.hive/focus.jsonl, append-only: {kind: focus|tag|link|relation|summary|aim|check|check_done|check_untick|file|order|brief, ..., from, at}.
+Records go to ~/.hive/focus.jsonl, append-only: {kind: focus|tag|link|relation|summary|lead|aim|check|check_done|check_untick|file|order|brief|seen, ..., from, at}.
 """
 import argparse, datetime as dt, json, os, re, sys, time
 from pathlib import Path
@@ -55,6 +78,19 @@ RESULT = re.compile(r"^(Done|Blocked|Needs the person|Waiting|Told to stop):\s*\
 MISC = "misc"
 RELATE = ("thread", "agent", "file")   # what hive focus relate joins to a focus
 MAX_SUMMARY, MAX_BULLET = 2500, 220
+MAX_LEAD, LEAD_CUT, LEAD_OLD, MAX_NOW = 320, 600, 3 * 86400, 7   # In short is two sentences (flagged past 320, cut at 600) and is flagged when the lines moved on three days past it; past seven Now lines nobody reads the list (the person, 2026-11-16)
+SEEN_EVERY, SEEN_VISIT, SEEN_LONG = 60, 900, 3600   # one seen record a minute at most; looks less than a quarter of an hour apart are one visit; in a visit that goes on, a mark lasts an hour
+HOME_ID = "*home"                    # `hive focus seen --home`: the person looked at the home. Not a focus id (those open with a letter), so a focus may be called home
+# The word an In short opens with, and the state the card shows for it. Seven states, each a different thing for the person to do:
+# nothing (on track, done), look closer (at risk), expect nothing until something outside moves (blocked, waiting, paused), act (needs you).
+VERDICT = {"on track": "on track", "going well": "on track", "ahead": "on track",
+           "at risk": "at risk", "off track": "at risk", "behind": "at risk", "slipping": "at risk",
+           "blocked": "blocked", "stuck": "blocked", "stalled": "blocked",
+           "needs you": "needs you", "needs the person": "needs you", "waiting on you": "needs you", "waits on you": "needs you",
+           "waiting": "waiting", "paused": "paused", "on hold": "paused", "parked": "paused",
+           "done": "done", "finished": "done", "complete": "done"}
+VERDICT_RX = re.compile(r"^[\s*_]*(" + "|".join(sorted(map(re.escape, VERDICT), key=len, reverse=True)) + r")[\s*_]*(?:[:.—–]|\s-\s)[\s*_]*", re.I)
+VERDICTS = "On track, At risk, Blocked, Needs you, Waiting, Paused or Done"
 BRIEF_MAX, BRIEF_FILES, BRIEF_FILE_MAX = 4000, 10, 10_000_000   # a group's instructions (characters), how many files, and each file's size
 GROUP_FILES = HOME / "files" / "groups"
 WINDOWS = {"day": 86400, "week": 7 * 86400}   # the home card's gauge: each focus's share of the hive's work over the last day and week
@@ -68,7 +104,48 @@ JARGON = [
     ("tool talk", re.compile(r"\b(?:PR\s*#?\d+|commit\s+[0-9a-f]{6,}|stdin|regex|jsonl|API|endpoint|refactor)\b"), "say what it means for the work"),
 ]
 
+# A Now or Lately line that reads as something only the person can do: it belongs under `## Needs you`, where the page shows it as
+# waiting on them (2026-11-16: the page said "Nothing waits on you here" above a line saying only the person's sign-in would fix it).
+ASK = re.compile(r"\b(?:only you(?:rs?)?\b|(?<!what )wait(?:s|ing)? (?:only )?(?:on|for) (?:[^.;:]{0,60}? and )?(?:you(?:rs?)?|the person(?:'s)?)\b"
+                 r"|(?<!waits )(?<!wait )(?<!waiting )on you:|needs? your\b|you need to\b|you must\b|you have to\b|(?:until|unless) you\b"
+                 r"|(?<!what )the person (?:must|has to|needs to|will have to) (?:approve|agree|decide|sign|pick|choose|confirm|answer|reply|pay|buy|say|send|rule|log in|plug|press|order|register|do (?:this|that|it))\b"
+                 r"|(?:needs?|requires?|takes) (?:a human|(?:the person's|their) (?:sign-?in|log-?in|decision|call|approval|go-ahead|answer|reply|say-so|signature|payment|choice|pick|ruling))\b|requires? your\b"
+                 r"|(?:sign-?in|log-?in|signature|payment) (?:is |was )?(?:required|needed)\b"
+                 r"|once you (?:approve|agree|decide|sign|pick|choose|confirm|answer|reply|pay|say|send)\b|returns? (?:when|once|after) you\b"
+                 r"|asked (?:you|the person) to (?:choose|decide|pick|approve|confirm|rule|say|sign)\b"
+                 r"|(?:account|sign-?up|order|registration|licen[cs]e) in (?:your|the person's) name\b"
+                 r"|(?<!from )your (?:sign-?in|log-?in|decision|call|approval|go-ahead|go(?![\w-])|answer|reply|say-so|signature|payment|choice|pick|part|turn|move|ruling)\b"
+                 r"|(?:for you|yours|up to you) to (?:decide|sign|approve|pick|choose|confirm|answer|pay|buy|send|say|do|make|read and judge)\b|(?:is|are|stays?) yours\b)", re.I)
+
 STEP_ID = re.compile(r"\b(?:R-?\d{2,4}[\w-]*|[A-Z]{2}-\d+[a-z]?)\b")   # a ladder step id (R107, R-1114-c, IM-1b): the to-do list is the person's, ids mean nothing there
+
+# Dates and day words in the person's text (lint's "past date" and "says today", 2026-11-16). A date that was still ahead when
+# the line was written and is behind now ("the boards land 11-14", read on the 16th) reads as news that never came, and "today"
+# in a line two days old names the wrong day. Forms: 2026-11-18, 11-18 (two digits each, not a count: "10-12 hours"), Nov 18,
+# November 18th, 18 Nov. "may" counts as a month only with its capital.
+_MONTHS = "jan feb mar apr may jun jul aug sep oct nov dec".split()
+_MONTH = r"(?:(?i:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)|May)"
+_NTH = r"(?:st|nd|rd|th)?"
+_UNIT = r"(?!\s*(?:%|°|(?i:percent|of|hours?|hrs?|h|min(?:ute)?s?|days?|weeks?|months?|years?|times|agents?|posts?|threads?|runs?|items?|lines?|steps?|tests?|checks?|points?|pages?|rows?|files?|words?|px|ms|mm|cm|kg|gb|mb|k?hz|mhz)\b))"
+DATE_RX = re.compile(rf"\b(?P<y>20\d\d)-(?P<m1>\d\d)-(?P<d1>\d\d)\b"
+                     rf"|\b(?P<mon2>{_MONTH})\.?\s+(?P<d2>\d{{1,2}}){_NTH}(?:\s*(?:to|-|–)\s*(?P<e2>\d{{1,2}}){_NTH})?\b"
+                     rf"|\b(?P<d3>\d{{1,2}}){_NTH}\s+(?P<mon3>{_MONTH})\b"
+                     rf"|(?<![\w/.:-])(?P<m4>\d\d)-(?P<d4>\d\d)(?![\w/:-]|\.\d){_UNIT}")
+DATE_TO = re.compile(r"^\s*(?:to|until|through|and|-|–|—)\s*$", re.I)   # between two dates of one span ("11-14 to 11-18"): only its end can be late
+DAY_WORD = re.compile(r"\b(?:today|tonight|tomorrow|yesterday|this (?:morning|afternoon|evening)|last night)\b", re.I)
+DAY_WORD_OLD = 36 * 3600            # a day word is wrong once the line is this old
+BAR_NAME, BAR_NEEDS = re.compile(r"\s*\(a[0-9a-f]{4,5}\)"), re.compile(r"^Needs the person:\s*", re.I)   # a status bar's last line, as the dash's standLine reads it
+BAR_DAYS = 7                        # how long a status bar's wait stays listed (the dash's NEEDS_FOR); a For you line's days are away.py's FOR_YOU_DAYS
+BTW = re.compile(r"^btw-(.+)-[0-9a-f]{4}$")   # a side question's thread names the conversation it was asked in
+FOR_YOU_TODO = re.compile(r"^\W*for you\W*:\s*", re.I)   # a to-do the agents put on the person ("For you: order the boards")
+# A to-do nothing waits for: it is the person's to take up when they like ("if you want it proven", "when a spare machine is free",
+# "say if you want one"), or it is held ("don't press yet"). foryou.OFFER reads a line's opening words; a to-do is one clause,
+# so the offer may come at its end.
+NO_RUSH = re.compile(r"^\W*(?:if|only if|when(?:ever)?|once|after|next time|some ?time|any ?time|optional(?:ly)?)\b"
+                     r"|\bif you(?:'d| would)? (?:want|wish|like|prefer|ever)\b|\b(?:say|tell (?:me|us)|let (?:me|us) know) if\b"
+                     r"|\bno (?:rush|hurry)\b|\boptional\b|\bwhen(?:ever)? you (?:want|like|can|have|get)\b|\b(?:not|don'?t \w+) yet\b", re.I)
+POST_ID = re.compile(r"\b[0-9a-f]{12}\b")   # a post a line names ("post 11160104f457")
+TWIN_GONE = ("offer", "ends by itself")   # a line that came off the person's list this way never waited: its to-do is theirs to take up or leave
 
 def now(): return time.time()
 def who(): return os.environ.get("HIVE_NAME", "anon")
@@ -103,17 +180,109 @@ def priorities(text=None):
         seen.add(th); out.append({"id": th, "name": title.strip(), "n": int(n), "thread": th, "aim": re.sub(r"\s*\[[^\]]*\]", "", rest).strip(" ,;:.")[:200] or None})
     return out
 
+HEADING = re.compile(r"^(?:#{1,3}\s*)?(in short|in brief|verdict|bottom line|tl;?dr|now|currently|lately|recent(?:ly)?.*|evolution.*|needs? (?:you|me|the person)|decisions?|for you)\s*:?\s*$", re.I)
+def heading(line):
+    """The part a summary line opens ("lead", "now", "lately", "needs"), or None when it is not a heading."""
+    m = HEADING.match(line.strip())
+    if not m: return None
+    h = m.group(1).lower()
+    return "lead" if h.startswith(("in ", "verdict", "bottom", "tl")) else "now" if h in ("now", "currently") else "needs" if h.startswith(("need", "decision", "for")) else "lately"
+
 def parse_summary(text):
-    """`## Now`, `## Lately` and `## Needs you` bullets out of the summary's markdown; a bullet-less part is kept as one bullet."""
+    """`## Now`, `## Lately` and `## Needs you` bullets out of the summary's markdown; a bullet-less part is kept as one bullet.
+    An `## In short` part is passed over: it is kept in a record of its own (split_lead)."""
     parts, cur = {"now": [], "lately": [], "needs": []}, None
     for ln in (text or "").splitlines():
         s = ln.strip()
-        if not s: continue
-        m = re.match(r"^(?:#{1,3}\s*)?(now|currently|lately|recent(?:ly)?.*|evolution.*|needs? (?:you|me|the person)|decisions?|for you)\s*:?\s*$", s, re.I)
-        if m: cur = "now" if m.group(1).lower() in ("now", "currently") else "needs" if m.group(1).lower().startswith(("need", "decision", "for")) else "lately"; continue
+        if not s or LEAD_INLINE.match(s): continue
+        h = heading(s)
+        if h: cur = h; continue
         if cur is None: cur = "now"
-        parts[cur].append(re.sub(r"^[-*•]\s+", "", s))
+        if cur != "lead": parts[cur].append(re.sub(r"^[-*•]\s+", "", s))
     return parts
+
+LEAD_INLINE = re.compile(r"^#{1,3}\s*(?:in short|in brief|verdict|bottom line|tl;?dr)\s*[:.]\s*(\S.*)$", re.I)   # "## In short: On track: ..." on one line
+def split_lead(text):
+    """(the In short part as one string, the summary without it): the lead is kept in a record of its own, so the lines can be
+    rewritten without it and it can be rewritten without them."""
+    lead, rest, cur = [], [], None
+    for ln in (text or "").splitlines():
+        m = LEAD_INLINE.match(ln.strip())
+        if m: cur = "lead"; lead.append(m.group(1)); continue
+        h = heading(ln) if ln.strip() else None
+        if h: cur = h
+        if cur == "lead":
+            if not h and ln.strip(): lead.append(re.sub(r"^[-*•]\s+", "", ln.strip()))
+        else: rest.append(ln)
+    return " ".join(" ".join(lead).split()), "\n".join(rest).strip()
+
+def lead_state(text):
+    """An In short's state and the sentence after it: "At risk: the board is late" gives ("at risk", "The board is late");
+    (None, text) when it opens with no state word."""
+    text = " ".join(str(text or "").split())
+    m = VERDICT_RX.match(text)
+    body = text[m.end():].strip() if m else ""
+    if not body: return None, text
+    return VERDICT[m.group(1).lower()], body[:1].upper() + body[1:]
+
+def norm(t): return " ".join(str(t).split()).lower()
+# The words of an ask that say what it is about: no #thread or @name, no word every ask shares ("only you", "waits on the person").
+ASK_STOP = frozenset("the and for you your yours with that this from are was has have had not but can will its into only person persons needs need wait waits waiting until when once here there them they their what which".split())
+def ask_words(t): return {w for w in re.findall(r"[a-z0-9]{3,}", re.sub(r"[#@][\w.:-]+", " ", str(t).lower())) if w not in ASK_STOP}
+def ask_key(t): return norm(t), ask_words(t)
+def same_key(a, b):
+    """same_ask on two ask_key()s, for a caller that compares one line against many."""
+    n = len(a[1] & b[1])
+    return (bool(a[0]) and a[0] == b[0]) or (n >= 3 and n >= 0.6 * min(len(a[1]), len(b[1])))
+def near_key(a, b, least=2, share=0.4):
+    """same_key with a lower bar, for two lines already known to be in one focus, where fewer other lines could share the words:
+    a to-do against the For you line it was copied from, which says the same at three times the length ("decide whether to pay
+    for app signing" against a line that sets out both costs)."""
+    n = len(a[1] & b[1])
+    return same_key(a, b) or (n >= least and n >= share * min(len(a[1]), len(b[1])))
+def same_ask(a, b):
+    """Whether two lines say the same ask in other words: they share three or more telling words, and those are most of the shorter
+    line's. A Needs you line and a reworded Now line then count once (2026-11-16 review: the card said 3 wait where the agents listed 2)."""
+    return same_key(ask_key(a), ask_key(b))
+
+def set_lead(f, text, r):
+    """Put the In short of record `r` on focus `f`; no text takes it away. {text, state, body, from, at, since, was, turned}: `since`
+    is when it began to say this and `at` when it was last written, so the same text again says "read against the lines, still holds";
+    `was` is the state before the one it has and `turned` when that changed (None: it has had one state)."""
+    text = " ".join(str(text or "").split())[:LEAD_CUT]
+    if not text: f["lead"] = None; return
+    prev = f.get("lead") or {}
+    st, body = lead_state(text)
+    same = prev.get("state") == st or not prev   # the state it had before this one, and when it turned: the card says "was on track" while that is new to the person
+    f["lead"] = {"text": text, "state": st, "body": body, "from": r.get("from"), "at": r.get("at"),
+                 "since": prev.get("since") if norm(prev.get("text") or "") == norm(text) else r.get("at"),
+                 "was": prev.get("was") if same else prev.get("state"), "turned": prev.get("turned") if same else r.get("at")}
+
+def look(p, t):
+    """The person's looks at one place (a focus's page, the home) after one more at time `t`; `p` is the record before, or None.
+    {at: the newest look, start: the first of its visit, base: the last look of the visit before (None: there was none), looks: this
+    visit's looks of the last SEEN_LONG and the one before them}. A visit is looks less than SEEN_VISIT apart: by the gap between
+    looks, not by the time since its first, so the marks do not go a quarter of an hour into a read (review, 2026-11-16)."""
+    if p and t - float(p.get("at") or 0) <= SEEN_VISIT:
+        ls = list(p.get("looks") or [p["at"]]) + [t]
+        k = max((i for i, x in enumerate(ls) if x <= t - SEEN_LONG), default=0)
+        return {**p, "at": t, "looks": ls[k:]}
+    return {"at": t, "start": t, "base": p["at"] if p else None, "looks": [t]}
+
+def since_seen(seen, at=None):
+    """The time the person's marks count from: what is newer than this is new to them. During a visit it is their last look of the
+    visit before (so what was new when they came stays marked while they read), or, in a visit that has gone on past SEEN_LONG, their
+    newest look that old (what they have had an hour with is not new); after the visit, their last look. None: never looked, or
+    this is the first visit, and nothing is marked."""
+    if not seen: return None
+    t = now() if at is None else at
+    if t - float(seen.get("at") or 0) > SEEN_VISIT: return seen.get("at")
+    old = [x for x in seen.get("looks") or [] if x <= t - SEEN_LONG]
+    return max(old) if old else seen.get("base")
+
+def seen_out(seen, at=None):
+    """A look record as the pages get it: {at, start, base, since}, `since` worked out here so every page agrees."""
+    return {"at": seen.get("at"), "start": seen.get("start"), "base": seen.get("base"), "since": since_seen(seen, at)} if seen else None
 
 def board_posts():
     out = []
@@ -159,17 +328,20 @@ def reader(f, posts, now=None):
     now = now or dt.datetime.now(dt.timezone.utc).timestamp()
     th = set(f.get("threads") or []) | {f.get("thread") or f["id"]}
     at = sorted(ts(p.get("at")) for p in posts if p.get("thread") in th and str(p.get("from", "")).lower() == "person")
-    if not at: return "The person has never written in this focus: the card is all they know of it, so it says what the work is for, where it stands and what changed, before any detail."
+    seen, s = (f.get("seen") or {}).get("at"), f.get("summary") or {}
+    span = lambda x: f"{x * 60:.0f} minutes" if x < 1 else f"{x:.0f} hours" if x < 48 else f"{x / 24:.0f} days"
+    new = sum(1 for a in (s.get("now_at") or []) + (s.get("lately_at") or []) if seen and float(a or 0) > seen)
+    look = "" if not seen else f" They last opened its page {span((now - seen) / 3600)} ago" + (f"; {new} of the card's lines are newer than that, and the page marks those as new to them." if new else ", and have seen every line on the card.")
+    if not at: return "The person has never written in this focus: the card is all they know of it, so it says what the work is for, where it stands and what changed, before any detail." + look
     h = (now - at[-1]) / 3600; week = sum(1 for t in at if now - t <= 7 * 86400)
     days = len({int(t // 86400) for t in at if now - t <= 7 * 86400})
-    span = lambda x: f"{x * 60:.0f} minutes" if x < 1 else f"{x:.0f} hours" if x < 48 else f"{x / 24:.0f} days"
     back = [t for t in at if at[-1] - t > 3600]            # a post just now after a long gap is someone coming back, not someone close
     away = (at[-1] - back[-1]) / 3600 if h < 3 and back else h
     came = f", coming back after {span(away)} away" if away > h else ""
     how = ("they are following closely, so the card can be about the current step" if away < 3 else
            "its first bullets say what was done and what was found since then, at the level they would ask about, then what is next" if away < 72 else
            "they have been away from it, so it opens with where the whole thing stands and why, and leaves out steps")
-    return f"The person last wrote in this focus {span(h)} ago{came} ({week} posts on {days} of the last 7 days): {how}."
+    return f"The person last wrote in this focus {span(h)} ago{came} ({week} posts on {days} of the last 7 days): {how}." + look
 
 def ts(at):
     if isinstance(at, (int, float)): return float(at)  # records carry time.time(); posts an ISO string
@@ -181,7 +353,7 @@ def state(recs=None, pri=None, posts=None):
     recs = records() if recs is None else recs
     foci, order = {}, []
     for f in (priorities() if pri is None else pri):
-        foci[f["id"]] = {"aim": None, **f, "own": True, "links": [], "relations": [], "summary": None, "checks": [], "threads": [], "files": []}; order.append(f["id"])
+        foci[f["id"]] = {"aim": None, **f, "own": True, "links": [], "relations": [], "lead": None, "summary": None, "checks": [], "threads": [], "files": []}; order.append(f["id"])
     for r in recs:
         if r["kind"] == "focus":
             fid = r.get("id")
@@ -189,7 +361,7 @@ def state(recs=None, pri=None, posts=None):
             if r.get("off"):
                 if fid in foci and not foci[fid].get("own"): del foci[fid]; order.remove(fid)
             elif fid not in foci:
-                foci[fid] = {"id": fid, "name": r.get("name") or fid, "thread": r.get("thread"), "own": False, "aim": None, "links": [], "relations": [], "summary": None, "checks": [], "threads": [], "files": [], "made": r.get("at")}; order.append(fid)
+                foci[fid] = {"id": fid, "name": r.get("name") or fid, "thread": r.get("thread"), "own": False, "aim": None, "links": [], "relations": [], "lead": None, "summary": None, "checks": [], "threads": [], "files": [], "made": r.get("at")}; order.append(fid)
             else: foci[fid]["name"] = r.get("name") or foci[fid]["name"]
     tags = {}
     for r in recs:
@@ -213,15 +385,33 @@ def state(recs=None, pri=None, posts=None):
     for (fid, _, _), x in rel.items(): foci[fid]["relations"].append(x)
     for r in recs:
         if r["kind"] == "aim" and r.get("focus") in foci: foci[r["focus"]]["aim"] = (r.get("text") or "").strip() or None
-    for r in recs:
-        if r["kind"] == "summary" and r.get("focus") in foci:
-            prev = foci[r["focus"]]["summary"] or {}
-            parts = parse_summary(r.get("text"))
+    for r in recs:   # In short and the lines, each in the order it was written
+        if r["kind"] == "lead" and r.get("focus") in foci: set_lead(foci[r["focus"]], None if r.get("off") else r.get("text"), r)
+        elif r["kind"] == "summary" and r.get("focus") in foci:
+            f = foci[r["focus"]]; prev = f["summary"] or {}
+            lead, text = split_lead(r.get("text"))
+            if lead and norm(lead) != norm((f["lead"] or {}).get("text") or ""): set_lead(f, lead, r)   # an In short inside a summary counts when it says something new
+            parts = parse_summary(text)
             # needs_at[i]: when the i-th Needs you bullet first showed in an unbroken run of summaries, so a rewrite doesn't make an old
             # ask look new (the person, 110813526b10: a needs-you that sits a day on fast work is likely obsolete).
-            was = {" ".join(t.split()).lower(): a for t, a in zip(prev.get("needs") or [], prev.get("needs_at") or [])}
-            parts["needs_at"] = [was.get(" ".join(t.split()).lower(), r.get("at")) for t in parts.get("needs") or []]
-            foci[r["focus"]]["summary"] = {"text": r.get("text") or "", "from": r.get("from"), "at": r.get("at"), **parts}
+            was = {norm(t): a for t, a in zip(prev.get("needs") or [], prev.get("needs_at") or [])}
+            parts["needs_at"] = [was.get(norm(t), r.get("at")) for t in parts["needs"]]
+            # now_at, lately_at: the same for the Now and Lately lines (one map, so a line moved from Now to Lately keeps its time): the
+            # page marks what is new since the person last looked.
+            was = {norm(t): a for k in ("now", "lately") for t, a in zip(prev.get(k) or [], prev.get(k + "_at") or [])}
+            for k in ("now", "lately"): parts[k + "_at"] = [was.get(norm(t), r.get("at")) for t in parts[k]]
+            # Now lines that read as the person's to do: the page lists them as waiting on them. One that says in other words what a
+            # Needs you line already says is that ask, not a second one (same_ask).
+            parts["hidden"] = [i for i, t in enumerate(parts["now"]) if ASK.search(t) and not any(same_ask(t, n) for n in parts["needs"])]
+            f["summary"] = {"text": text, "from": r.get("from"), "at": r.get("at"), **parts}
+    # The person's looks, at a focus's page or at the home (look() above keeps the visit); since_seen() turns a record into the time
+    # their "new" marks count from.
+    seen = {}
+    for r in recs:
+        if r["kind"] == "seen" and r.get("from") == "person" and (r.get("focus") in foci or r.get("focus") == HOME_ID):
+            seen[r["focus"]] = look(seen.get(r["focus"]), float(r.get("at") or 0))
+    for fid, x in seen.items():
+        if fid in foci: foci[fid]["seen"] = x
     checks = {}
     for r in recs:
         # The person's tick waits for an agent to confirm it (the person, 1108133400fb): done_by "person" and no ok yet. An agent's
@@ -248,7 +438,7 @@ def state(recs=None, pri=None, posts=None):
             files = [x for x in r.get("files") or [] if isinstance(x, str) and Path(x).resolve().parent == own and not Path(x).is_symlink()]
             foci[r["focus"]]["brief"] = {"text": text, "files": files, "from": r.get("from"), "at": r.get("at")} if text or files else None
     for f in foci.values():
-        f.setdefault("brief", None)
+        f.setdefault("brief", None); f.setdefault("seen", None)
         if f.get("thread") and f["thread"] not in f["threads"]: f["threads"].insert(0, f["thread"])
     order = ordered(order, recs)
     # Needs-you items the person put off (the person, 1108133400fb): key -> {key, th, focus, text, t, what: "later"|"moot", from, at};
@@ -258,7 +448,7 @@ def state(recs=None, pri=None, posts=None):
         if r["kind"] == "later" and r.get("key"):
             if r.get("what") == "back": later.pop(r["key"], None)
             elif r.get("what") in ("later", "moot"): later[r["key"]] = {k: r.get(k) for k in ("key", "th", "focus", "text", "t", "what", "from", "at")}
-    return {"foci": [foci[i] for i in order], "tags": tags, "order": order, "later": sorted(later.values(), key=lambda x: -(x.get("at") or 0)), "moved": moved}
+    return {"foci": [foci[i] for i in order], "tags": tags, "order": order, "later": sorted(later.values(), key=lambda x: -(x.get("at") or 0)), "moved": moved, "home_seen": seen.get(HOME_ID)}
 
 MOVED_FOR, MOVED_MAX, MOVED_MERGE = 7 * 86400, 80, 600
 def moves(recs, foci, at=None):
@@ -310,6 +500,54 @@ def focus_of(st, thread, posts=None):
         par = first and first.get("parent")
         if par and par != thread: return focus_of(st, par, None)
     return None
+
+def focus_finder(st, posts):
+    """thread -> the focus the pages show it under (None: Other), for a caller that places many threads: one pass over the board,
+    then the dash's own rule (foci.js focusOf), up the chain of the conversations it was started from: its tag, else the focus
+    whose own thread it is, else the same for its parent, eight steps at most. focus_of looks one parent up and no further."""
+    own, first, memo = {}, {}, {}
+    for f in st["foci"]:
+        for k in (f.get("thread"), f["id"]):
+            if k: own.setdefault(k, f["id"])
+    for p in posts:
+        th = p.get("thread")
+        if th and th not in first: first[th] = p.get("parent")   # the board is in time order: a thread's first post is its first line
+    def of(thread):
+        if thread not in memo:
+            t, out = thread, None
+            for _ in range(8):
+                if not t: break
+                if t in st["tags"]: out = st["tags"][t]; break
+                if t in own: out = own[t]; break
+                m = BTW.match(str(t))
+                t = m.group(1) if m else first.get(t)
+            memo[thread] = out
+        return memo[thread]
+    return of
+
+def late_dates(text, written, at=None):
+    """The dates in a line that were still ahead on the day it was written and are behind today: [(as written, date)]. Days are
+    local. A date with no year is in the year the line was written, or the next when that would put it half a year back."""
+    text = str(text or "")
+    try: day0, today = dt.date.fromtimestamp(float(written)), dt.date.fromtimestamp(float(at or now()))
+    except (TypeError, ValueError, OverflowError, OSError): return []
+    found = []
+    for m in DATE_RX.finditer(text):
+        g = m.groupdict()
+        try:
+            if g["y"]: d = dt.date(int(g["y"]), int(g["m1"]), int(g["d1"]))
+            else:
+                mon = int(g["m4"]) if g["m4"] else _MONTHS.index((g["mon2"] or g["mon3"])[:3].lower()) + 1
+                day = int(g["d4"] or g["d3"] or (g["e2"] if g["e2"] and int(g["e2"]) > int(g["d2"]) else g["d2"]))
+                d = dt.date(day0.year, mon, day)
+                if (day0 - d).days > 180: d = d.replace(year=d.year + 1)
+        except ValueError: continue
+        found.append((m, d))
+    out = []
+    for i, (m, d) in enumerate(found):
+        if i + 1 < len(found) and DATE_TO.match(text[m.end():found[i + 1][0].start()]): continue   # a span's start: its end decides
+        if day0 < d < today: out.append((m.group(0).strip(), d))
+    return out
 
 def tag_history(recs, thread):
     """The foci a thread was tagged into, oldest first (None where it was taken out)."""
@@ -425,23 +663,215 @@ def newest_result(threads, posts):
             if t > bt: bt, best = t, p
     return bt, best
 
-def lint(st, posts=None, only=None):
-    """[{focus, kind, what, fix}] for everything that reads wrong on the person's pages. Never refuses: the caller decides."""
+def core_module(name):
+    """away, asks or foryou, from beside this file: `hive focus` runs isolated (python -I), with no script directory on the path."""
+    import importlib
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path: sys.path.insert(0, here)
+    return importlib.import_module(name)
+
+def person_waits(st, posts, at=None):
+    """What waits on the person by the board's own evidence, and what stopped waiting, for lint to hold the summaries against:
+    {"open": [...], "closed": [...]}, rows {thread, text, kind: line|ask|bar, at, post|ask} and, on a closed one, rule (away.py's,
+    or old, or closed) and why in words.
+    Open is what the person is told waits on them: For you lines open by away.py's rules (open_on_person), asks in state person,
+    and status bars ending `Needs the person:` with no word from them since. Closed is every For you line that came off: by a
+    rule, by age, or by an agent's `hive foryou close`. None when it can't be known: away.py is missing or fails, or the files in
+    use aren't the live ones (a test's own board says nothing about the live asks)."""
+    try: away, asks, foryou = core_module("away"), core_module("asks"), core_module("foryou")
+    except Exception: return None
+    if FILE.parent != away.STATE or BOARD != away.HOME / "board.jsonl": return None
+    at = at or now()
+    try:
+        items, done, shut, dropped = asks.ledger(), away.status_done(), away.closed_for_yous(), []
+        kept = away.for_yous(posts, items, away.needs_order()[1], 0, latest_only=True, dropped=dropped)
+    except Exception: return None
+    line = lambda r, **k: {"thread": r["thread"], "text": r["text"], "kind": "line", "at": r["at"], "post": str(r["post"]), **k}
+    off = lambda r, rule: line(r, rule=rule, why=away.RULE_WHY.get(rule, rule))
+    open_, closed = [], [off(r, r["rule"]) for r in dropped]
+    for r in kept:
+        rule = away.view_rule(r, done)
+        if rule: closed.append(off(r, rule))
+        elif r["at"] < at - away.FOR_YOU_DAYS * 86400: closed.append(line(r, rule="old", why=f"it is over {away.FOR_YOU_DAYS} days old, and a line that old is no longer listed"))
+        else: open_.append(line(r))
+    said = {}                                           # thread -> when the person last wrote in it
+    for p in posts:
+        pid = str(p.get("id"))
+        if pid in shut:
+            e = shut[pid]
+            for l in foryou.lines(p.get("text")):
+                if not foryou.NOTHING.match(l): closed.append({"thread": p.get("thread"), "text": l, "kind": "line", "at": ts(p.get("at")), "post": pid, "rule": "closed", "why": f"{e.get('by') or 'an agent'} closed it: {' '.join(str(e.get('why') or 'no reason given').split())[:160]}"})
+        if str(p.get("from", "")).lower() == "person": said[p.get("thread")] = max(said.get(p.get("thread"), 0), ts(p.get("at")))
+    for i, e in items.items():
+        if e.get("status") == "person" and e.get("kind") != "direction":
+            open_.append({"thread": e.get("thread") or e.get("post") or "asks", "text": str(e.get("ask") or ""), "kind": "ask", "at": away.stamp(e.get("when") or e.get("at")) or 0, "ask": i})
+    bars = {}
+    for e in away.lines(STATUS):
+        if e.get("thread"): bars[e["thread"]] = e
+    for th, e in bars.items():
+        rows = [l for l in str(e.get("text") or "").splitlines() if l.strip()]
+        last = BAR_NAME.sub("", rows[-1]).strip() if rows else ""
+        m = BAR_NEEDS.match(last)
+        try: t = float(e.get("at") or 0)
+        except (TypeError, ValueError): t = 0.0
+        if m and at - t < BAR_DAYS * 86400 and said.get(th, 0) <= t: open_.append({"thread": th, "text": last[m.end():], "kind": "bar", "at": t})
+    return {"open": open_, "closed": closed}
+
+_WEEKDAYS = "Monday Tuesday Wednesday Thursday Friday Saturday Sunday".split()
+def day_meant(word, written):
+    """The day a day word meant in a line written at `written`, in words ("Tuesday, 11-10"): the day it was written, the one after
+    for "tomorrow", the one before for "yesterday" and "last night". Days are local. None when the time can't be read."""
+    try: d = dt.date.fromtimestamp(float(written))
+    except (TypeError, ValueError, OverflowError, OSError): return None
+    w = " ".join(str(word or "").lower().split())
+    d += dt.timedelta(days=1 if w == "tomorrow" else -1 if w in ("yesterday", "last night") else 0)
+    return f"{_WEEKDAYS[d.weekday()]}, {d:%m-%d}"
+
+def days(t, at=None):
+    """How long ago `t` was, in words: "40 minutes", "5 hours", "3 days"."""
+    h = ((at or now()) - float(t or 0)) / 3600
+    n, unit = (h * 60, "minute") if h < 1 else (h, "hour") if h < 48 else (h / 24, "day")
+    return f"{n:.0f} {unit}" + ("" if f"{n:.0f}" == "1" else "s")
+
+def todo_body(c):
+    """A to-do the agents put on the person ("For you: order the boards"): the words after the marker, or None for any other to-do."""
+    m = FOR_YOU_TODO.match(c.get("text") or "")
+    return c["text"][m.end():] if m else None
+
+def todo_ids(body):
+    """The posts and asks a to-do names by id ("see post 11160104f457", "answer k1234")."""
+    return set(POST_ID.findall(body)) | set(re.findall(r"\bk\d{4}\b", body))
+
+def todo_rows(body, opens, mine):
+    """The open rows (For you lines, asks, status bars) that tell the person what the to-do `body` says: a row anywhere in nearly
+    its words, or a row of the to-do's own focus (`mine`) in other words or named by its id. Rows as lint pairs them: (ask_key, row)."""
+    k, ids = ask_key(body), todo_ids(body)
+    out = [r for o, r in opens if same_key(k, o)]
+    return out + [r for o, r in mine if not any(r is x for x in out) and (near_key(k, o) or r.get("post") in ids or r.get("ask") in ids)]
+
+def waits_by_focus(st, posts, waits):
+    """person_waits()'s open rows with their ask_key, all of them and by the focus each one's thread shows under: (opens, {focus: [...]})."""
+    of, here = focus_finder(st, posts), {}
+    opens = [(ask_key(r["text"]), r) for r in waits["open"]]
+    for x in opens: here.setdefault(of(x[1]["thread"]), []).append(x)
+    return opens, here
+
+def tick_note(st, checks, posts=None, waits=None, at=None):
+    """For an agent that ticked or confirmed to-dos the agents had put on the person: one line for each place that still tells the
+    person the step waits on them (an open For you line, an ask that is theirs, a status bar ending Needs the person, a Needs you
+    line of the card), with the command that takes it off. A to-do and its line are two records of one wait, and closing one left
+    the other standing (2026-11-16: six to-dos were open whose line had been closed)."""
+    todo = [(c, todo_body(c)) for c in checks if todo_body(c) is not None]
+    if not todo: return []
+    if posts is None:
+        posts = board_posts()
+        if waits is None: waits = person_waits(st, posts, at)
+    opens, here = waits_by_focus(st, posts, waits) if waits else ([], {})
+    cut = lambda t: " ".join(str(t).split())[:70]
+    out, ticked = [], {c["id"] for c, _ in todo}
+    for c, body in todo:
+        k, ids = ask_key(body), todo_ids(body)
+        f = next((g for g in st["foci"] if g["id"] == c["focus"]), None)
+        # One of a pair (lint's "to-do twice"): the other to-do still puts the step on the person, so every place that says it stays.
+        if any(d["id"] not in ticked and not d["done"] and todo_body(d) is not None and near_key(k, ask_key(todo_body(d)), 4, 0.5) for d in (f or {}).get("checks") or []): continue
+        rows = todo_rows(body, opens, here.get(c["focus"], []))
+        # A row in the to-do's words, or one it names, is the step for sure: with one of those, a row that only shares a few words is left out.
+        for r in [r for r in rows if same_key(k, ask_key(r["text"])) or r.get("post") in ids or r.get("ask") in ids] or rows:
+            if r["kind"] == "line": out.append(f"{c['id']} is ticked, and a For you line in #{r['thread']} still tells the person it waits on them: \"{cut(r['text'])}\". If that is the same step, close it too: hive foryou close {r['post']} --why \"...\"")
+            elif r["kind"] == "ask": out.append(f"{c['id']} is ticked, and ask {r['ask']} still waits on the person: \"{cut(r['text'])}\". If that is the same step: hive asks done {r['ask']} --evidence POST, or hive asks reopen {r['ask']} --why \"...\" when it is back with the agents")
+            else: out.append(f"{c['id']} is ticked, and the status bar of #{r['thread']} still ends \"Needs the person: {cut(r['text'])}\". If that is the same step, set the bar again with where the thread stands now: hive status {r['thread']}")
+        for n in ((f or {}).get("summary") or {}).get("needs") or []:
+            if near_key(k, ask_key(n)): out.append(f"{c['id']} is ticked, and the card of {c['focus']} still lists under Needs you: \"{cut(n)}\". If that is the same step, take the line off: hive focus show {c['focus']}, then hive focus set {c['focus']}")
+    return out
+
+def closed_note(ids, st=None, posts=None, waits=None, at=None):
+    """For an agent that closed For you lines (hive foryou close): one line for each open to-do that put the same step on the person
+    and that nothing they are told about says any more, so the two are closed in one go. Lint's own "to-do off the list", for the
+    lines just closed."""
+    ids = {str(i) for i in ids}
+    st = st or state(posts=posts)
+    return [f"to-do {i['check']} of {i['focus']} still puts this on the person: \"{i['in']}\". If the step is settled, tick it too: hive focus check done {i['check']}. If it only stopped being pressing, tick it and add it again as an offer (\"For you: if you want ...\")"
+            for i in lint(st, posts, waits=waits, at=at) if i["kind"] == "to-do off the list" and i.get("twin") in ids]
+
+def lint(st, posts=None, only=None, waits=None, at=None):
+    """[{focus, kind, what, fix}] for everything that reads wrong on the person's pages. Never refuses: the caller decides.
+    waits: person_waits()'s answer, for the checks that hold a card against what waits on the person. Worked out here when lint
+    reads the board itself; a caller that brings its own posts brings this too, or goes without those checks."""
     out = []
-    posts = board_posts() if posts is None else posts
+    at = at or now()
+    if posts is None:
+        posts = board_posts()
+        if waits is None: waits = person_waits(st, posts, at)
+    if waits:
+        # Each row with its ask_key, by the focus its thread shows under. Closed rows newest first, and one dropped as a repeat
+        # last: the line it repeats is the one that says why the wait ended.
+        (opens, here), of, off = waits_by_focus(st, posts, waits), focus_finder(st, posts), {}
+        gone = sorted(((ask_key(r["text"]), r) for r in waits["closed"]), key=lambda x: (x[1].get("rule") == "repeat", -float(x[1].get("at") or 0)))
+        for x in gone: off.setdefault(of(x[1]["thread"]), []).append(x)
     for f in st["foci"]:
         if only and f["id"] != only: continue
-        s = f.get("summary")
-        if not s:
-            if f["threads"]: out.append({"focus": f["id"], "kind": "missing", "what": "no summary yet", "fix": f"hive focus set {f['id']} <<'X' with ## Now and ## Lately bullets"})
-            continue
-        for part in ("now", "lately", "needs"):
-            for b in s[part]:
+        s, lead = f.get("summary"), f.get("lead")
+        todo = [(c, todo_body(c)) for c in f["checks"] if not c["done"] and todo_body(c) is not None]
+        if waits:
+            # One meaning for "needs you" (2026-11-16): the In short, the Needs you lines, the to-do list and the list of what waits on
+            # the person are four places that say it, and the person reads whichever is in front of them.
+            mine, was = here.get(f["id"], []), off.get(f["id"], [])
+            if lead and lead["state"] == "needs you" and not ((s or {}).get("needs") or (s or {}).get("hidden") or todo or mine):
+                out.append({"focus": f["id"], "kind": "needs nothing", "part": "lead", "what": "In short says Needs you, and nothing in the focus is listed as waiting on them", "in": lead["text"][:80],
+                            "fix": f"if something still waits on them, put it under ## Needs you with its #thread (hive focus set {f['id']}) and write the For you line in that thread, so it is counted where they look; if nothing does, open the In short with the state it is in now"})
+            keys = [(c, body, ask_key(body)) for c, body in todo]
+            for i, (c, body, k) in enumerate(keys):
+                # The same step twice on the person's list (2026-11-16: one decision, added by two agents a day apart).
+                first = next((d for d, _, o in keys[:i] if near_key(k, o, 4, 0.5)), None)
+                if first: out.append({"focus": f["id"], "kind": "to-do twice", "part": "to-do", "what": f"to-do {c['id']} says the same as {first['id']}", "in": c["text"][:80], "fix": f"the person reads one step twice: keep the one that says more and tick the other (hive focus check done {c['id']}, or hive focus check done {first['id']})"})
+                if NO_RUSH.search(body): continue
+                # Said by something the person is told about: a line anywhere in nearly its words, a line, ask or bar of this focus
+                # in other words or named by its id, or a Needs you line of the card.
+                ids = todo_ids(body)
+                if todo_rows(body, opens, mine) or any(near_key(k, ask_key(n)) for n in (s or {}).get("needs") or []): continue
+                twin = (next((r for _, r in was if r.get("post") in ids), None) or next((r for o, r in was if near_key(k, o, 4, 0.5)), None)
+                        or next((r for o, r in gone if same_key(k, o)), None))
+                if twin and (twin.get("rule") in TWIN_GONE or any(str(twin.get("post")) in r["text"] for _, r in mine)): continue   # it never waited, or an open bar names it
+                out.append({"focus": f["id"], "kind": "to-do off the list", "part": "to-do", "what": f"to-do {c['id']} is the person's, and nothing like it is on the list of what waits on them", "in": c["text"][:80],
+                            "check": c["id"], "twin": str(twin["post"]) if twin and twin.get("post") else None,
+                            "fix": (f"its For you line in #{twin['thread']} came off that list: {twin['why']}. " if twin else "no For you line, ask or status bar says it. ")
+                                   + f"Settled or dropped: tick it (hive focus check done {c['id']}). Work stops until they do it: write the For you line in its thread, so they are told. "
+                                     "No rush: tick it and add it again as an offer (\"For you: if you want …\"), which stays a to-do and nothing more"})
+        # A date that has gone by, and a day word in an old line (2026-11-16): both were right on the day they were written.
+        dated = ([("lead", lead["text"], lead.get("since") or lead.get("at"), None)] if lead else []) + [(part, b, a, None) for part in ("now", "needs", "lately") for b, a in zip((s or {}).get(part) or [], (s or {}).get(part + "_at") or [])] + [("to-do", c["text"], c.get("at"), c["id"]) for c in f["checks"] if not c["done"]]
+        for part, b, wrote, cid in dated:
+            if not wrote: continue
+            redo = f"if it happened, tick it (hive focus check done {cid}); if it is still to do, tick it and add it again with the day it is now due" if cid else "say what happened that day, or give the new date"
+            for said, d in (late_dates(b, wrote, at) if part != "lately" else []):
+                out.append({"focus": f["id"], "kind": "past date", "part": part, "what": f"{said} has passed", "in": b[:80], "fix": f"it was still ahead when this was written {days(wrote, at)} ago: {redo}"})
+            m = DAY_WORD.search(b)
+            if m and at - float(wrote) > DAY_WORD_OLD:
+                out.append({"focus": f["id"], "kind": "says today", "part": part, "what": f"\"{m.group(0)}\" in a line written {days(wrote, at)} ago", "in": b[:80], "fix": (f"write {day_meant(m.group(0), wrote)} in its place" if day_meant(m.group(0), wrote) else "name the day") + ", so it reads right on any day" + (f": tick it and add it again (hive focus check done {cid})" if cid else "")})
+        if not s and f["threads"]: out.append({"focus": f["id"], "kind": "missing", "what": "no summary yet", "fix": f"hive focus set {f['id']} <<'X' with ## Now and ## Lately bullets"})
+        if not s and not lead: continue
+        s = s or {"now": [], "lately": [], "needs": []}
+        for part in ("lead", "now", "lately", "needs"):
+            for b in ([lead["text"]] if lead else []) if part == "lead" else s[part]:
                 for name, rx, fix in JARGON:
                     m = rx.search(b)
-                    if m: out.append({"focus": f["id"], "kind": name, "what": m.group(0).strip(), "in": b[:80], "fix": fix})
-                if len(b) > MAX_BULLET: out.append({"focus": f["id"], "kind": "long bullet", "what": b[:60] + "…", "fix": f"keep a bullet under {MAX_BULLET} characters: one thing, in plain words"})
-        if not s["now"] and not s["lately"]: out.append({"focus": f["id"], "kind": "empty", "what": "no bullets", "fix": "give at least one ## Now bullet"})
+                    if m: out.append({"focus": f["id"], "kind": name, "part": part, "what": m.group(0).strip(), "in": b[:80], "fix": fix})
+                if part != "lead" and len(b) > MAX_BULLET: out.append({"focus": f["id"], "kind": "long bullet", "part": part, "what": b[:60] + "…", "fix": f"keep a bullet under {MAX_BULLET} characters: one thing, in plain words"})
+        if f.get("summary") and not s["now"] and not s["lately"]: out.append({"focus": f["id"], "kind": "empty", "what": "no bullets", "fix": "give at least one ## Now bullet"})
+        # In short: the one part a person who reads nothing else gets (2026-11-16). Missing, without its state, too long, or left
+        # behind by the lines under it.
+        lines_at = [float(a or 0) for a in (s.get("now_at") or []) + (s.get("lately_at") or [])]
+        if not lead:
+            if len(s["now"]) + len(s["lately"]) >= 3: out.append({"focus": f["id"], "kind": "no lead", "part": "lead", "what": "no In short", "fix": f"say in one or two sentences whether the focus is on track against its aim and the one thing that matters now, for someone who reads nothing else: hive focus lead {f['id']} \"On track: …\" (it opens with {VERDICTS})"})
+        else:
+            if not lead["state"]: out.append({"focus": f["id"], "kind": "no state", "part": "lead", "what": "In short opens with no state", "in": lead["text"][:80], "fix": f"open it with {VERDICTS} and a colon: the card shows that word first"})
+            if len(lead["text"]) > MAX_LEAD: out.append({"focus": f["id"], "kind": "long lead", "part": "lead", "what": f"In short is {len(lead['text'])} characters", "fix": f"keep it under {MAX_LEAD}: the state and the one thing that matters; the rest is what the lines are for"})
+            if lines_at and max(lines_at) - float(lead.get("at") or 0) > LEAD_OLD:
+                out.append({"focus": f["id"], "kind": "old lead", "part": "lead", "what": f"In short was last written {(max(lines_at) - float(lead.get('at') or 0)) / 86400:.0f} days before the newest line", "fix": f"read it against the lines as they are now: rewrite it, or set the same text again to say it still holds (hive focus lead {f['id']} \"…\")"})
+        if len(s["now"]) > MAX_NOW: out.append({"focus": f["id"], "kind": "too many", "part": "now", "what": f"{len(s['now'])} Now lines", "fix": f"keep the {MAX_NOW} that matter at this focus's level; merge the rest, move what is settled to Lately, or leave it to its thread's status"})
+        for i in s.get("hidden") or []:
+            b = s["now"][i]
+            out.append({"focus": f["id"], "kind": "hidden ask", "part": "now", "what": ASK.search(b).group(0), "in": b[:80], "fix": "if only the person can do it and it is still open, move the line under ## Needs you with its #thread, so the page shows it as waiting on them; if it isn't theirs, say who does it"})
+        if not f.get("summary"): continue
         t, p = newest_result(set(f["threads"]), posts)
         if p and t > float(s.get("at") or 0) + 60:
             out.append({"focus": f["id"], "kind": "stale", "what": f"a result was posted in #{p['thread']} by {p.get('from')} after the summary", "fix": f"the agent that posts a result updates the summary in the same run: hive focus set {f['id']}"})
@@ -463,9 +893,13 @@ def nudge(name, thread, since, posts=None, own=None):
     if not p: return None
     s = f.get("summary")
     if s and float(s.get("at") or 0) >= t: return None
+    lead = f.get("lead")
+    short = (f"Then read In short against the lines as you left them (now: \"{lead['text'][:200]}\") and rewrite it if it is no longer the verdict: hive focus lead {f['id']} \"On track: …\"" if lead else
+             f"Then give it its In short, which the person reads first and often alone, in one or two sentences (is the focus on track against its aim, and the one thing that matters now): hive focus lead {f['id']} \"On track: …\" (it opens with {VERDICTS})")
     return (f"{'This thread' if own in (None, thread) else f'#{thread}, where you posted a result,'} is in the focus \"{f['name']}\" and its summary is {'older than your result' if s else 'not written yet'}. The person reads the focus card, "
-            f"not the thread, so update it now, in plain words (what is being done and by whom, what changed), with @agent and #thread where they help:\n"
-            f"hive focus set {f['id']} <<'X'\n## Now\n- …\n## Lately\n- …\nX\n" + reader(f, posts))
+            f"not the thread, so update it now, in plain words: what is being done and what changed, each line opening with its topic and a colon, with @agent and #thread where they help. "
+            f"Run hive focus show {f['id']} first and keep the others' lines; anything only the person can do goes under ## Needs you, never inside a Now line:\n"
+            f"hive focus set {f['id']} <<'X'\n## Now\n- Topic: …\n## Lately\n- …\nX\n{short}.\n" + reader(f, posts))
 
 FILE_ASKED = STATE / "file-asked.jsonl"     # {thread, name, at, file, title}: which agent was asked to file or title which conversation
 META, RENAMED = STATE / "thread-meta.json", STATE / "renamed.jsonl"
@@ -529,8 +963,16 @@ def file_nudge(name, thread, since, posts=None):
                    f"hive rename {thread} \"…\" (the person's own title always wins).")
     return " ".join(out)
 
-def fmt_lint(items):
-    return "\n".join(f"{i['focus']}: {i['kind']}: {i['what']}" + (f"  (in: {i['in']})" if i.get("in") else "") + f"\n    → {i['fix']}" for i in items) or "nothing flagged"
+def fmt_lint(items, each=0):
+    """The flags as lines. each: at most that many of one kind in one focus, then a line counting the rest (`set` prints the
+    flags after every summary, and twelve passed dates would bury the one flag about the lines just written)."""
+    out, seen, more = [], {}, {}
+    for i in items:
+        k = (i["focus"], i["kind"]); seen[k] = seen.get(k, 0) + 1
+        if each and seen[k] > each: more[i["focus"]] = more.get(i["focus"], 0) + 1; continue
+        out.append(f"{i['focus']}: {i['kind']}: {i['what']}" + (f"  (in: {i['in']})" if i.get("in") else "") + f"\n    → {i['fix']}")
+    out += [f"{fid}: {n} more of the same kinds: hive focus lint {fid}" for fid, n in more.items()]
+    return "\n".join(out) or "nothing flagged"
 
 def check_id(recs): return f"c{sum(1 for r in recs if r['kind'] == 'check') + 1:04d}"
 
@@ -545,6 +987,8 @@ def main(argv=None):
     p = sp.add_parser("set"); p.add_argument("focus")
     p = sp.add_parser("show"); p.add_argument("focus")
     p = sp.add_parser("reader"); p.add_argument("focus")
+    p = sp.add_parser("lead", help="In short: the one or two sentences the person reads first"); p.add_argument("focus"); p.add_argument("text", nargs="*"); p.add_argument("--off", action="store_true")
+    p = sp.add_parser("seen", help="the person looked at the focus's page, or at the home (the dashboard writes it)"); p.add_argument("focus", nargs="?"); p.add_argument("--home", action="store_true"); p.add_argument("--json", action="store_true", help="print {noted, key, seen: {at, start, base, since}}")
     p = sp.add_parser("keeper"); p.add_argument("focus")
     p = sp.add_parser("aim"); p.add_argument("focus"); p.add_argument("text", nargs="*")
     p = sp.add_parser("check"); p.add_argument("what", choices=["add", "list", "done", "untick", "confirm", "ticked"]); p.add_argument("args", nargs="*"); p.add_argument("--why", default="")
@@ -606,20 +1050,62 @@ def main(argv=None):
         text = " ".join(" ".join(a.text).split())[:200]
         if not text: print(f.get("aim") or "(no aim yet)"); return
         append({"kind": "aim", "focus": f["id"], "text": text}); print(f"aim of {f['id']}: {text}"); return
-    if a.cmd in ("set", "show", "keeper", "reader"):
+    if a.cmd == "seen":
+        if who() != "person": sys.exit("hive focus seen: the dashboard records this when the person looks at the home or a focus's page; hive focus reader says when that was")
+        if bool(a.home) == bool(a.focus): sys.exit("hive focus seen FOCUS, or hive focus seen --home")
+        f = None if a.home else find(st, a.focus.strip().lower())
+        if not a.home and not f: sys.exit(f"hive focus seen: no focus {a.focus!r}")
+        fid, name = (f["id"], f["id"]) if f else (HOME_ID, "the home")
+        cur = st["home_seen"] if not f else f.get("seen")
+        noted = now() - (cur or {}).get("at", 0) >= SEEN_EVERY
+        if noted: cur = look(cur, append({"kind": "seen", "focus": fid})["at"])
+        print(json.dumps({"noted": noted, "key": fid, "seen": seen_out(cur)}) if a.json else f"{name}: seen" if noted else f"{name}: already noted"); return
+    if a.cmd in ("set", "show", "keeper", "reader", "lead"):
         f = find(st, a.focus)
         if not f: sys.exit(f"hive focus: no focus {a.focus!r} (hive focus list; hive focus new ID \"name\" adds one)")
-        if a.cmd == "show": print((f.get("summary") or {}).get("text") or "(no summary yet)"); return
+        cur = f.get("lead")
+        if a.cmd == "lead":
+            if a.off:
+                if cur: append({"kind": "lead", "focus": f["id"], "off": True})
+                print(f"{f['id']}: no In short now"); return
+            raw = " ".join(a.text).strip()
+            if not raw and not sys.stdin.isatty():   # a heredoc is there at once; an agent's idle pipe never is, and must not hang the command
+                import select
+                try:
+                    if select.select([sys.stdin], [], [], 0.3)[0]: raw = sys.stdin.read().strip()
+                except (OSError, ValueError): pass
+            if not raw:
+                print(f"{cur['text']}\n(written {days(cur['at'])} ago by {cur.get('from')}" + ("" if cur["at"] == cur["since"] else f"; it has said this for {days(cur['since'])}") + ")" if cur else
+                      f"(no In short yet: hive focus lead {f['id']} \"On track: …\", one or two sentences opening with {VERDICTS})"); return
+            text = split_lead(raw)[0] or " ".join(raw.split())
+            if len(text) > LEAD_CUT:
+                print(f"hive focus lead: {len(text)} characters, In short keeps {LEAD_CUT}: the end was CUT OFF. It is one or two sentences; the rest belongs in the lines.", file=sys.stderr); text = text[:LEAD_CUT]
+            same = bool(cur) and norm(cur["text"]) == norm(text)
+            append({"kind": "lead", "focus": f["id"], "text": text})
+            st = state(); f = find(st, f["id"])
+            flags = [i for i in lint(st, only=f["id"]) if i.get("part") == "lead"]
+            print((f"In short on {f['id']} still holds (it has said this for {days(f['lead']['since'])})" if same else f"In short set on {f['id']}" + (f", shown as \"{f['lead']['state']}\"" if f["lead"]["state"] else ""))
+                  + (f"\nreads wrong on the person's page, fix when you can:\n{fmt_lint(flags)}" if flags else ""))
+            return
+        if a.cmd == "show":
+            s = f.get("summary")
+            print("\n".join(x for x in (f"## In short\n{cur['text']}\n" if cur else "", s["text"] if s else "" if cur else "(no summary yet)") if x)); return
         if a.cmd == "keeper": print(keeper(f, board_posts()) or "nobody"); return
         if a.cmd == "reader": print(reader(f, board_posts())); return
         if sys.stdin.isatty(): sys.exit("hive focus set: the summary comes on stdin, a quoted heredoc with ## Now and ## Lately bullets")
-        raw = sys.stdin.read().strip(); text = raw[:MAX_SUMMARY]
+        lead, raw = split_lead(sys.stdin.read()); text = raw[:MAX_SUMMARY]
         if len(raw) > MAX_SUMMARY: print(f"hive focus set: {len(raw)} characters, the card keeps {MAX_SUMMARY}: the end was CUT OFF. Shorten it (fewer bullets, higher level) and set it again.", file=sys.stderr)
         parts = parse_summary(text)
-        if not parts["now"] and not parts["lately"]: sys.exit("hive focus set: empty; give ## Now and ## Lately bullets")
+        if not parts["now"] and not parts["lately"]: sys.exit("hive focus set: empty; give ## Now and ## Lately bullets" + (f" (In short alone: hive focus lead {f['id']})" if lead else ""))
         append({"kind": "summary", "focus": f["id"], "text": text})
+        new_lead = bool(lead) and not (cur and norm(cur["text"]) == norm(lead))
+        if new_lead:
+            if len(lead) > LEAD_CUT: print(f"hive focus set: In short is {len(lead)} characters and keeps {LEAD_CUT}: the end was CUT OFF.", file=sys.stderr)
+            append({"kind": "lead", "focus": f["id"], "text": lead[:LEAD_CUT]})
         st = state(); flags = [i for i in lint(st, only=f["id"]) if i["kind"] != "stale"]
-        print(f"summary set on {f['id']} ({len(parts['now'])} now, {len(parts['lately'])} lately" + (f", {len(parts['needs'])} for the person" if parts["needs"] else "") + ")\n" + reader(f, board_posts()) + (f"\nreads as agent talk, fix when you can:\n{fmt_lint(flags)}" if flags else ""))
+        f = find(st, f["id"])   # as set: the lines' first-seen times feed the reader line
+        still = "" if new_lead or not f.get("lead") else (f"\nIn short still reads, from {days(f['lead']['at'])} ago: \"{f['lead']['text']}\"\nIf the lines you just set change that, rewrite it (hive focus lead {f['id']} \"On track: …\"); if it holds, set the same text again to say so.")
+        print(f"summary set on {f['id']} ({'In short, ' if new_lead else ''}{len(parts['now'])} now, {len(parts['lately'])} lately" + (f", {len(parts['needs'])} for the person" if parts["needs"] else "") + ")" + still + "\n" + reader(f, board_posts()) + (f"\nreads wrong on the person's page, fix when you can:\n{fmt_lint(flags, 3)}" if flags else ""))
         return
     if a.cmd == "check":
         recs = records()
@@ -644,7 +1130,12 @@ def main(argv=None):
             if a.what == "confirm" and not known[cid]["done"]: sys.exit(f"hive focus check: {cid} isn't ticked; use done")
             kind = {"done": "check_done", "untick": "check_untick", "confirm": "check_ok"}[a.what]
             append({"kind": kind, "id": cid, **({"why": " ".join(a.why.split())[:200]} if a.what == "untick" and a.why else {})})
-        print(f"{a.what}: {' '.join(a.args)}"); return
+        print(f"{a.what}: {' '.join(a.args)}", flush=True)
+        if a.what != "untick" and who() != "person":   # a hint for the agent: never costs the tick that was just written
+            try:
+                for ln in tick_note(st, [known[cid] for cid in a.args]): print(f"hive focus check: {ln}", file=sys.stderr)
+            except Exception: pass
+        return
     if a.cmd == "lint":
         f = find(st, a.focus) if a.focus else None
         if a.focus and not f: sys.exit(f"hive focus lint: no focus {a.focus!r}")
@@ -745,7 +1236,9 @@ def main(argv=None):
     if a.cmd == "json":
         posts = board_posts()
         for f in st["foci"]: f["keeper"] = keeper(f, posts)
-        out = {"foci": st["foci"], "tags": st["tags"], "later": st["later"], "moved": st["moved"], "misc": MISC, "lint": lint(st, posts), "activity": activity(st, posts, run_starts(now() - WINDOWS["week"])), "at": now()}
+        home = seen_out(st["home_seen"])
+        for f in st["foci"]: f["seen"] = seen_out(f.get("seen"))
+        out = {"foci": st["foci"], "tags": st["tags"], "later": st["later"], "moved": st["moved"], "misc": MISC, "home_seen": home, "seen_visit": SEEN_VISIT, "lint": lint(st, posts, waits=person_waits(st, posts)), "activity": activity(st, posts, run_starts(now() - WINDOWS["week"])), "at": now()}
         print(json.dumps(out, default=str)); return
 
 if __name__ == "__main__": main()

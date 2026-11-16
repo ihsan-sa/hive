@@ -5,6 +5,7 @@
 import { h, tr } from "../core/dom.js";
 import { figure } from "./figure.js";
 import { sigOf } from "./math.js";
+import { post as apiPost, can } from "../core/store.js";
 
 const MAX = 1000000, MAX_H = 1200, MIN_H = 80, MSG_MAX = 4000, ST = new Map();
 const stateOf = k => { let s = ST.get(k); if (!s) { ST.set(k, s = { open: false, px: 0, values: null }); if (ST.size > 200) ST.delete(ST.keys().next().value); } return s; };
@@ -208,6 +209,34 @@ function drawArtifact(code, title, st, box, ver) {
       st.values = null; vals.hidden = true; vals.textContent = "";
       for (const s of box.querySelectorAll(".rc-fig-src")) s.textContent = c;
       if (frame) { destroy(); if (st.open) build(); }
+    }
+    // Edit by hand (everyday E43): the shown version's code in a box; Save posts it as the person's newest version of this page (dash.py
+    // page_edit_post), which wakes nobody and opens running, with this one behind the arrows.
+    const edit = h("button", { type: "button", class: "rc-t", "data-artedit": "", title: "Change this page's code yourself", onclick: () => editor() }, "Edit");
+    if (can("post")) box.querySelector(".rc-tools")?.prepend(edit);
+    let ed = null;
+    function editor() {
+      if (ed) { ed.querySelector("textarea").focus(); return; }
+      const ta = h("textarea", { class: "msg-edit-t rc-arted-t", rows: 14, spellcheck: "false", "aria-label": "This page's code" });
+      ta.value = code;
+      const err = h("p", { class: "msg-edit-err", role: "alert", hidden: true });
+      const done = () => { ed?.remove(); ed = null; edit.focus(); };
+      const save = async b => {
+        const c = ta.value.replace(/\s+$/, "");
+        if (!c.trim()) { err.textContent = "Not saved: the page is empty."; err.hidden = false; return; }
+        if (c === code.replace(/\s+$/, "")) return done();
+        b.disabled = true; err.hidden = true;
+        for (const k of [c, c + "\n"]) stateOf(sigOf("html\0" + k)).open = true;   // the new copy opens running
+        try { await apiPost("/api/post", { thread: ver.th, page: { code: c, title: title || null } }); done(); }
+        catch (x) { b.disabled = false; err.textContent = "Not saved: " + (x.message || x); err.hidden = false; }
+      };
+      ed = h("div", { class: "msg-editor rc-arted" }, ta, err,
+        h("div", { class: "msg-edit-acts" },
+          h("button", { type: "button", class: "btn rc-arted-save", "data-kind": "primary", "data-size": "s", onclick: (e, b) => save(b) }, "Save as new version"),
+          h("button", { type: "button", class: "btn rc-arted-cancel", "data-kind": "quiet", "data-size": "s", onclick: () => done() }, "Cancel"),
+          h("span", { class: "meta" }, "Saved as your own version at the end of this chat; no agent is asked. This one stays behind the arrows.")));
+      ta.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); done(); } });
+      wrap.append(ed); ta.focus();
     }
     wrap.prepend(bar); ver.drawn = true; LIVE.add(live);
     if (LIVE.size > 300) for (const f of LIVE) { if (LIVE.size <= 300) break; if (f.gone()) f.drop(); }
