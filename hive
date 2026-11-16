@@ -130,6 +130,16 @@ def receipt(to, ignored, ext, me):
     if ignored: bits.append(f"ignored {', '.join(ignored)}: no such agent (--to starts one under a code like a1b2c)")
     if bits: print("hive post: " + "; ".join(bits), file=sys.stderr)
 
+def effort_hint(to, a):
+    """The line an agent sees when it starts a fresh Claude agent with no --effort, or None. The rule is in `hive help agents`, which few
+    runs open, so it is said at the step it applies to (7 days to 2026-11-15: 4 of 187 such starts chose an effort,
+    projects/hive-meta/effort_chosen.py; thread 111517062687)."""
+    me = os.environ.get("HIVE_NAME", "").lower()
+    if a.as_ or not HASH_NAME.fullmatch(me) or me.startswith("f") or getattr(a, "effort", None): return None  # a free agent's post doesn't choose it
+    if ":" in (a.model or "") or not any(n in ("new", "claude", *CLAUDE_MODELS) for n in to): return None  # another provider takes no effort
+    return ("hive post: no --effort, so the new agent runs at medium (to 11-29, half of Opus agents run at high: the effort trial), which suits most work. --effort high for a design, an independent review, "
+            "debugging that failed once or a Fable run (hive help agents).")
+
 def box():
     """The sandbox module. Only reached on a consumer install, or when someone asks for the check."""
     sys.path.insert(0, str(CORE)); import sandbox
@@ -338,7 +348,8 @@ def cmd_post(a):
     # release-train included: they set HIVE_NAME too but read no refusal, so only an agent's own name is refused. A model chosen in Settings stands for that Hive's agents.
     if c.get("spawn_model") and not settings_model() and HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_ and not a.model and (w := [n for n in to + [t for _, t in copies] if n in ("new", "claude")]):
         sys.exit(f"hive post: nothing posted. {' and '.join(w)} starts a new agent, so choose its model: add --model sonnet (or opus, haiku, fable, codex:gpt-6-astra), "
-                 "or use the words opus, sonnet, haiku, fable or astra instead. If you only meant to write about it, put it in backticks.")
+                 "or use the words opus, sonnet, haiku, fable or astra instead. A Claude agent runs at medium effort unless you add --effort high "
+                 "(a design, an independent review, debugging that failed once). If you only meant to write about it, put it in backticks.")
     # A post naming the person pings their phone: orientation asks for it short, plain, with one `For you:` line. Checked before
     # anything is written, so a slip costs a re-post, not a second ping. Agents' own names only, like the model check above.
     # (A chat answer has no need of the mention: refused here, agents added "For you: nothing needed" to get it through, projects/everyday E9.)
@@ -410,6 +421,7 @@ def cmd_post(a):
         print(f"Filed? Put what should outlast this thread in the kb, linked back: kb file \"TITLE\" --from {pid} <<'X' ... X", flush=True)
     if not a.as_: remind_asks(pid, p["thread"])
     receipt(list(dict.fromkeys(to)), ignored, ext, me)
+    if (w := effort_hint(to, a)): print(w, file=sys.stderr)
 
 def cmd_model(a):
     """Carry on with this conversation on another model (the person, 2026-11-04): a post to itself with --model, which the starter queues until this run ends."""
@@ -767,6 +779,7 @@ def cmd_module(a):
         if link.parent == BIN and link.name in MODULE_NEVER:  # ~/.local/bin comes first on PATH, and the Hive runs these to check and install modules
             print(f"note: a module can't provide {link.name}, so it wasn't linked"); continue
         link.unlink(missing_ok=True); link.symlink_to(target); print(f"linked {link} -> {target}")
+        if link.parent == BIN and not os.access(target, os.X_OK): print(f"note: {target.name} isn't executable, so {link.name} will fail with Permission denied; the module should ship it as mode 755")
     m = manifest(d)
     print(f"{name}: {m.get('description', '')[:300]}")
     for doc in m.get("provides", {}).get("procedures", []) or ["README.md"]: print(f"read first: {d / doc}")
@@ -1443,7 +1456,7 @@ p.add_argument("do", choices=["check"]); p.add_argument("--json", action="store_
 p = sp.add_parser("step", help="hive step ask --why \"...\" --script PATH | status | list | approve ID | deny ID: run something once outside the sandbox")
 p.add_argument("do", choices=["ask", "status", "list", "approve", "deny", "verdict"]); p.add_argument("id_or_script", nargs="?"); p.add_argument("verdict", nargs="?")
 p.add_argument("--why", default=""); p.add_argument("--script"); p.set_defaults(f=cmd_step)
-sp.add_parser("improve", help="hive improve log --what ... --measure ... --check CMD --want up|down [--kind fix|behaviour --control CMD] (a script judges it), or --no-check WHY | attach ID --check CMD --want up|down (late: never a held) | autojudge | num FIELD | judge ID held|reverted|inconclusive --why ... | list [--due] | show ID: the ledger of changes meant to make the hive better, each judged later by someone else (core/progress.py)")
+sp.add_parser("improve", help="hive improve log --what ... --measure ... --check CMD --want up|down [--kind fix|behaviour --control CMD] (a script judges it), or --no-check WHY | attach ID --check CMD --want up|down (late: never a held) | autojudge | num FIELD | judge ID held|reverted|inconclusive --why ... | reading ID --why ... (read a number, changed nothing: not owed a verdict) | list [--due] | show ID: the ledger of changes meant to make the hive better, each judged later by someone else (core/progress.py)")
 sp.add_parser("steer", help="hive steer [--brief|--first|--log]: the few numbers the hive steers by, first one first (the RSI lab's index; hive progress heads with its --brief)")
 sp.add_parser("progress", help="hive progress [--since 1d] [--snapshot] [--post] [--json]: the hive's numbers for the window against the window before, with what got worse (core/progress.py)")
 def cmd_outcomes(a):

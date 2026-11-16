@@ -57,6 +57,21 @@ function keep(d) {
   try { if (d.text || rid || d.quote || d.to || d.name || d.model || d.effort || d.focus) localStorage.setItem(k, JSON.stringify({ text: d.text, reply: rid, quote: d.quote, to: d.to, name: d.name, model: d.model, effort: d.effort, focus: d.focus })); else localStorage.removeItem(k); } catch (e) {}
 }
 const field = th => document.querySelector(`.cp[data-key="${CSS.escape("cp:" + (th || "(new)"))}"] .cp-t`);
+// Two tabs, one draft: another tab typed, picked or sent in a thread this tab has open, so this tab's copy follows it. Without this a
+// stale copy here wrote over the other tab's text on its next keystroke, and a Send there left the sent text in this box to go twice.
+window.addEventListener("storage", e => {
+  if (e.key === null) { for (const k of [...D.keys()]) if (!D.get(k).files.length) D.delete(k); refresh(); return; }
+  if (!e.key.startsWith("draft:")) return;
+  const d = D.get(e.key); if (!d) return;
+  let v = {}; try { v = JSON.parse(e.newValue || "{}") || {}; } catch (x) {}
+  const el = field(d.th);
+  if (e.newValue && el && document.hasFocus() && document.activeElement === el) return;   // typing here now: this tab's next keystroke wins
+  const rid = v.reply || null;
+  if ((d.reply ? d.reply.id : d.replyId) !== rid) d.reply = null;
+  Object.assign(d, { text: v.text || "", replyId: rid, quote: v.quote || null, to: v.to || null, name: v.name || "", naming: d.naming || !!v.name, model: v.model || "", effort: v.effort || "", focus: v.focus || "" });
+  if (el && el.value !== d.text) { el.value = d.text; mdSync(el); }
+  refresh();
+});
 
 /** Start a reply to a post from anywhere: opens its thread and puts the cursor in the composer. */
 export function replyTo(p) {
@@ -170,15 +185,35 @@ let lid = 0;
 // A message that wasn't sent (no network, the Hive down) stays through a reload (WCAG 2.2.5): its words, who it's to and what it answers are
 // kept in this browser until it is sent or discarded. A file not uploaded yet can't be kept, so it says to attach that again.
 const UNSENT = "hive.cp.unsent";
-function saveUnsent() {
-  try {
-    const v = OUT.filter(x => x.state === "failed" || (x.tried && x.state === "sending")).map(x => ({ th: x.th, text: x.text, wire: x.wire, reply: x.reply ? { id: x.reply.id, from: x.reply.from, text: x.reply.text, th: x.reply.th } : null,
-      quote: x.quote, to: x.to, name: x.name, model: x.model, effort: x.effort, focus: x.focus, t: x.t, err: x.err, refs: x.refs || null, lost: x.refs ? [] : x.files.map(f => f.name).concat(x.lost || []) }));
-    v.length ? localStorage.setItem(UNSENT, JSON.stringify(v)) : localStorage.removeItem(UNSENT);
-  } catch (e) {}
+// Two tabs share it (the Hive open twice): each item has its own uid, a save merges with what the other tabs keep instead of overwriting it,
+// a tab hears the others' changes (the storage event) so a message sent or discarded there leaves here too, and Try again claims the item
+// first, so the other tab drops it rather than offering to post it a second time.
+const TAB = Math.random().toString(36).slice(2, 10);
+const CLAIM_MS = 60000;
+const readUnsent = () => { try { const v = JSON.parse(localStorage.getItem(UNSENT) || "[]"); return Array.isArray(v) ? v : []; } catch (e) { return []; } };
+const writeUnsent = v => { try { v.length ? localStorage.setItem(UNSENT, JSON.stringify(v)) : localStorage.removeItem(UNSENT); } catch (e) {} };
+const claimedElsewhere = x => !!x && !!x.by && x.by !== TAB && Date.now() - (x.at || 0) < CLAIM_MS;
+const pack = x => ({ uid: x.uid, th: x.th, text: x.text, wire: x.wire, reply: x.reply ? { id: x.reply.id, from: x.reply.from, text: x.reply.text, th: x.reply.th } : null,
+  quote: x.quote, to: x.to, name: x.name, model: x.model, effort: x.effort, focus: x.focus, t: x.t, err: x.err, refs: x.refs || null, lost: x.refs ? [] : x.files.map(f => f.name).concat(x.lost || []) });
+/** Write this tab's unsent messages, keeping the ones other tabs hold; gone: uids sent, discarded or taken back into a box here. */
+function saveUnsent(gone = []) {
+  const mine = OUT.filter(x => x.state === "failed" || (x.tried && x.state === "sending")), here = new Set(OUT.map(x => x.uid));
+  writeUnsent(readUnsent().filter(x => x.uid && !here.has(x.uid) && !gone.includes(x.uid)).concat(mine.map(pack)));
 }
-try { for (const x of JSON.parse(localStorage.getItem(UNSENT) || "[]")) OUT.push({ ...x, lid: ++lid, files: [], interrupt: false, uploading: false, state: "failed", tried: true,
-  err: String(x.err || "it didn't reach the Hive").replace(/\.+$/, "") + (x.lost && x.lost.length ? `. Attach ${x.lost.join(", ")} again` : "") }); } catch (e) {}
+const restore = x => ({ ...x, lid: ++lid, files: [], interrupt: false, uploading: false, state: "failed", tried: true, by: undefined, at: undefined,
+  err: String(x.err || "it didn't reach the Hive").replace(/\.+$/, "").replace(/\. Attach .* again$/, "") + (x.lost && x.lost.length ? `. Attach ${x.lost.join(", ")} again` : "") });
+{ const v = readUnsent(); let fixed = false;
+  for (const x of v) { if (!x.uid) { x.uid = TAB + "-" + (lid + 1); fixed = true; } OUT.push(restore(x)); }   // a list saved before uids: number it once
+  if (fixed) writeUnsent(v); }
+// Another tab changed the list: drop what it sent, discarded or is sending now; show what failed there.
+window.addEventListener("storage", e => {
+  if (e.key !== UNSENT && e.key !== null) return;
+  const v = readUnsent(), by = new Map(v.map(x => [x.uid, x])); let changed = false;
+  for (let i = OUT.length - 1; i >= 0; i--) { const x = OUT[i]; if (x.state !== "failed") continue; const s = by.get(x.uid); if (!s || claimedElsewhere(s)) { OUT.splice(i, 1); changed = true; } }
+  const have = new Set(OUT.map(x => x.uid));
+  for (const x of v) if (x.uid && !have.has(x.uid) && !claimedElsewhere(x)) { OUT.push(restore(x)); changed = true; }
+  if (changed) refresh();
+});
 function prune() {
   for (let i = OUT.length - 1; i >= 0; i--) if (OUT[i].id && S.byId[OUT[i].id]) { for (const f of OUT.splice(i, 1)[0].files) if (f.url) URL.revokeObjectURL(f.url); }
 }
@@ -199,7 +234,7 @@ async function deliver(it) {
   saveUnsent(); refresh();
 }
 function queue(th, d, r, interrupt = false) {
-  const it = { lid: ++lid, th: th || null, text: d.text, files: d.files, reply: d.reply, quote: d.quote || null, interrupt, to: th ? r.who : null, name: th ? null : d.name.trim() || null, wire: wire(th, d, r), model: d.model || null, effort: d.effort || null, focus: th ? null : d.focus || null, state: "sending", err: "", t: now() };
+  const it = { lid: ++lid, uid: TAB + "-" + Date.now().toString(36) + "-" + lid, th: th || null, text: d.text, files: d.files, reply: d.reply, quote: d.quote || null, interrupt, to: th ? r.who : null, name: th ? null : d.name.trim() || null, wire: wire(th, d, r), model: d.model || null, effort: d.effort || null, focus: th ? null : d.focus || null, state: "sending", err: "", t: now() };
   OUT.push(it); deliver(it);
   return it;
 }
@@ -329,16 +364,19 @@ export const actions = {
   // A file lost in a reload can't go again by itself: posting the words alone would leave out what they're about, so Try again
   // puts the message back in its box with the file to attach (WCAG 3.3.4), and nothing is posted until Send.
   retry: it => {
-    if (it.refs || !(it.lost && it.lost.length)) return deliver(it);
+    // Sent, discarded or being sent from another tab since this one drew it: drop it here rather than post it twice.
+    const v = readUnsent(), mine = v.find(x => x.uid === it.uid);
+    if (it.tried && (!mine || claimedElsewhere(mine))) { OUT.splice(OUT.indexOf(it), 1); refresh(); return; }
+    if (it.refs || !(it.lost && it.lost.length)) { if (mine) { mine.by = TAB; mine.at = Date.now(); writeUnsent(v); } return deliver(it); }
     const lost = it.lost; actions.edit(it);
     const d = draft(it.th); d.err = `Attach ${lost.join(", ")} again, then Send.`; refresh();
   },
   edit: it => {
     const d = draft(it.th);
     d.text = d.text.trim() ? d.text + "\n\n" + it.text : it.text; d.files = d.files.concat(it.files); d.reply ||= it.reply; d.quote ||= it.quote; keep(d);
-    OUT.splice(OUT.indexOf(it), 1); saveUnsent(); CP.focus = true; const el = field(it.th); if (el) el.value = d.text; refresh();
+    OUT.splice(OUT.indexOf(it), 1); saveUnsent([it.uid]); CP.focus = true; const el = field(it.th); if (el) el.value = d.text; refresh();
   },
-  discard: it => { OUT.splice(OUT.indexOf(it), 1); saveUnsent(); for (const f of it.files) if (f.url) URL.revokeObjectURL(f.url); refresh(); },
+  discard: it => { OUT.splice(OUT.indexOf(it), 1); saveUnsent([it.uid]); for (const f of it.files) if (f.url) URL.revokeObjectURL(f.url); refresh(); },
 };
 
 // ---- voice memo: a record button, shown only while the voice module's service is proven working (S.app.voice) ----

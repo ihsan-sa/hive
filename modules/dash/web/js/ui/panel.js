@@ -18,10 +18,13 @@ function setW(w, save) { w = clampW(w); document.documentElement.style.setProper
 function applyW() { let w = 0; try { w = +localStorage.getItem(keyOf()); } catch (e) {} setW(w || DEFW[P.kind] || 640, false); }
 function curW() { return P.root ? P.root.getBoundingClientRect().width : DEFW[P.kind] || 640; }
 function grip() {
-  const g = h("div", { class: "panel-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize panel", tabindex: 0, title: "Drag to resize, double-click to reset" });
-  const move = (e) => setW(innerWidth - e.clientX, false);
-  const up = () => { g.classList.remove("on"); removeEventListener("pointermove", move); removeEventListener("pointerup", up); removeEventListener("pointercancel", up); setW(curW(), true); };
-  g.onpointerdown = (e) => { e.preventDefault(); g.classList.add("on"); addEventListener("pointermove", move); addEventListener("pointerup", up); addEventListener("pointercancel", up); };
+  const g = h("div", { class: "panel-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize panel", tabindex: 0, title: "Drag to resize, or click to widen a step (from the widest it goes back to the narrowest); double-click resets" });
+  // A click that doesn't move is the one-press way (WCAG 2.5.7): it widens a step, and from the widest it starts again at the narrowest.
+  let x0 = 0;
+  const move = (e) => { if (Math.abs(e.clientX - x0) >= 4) setW(innerWidth - e.clientX, false); };
+  const up = (e) => { g.classList.remove("on"); removeEventListener("pointermove", move); removeEventListener("pointerup", up); removeEventListener("pointercancel", up);
+    if (e.type === "pointerup" && Math.abs(e.clientX - x0) < 4) { const w = curW(); setW(w >= maxW() - 4 ? PMIN : w + 160, true); } else setW(curW(), true); };
+  g.onpointerdown = (e) => { e.preventDefault(); x0 = e.clientX; g.classList.add("on"); addEventListener("pointermove", move); addEventListener("pointerup", up); addEventListener("pointercancel", up); };
   g.ondblclick = () => { try { localStorage.removeItem(keyOf()); } catch (e) {} applyW(); };
   g.onkeydown = (e) => { const d = e.key === "ArrowLeft" ? 24 : e.key === "ArrowRight" ? -24 : 0; if (d) { e.preventDefault(); setW(curW() + d, true); } };
   return g;

@@ -72,11 +72,14 @@ export const previewOpen = () => !!P.root;
 export const previewKey = () => (P.root && !P.list && P.items[P.i] ? keyOf(P.items[P.i]) : null);
 
 function grip() {
-  const g = h("div", { class: "pv-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize the preview", tabindex: 0, title: "Drag to resize, double-click to reset" });
+  const g = h("div", { class: "pv-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize the preview", tabindex: 0, title: "Drag to resize, or click to widen a step (from the widest it goes back to the narrowest); double-click resets" });
+  // A click that doesn't move is the one-press way (WCAG 2.5.7): it widens a step, and from the widest it starts again at the narrowest.
+  let x0 = 0;
   const cur = () => (P.root ? P.root.getBoundingClientRect().width : 560);
-  const move = e => setW(innerWidth - e.clientX - 8, false);
-  const up = () => { g.classList.remove("on"); removeEventListener("pointermove", move); removeEventListener("pointerup", up); removeEventListener("pointercancel", up); document.body.removeAttribute("data-pv-drag"); setW(cur(), true); };
-  g.onpointerdown = e => { e.preventDefault(); g.classList.add("on"); document.body.setAttribute("data-pv-drag", ""); addEventListener("pointermove", move); addEventListener("pointerup", up); addEventListener("pointercancel", up); };
+  const move = e => { if (Math.abs(e.clientX - x0) >= 4) setW(innerWidth - e.clientX - 8, false); };
+  const up = e => { g.classList.remove("on"); removeEventListener("pointermove", move); removeEventListener("pointerup", up); removeEventListener("pointercancel", up); document.body.removeAttribute("data-pv-drag");
+    if (e.type === "pointerup" && Math.abs(e.clientX - x0) < 4) { const w = cur(); setW(w >= maxW() - 4 ? WMIN : w + 160, true); } else setW(cur(), true); };
+  g.onpointerdown = e => { e.preventDefault(); x0 = e.clientX; g.classList.add("on"); document.body.setAttribute("data-pv-drag", ""); addEventListener("pointermove", move); addEventListener("pointerup", up); addEventListener("pointercancel", up); };
   g.ondblclick = () => { try { localStorage.removeItem(KEY); } catch (e) {} setW(Math.max(560, innerWidth * 0.45), false); };
   g.onkeydown = e => { const d = e.key === "ArrowLeft" ? 32 : e.key === "ArrowRight" ? -32 : 0; if (d) { e.preventDefault(); setW(cur() + d, true); } };
   return g;

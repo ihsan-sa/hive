@@ -1458,6 +1458,22 @@ def cache_trial(name, sid="", path=None, quiet=False):
         return on
     except Exception: return None
 
+def effort_trial(name, sid="", model=None, path=None, quiet=False):
+    """A trial of running at high effort (hive-meta R49, thread effort-trial): ~/.hive/effort_trial.json holds {"name", "until", "share",
+    "effort", "models"}, and that share of agents by a stable hash of their name run at `effort` (default high) when nothing chose one, on a
+    model in `models` (default ["opus"]; null there is the login's default model). Returns the effort for the trial arm, "" for the other,
+    None with no trial or a model outside it; every run start under a live trial adds a line to effort_trial.log with its arm and model. The
+    arm is never written as the run's `effort`, so effort_chosen.py and the effort splits don't count it as chosen. Never fails a start."""
+    try:
+        p = Path(path or STATE / "effort_trial.json"); t = json.loads(p.read_text())
+        if t.get("until") and now() > t["until"]: return None
+        if model not in t.get("models", ["opus"]) or (e := t.get("effort") or "high") not in EFFORTS: return None  # a typo would fail the start at the CLI
+        on = int(__import__("hashlib").sha1(f"{t['name']}:{name}".encode()).hexdigest()[:8], 16) / 2**32 < t.get("share", .5)
+        if not quiet:
+            with p.with_name("effort_trial.log").open("a") as f: f.write(json.dumps({"ts": now(), "trial": t["name"], "name": name, "session": sid, "model": model, "on": on}) + "\n")
+        return e if on else ""
+    except Exception: return None
+
 def cut_orientation(name, text, path=None):
     """A removal trial (projects/rsi-lab/rules.md): ~/.hive/cut.json holds {"name", "until", "groups": {group: [exact sentences]}} and each
     group is dropped for half the agents, on a coin of its own per group and agent name. Returns (text, cut): cut is None with no
@@ -1643,7 +1659,7 @@ def warm_key(c, login, model):
         try: return (str(f.resolve()), f.stat().st_mtime_ns)
         except OSError: return 0
     files = [CORE / "orientation.md", CORE / "warden-step.md", HOME / "user-instructions.md", HOME / "answer-style.md", CORE / "config.json", HOME / "mcp.json", HOME / "settings.json",
-             *(STATE / f for f in ("tool_drop.json", "cache_split.json", "cut.json", "holdout.json", "trial.json")), Path(login or "/").expanduser() / "settings.json"]
+             *(STATE / f for f in ("tool_drop.json", "cache_split.json", "cut.json", "holdout.json", "trial.json", "effort_trial.json")), Path(login or "/").expanduser() / "settings.json"]
     return (login, model, *map(mt, files), mt(Path(shutil.which("claude") or "/")), modules_seen[1], json.dumps(c.get("model_ids") or {}, sort_keys=True),
             json.dumps(c.get("claude_args")), c.get("auto_compact_window"), c.get("max_budget_usd"))
 
@@ -1708,10 +1724,10 @@ def warm_boot(c, st, login):
         WARM_DIR.mkdir(parents=True, exist_ok=True)
         name, sid = fresh_name(st, "a"), str(uuid.uuid4())
         system, trial, cut = system_for(name, "agent", modules_note())
-        cmd, env, _, _ = claude_launch(c, name, sid, model, None, login, "agent", [], None, system, quiet=True)
+        cmd, env, _, _, arm = claude_launch(c, name, sid, model, None, login, "agent", [], None, system, quiet=True)
         path = WARM_DIR / f"{name}-{dt.datetime.now():%m%d-%H%M%S}.jsonl"
         proc = subprocess.Popen(cmd, cwd=HOME, env=env, stdout=path.open("w"), stderr=subprocess.STDOUT, stdin=subprocess.PIPE, text=True)
-        WARM["agent"] = {"name": name, "sid": sid, "model": model, "login": login, "env": env, "path": path, "proc": proc, "at": time.time(),
+        WARM["agent"] = {"name": name, "sid": sid, "model": model, "login": login, "env": env, "path": path, "proc": proc, "at": time.time(), "effort_trial": arm,
                          "key": warm_key(c, login, model), "trial": trial, "cut": cut}
         log(event="warm_boot", name=name, pid=proc.pid, model=model)
     except Exception as e: log(event="warm_error", why=f"{type(e).__name__}: {e}"[:300]); WARM["after"] = time.time() + 300
@@ -1741,9 +1757,10 @@ def claude_launch(c, name, sid, model, prov, login, kind, posts, prompt, system,
     if effort and not prov: env["CLAUDE_EFFORT"] = effort
     drop = tool_trial(name, sid, quiet=quiet) if kind != "warden" and not prov else None
     if kind != "warden" and not prov and cache_trial(name, sid, quiet=quiet): env["CLAUDE_CODE_MESSAGES_PROMPT_CACHE_TTL"] = "5m"
+    arm = effort_trial(name, sid, model, quiet=quiet) if kind != "warden" and not prov and not effort else None  # not in CLAUDE_EFFORT: it isn't a chosen effort
     cmd = argv or ["claude", "-p", *([prompt] if prompt is not None else ["--input-format", "stream-json"]), "--append-system-prompt", system,
                    *(["--disallowedTools", ",".join(drop)] if drop else []),
-                   *(["--effort", effort] if effort and not prov else []),
+                   *(["--effort", effort or arm] if (effort or arm) and not prov else []),
                    *(["--resume", sid] if resume else ["--session-id", sid]),
                    *(["--model", prov[2] if prov else model] if model else []),
                    *(["--max-budget-usd", str(c["max_budget_usd"])] if c.get("max_budget_usd") and not prov else []), *(["--mcp-config", str(HOME / "mcp.json")] if (HOME / "mcp.json").is_file() and not prov else []), *c["claude_args"],
@@ -1754,7 +1771,7 @@ def claude_launch(c, name, sid, model, prov, login, kind, posts, prompt, system,
         sb.ensure_broker(); sb.ready(name)
         cmd, env = sb.wrap(cmd, env, name)
     else: env.pop("_BOX_KEEP", None)
-    return cmd, env, login, effort
+    return cmd, env, login, effort, arm
 
 def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False, lost=False, woken=None, all_since=None, slept=None, heir_of=None, why=None):
     kind = "warden" if is_warden(name) else "agent"
@@ -1772,6 +1789,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     sid = w["sid"] if w else resume or str(uuid.uuid4())  # the claude session id, so `claude --resume <session>` works
     first = posts[0]
     model = w["model"] if w else start_model(c, posts)
+    arm = w.get("effort_trial") if w else None  # a cold start gets its arm from claude_launch below
     prov = provider_of(c, model)
     system, trial, cut = (None, w["trial"], w["cut"]) if w else system_for(name, kind, ahead["modules"].result() if kind != "warden" else "")
     sb = box()
@@ -1853,7 +1871,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     def record():
         rec = {"name": name, "pid": proc.pid, "session": sid, "at": now(), "post": first["id"], "login": login,
                "thread": first.get("thread"), "from": first.get("from"), "out": str(path), "proc": proc_start(proc.pid), "boot": boot_id(), **({"resumed": True} if resume else {}), **({"woke": list(extra)} if extra else {}), **({"slept": posts} if slept else {}), **({"heir_of": heir_of["name"]} if heir_of else {}), **({"all_since": all_since} if all_since else {}), **({"model": model} if model else {}), **({"fallback": fb} if fb else {}), **({"trial": trial} if trial else {}), **({"cut": cut} if cut is not None else {}),
-               "harness": prov[1].get("harness", "claude-code") if prov else "claude-code", **({"provider": prov[0]} if prov else {}), **({"effort": env["CLAUDE_EFFORT"]} if env.get("CLAUDE_EFFORT") else {}), **({"warm": True} if w else {})}
+               "harness": prov[1].get("harness", "claude-code") if prov else "claude-code", **({"provider": prov[0]} if prov else {}), **({"effort": env["CLAUDE_EFFORT"]} if env.get("CLAUDE_EFFORT") else {}), **({"effort_trial": arm or "off"} if arm is not None else {}), **({"warm": True} if w else {})}
         (RUN / f"{name}.json").write_text(json.dumps(rec))
         return rec
     if w:  # hand over: the run record first (hive reads the thread from it: a warm process has no HIVE_THREAD), then the opening message on stdin
@@ -1863,7 +1881,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
         rec = record()
         try:
             w["proc"].stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n"); w["proc"].stdin.close()
-            tool_trial(name, sid); cache_trial(name, sid)  # the arms it was booted on (same name, same trial file: the key), logged now it runs
+            tool_trial(name, sid); cache_trial(name, sid); effort_trial(name, sid, w["model"])  # the arms it was booted on (same name, same trial file: the key), logged now it runs
             WARM["fails"] = 0
             log(event="warm_used", name=name, age=round(time.time() - w["at"], 1))
         except (OSError, ValueError) as e:  # it died since warm_take looked: start cold, on a session id it never held
@@ -1871,7 +1889,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
             sid, path = str(uuid.uuid4()), HOME / "sessions" / f"{name}-{dt.datetime.now():%m%d-%H%M%S}.jsonl"
             system, trial, cut = system_for(name, kind, modules_note())
     if not w:
-        cmd, env, login, _ = claude_launch(c, name, sid, model, prov, login, kind, posts, prompt, system, resume)
+        cmd, env, login, _, arm = claude_launch(c, name, sid, model, prov, login, kind, posts, prompt, system, resume)
         proc = subprocess.Popen(cmd, cwd=HOME, env=env, stdout=path.open("w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         rec = record()
     children[name] = proc
@@ -2332,7 +2350,7 @@ def main():
                 try: p = json.loads(line)
                 except ValueError: continue
                 called, unknown = callable_names(p, c)
-                if not called and cont and p.get("from") == "person":  # the `person` event (moving-p2.md 3): their post with no @name ends an agent's `Waiting: ... person`
+                if (not called or p.get("routed")) and cont and p.get("from") == "person":  # the `person` event (moving-p2.md 3): their post with no @name ends an agent's `Waiting: ... person`
                     try: w = cont.person_waiter(p); w = None if w and runs_now(w) else w
                     except Exception as e: w = None; log(event="person_waiter_error", post=p.get("id"), err=f"{type(e).__name__}: {e}"[:200])
                     if w: called = [w]; log(event="person_waiter", name=w, post=p.get("id"), thread=p.get("thread"))

@@ -80,8 +80,8 @@ export function offerDraft(d) {
 /** Open the overlay: the grey comes up at once, then the frozen picture under it. The overlay itself is left out of the picture. */
 export async function openFeedback() {
   if (FB.open) return; FB.open = true;
-  let pic = null, boxes = [], drag = null, only = false, away = false, frozen = false;
-  const view = h("canvas", { class: "fb-c", "aria-label": "The screen, frozen. Drag to draw a box." });
+  let pic = null, boxes = [], drag = null, corner = null, only = false, away = false, frozen = false;
+  const view = h("canvas", { class: "fb-c", "aria-label": "The screen, frozen. Drag to draw a box, or click one corner and then the other." });
   const stage = h("div", { class: "fb-s" });
   const say = h("p", { class: "meta", role: "alert", "data-tone": "bad", style: "color:var(--ci)", hidden: true });
   const text = h("textarea", { class: "input fb-t", "aria-label": "Your comment", placeholder: "What's wrong, or what would you change? Ctrl+Enter sends." });
@@ -99,7 +99,7 @@ export async function openFeedback() {
   gh.hidden = !toMakers();
   const again = button("Browser capture", () => take(), { size: "s", kind: "quiet", title: "If the picture looks wrong: take it with the browser's own screen capture, which asks first" });
   const more = h("details", { class: "fb-more" }, h("summary", { class: "btn", "data-kind": "quiet", "data-size": "s" }, "More ways"), h("div", { class: "fb-more-b" }, again, gh));   // Send is the one primary; the rest wait here
-  const hint = h("div", { class: "fb-hint", hidden: true }, "Drag on the screen to draw a box");
+  const hint = h("div", { class: "fb-hint", hidden: true }, "Drag on the screen to draw a box, or click two corners");
   const card = h("div", { class: "fb-card" },
     h("div", { class: "fb-r" }, h("b", { class: "fb-title" }, "Send feedback"), undo, button("Close", () => dlg.close(), { size: "s" })),
     text, say, h("div", { class: "fb-r" }, onlyL, noPicL),
@@ -120,6 +120,7 @@ export async function openFeedback() {
     c.fillStyle = GREY; c.fillRect(0, 0, pic.width, pic.height);
     for (const b of list) if (b.w && b.h) c.drawImage(pic, b.x, b.y, b.w, b.h, b.x, b.y, b.w, b.h);
     drawBoxes(c, list);
+    if (corner) { const r = Math.max(4, pic.width / 300); c.fillStyle = BOX; c.fillRect(corner.x - r, corner.y - r, 2 * r, 2 * r); }   // the first corner of a box drawn by two clicks
     dodge(list[list.length - 1]);
   }
   function dodge(b) {   // the card moves to the other corner rather than sit on what's being boxed
@@ -146,11 +147,11 @@ export async function openFeedback() {
     const closed = new Promise(ok => dlg.addEventListener("close", ok, { once: true }));   // close fires a moment later: where grab() answers at once it mustn't arrive after we reopen, or it ends the overlay
     dlg.close();
     const r = await grab(); await closed;
-    if (r.pic) { pic = r.pic; boxes = []; frozen = false; }
+    if (r.pic) { pic = r.pic; boxes = []; corner = null; frozen = false; }
     dlg.showModal(); away = false; show(r.why); text.focus({ preventScroll: true });
   }
   async function load(f) {
-    try { const b = await createImageBitmap(f); pic = toCanvas(b, b.width, b.height); boxes = []; frozen = false; b.close(); say.hidden = true; show(); }
+    try { const b = await createImageBitmap(f); pic = toCanvas(b, b.width, b.height); boxes = []; corner = null; frozen = false; b.close(); say.hidden = true; show(); }
     catch (e) { say.textContent = tr("That file isn't a picture this browser can read."); say.hidden = false; }
   }
   pick.addEventListener("change", () => { if (pick.files[0]) load(pick.files[0]); pick.value = ""; });
@@ -169,7 +170,12 @@ export async function openFeedback() {
   view.addEventListener("pointerdown", e => { start = at(e); view.setPointerCapture(e.pointerId); e.preventDefault(); });
   view.addEventListener("pointermove", e => { if (!start) return; const p = at(e);
     drag = { x: Math.min(start.x, p.x), y: Math.min(start.y, p.y), w: Math.abs(p.x - start.x), h: Math.abs(p.y - start.y) }; paint(); });
-  const end = () => { if (drag && drag.w > 6 && drag.h > 6) boxes.push(drag); start = drag = null; paint(); sync(); };
+  // Two clicks are the one-press way (WCAG 2.5.7): the first marks a corner, the second the opposite one.
+  const end = e => { const click = start && e.type === "pointerup" && (!drag || (drag.w <= 6 && drag.h <= 6));
+    if (click && corner) { const b = { x: Math.min(corner.x, start.x), y: Math.min(corner.y, start.y), w: Math.abs(start.x - corner.x), h: Math.abs(start.y - corner.y) }; if (b.w > 6 && b.h > 6) boxes.push(b); corner = null; }
+    else if (click) corner = start;
+    else { corner = null; if (drag && drag.w > 6 && drag.h > 6) boxes.push(drag); }
+    start = drag = null; paint(); sync(); };
   view.addEventListener("pointerup", end); view.addEventListener("pointercancel", end);
 
   function framed() {   // what's sent: the whole picture with its boxes, or only what they cover

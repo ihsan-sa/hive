@@ -98,6 +98,9 @@
 /* With many areas the replay bar would sit below the fold: keep it pinned to the bottom of the view while the map scrolls. */
 .map-rp{position:sticky;bottom:calc(var(--nav-h,0px) + var(--s3));z-index:3}
 .map[data-tile] .map-rp{position:static}
+/* A control Tab scrolls to stops above the pinned replay bar, not under it (WCAG 2.4.11; drive_app_focus part=4 at 844x390 found a thread row
+   hidden there). The bar is about 50px tall and sits var(--s3) up from the bottom bar, if there is one. */
+html:has(.map:not([data-tile]) .map-rp){scroll-padding-bottom:calc(var(--nav-h,0px) + var(--s3) + 64px)}
 
 /* ---- the graph: Claude Design's hub-and-fan (~/designs/mesh-graph/GRAPH-HANDOFF.md). The person, 2026-11-04: "make it look good,
    intuitive, and not random and chaotic". Positions come from mesh-layout.js; this file only draws. */
