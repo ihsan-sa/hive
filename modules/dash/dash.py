@@ -5374,14 +5374,14 @@ def settings_page():
 
 
 LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in</title>
-<style>body{font:15px/1.5 system-ui,sans-serif;max-width:30rem;margin:4rem auto;padding:0 1rem;color-scheme:light dark}input{width:100%;font:inherit;padding:.4rem;box-sizing:border-box}button{font:inherit;margin-top:.6rem;padding:.3rem 1rem}code{font-size:.95em}#e{color:#c33}</style></head>
+<style>body{font:15px/1.5 system-ui,sans-serif;max-width:30rem;margin:4rem auto;padding:0 1rem;color-scheme:light dark}input{width:100%;font:inherit;padding:.4rem;box-sizing:border-box}button{font:inherit;margin-top:.6rem;padding:.3rem 1rem}code{font-size:.95em}#e{color:#c33}label{display:block;font-weight:600;margin-bottom:.2rem}</style></head>
 <body><h1 style="font-size:1.3rem">This Hive needs its secret</h1><p>Run <code>hive web</code> on this machine, as the Hive's user, and open the address it prints.</p>
-<input id="s" type="password" placeholder="or paste the secret here" autocomplete="off" aria-label="Secret"><button id="b">Open</button><p id="e" role="alert"></p>
+<form id="f"><label for="s">Secret</label><input name="username" autocomplete="username" value="hive" hidden>
+<input id="s" name="password" type="password" placeholder="or paste the secret here" autocomplete="current-password" spellcheck="false" required><button id="b" type="submit">Open</button></form><p id="e" role="alert"></p>
 <script>"use strict";
 const go=async k=>{const r=await fetch("/login",{method:"POST",headers:{"Content-Type":"application/json","X-Hive-Dash":"1"},body:JSON.stringify({secret:k})});
  if(r.ok)location.replace("/");else document.getElementById("e").textContent="That isn't this Hive's secret. Run hive web again for the current address.";};
-document.getElementById("b").addEventListener("click",()=>go(document.getElementById("s").value.trim()));
-document.getElementById("s").addEventListener("keydown",e=>{if(e.key==="Enter")go(e.target.value.trim());});
+document.getElementById("f").addEventListener("submit",e=>{e.preventDefault();go(document.getElementById("s").value.trim());});
 (async()=>{const k=location.hash.slice(1);if(k){history.replaceState(null,"","/login");return go(k);}
  // the session cookie is SameSite=Strict, so a link from elsewhere arrives without it: this request has it, if there is one
  const r=await fetch("/api/app");if(r.ok)location.replace("/");})();

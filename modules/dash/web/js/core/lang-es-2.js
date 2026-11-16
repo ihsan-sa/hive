@@ -447,7 +447,10 @@ export default {
     [/^Type (\S+) to confirm$/, "Escribe $1 para confirmar"],
     [/^Kill (\S+)\?$/, "¿Parar $1?"],
     [/^Kill (\S+)$/, "Parar $1"],
-    [/^Stop (.+?)(?:'s|') agent now(\?)?$/, (_, x, q) => `${q ? "¿" : ""}Parar ya al agente de «${x}»${q || ""}`],   // E18u: askStop's "Stop X's agent now?"
+    // E18u: askStop's "Stop X's agent now?"; E18zb: and its button "Stop X's agent B", with the mark a conversation's agents share (agentLabel)
+    [/^Stop (.+?)(?:'s|') agent((?: [A-Z]{1,2}| on .+?)?)( now)?(\?)?$/, (_, x, m, now, q) => `${q ? "¿" : ""}Parar ${now ? "ya " : ""}al agente de «${x}»${m.startsWith(" on ") ? " en" + m.slice(3) : m}${q || ""}`],
+    // E18zb: the other names agentLabel gives (the warden, the Hive, "Agent B"), as the stop button and its window say them
+    [/^Stop (the warden|the Hive|the agent|an agent|Agent [A-Z]{1,2})( now)?(\?)?$/, (_, x, now, q) => `${q ? "¿" : ""}Parar ${now ? "ya " : ""}${({ "the warden": "al guardián", "the Hive": "el Hive", "the agent": "al agente", "an agent": "un agente" })[x] || "al " + x.replace("Agent", "agente")}${q || ""}`],
     [/^Stop (.+)\?$/, "¿Parar $1?"],
     [/^Nothing was (stopped|killed)$/, "No se paró nada"],
     [/^Doing now: (.+)$/s, "Haciendo ahora: $1"],

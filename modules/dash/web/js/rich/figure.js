@@ -1,7 +1,7 @@
 // The frame every drawing sits in: one tool row, a stage that pans and zooms, the source one press away, and a quiet note if the
 // drawing fails, when the source simply stays. A spec's draw() runs only once the figure nears the screen, one at a time, when idle.
 // What the person set (zoom, source showing) and the height drawn live here by source, so a re-opened thread comes back the same.
-import { h, copyText } from "../core/dom.js";
+import { h, tr, copyText } from "../core/dom.js";
 import { lazyKind } from "./lazy.js";
 import { sigOf } from "./math.js";
 import { askButton } from "./ask.js";
@@ -117,7 +117,7 @@ export function figure(spec) {
         zb("+", "Zoom in", step(1.25)),
         h("button", { type: "button", class: "rc-t", "data-zoom": "", "data-fs": "", hidden: true, onclick: (e, b) => {
           const f = b.closest(".rc-fig"), on = !f.hasAttribute("data-full");
-          f.toggleAttribute("data-full", on); b.textContent = on ? "Close" : "Full screen";
+          f.toggleAttribute("data-full", on); b.textContent = tr(on ? "Close" : "Full screen");
           if (on) document.addEventListener("keydown", escClose); else document.removeEventListener("keydown", escClose);
           if (lz._c && stageOf()) setZoom(lz._c, fitZoom(lz._c, stageOf()));
         } }, "Full screen"),

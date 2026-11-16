@@ -33,12 +33,12 @@ export function confirm({ title, body = [], ok = "OK", kind = "primary", typed, 
     if (yes.disabled || yes.dataset.busy) return;
     // Spinner on the button, and busyText (when given) under the text, so a slow job doesn't look like a dead click.
     yes.dataset.busy = "1"; yes.setAttribute("aria-busy", "true"); yes.disabled = true; err.removeAttribute("data-ok");
-    if (busyText) { err.textContent = busyText; err.setAttribute("data-ok", ""); } else err.textContent = "";
+    if (busyText) { err.textContent = tr(busyText); err.setAttribute("data-ok", ""); } else err.textContent = "";
     try {
       const msg = await onOk(code ? code.value : undefined);
-      if (typeof msg === "string" && msg) { err.textContent = msg; err.setAttribute("data-ok", ""); yes.remove(); no.textContent = tr("Close"); if (code) code.disabled = true; }
+      if (typeof msg === "string" && msg) { err.textContent = tr(msg); err.setAttribute("data-ok", ""); yes.remove(); no.textContent = tr("Close"); if (code) code.disabled = true; }
       else dlg.close();
-    } catch (x) { err.textContent = `${failText}: ${x.message}.`; }
+    } catch (x) { err.textContent = `${tr(failText)}: ${tr(x.message)}.`; }   // each piece in the chosen language (tr)
     finally { delete yes.dataset.busy; yes.removeAttribute("aria-busy"); ready(); }
   });
   dlg.addEventListener("close", () => dlg.remove());

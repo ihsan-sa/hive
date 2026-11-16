@@ -228,7 +228,7 @@ function drawArtifact(code, title, st, box, ver) {
         b.disabled = true; err.hidden = true;
         for (const k of [c, c + "\n"]) stateOf(sigOf("html\0" + k)).open = true;   // the new copy opens running
         try { await apiPost("/api/post", { thread: ver.th, page: { code: c, title: title || null } }); done(); }
-        catch (x) { b.disabled = false; err.textContent = "Not saved: " + (x.message || x); err.hidden = false; }
+        catch (x) { b.disabled = false; err.textContent = tr("Not saved: ") + tr(String(x.message || x)); err.hidden = false; }
       };
       ed = h("div", { class: "msg-editor rc-arted" }, ta, err,
         h("div", { class: "msg-edit-acts" },

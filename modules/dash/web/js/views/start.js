@@ -142,7 +142,8 @@ export default {
     if (simpleOn()) return simpleStart(ctx, signed);
     const signIn = api => { F.chose = api ? "Use API billing instead" : "Sign in with my Claude subscription"; startSignin("start", null, api, ctx.update); };
     const rows = [
-      hive("hi", p(cfgd ? "You're set up." : "Hi.", " Hive runs ", cfgd ? "" : "Claude ", "agents on this computer. Tell it what you want done, in your own words, and an agent works on it in the background and answers you here.")),
+      hive("hi", p(cfgd ? "You're set up." : "Hi.", " ", cfgd ? "Hive runs agents on this computer. Tell it what you want done, in your own words, and an agent works on it in the background and answers you here."
+        : "Hive runs Claude agents on this computer. Tell it what you want done, in your own words, and an agent works on it in the background and answers you here.")),
     ];
     if (s.claude === false) rows.push(hive("claude", p("Claude Code isn't installed for this account yet, and the agents need it. In a terminal, as this account:"),
       h("pre", null, h("code", null, "curl -fsSL https://claude.ai/install.sh | bash")), p("Then restart this app: ", h("code", null, "systemctl --user restart hive-dash"))));
