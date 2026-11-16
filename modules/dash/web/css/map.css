@@ -264,4 +264,4 @@ text.map-ring-t{font-size:10.5px;font-weight:var(--w-bold);letter-spacing:.05em;
 .map-card::after,.map-ag::after,.map-more::after{content:"";position:absolute;inset:-4px}
 .map-cv[data-lod=min] .map-card{overflow:visible}
 .map-cv[data-lod=min] .map-card::after{inset:-5px}
-.map-ag::after,.map-more::after{inset:-3px 0}
+.map-ag::after,.map-more::after{inset:-5px 0}

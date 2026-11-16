@@ -3725,7 +3725,46 @@ def config_view():
     try: style = ANSWER_STYLE.read_text(errors="replace")
     except OSError: style = ""
     return {**{k: c.get(k) for k in ("max_sessions", "keeper_every_s", "keeper_idle_s", "usage_stop_pct", "auto_update", "update_every_s", "update_pace", "max_budget_usd", "max_daily_usd")}, "spend_today": spend_today(),
-            "answer_style": style.strip()}
+            "answer_style": style.strip(), "memory": memory_view(c)}
+
+
+# E39b (projects/everyday MEMORY.md): Settings › Everyday › Memory. core/memory.py is the only writer of ~/memory.md; the dash reads it with
+# memory.read and deletes through `memory.py forget` run as the person (HIVE_NAME=person: memory.py refuses a run with none). Off is config.json "memory": "off", which memory.py reads.
+MEMORY_FILE = HOME / "memory.md"
+
+
+def memory_mod():
+    """core/memory.py, or None on a core without it (the block then says memory isn't on this Hive)."""
+    src = HOME / "core" / "memory.py"
+    if not src.is_file(): return None
+    import importlib.util
+    try:
+        spec = importlib.util.spec_from_file_location("h2_core_memory", src); mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        return mod
+    except Exception: return None
+
+
+def memory_view(c=None):
+    mem = memory_mod()
+    if mem is None: return {"available": False}
+    c = cfg() if c is None else c
+    on = str(c.get("memory", "on")).lower() not in ("off", "false", "0", "no")   # as memory.is_off
+    items = mem.read(MEMORY_FILE)
+    try: INDEX.refresh(); have = {str(t) for t in INDEX.threads}
+    except Exception: have = None
+    meta, names = thread_meta(), thread_names() or {}
+    for i in items:
+        th = i["chat"]
+        i["title"] = (meta.get(th) or {}).get("title") or names.get(th) or None
+        i["gone"] = th != "settings" and have is not None and th not in have   # the dash has no chat delete: a chat with no posts left is gone
+    return {"available": True, "on": on, "items": items}
+
+
+def memory_forget(ids):
+    """Delete lines (a list of ids) or all of them ("all"), through memory.py as the person."""
+    r = subprocess.run([sys.executable, "-I", str(HOME / "core" / "memory.py"), "forget", *(["--all"] if ids == "all" else ids)],
+                       env={**child_env(), "HIVE_NAME": "person"}, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+    if r.returncode: raise ValueError((r.stderr or r.stdout).strip().removeprefix("memory: ")[:300] or "memory couldn't be changed")
 
 
 # E33 (projects/everyday): the person's standing word on how they want answers, from Settings › Everyday. Its own file, not config.json: free text.
@@ -3775,6 +3814,15 @@ def set_config(d):
     if "update_pace" in d:
         if d["update_pace"] not in ("every", "daily"): raise ValueError("how often to update is every release or about once a day")
         new["update_pace"] = d["update_pace"]; new["update_pace_chosen"] = True  # install.sh drops a "daily" nobody chose
+    if "memory_on" in d:
+        if type(d["memory_on"]) is not bool: raise ValueError("memory is on or off")
+        new["memory"] = None if d["memory_on"] else "off"   # on is the default: the key goes away
+    forget = None
+    if "memory_forget" in d:
+        forget = d["memory_forget"]
+        if forget != "all" and not (isinstance(forget, list) and 0 < len(forget) <= 60 and all(isinstance(x, str) and re.fullmatch(r"[0-9a-f]{6}", x) for x in forget)):
+            raise ValueError("delete names memory lines by id, or all")
+        if memory_mod() is None: raise ValueError("memory isn't on this Hive's core yet")
     style = None
     if "answer_style" in d:
         style = d["answer_style"]
@@ -3785,14 +3833,16 @@ def set_config(d):
         if style is None: return
         if style: write_text_private(ANSWER_STYLE, style + "\n")
         else: ANSWER_STYLE.unlink(missing_ok=True)
-    if not new and style is not None: put_style(); return config_view()
-    if not new: raise ValueError("nothing to change")
+    if not new and style is None and forget is None: raise ValueError("nothing to change")
+    # A delete goes first: memory.py may still refuse it (a line already gone), and then the switch and the rest stay as they were.
+    if forget is not None: memory_forget(forget)
+    if not new: put_style(); return config_view()
     with _cfg_lock:
         c = jload(HOME / "core" / "config.json")
         if not isinstance(c, dict): raise ValueError("core/config.json can't be read")
         c.update(new)
-        for k in ("max_budget_usd", "max_daily_usd"):
-            if c.get(k) is None: c.pop(k, None)
+        for k in ("max_budget_usd", "max_daily_usd", "memory"):
+            if k in c and c[k] is None: c.pop(k, None)
         t = HOME / "core" / f".config.json.{os.getpid()}.{threading.get_ident()}"
         t.write_text(json.dumps(c, indent=2) + "\n"); t.replace(HOME / "core" / "config.json")
     put_style()
@@ -3879,7 +3929,12 @@ def export_zip(out):
                 lines.append("")
             z.writestr(f"{base}/chat.md", "\n".join(lines))
             index.append(f"{base}/chat.md  ({len(posts)} messages)")
-        z.writestr("README.txt", f"Your chats, exported {now}. One folder per chat: chat.md is the chat as plain text, oldest message first, with its files beside it.\n\n" + "\n".join(index) + "\n")
+        try:   # E39b: what the chats remember about the person (Settings › Everyday › Memory), as the file is
+            with MEMORY_FILE.open("rb") as f: mem = f.read(64 * 1024)
+        except OSError: mem = None
+        if mem is not None: z.writestr("memory.md", mem)
+        z.writestr("README.txt", f"Your chats, exported {now}. One folder per chat: chat.md is the chat as plain text, oldest message first, with its files beside it."
+                   + (" memory.md holds what your chats remember about you (Settings › Everyday › Memory)." if mem is not None else "") + "\n\n" + "\n".join(index) + "\n")
 
 
 # The hive's name and logo, from Settings. Only how this app looks: nothing else reads them, and agents keep their names.

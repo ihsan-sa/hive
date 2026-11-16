@@ -65,7 +65,7 @@ fi
 # Once installed, the files here are the Hive's own work, and an update has to get past this.
 if [ ! -e "$HOME/.hive-installed" ]; then
   other=$(find "$HOME" -mindepth 1 -maxdepth 1 ! -name '.*' ! -name core ! -name kb ! -name projects \
-          ! -name run ! -name sessions ! -name board.jsonl ! -name log.jsonl ! -name reports ! -name asks.jsonl ! -name outcomes.jsonl ! -name progress.jsonl ! -name improvements.jsonl ! -name modules ! -name files ! -name settings.json ! -name 'hive-old-*' | head -3)
+          ! -name run ! -name sessions ! -name board.jsonl ! -name log.jsonl ! -name reports ! -name asks.jsonl ! -name outcomes.jsonl ! -name progress.jsonl ! -name improvements.jsonl ! -name modules ! -name files ! -name settings.json ! -name memory.md ! -name 'hive-old-*' | head -3)
   [ ! -e "$HOME/.ssh" ] && [ -z "$other" ] || die "this account has files or ~/.ssh, and its agents would have full rights to them.
 Use a new user (sudo ./install.sh), or install in a folder of this account with the --this-account line on the Hive's site."
 fi

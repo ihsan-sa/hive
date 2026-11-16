@@ -150,6 +150,14 @@ hive goals [--idle] [--json]: every goal (the person's focuses in kb/priorities.
 
 hive asks list | check | own ID | done ID --evidence POST | hold|person|drop ID --why | add --post ID --ask ... | directions | extract: the register of what the person asked for, so nothing is dropped (core/asks.py)
 
+## hive remember
+
+hive remember "fact" [--asked] | --replace ID "fact" | --list: save a lasting fact the person told you in their own web chat to ~/memory.md, which every new chat of theirs is given (--asked: they said remember). End your reply with *Saved to memory: ...*. Refused outside the person's own chat, for secrets, at the cap, or with memory off (core/memory.py)
+
+## hive forget
+
+hive forget ID: remove a line from the person's memory when they ask (`hive remember --list` shows ids)
+
 ## hive remind
 
 hive remind at +1h|09:00|"2026-11-20 09:00" TEXT | every "0 8 * * *" TEXT [--to NAME] [--thread T] | list [--thread T] | rm ID: a reminder or recurring post into the chat that asked (default the thread that woke you), as `remind`, to person by default; the hive-remind timer posts what is due each minute. Use it for any reminder or scheduled job: never write a systemd timer or cron line (core/remind.py)

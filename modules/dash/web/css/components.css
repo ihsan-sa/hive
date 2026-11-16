@@ -1456,6 +1456,8 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 .wkb-seg{min-width:2px;display:flex;align-items:center;padding-left:4px;border-radius:4px;font-size:var(--fs-micro);font-weight:var(--w-bold);text-decoration:none;white-space:nowrap}
 a.wkb-seg:hover{filter:brightness(1.08)}
 .wkb-seg:focus-visible{outline:none;box-shadow:var(--ring)}
+a.wkb-seg{position:relative}
+a.wkb-seg::after{content:"";position:absolute;inset:0 -3px;min-width:24px}   /* a 24 px tap area on a thin segment (WCAG 2.5.8) */
 .wkb-key{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px var(--s4);font-size:var(--fs-meta);color:var(--ink-2)}
 .wkb-key li{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%}
 .wkb-key i{flex:none;width:10px;height:10px;border-radius:3px}
@@ -1678,6 +1680,8 @@ details.blk[open]>summary .blk-t::after{margin-bottom:-1px;transform:rotate(225d
 /* ===== check + switch — replaces the .check / .checks rules ===== */
 .check{display:inline-flex;gap:8px;align-items:flex-start;cursor:pointer;font-size:var(--fs-small)}
 .check input[type=checkbox]:not(.switch){appearance:none;flex:none;margin:2px 0 0;width:16px;height:16px;border:1.5px solid var(--edge);border-radius:4px;background:var(--surface);display:grid;place-content:center;cursor:pointer}
+.check input[type=checkbox]:not(.switch){position:relative}
+.check input[type=checkbox]:not(.switch)::before{content:"";position:absolute;inset:-5px}   /* a 26 px tap area round the 16 px box (WCAG 2.5.8) */
 .check input[type=checkbox]:not(.switch):checked{background:var(--ink);border-color:var(--ink)}
 .check input[type=checkbox]:not(.switch):checked::after{content:"";width:8px;height:4px;border-left:1.8px solid var(--on-ink);border-bottom:1.8px solid var(--on-ink);transform:translateY(-1px) rotate(-45deg)}
 .check .field-h{display:block}
@@ -1938,6 +1942,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 /* ===== icon: NEW, used by kit.js icon() ===== */
 .ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 /* agent mark (R7, from the design): the agent's two middle letters (a7c31 → 7c) in a soft square, its status shape at the corner. One colour for everyone: the shape carries the state */
+.av::after{content:"";position:absolute;inset:-4px}   /* a 24 px tap area on a 20 px face (WCAG 2.5.8) */
 .av{position:relative;display:inline-grid;place-items:center;width:24px;height:24px;flex:none;border-radius:7px;background:var(--hover);color:var(--ink-2);font:600 10px/1 var(--font);letter-spacing:.02em;text-transform:lowercase;text-decoration:none}
 html:not([data-dev]) .av{text-transform:none}   /* lowercase is for the developer look's codes; the app look's avatars say "A" to match "Agent A", and "Y" for you */
 .av:hover{text-decoration:none;color:var(--ink)}
@@ -2980,6 +2985,8 @@ button.fl-rn:hover{text-decoration:underline}
 .fp-convs .lr:first-child{border-top:0}
 .fp-convs .lr-t .st{width:7px;height:7px}
 .fp-convs .lr-t b{flex:0 1 auto;min-width:0}.fp-convs .lr-in{min-width:0}   /* a long title ends in an ellipsis, it doesn't widen the page at 390 (r23 review) */
+.fp-rel>a{position:relative}
+.fp-rel>a::after{content:"";position:absolute;inset:-4px}   /* a 24 px tap area on the small +N link (WCAG 2.5.8) */
 .fp-more{font-size:var(--fs-small);color:var(--ink-2);padding-top:4px}
 /* side: Agents and Activity */
 .fp-ag{display:grid;gap:10px}

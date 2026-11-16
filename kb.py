@@ -924,8 +924,11 @@ def cmd_recall(a):
     hits = recall(c, text, a.n + 4, ctx, thread=thread) if kbuse else recall(c, text, a.n, ctx, thread=thread)
     hits = recall_wall(c, hits, mine[0] if mine else None)
     bad = set()
-    if kbuse:  # what is injected leaves out the notes recall shows again and again and nobody opens (kbuse.duds); the ranking itself is untouched
+    sender = str(mine[0].get("from") or "").lower() if mine else ""
+    if kbuse:  # what is injected leaves out the notes recall shows again and again and nobody opens (kbuse.duds), and those this sender's runs never open (kbuse.stale); the ranking itself is untouched
         try: bad = kbuse.duds()
+        except Exception: pass
+        try: bad = bad | kbuse.stale().get(sender, set()) if sender else bad
         except Exception: pass
     ranked = hits[:a.n]; hits = recall_gate(hits, bad, person, a.midrun, a.n, quiet); held = [h for h in ranked if h not in hits]
     if a.who: seen = recall_shown(a.who); hits = [h for h in hits if h["path"] not in seen]
@@ -933,6 +936,7 @@ def cmd_recall(a):
         print("Notes that may bear on this (matched on its words, not checked; `kb open PATH:LINE` reads one):")
         for h in hits: print("- %s:%d  %s" % (fmt_path(h["path"]), h["line"], re.sub(r"\s+", " ", h["head"])[:90]))
     rec = {"recall": a.post or "stdin", "top": [h["path"] for h in hits], "ms": int((time.time() - t0) * 1000)}
+    if sender: rec["sender"] = sender  # kbuse.stale keys on it
     if held: rec.update(held=len(held), held_paths=[fmt_path(h["path"]) for h in held])
     if quiet: rec["quiet"] = True  # every message is still searched; what was ranked and not shown, so what the silence cost can be counted (did the run read it anyway?)
     if a.who: os.environ["HIVE_NAME"] = a.who
