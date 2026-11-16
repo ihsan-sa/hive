@@ -8,6 +8,7 @@ import { SIMPLE_NAV } from "../core/nav.js";
 import { pinned, important } from "./threadmeta.js";
 import { button } from "./kit.js";
 import { FEEDBACK_KEY } from "./feedback.js";
+import { oneKeyOn } from "../core/onekey.js";
 
 const MAC = /Mac|iPhone|iPad/.test(navigator.platform || "");
 const MOD = MAC ? "⌘" : "Ctrl+";
@@ -64,6 +65,7 @@ export function openShortcuts() {
   ];
   const dlg = dialog("Keyboard shortcuts", h("h2", null, "Keyboard shortcuts"),
     h("dl", { class: "qs-keys" }, rows.map(([k, t]) => [h("dt", null, h("kbd", null, k)), h("dd", null, t)])),
+    h("p", { class: "field-h" }, "?, F and / work on one key press. Turn them off in ", h("a", { href: "#settings", onclick: () => dlg.close() }, "Settings"), ", under This device."),
     h("div", { class: "dlg-a" }, button("Close", () => dlg.close(), { kind: "primary" })));
 }
 
@@ -72,6 +74,6 @@ export function initSwitcher(v) {
   addEventListener("keydown", e => {
     if (e.defaultPrevented || e.altKey || document.querySelector("dialog[open]:not(.qs)")) return;
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "k" && !e.target.closest?.(".cp")) { e.preventDefault(); open && open.classList.contains("qs") && open.getAttribute("aria-label") === "Quick switcher" ? open.close() : openSwitcher(); }
-    else if (e.key === "?" && !e.ctrlKey && !e.metaKey && !typing(e)) { e.preventDefault(); openShortcuts(); }
+    else if (e.key === "?" && !e.ctrlKey && !e.metaKey && !typing(e) && oneKeyOn()) { e.preventDefault(); openShortcuts(); }
   });
 }

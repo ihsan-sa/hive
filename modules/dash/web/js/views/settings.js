@@ -3,6 +3,7 @@ import { status as st } from "../core/status.js";
 import { h } from "../core/dom.js";
 import { S, can, built, jget, needsAccount, post, loadApp, said, fullEnded, unreached, kept, keep, KEPT_NOTE } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
+import { oneKeyOn, setOneKey } from "../core/onekey.js";
 import { deviceFingerprint } from "../core/sign.js";
 import { notifyBlocked, notifyOn, notifySupported, notifyTest, pushOn, pushSupported, setNotify, setPush } from "../core/notify.js";
 import { DEFAULT_NAME, brandLogo, brandName } from "../core/brand.js";
@@ -129,7 +130,7 @@ function viewSection(ctx) {
   return section({ title: "This device", note: "this browser only", level: 1 },
     blocks(block({ title: "Simple view", key: "simple", sub: on ? "On: you see a chat, and your Hive talks to you in plain words." : "Off: you see every tab, and what the agents say to each other. Turn it on for just a chat and what's been made, with agents told to use plain words.",
       actions: button(on ? "Show everything" : "Turn on simple view", () => { setSimple(!on); ctx.update(); }, { size: "s" }) }),
-    langBlock(), voiceBlock(ctx), notifyBlock(ctx), pushBlock(ctx), phoneBlock(ctx), signBlock(ctx)));
+    langBlock(), keysBlock(ctx), voiceBlock(ctx), notifyBlock(ctx), pushBlock(ctx), phoneBlock(ctx), signBlock(ctx)));
 }
 // Voice calls and memos: where they stand on this install (dash.py voice_view, projects/everyday/VOICE.md V1). The build runs in the
 // background after install, so this says Setting up, Didn't finish (with Try again) or Not on this install (with why) instead of a Call
@@ -196,6 +197,14 @@ function langBlock() {
   const cur = getLang();
   return block({ title: "Language", key: "lang", sub: "The words on the screens. Agents answer in the language you write in, whatever this says.",
     actions: LANGS.map(([code, name]) => button(name, () => chooseLang(code), { size: "s", ...(code === cur ? { kind: "primary" } : {}) })) });
+}
+// One-key shortcuts (WCAG 2.1.4, core/onekey.js): ?, F and / act on one key press with nothing held; this turns them off here.
+function keysBlock(ctx) {
+  const on = oneKeyOn(), label = "One-key shortcuts";
+  return block({ title: label, key: "onekey",
+    sub: on ? "On: ? lists the shortcuts, F goes full screen, and / jumps to search in Knowledge. Turn them off if they go off by accident, for example when you talk to the page." : "Off: ?, F and / type nothing special. Shortcuts with Ctrl or ⌘ still work.",
+    actions: [savedMark(label), h("input", { type: "checkbox", role: "switch", class: "switch", "aria-label": label, checked: on,
+      onchange: (e, n) => { setOneKey(n.checked); flash(label, ctx.update); ctx.update(); } })] });
 }
 // This browser's signature on posts (core/sign.js). The fingerprint is what root pins, so it has to be readable here; nothing can be done with it but compare it.
 function signBlock(ctx) {
