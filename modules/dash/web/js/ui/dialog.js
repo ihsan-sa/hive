@@ -7,6 +7,7 @@ import { button } from "./kit.js";
  * typed: a code that must be typed exactly before OK enables (Kill). Tab completes it from its first letters.
  * busyText: shown under the text, with a spinner on OK, while onOk runs (for jobs that take a while).
  * onOk: async; throw to show "Nothing changed: <reason>." and keep the window open. Return a string to show it and keep open.
+ *   Throw an Error with .whole set to show its message as it is, in the error colour, with only Close left.
  */
 export function confirm({ title, body = [], ok = "OK", kind = "primary", typed, failText = "Nothing changed", busyText, onOk }) {
   const err = h("div", { class: "dlg-err", role: "status" });
@@ -38,7 +39,12 @@ export function confirm({ title, body = [], ok = "OK", kind = "primary", typed, 
       const msg = await onOk(code ? code.value : undefined);
       if (typeof msg === "string" && msg) { err.textContent = tr(msg); err.setAttribute("data-ok", ""); yes.remove(); no.textContent = tr("Close"); if (code) code.disabled = true; }
       else dlg.close();
-    } catch (x) { err.textContent = `${tr(failText)}: ${tr(x.message)}.`; }   // each piece in the chosen language (tr)
+    } catch (x) {
+      err.removeAttribute("data-ok");   // the waiting line's plain colour (busyText) must not stay on a failure
+      // x.whole: the caller's own whole sentence, already in the chosen language, and the end of this window (kbwipe.js: a put back that couldn't move everything, or whose answer didn't arrive)
+      if (x.whole) { err.textContent = x.message; yes.remove(); no.textContent = tr("Close"); if (code) code.disabled = true; }
+      else err.textContent = `${tr(failText)}: ${tr(x.message)}.`;   // each piece in the chosen language (tr)
+    }
     finally { delete yes.dataset.busy; yes.removeAttribute("aria-busy"); ready(); }
   });
   dlg.addEventListener("close", () => dlg.remove());

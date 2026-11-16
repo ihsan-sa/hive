@@ -4,6 +4,18 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## A button that wipes the knowledge base, with a way back
+
+Settings has a new last section, **Wipe the knowledge base**, for when a Hive should start a piece of work without what its agents learned before. It moves every note in the knowledge base into a private copy on the same machine. Your priorities and your standing directions stay where they are, and so do the board, the projects, the core and the modules. Nothing is deleted: the section lists the copies from earlier wipes, and **Put back** merges one in again without overwriting a note that is there now.
+
+It is made hard to do by accident. The window has three steps. The first shows which Hive this is, its folder, how many files move, what stays and which agents are running. The second has three boxes to tick. In the third you type the Hive's name by hand, and the last button stays off for ten seconds. Nothing is sent before that last button, and a put back asks for typed words too.
+
+The section shows only to the owner's full sign-in at the Hive's own address, with the files and settings rights: not to a guest, a shared link or a site's own name. From outside the machine the sign-in must also be from the last 15 minutes, and the window offers to sign in again when it is older.
+
+Agents are told on the board when a wipe or a put back happens, and search stops returning the moved notes. A wipe that can't move an entry stops there and says which one, and what had moved stays in the copy, ready to put back. If the answer gets lost on its way to the page, the window reads the list of copies and says what that shows; it says nothing was moved only when the Hive refused.
+
+The copy still takes its space on the disk, and a backup of the machine made before the wipe still holds the notes: this is a fresh start for the agents, not a way to erase what was written.
+
 ## The home lists your focuses by where they stand
 
 With many focuses, Chat's home was a wall of cards, and finding the one that needed you meant reading all of them. With seven or more focuses the home now lists them instead, one row each, grouped by where each one stands: Needs you first, then Blocked, At risk, On track, Waiting on others, Paused, Done, and No state yet. A focus goes under Needs you as soon as an ask in it waits on you, whatever its In short says.

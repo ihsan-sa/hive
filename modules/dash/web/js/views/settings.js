@@ -21,6 +21,7 @@ import { href, threadHref } from "../core/router.js";
 import { copyButton } from "../ui/refs.js";
 import { MODELS, POWER, accountsData, codexPart, forget, keysPart, loadPage, modelPart, pageData, powerPart, reading, rootNote, sandboxPart, sharePart } from "../ui/setup.js";
 import { forgetSecrets, secretParts, secretsLost } from "./secrets.js";
+import { kbWipeSection } from "../ui/kbwipe.js";
 
 // Everything the person is typing lives here, so a poll never loses it.
 // T: words typed here and not saved yet (the style, the Hive name). enter() clears F; T lasts the session, so coming back to Settings shows them
@@ -717,7 +718,7 @@ export default {
     const [slug, row] = (ctx.arg || "").split("/");   // #settings/modules/slack-door: the section, then a row to open on (modulesSection's F.goRow)
     if (row && slug === "modules" && F.goTo !== ctx.arg) { F.goTo = ctx.arg; F.goRow = row; }   // once per link, so "Hide the full list" stays hidden
     const hive = hiveSection(ctx), [everyday, setOnce] = Array.isArray(hive) ? hive : [hive, null];
-    const secs = [everyday, loginsSection(ctx), useSection(), tiersSection(ctx), ...setupSections(ctx), secretsSection(ctx), viewSection(ctx), setOnce, modulesSection(ctx), accessSection(ctx)].filter(Boolean);
+    const secs = [everyday, loginsSection(ctx), useSection(), tiersSection(ctx), ...setupSections(ctx), secretsSection(ctx), viewSection(ctx), setOnce, modulesSection(ctx), accessSection(ctx), kbWipeSection(ctx)].filter(Boolean);
     const header = pageHeader({ title: "Settings" });
     if (!secs.length) return form({ header, sections: [empty("This connection can't change any settings.")] });
     const nav = secs.map(n => n.dataset.name || n.getAttribute("aria-label")),   // data-name: the English title, which the interface language (core/lang.js) leaves alone, so #settings/this-device works in any language

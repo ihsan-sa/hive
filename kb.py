@@ -1049,6 +1049,7 @@ def cmd_alias(a):
 
 def cmd_miss(a):
     q = " ".join(a.question); day = time.strftime("%Y-%m-%d", time.gmtime())
+    os.makedirs(os.path.dirname(MISSES), exist_ok=True)   # a wipe from the dashboard leaves kb/history empty, or a person may remove it
     with open(MISSES, "a") as f: f.write(f"- {day} {os.environ.get('HIVE_NAME','?')}: {q}\n")
     log({"miss": q}); print("recorded in " + MISSES)
 
