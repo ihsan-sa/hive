@@ -24,7 +24,7 @@ export function askKill(n, said) {
   confirm({
     title: said ? said + "?" : `Kill ${n}?`, ok: said || `Kill ${n}`, kind: "danger", typed: S.app.app && said ? null : n, failText: `Nothing was ${done}`,
     body: [
-      L && L.doing ? h("p", { class: "meta" }, "Doing now: " + short(L.doing, 160)) : null,
+      L && L.doing ? h("p", { class: "meta" }, "Doing now: ", h("span", { "data-content": "" }, short(L.doing, 160))) : null,
       "This ends the run and the shells it started, right away, without letting it save its work.",
       "The starter won't resume it, and any wakes queued for it are dropped. A new post that mentions it starts it again. Jobs it detached with nohup keep running, and you'll be told their pids.",
     ],
@@ -55,7 +55,7 @@ export function askStop(n, said = agentLabel(n)) {
   const dlg = confirm({
     title: `Stop ${said}?`, ok: "Stop after this step", failText: "It wasn't stopped",
     body: [
-      L && L.doing && !(S.app && S.app.app && ownStep(L.doing)) ? h("p", { class: "meta" }, "Doing now: " + short(L.doing, 160)) : null,
+      L && L.doing && !(S.app && S.app.app && ownStep(L.doing)) ? h("p", { class: "meta" }, "Doing now: ", h("span", { "data-content": "" }, short(L.doing, 160))) : null,
       `${capFirst(said)} finishes the step it's on, saves what it has, and stops. Nothing is lost, and a message in its conversation wakes it again.`,
       h("p", { class: "meta" }, "Need it to stop this second? ", h("button", { type: "button", class: "linkbtn", onclick: () => { dlg.close(); askKill(n); } }, "Kill it instead"), ", which ends it at once without saving."),
     ],
@@ -129,7 +129,7 @@ export function askTier(th) {
   confirm({
     title: "Tier for " + threadTitle(th), ok: "Save",
     body: [h("p", { class: "meta" }, `Now: ${tier(was).label}${setNow ? ", set here on the dashboard" : ", from the list in kb/priorities.md"}. Your choice is saved there, in its own section, and beats the list for this thread.`),
-      ...TIERS.map(t => opt(t.key, t.key === "other" ? "Not in the order" : t.label, desc[t.key], () => { pick = t.key; warn.textContent = was === "held" && pick !== "held" ? "This takes it off hold. The keeper may start work on it again." : ""; })),
+      ...TIERS.map(t => opt(t.key, t.key === "other" ? "Not in the order" : t.label, desc[t.key], () => { pick = t.key; warn.textContent = tr(was === "held" && pick !== "held" ? "This takes it off hold. The keeper may start work on it again." : ""); })),
       setNow ? opt("", "Back to the list", "remove your dashboard setting", () => { pick = null; warn.textContent = tr("This goes back to what the list in kb/priorities.md says."); }) : null,
       warn],
     onOk: async () => { if (pick === was && setNow) return; await post("/api/tier", { thread: th, tier: pick }); await poll(); },

@@ -116,6 +116,16 @@ ASK = re.compile(r"\b(?:only you(?:rs?)?\b|(?<!what )wait(?:s|ing)? (?:only )?(?
                  r"|(?:account|sign-?up|order|registration|licen[cs]e) in (?:your|the person's) name\b"
                  r"|(?<!from )your (?:sign-?in|log-?in|decision|call|approval|go-ahead|go(?![\w-])|answer|reply|say-so|signature|payment|choice|pick|part|turn|move|ruling)\b"
                  r"|(?:for you|yours|up to you) to (?:decide|sign|approve|pick|choose|confirm|answer|pay|buy|send|say|do|make|read and judge)\b|(?:is|are|stays?) yours\b)", re.I)
+# The same words after a "nothing", "never" or "not" in the same clause say the opposite ("Nothing waits on you here", "it never hides a
+# thread waiting on you", "nothing for you to sign"): not an ask. "Nothing runs there until you sign in" still is one, so until and unless
+# are read whatever stands before them. (2026-11-16: a home where every ask was answered showed "1 may be yours" on all 18 focuses, from
+# the line that said nothing waits; 11 of the 200 card lines ever marked were of this kind.)
+NOT_ASK = re.compile(r"\b(?:nothing|no one|nobody|none|never|not|no|no longer|isn't|aren't|doesn't|don't|won't)\b[^.;:,()]{0,40}$", re.I)
+def reads_as_ask(t):
+    """The words of line `t` that say something is the person's to do, or None."""
+    for m in ASK.finditer(t or ""):
+        if re.match(r"(?:until|unless)\b", m.group(0), re.I) or not NOT_ASK.search(t[:m.start()]): return m.group(0)
+    return None
 
 STEP_ID = re.compile(r"\b(?:R-?\d{2,4}[\w-]*|[A-Z]{2}-\d+[a-z]?)\b")   # a ladder step id (R107, R-1114-c, IM-1b): the to-do list is the person's, ids mean nothing there
 
@@ -402,7 +412,7 @@ def state(recs=None, pri=None, posts=None):
             for k in ("now", "lately"): parts[k + "_at"] = [was.get(norm(t), r.get("at")) for t in parts[k]]
             # Now lines that read as the person's to do: the page lists them as waiting on them. One that says in other words what a
             # Needs you line already says is that ask, not a second one (same_ask).
-            parts["hidden"] = [i for i, t in enumerate(parts["now"]) if ASK.search(t) and not any(same_ask(t, n) for n in parts["needs"])]
+            parts["hidden"] = [i for i, t in enumerate(parts["now"]) if reads_as_ask(t) and not any(same_ask(t, n) for n in parts["needs"])]
             f["summary"] = {"text": text, "from": r.get("from"), "at": r.get("at"), **parts}
     # The person's looks, at a focus's page or at the home (look() above keeps the visit); since_seen() turns a record into the time
     # their "new" marks count from.
@@ -870,7 +880,7 @@ def lint(st, posts=None, only=None, waits=None, at=None):
         if len(s["now"]) > MAX_NOW: out.append({"focus": f["id"], "kind": "too many", "part": "now", "what": f"{len(s['now'])} Now lines", "fix": f"keep the {MAX_NOW} that matter at this focus's level; merge the rest, move what is settled to Lately, or leave it to its thread's status"})
         for i in s.get("hidden") or []:
             b = s["now"][i]
-            out.append({"focus": f["id"], "kind": "hidden ask", "part": "now", "what": ASK.search(b).group(0), "in": b[:80], "fix": "if only the person can do it and it is still open, move the line under ## Needs you with its #thread, so the page shows it as waiting on them; if it isn't theirs, say who does it"})
+            out.append({"focus": f["id"], "kind": "hidden ask", "part": "now", "what": reads_as_ask(b) or "", "in": b[:80], "fix": "if only the person can do it and it is still open, move the line under ## Needs you with its #thread, so the page shows it as waiting on them; if it isn't theirs, say who does it"})
         if not f.get("summary"): continue
         t, p = newest_result(set(f["threads"]), posts)
         if p and t > float(s.get("at") or 0) + 60:

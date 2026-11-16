@@ -247,6 +247,8 @@
 @media (max-width:640px){
   .cm-filters .tm-chip,.cm-filters .seg button{min-height:44px;height:auto}
   .cm-foci-h>a{display:inline-flex;align-items:center;min-height:44px;padding:0 var(--s2)}   /* the Focuses head's Flow link, finger-sized */
+  .fo-m{margin-left:0;width:100%}   /* a focus row on a phone: its name, then what is new and yours, then the In short */
+  .fo-r{padding:12px 0 14px}
   .fc-tools .btn{min-width:44px;min-height:44px}   /* + and … on a focus card are always shown on a phone (hover:none): finger-sized */   /* finger-sized filter chips and By focus/recency on the phone home (R18: nothing tappable under 40 px) */
 }
 
@@ -273,6 +275,16 @@
 @container app (width < 700px){
   .cm-hline-all,.fc-hd:not(:has(.fc-ag)) .fc-name{position:relative;z-index:1}
   .cm-foci-h{margin-bottom:20px}
+  /* the Focuses head stays one line on a phone (drive_home_plain: the first focus starts within one screen): the news drops "since you last
+     looked", and the list or cards pick is as tall as the Flow link beside it */
+  .cm-foci-h{flex-wrap:nowrap}
+  .cm-foci-h>.sec-t{flex:none}
+  .cm-foci-new{display:block;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cm-foci-new>i{display:inline-block;vertical-align:-1px;margin-right:6px}
+  .cm-foci-new-t{display:none}
+  .cm-foci-h>.seg{flex:none;flex-wrap:nowrap;align-self:flex-start;padding:2px}
+  .cm-foci-h>.seg button{min-height:40px;height:auto;padding:0 10px}
+  .cm-foci-h>.seg+a{flex:none;margin-left:0}
   .cm-old-q a{padding-block:4px}   /* a link inside the sentence: 24 px, no taller, so the lines stay even (R18) */
   .cm-need-m .ref{position:relative}
   /* R-1110f-c: at phone width who asked gives way, so the source reads whole beside the time instead of two stubs ("Go to market: la… · Foryou p…"); the row tap still opens the answer. */

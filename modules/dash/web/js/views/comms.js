@@ -1148,14 +1148,19 @@ function pickLines(lines, n, since) {
   for (const l of lines) { if (keep.size >= n) break; keep.add(l); }
   return lines.filter(l => keep.has(l));
 }
+/** A focus's state word in the interface language. A language that says a focus's state differently from a conversation's (Spanish: "bloqueado",
+ *  "bloqueada") keeps the focus's word under "focus: <state>" (core/lang-es-4.js); without one it is the plain word. */
+const focusState = s => { const k = "focus: " + s, t = tr(k); return t === k ? s : t; };
+/** The state an In short had before it turned, as words: "was at risk", and "needed you" (never "was needs you"). */
+const wasWord = w => (w === "needs you" ? "needed you" : "was " + w);
 /** An In short's state as the card's and the page's word. Two things keep it honest (review C1, C2): a word said more than LEAD_OLD ago is drawn
  *  muted with its age beside it, since "on track" from two days back is a memory, not a reading; and while the change is new to the person
  *  (`since`: their last look), the state it had before is said after it ("was on track"). moving: agents are on the focus now. */
 export function leadWord(lead, since, moving) {
   const old = !!lead.at && Date.now() - lead.at > LEAD_OLD, turned = !!lead.was && newSince(lead.turned, since);
-  const title = (old ? `In short, said ${ago(lead.at)} and not since: ${lead.state}` : `In short: ${lead.state}`) + (turned ? `, was ${lead.was}` : "") + (moving ? ", and agents are on it now" : "");
-  return [statusWord(old ? "quiet" : lead.tone, lead.state, title, old ? "fc-st fc-st-old" : "fc-st"),
-    turned ? h("span", { class: "fc-was", "data-key": "fc-was" }, "was " + lead.was) : null,
+  const title = (old ? `In short, said ${ago(lead.at)} and not since: ${lead.state}` : `In short: ${lead.state}`) + (turned ? ", " + wasWord(lead.was) : "") + (moving ? ", and agents are on it now" : "");
+  return [statusWord(old ? "quiet" : lead.tone, focusState(lead.state), title, old ? "fc-st fc-st-old" : "fc-st"),
+    turned ? h("span", { class: "fc-was", "data-key": "fc-was" }, wasWord(lead.was)) : null,
     old ? h("span", { class: "fc-short-t", "data-key": "fc-said" }, "said ", when(lead.at, "t")) : null];
 }
 /** How many things on a focus's card are new to the person (core/foci.js cardSince): its In short, and every Now and Lately line, drawn on the card or not. */
@@ -1303,15 +1308,16 @@ const waitsRoom = () => { const home = document.querySelector(".cm-home"), foci 
 const waitsHeld = px => h("div", { class: "cm-hwait", "data-key": "waits-held", role: "status", style: px ? `height:${px}px;flex:none;overflow:hidden` : null }, h("span", { class: "vh" }, "Reading\u2026"),
   h("div", { class: "cm-hwait-l" }, skBar("18%", 11)),
   h("div", { class: "cm-hwait-b" }, [0, 1, 2].map(i => h("div", { class: "cm-hwait-r", "data-key": "r" + i }, skBar(WAIT_W[i], 12), skBar("34%")))));
-const fociHeld = (room, barPx) => [workBarHeld(barPx), h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h", "data-wait": "" }, skBar("84px", 11)),
-  h("div", { class: "cm-foci", "data-key": "foci", style: room }, WAIT_W.map((w, i) => h("div", { class: "skel-card cm-fwait", "data-key": "w" + i }, skBar("40%", 12), skBar(w, 11), skBar("84%"), skBar("62%"))))];
+const fociHeld = (room, barPx, list) => [workBarHeld(barPx), h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h", "data-wait": "" }, skBar("84px", 11)),
+  list ? h("div", { class: "cm-foci", "data-key": "foci", "data-view": "list", style: room }, h("div", { class: "fo-g" }, WAIT_W.map((w, i) => h("div", { class: "fo-r cm-fwait", "data-key": "w" + i }, skBar("34%", 12), skBar(w, 11)))))
+    : h("div", { class: "cm-foci", "data-key": "foci", style: room }, WAIT_W.map((w, i) => h("div", { class: "skel-card cm-fwait", "data-key": "w" + i }, skBar("40%", 12), skBar(w, 11), skBar("84%"), skBar("62%"))))];
 /** Beside "Focuses": how many of them say something new since the person last looked at the home, with the bar that marks the new lines on
  *  their cards (so the bar is explained where it is first met). Nothing before their second visit: there is no look to count from. */
 function fociNews(fs) {
   const hs = S.foci && S.foci.home_seen; if (!hs || !hs.since) return null;
   const n = fs.filter(f => cardNews(f)).length;
   return h("span", { class: "cm-foci-new", "data-key": "foci-new", "data-new": n ? "" : null }, n ? h("i", { "aria-hidden": "true" }) : null,
-    n ? `${n} with news since you last looked` : "Nothing new since you last looked", h("span", { class: "sec-n" }, " \u00b7 ", when(hs.since * 1e3, "t")));
+    n ? `${n} with news` : "Nothing new", h("span", { class: "cm-foci-new-t" }, " since you last looked"), h("span", { class: "sec-n" }, " \u00b7 ", when(hs.since * 1e3, "t")));   // a phone drops the tail (phone.css)
 }
 // The home's Focuses as a list (the person, 11160014bf8b: "I really can't get a good sense of what's going on"; nineteen cards were five screens
 // of equal weight). One row a focus, under what its In short says, the ones that wait on the person first: the In short in full, and beside the
@@ -1320,57 +1326,83 @@ function fociNews(fs) {
 const FOCI_VIEW_KEY = "hive.home.foci", FOCI_DRAWN_KEY = "hive.home.foci.drawn", LIST_FROM = 7;
 const viewRead = k => { try { const v = localStorage.getItem(k); return v === "list" || v === "cards" ? v : null; } catch (e) { return null; } };
 const FV = { pick: viewRead(FOCI_VIEW_KEY), drawn: viewRead(FOCI_DRAWN_KEY) };
-const fociView = () => FV.pick || (foci().length >= LIST_FROM ? "list" : "cards");
+/** "list" or "cards": the person's pick, else by how many focuses there are; while they are still being read, as it was last drawn. */
+const fociView = () => FV.pick || (S.foci === undefined ? FV.drawn || "cards" : foci().length >= LIST_FROM ? "list" : "cards");
 // The groups in the order the person reads them: what is theirs, what is in trouble, what is fine, what is set down. "" holds a focus with no In
 // short and one whose In short opens with no state.
-const FL_GROUPS = [["needs you", "Needs you", "info"], ["blocked", "Blocked", "bad"], ["at risk", "At risk", "warn"], ["on track", "On track", "good"], ["waiting", "Waiting on others", "quiet"], ["paused", "Paused", "ended"], ["done", "Done", "ended"], ["", "No state yet", "quiet"]];
+const FO_GROUPS = [["needs you", "Needs you", "info"], ["blocked", "Blocked", "bad"], ["at risk", "At risk", "warn"], ["on track", "On track", "good"], ["waiting", "Waiting on others", "quiet"], ["paused", "Paused", "ended"], ["done", "Done", "ended"], ["", "No state yet", "quiet"]];
+/** How many asks of this focus are listed as the person's (the card's "Needs you" count; the ones that only may be theirs are not in it). */
+const yoursOf = f => Math.max(needsOf(f.id || null).length, askedOf(f.id || null).length);
+/** The state a focus's own In short opens with, "" when it has none or one this list has no group for (so no row is ever dropped). */
+const leadKey = f => { const k = (leadOf(f) || {}).key || ""; return FO_GROUPS.some(g => g[0] === k) ? k : ""; };
+/** The group a focus is listed under: Needs you as soon as an ask of it waits on the person, whatever its In short says; else its own state. */
+const groupOf = f => (f.misc ? null : yoursOf(f) ? "needs you" : leadKey(f));
 function focusRow(f) {
   const id = f.id || null, page = href("focus", id || "misc"), rows = activeThreads(id).filter(r => !archived(r.th)), up = updatedAt(f, rows);
-  if (f.misc) return h("li", { class: "fl-r", "data-key": "fl:misc", "data-misc": "" },
-    h("div", { class: "fl-top" }, h("a", { class: "fl-name", href: page }, "Other"), h("div", { class: "fl-m" }, when(up, "t"))),
-    h("p", { class: "fl-short fl-none" }, `${plural(rows.length, "conversation")} not filed under a focus`));
+  if (f.misc) return h("li", { class: "fo-r", "data-key": "fo:misc", "data-misc": "" },
+    h("div", { class: "fo-top" }, h("a", { class: "fo-name", href: page, title: "Other: conversations not filed under a focus" }, "Other"), h("div", { class: "fo-m" }, when(up, "t", "updated"))),
+    h("p", { class: "fo-short fo-none" }, `${plural(rows.length, "conversation")} not filed under a focus.`));
   const lead = leadOf(f), since = cardSince(f), news = cardNews(f), working = agentsOf(id).now.length, asked = askedOf(id), nd = needsOf(id), hid = hiddenAsks(f);
   const listed = Math.max(nd.length, asked.length), mine = listed + hid.length, now = sumLines(f.summary, "now"), name = focusName(f);
-  // Its state is the group's heading; the row says only what the heading can't: that the word is old, or what it was before it turned.
+  // Its state is the group's heading; the row says only what the heading can't: its own state word when an ask put it under Needs you, that the
+  // word is old, or what it was before it turned.
+  const own = leadKey(f), moved = groupOf(f) !== own && own ? FO_GROUPS.find(g => g[0] === own) : null;
   const old = !!lead && !!lead.state && !!lead.at && Date.now() - lead.at > LEAD_OLD, turned = !!lead && !!lead.was && newSince(lead.turned, since);
-  const body = lead ? h("p", { class: "fl-short", title: lead.body }, lineText(labelCodes(fileNames(lead.body)), { pill: false, topic: false }))
-    : now.length ? h("p", { class: "fl-short fl-none", title: now[0].text }, lineText(labelCodes(fileNames(now[0].text)), { pill: false, topic: false }))
-    : h("p", { class: "fl-short fl-none" }, f.summary ? "Nothing listed as moving." : "No summary yet. The agents on it write one as they work.");
-  return h("li", { class: "fl-r", "data-key": "fl:" + id, "data-new": news ? "" : null, "data-lead": lead ? lead.key || "" : null },
-    h("div", { class: "fl-top" },
-      h("a", { class: "fl-name", href: page, title: name + (f.aim ? ": " + f.aim : "") }, name),
-      h("div", { class: "fl-m" },
-        turned ? h("span", { class: "fl-was", "data-key": "fl-was" }, "was " + lead.was) : null,
-        old ? h("span", { class: "fl-was", "data-key": "fl-said", title: `In short, said ${ago(lead.at)} and not since` }, "said ", when(lead.at, "t")) : null,
-        news ? h("a", { class: "fl-new", "data-key": "fl-new", href: page, title: `${plural(news, "thing")} here ${news === 1 ? "is" : "are"} new since you last looked` }, `${news} new`) : null,
-        mine ? h("a", { class: "fl-you", "data-key": "fl-you", href: page, title: listed && hid.length ? `${listed} asked of you, and ${plural(hid.length, "more line")} that may be yours` : listed ? `${plural(listed, "thing")} asked of you` : `${plural(hid.length, "line")} here may be yours to act on` },
-          h("span", { class: "st", "data-tone": "info", "aria-hidden": "true" }), listed ? `${mine} for you` : `${mine} may be yours`) : null,
-        working ? h("span", { class: "fl-ag", "data-key": "fl-ag", title: `${plural(working, "agent")} working on it now` }, h("span", { class: "st", "data-tone": "good", "data-live": "", "aria-hidden": "true" }), `${working} working`) : null,
+  const say = t => lineText(labelCodes(fileNames(t)), { pill: false, topic: false });
+  const body = lead ? h("p", { class: "fo-short", "data-key": "fo-short" }, say(lead.key && !own ? f.lead.text : lead.body))   // a state this list has no group for stays in its sentence
+    : now.length ? h("p", { class: "fo-short fo-none", "data-key": "fo-short" }, say(now[0].text))
+    : h("p", { class: "fo-short fo-none", "data-key": "fo-short" }, f.summary ? "Nothing listed as moving." : "No summary yet. The agents on it write one as they work.");
+  // One link a row for the focus itself, stretched over it (the name); a link inside the In short keeps its own stop and sits above it.
+  return h("li", { class: "fo-r", "data-key": "fo:" + id, "data-new": news ? "" : null, "data-lead": lead ? lead.key || "" : null, "data-you": mine ? "" : null },
+    h("div", { class: "fo-top" },
+      h("a", { class: "fo-name", href: page, title: name + (f.aim ? ": " + f.aim : "") }, name),
+      h("div", { class: "fo-m" },
+        moved ? h("span", { class: "fo-st sw", "data-key": "fo-st", "data-tone": moved[2] }, h("span", { class: "st", "data-tone": moved[2], "aria-hidden": "true" }), h("span", null, moved[1])) : null,
+        turned ? h("span", { class: "fo-was", "data-key": "fo-was" }, wasWord(lead.was)) : null,
+        old ? h("span", { class: "fo-was", "data-key": "fo-said" }, "said ", when(lead.at, "t")) : null,
+        news ? h("span", { class: "fo-new", "data-key": "fo-new" }, `${news} new`) : null,
+        listed ? h("span", { class: "fo-you", "data-key": "fo-you" }, h("span", { class: "st", "data-tone": "info", "aria-hidden": "true" }), `${listed} for you`) : null,
+        hid.length ? h("span", { class: "fo-maybe", "data-key": "fo-maybe" }, `${hid.length} may be yours`) : null,
+        working ? h("span", { class: "fo-ag", "data-key": "fo-ag" }, h("span", { class: "st", "data-tone": "good", "data-live": "", "aria-hidden": "true" }), `${working} working`) : null,
         when(up, "t", "updated"))),
     body);
 }
 function fociList(fs) {
-  const of = f => (f.misc ? "misc" : (leadOf(f) || {}).key || "");
-  const group = ([key, head, tone]) => { const g = fs.filter(f => of(f) === key); if (!g.length) return null;
-    return h("section", { class: "fl-g", "data-key": "flg:" + key, "data-state": key || "none" },
-      h("h3", { class: "fl-gh" }, h("span", { class: "sw", "data-tone": tone }, h("span", { class: "st", "data-tone": tone, "aria-hidden": "true" }), h("span", null, head)), h("span", { class: "fl-gn" }, h("span", { class: "vh" }, ", "), String(g.length), h("span", { class: "vh" }, g.length === 1 ? " focus" : " focuses"))),
-      h("ul", { class: "fl-rows" }, g.map(focusRow))); };
+  const group = ([key, head, tone]) => { const g = fs.filter(f => groupOf(f) === key); if (!g.length) return null;
+    return h("section", { class: "fo-g", "data-key": "fog:" + key, "data-state": key || "none" },
+      h("h3", { class: "fo-gh" }, h("span", { class: "sw", "data-tone": tone }, h("span", { class: "st", "data-tone": tone, "aria-hidden": "true" }), h("span", null, head)), h("span", { class: "fo-gn" }, h("span", { class: "vh" }, ", "), String(g.length), h("span", { class: "vh" }, g.length === 1 ? " focus" : " focuses"))),
+      h("ul", { class: "fo-rows" }, g.map(focusRow))); };
   const misc = fs.filter(f => f.misc);
-  return [FL_GROUPS.map(group), misc.length ? h("section", { class: "fl-g", "data-key": "flg:misc", "data-state": "misc", "aria-label": "Not in a focus" }, h("ul", { class: "fl-rows" }, misc.map(focusRow))) : null];
+  return [FO_GROUPS.map(group), misc.length ? h("section", { class: "fo-g", "data-key": "fog:misc", "data-state": "misc" }, h("h3", { class: "fo-gh" }, h("span", { class: "sw", "data-tone": "quiet" }, h("span", null, "Not in a focus"))), h("ul", { class: "fo-rows" }, misc.map(focusRow))) : null];
+}
+// Said in words the first times the list is drawn unasked, since the cards turned into rows by themselves: why, and where the cards are. It goes
+// with Got it or a pick, and after TOLD_LOADS page loads on its own, so a line nobody reads does not stay.
+const FOCI_TOLD_KEY = "hive.home.foci.told", TOLD_LOADS = 3;
+const TOLD = { n: (() => { try { return +localStorage.getItem(FOCI_TOLD_KEY) || 0; } catch (e) { return TOLD_LOADS; } })(), counted: false };
+const toldOver = () => { TOLD.n = TOLD_LOADS; store(FOCI_TOLD_KEY, String(TOLD_LOADS)); };
+function fociTold(ctx) {
+  if (FV.pick || TOLD.n >= TOLD_LOADS) return null;
+  if (!TOLD.counted) { TOLD.counted = true; store(FOCI_TOLD_KEY, String(TOLD.n + 1)); }
+  return h("p", { class: "cm-foci-told", "data-key": "foci-told", role: "note" },
+    h("span", null, "With this many focuses, the home lists them: the ones that wait on you come first. Cards, beside the heading, shows every focus with its lines."),
+    button("Got it", () => { toldOver(); ctx.update(); }, { kind: "quiet", size: "s", title: "Hide this line" }));
 }
 /** List or Cards, beside the Focuses heading: the person's pick, kept in this browser. */
 const fociPick = (view, ctx) => seg([["list", "List", "One row a focus, under what its In short says"], ["cards", "Cards", "A card a focus, with its lines and conversations"]], view,
-  v => { FV.pick = v; store(FOCI_VIEW_KEY, v); ctx.update(); }, { label: "Show the focuses as" });
+  v => { FV.pick = v; store(FOCI_VIEW_KEY, v); toldOver(); ctx.update(); }, { label: "Show the focuses as" });
 function fociGrid(ctx, settled) {
-  const px = heldRoom("home-foci", ".cm-foci", { settled }), room = px ? `min-height:${px}px` : null;   // the cards gain lines as the waits arrive
+  const view = fociView(), list = view === "list";
+  const px = heldRoom(list ? "home-foci-list" : "home-foci", ".cm-foci", { settled }), room = px ? `min-height:${px}px` : null;   // the cards gain lines as the waits arrive
   // A failed first read leaves an empty stand-in (core/foci.js): say so, not "no focus" (the person, 110901516bcd: cards gone after a dash restart).
   const barPx = heldRoom("home-workbar", ".wkb:not(.wkb-held)", { settled });
-  if (S.foci === undefined && !fociFailed()) return fociHeld(room, barPx);
+  if (S.foci === undefined && !fociFailed()) return fociHeld(room, barPx, list);
   if (S.foci === undefined || S.foci.failed && fociFailed()) return h("p", { class: "meta cm-foci-msg" }, "Couldn't read the focuses. It keeps trying.");
   const fs = fociOrder();
   if (!fs.length) return h("p", { class: "meta cm-foci-msg" }, "No focus yet. Agents make one when work has a goal; every conversation is in the list on the left.");
-  return [workBar(S.foci.activity), h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h" }, h("h2", { class: "sec-t" }, "Focuses"), h("span", { class: "sec-n" }, String(fs.length)), fociNews(fs), h("a", { href: href("flow") }, "Flow")),
-    h("div", { class: "cm-foci", "data-key": "foci", style: room }, fs.map(f => focusCard(f, ctx)))];
+  if (FV.drawn !== view) { FV.drawn = view; store(FOCI_DRAWN_KEY, view); }   // so the next visit's grey stand-in has the same shape
+  return [workBar(S.foci.activity), h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h" }, h("h2", { class: "sec-t" }, "Focuses"), h("span", { class: "sec-n" }, String(fs.filter(f => !f.misc).length)), fociNews(fs), fociPick(view, ctx), h("a", { href: href("flow") }, "Flow")),
+    list ? h("div", { class: "cm-foci", "data-key": "foci", "data-view": "list", style: room }, fociTold(ctx), fociList(fs))
+      : h("div", { class: "cm-foci", "data-key": "foci", style: room }, fs.map(f => focusCard(f, ctx)))];
 }
 /** #comms/~archived: every archived conversation, newest first, each with Bring back (the person, 11081454b6bd). Archived by hand or by age (ui/threadmeta.js). */
 function archivedPane(c, ctx) {

@@ -206,7 +206,7 @@ export async function openFeedback() {
       FB.comment = "";
       dlg.close(); sentNote();
     } catch (e) {   // the comment and picture stay, so it can be sent again
-      say.textContent = tr("It wasn't sent: ") + e.message; say.hidden = false; send.disabled = false; send.textContent = tr("Send");
+      say.textContent = tr("It wasn't sent: ") + tr(e.message); say.hidden = false; send.disabled = false; send.textContent = tr("Send");
     }
   }
   async function ghIssue() {   // a prefilled link, scrubbed on this machine; the person reviews it and posts it as themselves, so no token is needed
@@ -217,7 +217,7 @@ export async function openFeedback() {
       const r = await post("/api/issue-link", { text: said, page: location.hash.slice(1).split(/[/?]/)[0] || "home" });
       if (tab) { tab.opener = null; tab.location = r.url; } else location.assign(r.url);
       say.hidden = true;
-    } catch (e) { if (tab) tab.close(); say.textContent = tr("No link: ") + e.message; say.hidden = false; }
+    } catch (e) { if (tab) tab.close(); say.textContent = tr("No link: ") + tr(e.message); say.hidden = false; }
   }
   dlg.addEventListener("keydown", e => e.stopPropagation());   // what's open under the picture stays as it is: Escape closes this overlay only, and no shortcut acts on the page under it
   dlg.addEventListener("close", () => { if (FB.draftId && !away) { post("/api/feedback-draft-done", { id: FB.draftId }).catch(() => {}); FB.draftId = null; }

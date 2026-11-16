@@ -3520,6 +3520,40 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .cm-foci-new{display:inline-flex;align-items:baseline;gap:6px;min-width:0;font-size:var(--fs-meta);color:var(--ink-3)}
 .cm-foci-new[data-new]{color:var(--ink)}
 .cm-foci-new>i{align-self:center;flex:none;width:2px;height:12px;background:var(--ink)}
+/* The home's Focuses as a list (comms.js fociList; the person, 11160014bf8b): one row a focus, under what its In short says, the In short in full.
+   The name is the row's one link, stretched over the whole row; a link inside the sentence sits above it. A row with news since the person last
+   looked carries the same ink bar as a new line on a card. */
+.cm-foci-h>.seg{margin-left:auto;align-self:center}
+.cm-foci-h>.seg+a{margin-left:var(--s2)}
+.cm-foci[data-view=list]{grid-template-columns:minmax(0,1fr);gap:var(--s5)}
+/* Said the first times the list is drawn unasked (comms.js fociTold): one quiet line with Got it, the words free to wrap on a phone. */
+.cm-foci-told{display:flex;align-items:center;gap:var(--s3);margin:0;padding:var(--s2) var(--s3);border-radius:var(--r-m);background:var(--sunken);font-size:var(--fs-small);color:var(--ink-2)}
+.cm-foci-told>span{flex:1;min-width:0}
+.cm-foci-told>.btn{flex:none}
+.fo-g{display:grid;min-width:0}
+.fo-gh{display:flex;align-items:baseline;gap:8px;margin:0;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.fo-gh .sw{font-size:var(--fs-small);font-weight:var(--w-bold);color:var(--ink)}
+.fo-gn{font-size:var(--fs-meta);font-weight:var(--w-reg,400);color:var(--ink-3);font-variant-numeric:tabular-nums}
+.fo-rows{list-style:none;margin:0;padding:0;display:grid}
+.fo-r{position:relative;display:grid;gap:3px;min-width:0;padding:10px 0 12px}
+.fo-r+.fo-r{border-top:1px solid var(--line)}
+.fo-top{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 12px;min-width:0}
+.fo-name{min-width:0;font-size:var(--fs-body);font-weight:var(--w-bold);color:var(--ink);text-decoration:none;overflow-wrap:anywhere}
+.fo-name::after{content:"";position:absolute;inset:0}
+.fo-r:hover .fo-name{text-decoration:underline}
+.fo-m{margin-left:auto;display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:2px 12px;font-size:var(--fs-meta);color:var(--ink-3);white-space:nowrap}
+.fo-m .when{font-size:inherit;color:inherit}
+.fo-new,.fo-you{color:var(--ink);font-weight:var(--w-med)}
+.fo-you,.fo-ag{display:inline-flex;align-items:center;gap:6px}
+.fo-st{font-size:inherit}   /* its own state word, when an ask put the row under Needs you */
+.fo-short{margin:0;font-size:var(--fs-body);line-height:1.45;color:var(--ink);text-wrap:pretty;overflow-wrap:anywhere}
+.fo-none,.fo-g:is([data-state=paused],[data-state=done]) .fo-short{color:var(--ink-2)}
+.fo-short .ref,.fo-short .pill.ref{background:none;box-shadow:none;padding:0;border:0;height:auto;font-family:var(--mono);font-size:inherit;font-weight:var(--w-bold);color:inherit}
+:root:not([data-dev]) .fo-short .ref{font-family:var(--font)}
+.fo-short a{position:relative;z-index:1;color:inherit;text-decoration:underline;text-decoration-color:var(--line-2);text-underline-offset:2px}
+.fo-r[data-new]{margin-left:-12px;padding-left:12px;box-shadow:inset 2px 0 0 var(--ink)}
+@media (forced-colors:active){.fo-r[data-new]{padding-left:10px;border-left:2px solid CanvasText}}
+.fo-r.cm-fwait{gap:8px;padding:14px 0}
 /* the focus page: In short first, then one line on what changed since the last look */
 .fp-short-x{margin:0;font-size:var(--fs-lead);line-height:1.5;color:var(--ink);max-width:var(--measure);text-wrap:pretty;overflow-wrap:anywhere}
 .fp-short-x .ref{font-size:inherit}
