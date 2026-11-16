@@ -204,10 +204,57 @@ def with_ladder(row, g):
             row["gated_until"] = min(r["after"] for r in open_)  # UTC "YYYY-MM-DD[THH:MM]"; the floor starts nobody before it (ae5ec 11-16: a Waiting: cap of 2 h let a keeper in every 2 h on a ladder gated 11 h)
     return row
 
-def resume_arm(thread):
+LOG = HOME / "log.jsonl"
+CAP = HOME / ".hive" / "resume_cap.json"   # L134 (a5234, 2026-11-16): {"name", "since", "until", "max_context"}; absent or past `until`: no cap
+
+def context_of(out):
+    """Tokens in the context at a run's last main turn, from its stream-json `out` (as starter.context_of). 0 if unknown (codex and kimi don't print it)."""
+    n = 0
+    try:
+        with open(out, errors="replace") as f:
+            for line in f:
+                if '"assistant"' not in line or '"usage"' not in line: continue
+                try: e = json.loads(line)
+                except ValueError: continue
+                if e.get("type") == "assistant" and not e.get("parent_tool_use_id") and (u := (e.get("message") or {}).get("usage")):
+                    n = sum(u.get(k) or 0 for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+    except (OSError, TypeError): pass
+    return n
+
+def last_context(worker, log=None, tail=3_000_000):
+    """Context at the last turn of `worker`'s newest run (its newest start event in log.jsonl), 0 if none is found."""
+    try:
+        with open(log or LOG, "rb") as f:
+            f.seek(0, 2); f.seek(max(0, f.tell() - tail)); lines = f.read().decode(errors="replace").splitlines()
+    except OSError: return 0
+    for l in reversed(lines):
+        if '"start"' not in l or f'"name": "{worker}"' not in l: continue
+        try: e = json.loads(l)
+        except ValueError: continue
+        if e.get("event") == "start" and e.get("name") == worker: return context_of(e.get("out"))
+    return 0
+
+def capped(thread, worker, now=None, cap=None, ctx=None):
+    """L134 A/B: the context `worker` would carry into a resumed round if the cap sends this round to a fresh agent instead, else 0.
+    Only threads with crc32 odd are capped; the even half resumes as before, so the arms run side by side (read by keeper_cost.py, L134b)."""
+    if not thread or not worker or worker == "new": return 0
+    if cap is None:
+        try: cap = json.loads(CAP.read_text())
+        except (OSError, ValueError): return 0
+    now = now or dt.datetime.now(dt.timezone.utc)
+    try:
+        if not (dt.datetime.fromisoformat(cap["since"]) <= now < dt.datetime.fromisoformat(cap["until"])): return 0
+    except (KeyError, TypeError, ValueError): return 0
+    if zlib.crc32(thread.encode()) % 2 != 1: return 0
+    n = last_context(worker) if ctx is None else ctx
+    return n if n and n >= int(cap.get("max_context", 50_000)) else 0
+
+def resume_arm(thread, worker=None, now=None, cap=None, ctx=None):
     """Keeper briefs wake the thread's last worker, who keeps what it learned there (the starter gives an heir to one that is done or over
-    resume_max_context). The 11-06..11-09 A/B (hive-meta/continuity.md "A/B result") found resume 52% delivered vs fresh 32%, no kill, so it is the default."""
-    return True
+    resume_max_context). The 11-06..11-09 A/B (hive-meta/continuity.md "A/B result") found resume 52% delivered vs fresh 32%, no kill, so it is the default.
+    L133 (hive-meta load.md) priced that A/B: per delivered round a fresh agent cost 0.60 of a resumed one starting at 50 k or more (95% 0.34..1.16),
+    so the L134 A/B (`capped`, ~/.hive/resume_cap.json) sends odd-hashed threads to @new when the worker carries max_context or more."""
+    return not capped(thread, worker, now, cap, ctx)
 
 def post_model_args(text, model):
     """A brief's model is for a fresh agent only: on a woken worker the starter would hold it from then on, undoing a grader step-up or
@@ -255,13 +302,16 @@ def last_nothing(to, thread):
 
 def brief(row):
     """The brief a keeper round posts for one focus. Every clause is here because a thin hand-written brief produced the 'nothing changed' rounds."""
-    to = row["last_worker"] if row.get("last_worker") and resume_arm(row.get("thread")) else "new"
+    big = capped(row.get("thread"), row.get("last_worker")) if row.get("last_worker") else 0
+    to = row["last_worker"] if row.get("last_worker") and not big else "new"
     prev = to if to != "new" and stuck(to, row.get("thread")) else None
     if prev: to = "new"
     head = f"@{to} Keeper round on {row['name']}. The ladder is the `## {row.get('section') or 'Ladder'}` section of {row.get('goals_path') or 'this focus project goals.md (create it, one line a rung)'}: read that whole file, and obey any notes in the section.\n\n"
     rung = f"**Your rung:** {row['rung']}\n\nDo this rung. Land real work, then run its check." if row.get("rung") else "**The ladder has no rung you can take.** Your work this round is to write the next 3 to 5 rungs from the measure in that file, then do the first one."
     fresh = (f"\n\n**You take this fresh:** `{prev}`'s last {STREAK_NEW} rounds here were graded nothing (they posted a wait instead of doing the rung)."
-             " Read the thread for context, then do the rung yourself; do not hand it back.") if prev else ""
+             " Read the thread for context, then do the rung yourself; do not hand it back.") if prev else (
+        f"\n\n**You take this fresh:** `{row['last_worker']}` would have carried {big // 1000}k tokens of context into this round (a context-cap trial, hive-meta L134)."
+        " Read the thread's last posts and the files they name for what it learned, then do the rung yourself.") if big else ""
     return head + rung + fresh + last_nothing(to, row.get("thread")) + """
 
 Rules for the round:
