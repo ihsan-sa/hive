@@ -17,6 +17,7 @@ import { banner } from "./banner.js";
 import { newVersionNote } from "./newversion.js";
 import { startCall, phoneReady, inCall } from "./phone.js";
 import { D as deck, supported as deckSupported } from "../deck/control.js";
+import { oneKey } from "../core/onekey.js";
 
 export function statusBits() {
   const n = S.running.size, all = (S.usage && S.usage.logins) || (S.live && S.live.logins) || [], us = all.filter(l => inUse(l, S.usage)), hold = limitStop();
@@ -46,7 +47,7 @@ export function fullscreenButton() {
 fsDoc.addEventListener("fullscreenchange", () => { for (const b of document.querySelectorAll(".fs")) { b.replaceChildren(fsIcon()); b.title = tr(fsSay()); b.setAttribute("aria-label", b.title); } });
 addEventListener("keydown", e => {
   if ((e.key !== "f" && e.key !== "F") || e.ctrlKey || e.metaKey || e.altKey || !fsDoc.fullscreenEnabled) return;
-  if (e.target.closest && e.target.closest("input,textarea,select,[contenteditable]")) return;
+  if (!oneKey(e)) return;   // off in Settings → This device, or typing into a field
   e.preventDefault(); fsToggle();
 });
 

@@ -11,6 +11,7 @@ import { icon } from "../ui/icons.js";
 import { markdown } from "../ui/markdown.js";
 import { markWords } from "../ui/message.js";
 import { kbChat } from "./kbchat.js";
+import { oneKeyOn } from "../core/onekey.js";
 
 const K = { map: null, mapAt: 0, topics: new Set(), home: null, seen: new Map(), failed: new Map(), q: "", res: null, timer: 0, worktrees: false, limit: 300, source: false, edit: null, shown: null, memo: {}, mentions: { key: "", v: [] } };
 const open = (path, line) => href("knowledge", line ? `${path}::${line}` : path);
@@ -398,7 +399,7 @@ addEventListener("keydown", e => {
   const k = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k", slash = e.key === "/" && !e.metaKey && !e.ctrlKey;
   if (!k && !slash) return;
   const t = e.target, typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
-  if (slash && typing) return;
+  if (slash && (typing || !oneKeyOn())) return;
   const box = [...document.querySelectorAll("input[data-kb-all]")].find(i => i.offsetParent);
   if (box) { e.preventDefault(); box.focus(); box.select(); }
 });
