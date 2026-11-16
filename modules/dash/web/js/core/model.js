@@ -149,6 +149,9 @@ export function agentState(a) {
   if (unseen) return { key: "stuck", text: `quiet ${dur(q)}, hasn't seen ${unseen} new post${unseen > 1 ? "s" : ""} for it` };
   return { key: "quiet", text: "quiet " + dur(q) + (S.app.app ? "" : ", no job in the queue") };
 }
+/** Why the starter stopped a run it will resume by itself (the "died" log event's why), in the starter's own words (core/starter.py WHY_WORDS). */
+const RETRY_WORDS = { connection: "no connection to Claude", restart: "the machine restarted", stalled: "went silent with nothing running", other: "ended before it finished", budget: "reached its budget or turn limit" };
+export const retryWords = why => RETRY_WORDS[why] || RETRY_WORDS.other;
 /** Any name's status: {key, label}. Cached per poll. */
 export function agentStatus(n) {
   let v = S.stCache.get(n); if (v) return v;
@@ -160,6 +163,7 @@ export function agentStatus(n) {
   else if (S.killed[n] >= s.start) v = { key: "killed", label: "killed" };
   else if (s.replacedBy) v = { key: "ended", label: "replaced by " + s.replacedBy };
   else if (S.limitedNow.has(s.session)) v = { key: "limited", label: "stopped at a limit" };
+  else if (s.retry && S.diedNow.has(s.session)) v = { key: "limited", label: "stopped, carries on by itself" };
   else if (s.exit && s.exit !== 143) v = { key: "failed", label: `failed (exit ${s.exit})` };
   else v = { key: "ended", label: "ended " + ago(sEnd(s)) };
   S.stCache.set(n, v); return v;
@@ -596,6 +600,7 @@ export function threadState(th, read) {
   const q = (S.live ? S.live.pending : []).find(p => (p.threads || []).includes(th));
   if (q) return { key: "queued", label: "waiting to start", who: q.name };
   if (last && last.end && last.limited && S.limitedNow.has(last.session)) return { key: "limited", label: "stopped at a usage limit", who: last.name, t: last.end };
+  if (last && last.end && last.retry && S.diedNow.has(last.session)) return { key: "limited", label: "stopped, carries on by itself", who: last.name, t: last.end, retry: last.retry };
   if (last && last.end && last.exit && last.exit !== 143 && !last.limited) return { key: "failed", label: "stopped with an error", who: last.name, t: last.end };
   if (ask && !(read && read(ask))) return { key: "foryou", label: "new reply for you", who: ask.from, post: ask };
   return { key: "done", label: last ? "done" : "", who: last ? last.name : null };
@@ -691,7 +696,7 @@ export function threadStand(th, read, waits) {
   if ((live.key === "failed" && (trouble === "failed" || (live.t || 0) > at)) || (live.key === "limited" && (live.t || 0) > at)) {
     // a state line written after the failure is the newer word and follows it; else why the count doesn't have it, else the summary's state
     const simple = simpleOn(), also = b && at > (live.t || 0) ? b.line : offAlso || (b ? b.line : detail);
-    return live.key === "limited" ? out("limited", "Paused", simple ? "taking a break; it carries on by itself" : `stopped at a usage limit ${ago(live.t)}; it carries on by itself`, also)
+    return live.key === "limited" ? out("limited", "Paused", simple ? "taking a break; it carries on by itself" : live.retry ? `stopped (${retryWords(live.retry)}) ${ago(live.t)}; it carries on by itself` : `stopped at a usage limit ${ago(live.t)}; it carries on by itself`, also)
       : out("failed", "Failed", simple ? "ran into a problem; a message makes it try again" : `stopped with an error ${ago(live.t)}; a message wakes it to try again`, also);
   }
   // 5. on the list but out of the count: put off, said not needed, or old enough to sit in Stuff to address

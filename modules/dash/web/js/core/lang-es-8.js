@@ -311,6 +311,11 @@ export default {
   "It didn't join": "No se unió",
   "Not set": "Sin configurar",
   "A 2.4 GHz network. The password goes only to the board.": "Una red de 2,4 GHz. La contraseña va solo a la placa.",
+  "Type your Wi-Fi network's name and password and press Set Wi-Fi. They go only to the board.": "Escribe el nombre y la contraseña de tu red Wi-Fi y pulsa Configurar Wi-Fi. Van solo a la placa.",
+  "It didn't join your saved network in 90 s. Check the network and password saved in Secrets, and that it's a 2.4 GHz network.": "No se unió a tu red guardada en 90 s. Comprueba la red y la contraseña guardadas en Secretos, y que sea una red de 2,4 GHz.",
+  "your saved network": "tu red guardada",
+  "--- using the Wi-Fi saved in Secrets": "--- se usa el Wi-Fi guardado en Secretos",
+  "no answer": "sin respuesta",
   "Self-test": "Autoprueba",
   "Passed": "Superada",
   "Running…": "En marcha…",
@@ -370,5 +375,7 @@ export default {
     [/^Saved (.+)\. (?:They|It) can't be shown again; tell the agent (their names|its name)\.$/, (_, n, w) =>
       `Guardado: ${n}. ${w === "its name" ? "No se puede volver a mostrar; dile al agente su nombre." : "No se pueden volver a mostrar; dile al agente sus nombres."}`],
     [/^Nobody is on this right now\. A message wakes (\S+)$/, "Ahora no hay nadie en esto. Un mensaje despierta a $1"],
+    [/^Waiting for it to join (.+) \((\d+) s left\)$/, (_, n, t) => `Esperando a que se una a ${n === "your saved network" ? "tu red guardada" : n} (quedan ${t} s)`],
+    [/^--- the saved Wi-Fi couldn't be used \((.*)\); asking the person$/, (_, w) => `--- no se pudo usar el Wi-Fi guardado (${w === "no answer" ? "sin respuesta" : w}); se le pregunta a la persona`],
   ],
 };

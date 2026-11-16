@@ -971,6 +971,7 @@ KB_TOKEN_FROM, KB_TOKEN_TO = 15, 600   # a token works from 15 s to 10 min after
 KB_FRESH_S = 900   # from outside, the full sign-in must be this recent
 KB_WIPE_LOCK = threading.Lock()
 kb_wipe_tokens = {}   # token -> (sign-in key, issued at)
+KB_TOKEN_LOCK = threading.Lock()   # request threads share the table: one at a time adds, ages out or uses up a token
 KB_COPY_ID = re.compile(r"\d{8}-\d{6}(-\d{1,3})?")
 
 
@@ -1020,9 +1021,6 @@ def kb_running():
 def kb_wipe_plan(key, issue=True):
     """What the dialog shows before anything is sent, and a one-use token for this sign-in (none when issue is False: it must sign in again first)."""
     now = time.time()
-    for t, (_, at) in list(kb_wipe_tokens.items()):
-        if now - at > KB_TOKEN_TO: kb_wipe_tokens.pop(t, None)
-    while len(kb_wipe_tokens) >= 50: kb_wipe_tokens.pop(next(iter(kb_wipe_tokens)))
     name = kb_wipe_name()
     plan = {"name": name, "host": os.uname().nodename, "user": kb_user(), "home": str(HOME), "phrase": f"wipe {name}", "keep": [k for k in KB_KEEP if (KB_DIR / k).is_file()],
             "ticks": list(KB_TICKS), "agents": kb_running(), "wait": KB_TOKEN_FROM, "valid": KB_TOKEN_TO, "busy": KB_WIPE_LOCK.locked(), "copies": kb_copies()}
@@ -1032,13 +1030,20 @@ def kb_wipe_plan(key, issue=True):
     for e in names:
         x, y = kb_tree_size(KB_DIR / e); n += x; b += y
     plan.update(entries=len(names), files=n, bytes=b)
-    if issue: tok = secrets.token_urlsafe(24); kb_wipe_tokens[tok] = (key, now); plan["token"] = tok
+    if issue:
+        tok = secrets.token_urlsafe(24)
+        with KB_TOKEN_LOCK:
+            for t, (_, at) in list(kb_wipe_tokens.items()):
+                if now - at > KB_TOKEN_TO: del kb_wipe_tokens[t]
+            while len(kb_wipe_tokens) >= 50: del kb_wipe_tokens[next(iter(kb_wipe_tokens))]   # the oldest goes first
+            kb_wipe_tokens[tok] = (key, now)
+        plan["token"] = tok
     return plan
 
 
 def kb_take_token(tok, key, now=None):
     """True if tok was issued to this sign-in and is inside its window. It is used up either way."""
-    got = kb_wipe_tokens.pop(tok, None) if isinstance(tok, str) else None
+    with KB_TOKEN_LOCK: got = kb_wipe_tokens.pop(tok, None) if isinstance(tok, str) else None
     if not got: return False
     k, at = got; age = (now or time.time()) - at
     return hmac.compare_digest(str(k), str(key)) and KB_TOKEN_FROM <= age <= KB_TOKEN_TO

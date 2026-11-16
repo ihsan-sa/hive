@@ -13,7 +13,7 @@ import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitO
 import { workBar, workBarHeld } from "../ui/workbar.js";
 import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci, workingIn, leadOf, cardSince, newSince, hiddenAsks, markSeen as lookAt, seenLeave } from "../core/foci.js";
 import { newIn } from "./focus.js";
-import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadStand, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, fresh7, asksQuestion, fileInfo } from "../core/model.js";
+import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadStand, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, retryWords, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
 import { href, threadHref, go, parse } from "../core/router.js";
 import { yoursSearch, yoursText } from "../core/yours.js";
@@ -162,6 +162,7 @@ function threadEvents(th) {
   for (const s of S.sessions) {
     if (s.thread !== th || !s.end) continue;
     if (s.limited) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${s.name} stopped at a usage limit`, sub: "It carries on by itself once there's room." });
+    else if (s.retry) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${(w => w[0].toUpperCase() + w.slice(1))(agentLabel(s.name))} stopped (${retryWords(s.retry)})`, sub: "It carries on by itself; a message wakes it sooner." });
     else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "failed", text: simpleOn() ? "Your Hive ran into a problem" : `${(w => w[0].toUpperCase() + w.slice(1))(agentLabel(s.name))} stopped with an error (exit ${s.exit})`, sub: simpleOn() ? "Send a message and it tries again." : "Its last message above is where it got to." });
   }
   return out;
@@ -807,7 +808,8 @@ function stripLines(th) {
   if (call) out.push(line("working", [who(call.agent), call.state === "hold" ? " is putting you through on your call" : " is on a call with you", h("span", { class: "meta cm-line-m" }, " · " + dur(now() - call.started * 1e3))], post ? button("Hang up", () => hangUp(call.id), { size: "s" }) : null, { key: "call", live: true }));
   // One line per state, no quoted question and no Answer: the composer is already addressed to it (the Nov 8 handoff §8.6).
   if (st.key === "asks") out.push(line("asks", [who(st.who), " waits for your answer"], null, { key: "asks" }));
-  if (st.key === "limited") {
+  if (st.key === "limited" && st.retry) out.push(line("limited", [who(st.who), simpleOn() ? " is taking a break and carries on by itself." : ` stopped (${retryWords(st.retry)}) ${ago(st.t)} and carries on by itself. A message wakes it sooner.`], null, { key: "limited" }));
+  else if (st.key === "limited") {
     const room = hasRoom(), r = nextReset();
     out.push(line("limited", [who(st.who), simpleOn() ? " is taking a break. " : ` stopped at a usage limit ${ago(st.t)} and hasn't carried on. `, room ? "There's room again now, so it should carry on by itself soon." : r ? `It carries on by itself after ${stamp(r)}.` : "It carries on by itself once there's room."],
       room && post ? button("Carry on", () => say(th, "Please carry on where you stopped.", st.who), { size: "s" }) : null, { key: "limited" }));
