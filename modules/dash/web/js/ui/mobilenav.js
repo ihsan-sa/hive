@@ -57,9 +57,9 @@ export function mobileNav({ views, current, nav, update }) {
       act("theme", `Colour theme: ${THEMES.find(x => x[0] === th)[1]}`, () => { cycleTheme(); update(); }, th === "dark" ? "moon" : th === "light" ? "sun" : "auto", "tap to change"),
       fullscreen.can() ? act("fullscreen", fullscreen.on() ? "Leave full screen" : "Full screen", () => { close(); fullscreen.toggle(); }, "expand") : null,
       app ? act("simple", simpleOn() ? "Show everything" : "Simple view", () => { close(); setSimple(!simpleOn()); update(); }, "expand", simpleOn() ? "all the pages" : "just the chat") : null,
+      h("a", { class: "menu-i", role: "menuitem", href: HELP, target: "_blank", rel: "noopener", "data-key": "help" }, icon("info"), h("span", { class: "menu-i-t" }, "User guide")),   // guide, tour, feedback: the desktop "…" menu's order (WCAG 3.2.6, drive_app_help)
       app ? act("tour", "Take the tour", () => { close(); startTour(); }, "play") : null,
-      app && canFeedback() ? act("feedback", "Send feedback", () => { close(); openFeedback(); }, "reply") : null,
-      h("a", { class: "menu-i", role: "menuitem", href: HELP, target: "_blank", rel: "noopener", "data-key": "help" }, icon("info"), h("span", { class: "menu-i-t" }, "User guide"))) : null,
+      app && canFeedback() ? act("feedback", "Send feedback", () => { close(); openFeedback(); }, "reply") : null) : null,
     h("nav", { class: "bnav", "data-key": "bar", "aria-label": "Main" }, main.map(tab),
       h("button", { type: "button", class: "bnav-i", "data-key": "more", "aria-haspopup": "menu", "aria-expanded": String(ST.open), "aria-current": inMore && !ST.open ? "page" : null, onclick: () => { ST.open = !ST.open; update(); } },
         icon("more"), h("span", { class: "bnav-l" }, "More"))));

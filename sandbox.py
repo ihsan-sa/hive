@@ -16,7 +16,7 @@ SETTINGS, BOX_HOME, SOCKETS = HOME / "settings.json", HOME / ".sandbox" / "home"
 INSIDE, PORT = "/run/sandbox", 31280
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt")
-READ_ONLY = ("core", "modules", "mcp.json", "board.jsonl", "log.jsonl", "run", "sessions", "files", "settings.json", ".local/bin", ".local/share/claude",
+READ_ONLY = ("core", "modules", "mcp.json", "board.jsonl", "log.jsonl", "memory.md", "run", "sessions", "files", "settings.json", ".local/bin", ".local/share/claude",
              ".hive/starter.json", ".hive/usage.json", ".hive/usage_5h.json", ".hive/usage_resets.json", ".hive/paused.json",
              ".hive/login_limits.json", ".hive/provider_limits.json", ".hive/providers.json", ".hive/done", ".hive/killed",
              ".hive/thread-status.jsonl")  # the bars the dash reads: the stop gate checks them; they are set through the broker
@@ -245,7 +245,7 @@ def wrap(argv, env, name, box_home=None, sockets=None):
     # The board and the log are bound as files too. On a fresh install the warm agent's box starts before the first post, when there is no
     # board yet: --ro-bind-try then binds nothing, the box never sees the person's question, its status call fails and it posts the answer
     # two or three times (projects/everyday E12c). An empty file keeps the bind.
-    for f in ("board.jsonl", "log.jsonl"):
+    for f in ("board.jsonl", "log.jsonl", "memory.md"):  # memory.md: read-only in the box, so a direct write fails instead of landing in the box's own home (E39)
         try: (HOME / f).touch()
         except OSError: pass
     # The same for ~/files: the first upload makes it, after the warm box is up, so the person's first attachment was never seen (E25, t25).

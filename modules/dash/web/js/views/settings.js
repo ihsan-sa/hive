@@ -14,8 +14,8 @@ import { confirm } from "../ui/dialog.js";
 import { tiersSection, loadTiers, pausedTiers } from "../ui/worktiers.js";
 import { startSignin, signinBox, clearSignin } from "../ui/signin.js";
 import { ago, dur, now, plural, fix } from "../core/format.js";
-import { accountUse } from "../core/model.js";
-import { href } from "../core/router.js";
+import { accountUse, threadTitle } from "../core/model.js";
+import { href, threadHref } from "../core/router.js";
 import { copyButton } from "../ui/refs.js";
 import { MODELS, POWER, accountsData, codexPart, forget, keysPart, loadPage, modelPart, pageData, powerPart, reading, rootNote, sandboxPart, sharePart } from "../ui/setup.js";
 import { forgetSecrets, secretParts, secretsLost } from "./secrets.js";
@@ -354,6 +354,27 @@ function hiveSection(ctx) {
     F.saved.style = v;
     save({ answer_style: v }, () => { F.saved.style = was; }, "How I want answers");   // a refused save keeps what was typed; the next focus-out tries again
   };
+  // E39b (projects/everyday MEMORY.md): what new chats are told about the person. core/memory.py writes ~/memory.md; here it's read, deleted and turned off.
+  const mem = F.cfg.memory || {};
+  const memSet = async (fields, label) => {
+    try { const c = await act("memory", label, () => post("/api/config", fields), ctx.update); if (c && c.memory) F.cfg.memory = c.memory; say("memory", ""); if (fields.memory_on != null) flash("Use memory in new chats", ctx.update); }
+    catch (e) { say("memory", e.message, "bad"); loadCfg(ctx); }
+    ctx.update();
+  };
+  const memWhere = i => i.chat === "settings" ? "added in Settings" : i.gone ? "chat deleted" : h("a", { href: threadHref(i.chat) }, i.title || threadTitle(i.chat) || "the chat");
+  const memDay = d => { const t = new Date(d + "T12:00:00"); return isNaN(t) ? d : t.toLocaleDateString(undefined, { day: "numeric", month: "short", year: t.getFullYear() === new Date().getFullYear() ? undefined : "numeric" }); };
+  const DELETE_SAYS = "Removed from memory: new chats won't be given it. The chat where you said it still has it, and an agent can still find it there.";
+  const memN = (mem.items || []).length;
+  const memory = !mem.available ? null : block({ title: "Memory", sub: mem.on ? "New chats are given what you told other chats, like \"I'm vegetarian\". A chat says \"Saved to memory\" when it keeps something." : "Off: new chats aren't given these, and nothing new is kept. Turn it on to use them again.",
+      key: "memory", actions: toggle("Use memory in new chats", !!mem.on, v => memSet({ memory_on: v }, v ? "Turning memory on" : "Turning memory off")) },
+    memN ? h("ul", { class: "list mem-list", "aria-label": "What new chats are told about you" }, mem.items.map(i => h("li", { class: "lr", "data-key": "mem-" + i.id },
+      h("div", { class: "lr-in frow fsplit" }, h("span", { class: "mem-t" }, i.text, h("span", { class: "lr-s" }, " · ", memDay(i.date), " · ", i.how === "asked" ? "you asked" : "kept by the agent", " · ", memWhere(i))),
+        h("span", { class: "frow-end" }, button("Delete", () => memSet({ memory_forget: [i.id] }, "Deleting from memory"), { size: "s", kind: "quiet", busy: isBusy("memory"), title: "Delete: " + i.text })))))) :
+      h("p", { class: "field-h" }, mem.on ? "Nothing yet. Tell a chat \"remember that…\" and it shows here." : "Nothing kept."),
+    memN ? h("p", { class: "field-h" }, "Delete: " + DELETE_SAYS) : null,
+    memN ? h("div", { class: "frow" }, button("Delete all…", () => confirm({ title: "Delete all of memory?", body: [`All ${plural(memN, "line")} go: new chats won't be given any of them. The chats where you said them still have them, as does the Hive's backup, and an agent can still find them there.`],
+      ok: "Delete all", kind: "danger", onOk: () => memSet({ memory_forget: "all" }, "Deleting all of memory") }), { size: "s", kind: "danger", busy: isBusy("memory"), title: "Delete all of memory" })) : null,
+    msg("memory"));
   const spent = `Spent today: $${fix((+(F.cfg.spend_today || 0)), 2)} at API prices (UTC day). `;
   const starter = async () => {
     say("starter", up ? "Stopping…" : "Starting…");
@@ -375,6 +396,7 @@ function hiveSection(ctx) {
       block({ title: "How I want answers", sub: "Every chat follows this from its next reply, like \"short answers, metric units, no bullet lists\". Saves when you leave the box.", key: "answer-style", actions: savedMark("How I want answers") },
         h("textarea", { class: "input set-style", rows: 3, maxlength: 2000, "aria-label": "How I want answers", placeholder: "Anything every answer should follow", value: E.style,
           oninput: (e, n) => { E.style = n.value; }, onchange: saveStyle, onfocusout: saveStyle })),
+      memory,
       // E34 (GAPS row 19): every chat as plain text with its files, in one zip, made by the server (/api/export).
       can("config") ? block({ title: "Download my chats", sub: "Every chat as plain text with its files, in one zip. A big Hive takes a minute.", key: "export",
         actions: button("Download", null, { size: "s", href: "/api/export", icon: "download", title: "Download my chats" }) }) : null,

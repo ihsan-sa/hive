@@ -1620,6 +1620,15 @@ def group_left_note(first):
     return (f"\n\nThis chat is no longer in the person's group \"{f['name']}\": that group's instructions and files no longer apply here. "
             "Answer as you would in any chat (if earlier replies here followed the group's instructions, for example in another language, stop doing so).")
 
+def memory_note(first):
+    """The person's memory (~/memory.md, core/memory.py, E39) for a run woken by their own web-chat message in a chat they started there; "" for
+    every other run (a door, a keeper, a tidy run, another agent's post). In the opening message, not the system prompt: which run qualifies is only
+    known at hand-off, and a save or delete then reaches the very next start, warm agent included. Never stops a start."""
+    try:
+        import memory
+        return memory.note(first)
+    except Exception: return ""
+
 def group_note(first, fresh=True):
     """The block an agent starting in a group's thread gets: the group's instructions, then its files (inlined on a fresh start up to
     GROUP_INLINE_MAX characters in all, else listed by path). "" when the thread is in no group or the group has neither."""
@@ -1860,6 +1869,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     if kind != "warden" and not asked and not resume:
         prompt += ahead["recall"].result() + ahead["neighbours"].result()
     if kind != "warden": prompt += group_note(first, fresh=not resume)
+    if kind != "warden": prompt += memory_note(first)
     if (k := next((p["continue"] for p in posts if p.get("continue")), None)):
         prompt += guarded("wake_note", k, first.get("thread"), bool(heir_of)) or ""
     fb = next((p["fallback"] for p in posts if p.get("fallback")), None)
@@ -2023,6 +2033,14 @@ def floor_off(c, t):
     except (TypeError, ValueError): return False
     return a <= t < b
 
+def gated_now(r, t):
+    """True while every open rung of a ladder carries an after: date still ahead (goals.with_ladder sets gated_until, UTC)."""
+    g = r.get("gated_until")
+    if not g: return False
+    try: d = dt.datetime.fromisoformat(g.rstrip("Z"))
+    except ValueError: return False
+    return d.replace(tzinfo=dt.timezone.utc).timestamp() > t
+
 def floor(c, st, alive, login):
     """Keep the ladders moving with no gaps on the timeline, one start a minute at most, so work overlaps instead of arriving in bursts (the person, 2026-11-07, direction k1303; before it, post 1106181196b0).
     First tier, the focuses and floor_threads: a thread nobody is on gets its next agent floor_focus_gap_s after its last agent post or floor start, however many runs are going elsewhere, up to floor_focus_max running (floor_gap below backs off an unmoved ladder).
@@ -2048,7 +2066,7 @@ def floor(c, st, alive, login):
         else: g = gap
         return t - started.get(r["thread"], 0) >= g and (r["quiet_s"] is None or r["quiet_s"] >= g)
     only = set(c.get("floor_only") or [])  # config floor_only: when set, the floor starts only these threads (the person's "pause all but career", 2026-11-11, post 11111341a979); unset or [] is every ladder
-    rows = [r for r in cont.G.goals()["rows"] if (r["kind"] == "focus" or r.get("ladder")) and not r["running"] and not r.get("parked") and r["thread"] not in busy and (not only or r["thread"] in only) and due(r)]
+    rows = [r for r in cont.G.goals()["rows"] if (r["kind"] == "focus" or r.get("ladder")) and not r["running"] and not r.get("parked") and not gated_now(r, t) and r["thread"] not in busy and (not only or r["thread"] in only) and due(r)]
     if not rows: return
     held = cont.waits({r["thread"] for r in rows}, set(alive) | {n for n, ps in st["pending"].items() if ps}, t, c.get("floor_wait_max_s", 7200))
     for r in sorted(rows, key=lambda r: (not first(r), -(r["quiet_s"] if r["quiet_s"] is not None else float("inf")))):

@@ -229,6 +229,63 @@ def duds(now=None, rs=None):
         except OSError: pass
     return out
 
+STALE_SHOWN, STALE_PCT, STALE_DAYS, STALE_FRESH = 3, 10, 7, 3600   # per sender: shown this often in a week, opened this rarely, and the sender's runs stop getting it
+STALE_EXEMPT = {"person"}   # the person's posts range over everything (31% opened at any score); a hold keyed on "person" would silence a note for all of them
+
+def senders_of(ids, board=None):
+    """Post id -> sender, for recall rows logged before kb.py wrote `sender` into them (2026-11-16)."""
+    board = board or H + "/board.jsonl"; out = {}
+    if not ids: return out
+    try:
+        with open(board, errors="replace") as f:
+            for l in f:
+                if '"id"' not in l: continue
+                try: p = json.loads(l)
+                except ValueError: continue
+                if p.get("id") in ids: out[p["id"]] = str(p.get("from") or "").lower()
+    except OSError: pass
+    return out
+
+def stale(now=None, rs=None, board=None):
+    """{sender: paths} a recurring sender's runs keep being shown and never open: shown to runs woken by that sender's posts at least STALE_SHOWN
+    times in STALE_DAYS days, opened in under STALE_PCT% of them. The cause of kb_recall_opened_pct 27 (rung rsi-lab-kb2, 11-16): every run is a new
+    agent, so recall's once-per-agent rule never sees the repeat, and duds() needs 15 showings across everyone, so a note shown 4 times a day to
+    one role (kb/rsi.md to ae868's judge briefs, the podman note to each failed fresh-install post from release-train) is never cut. Keyed on the
+    sender, not the note: the same note still goes to every other sender, so a rare-but-matters note stays where it does get read.
+    Showings in the last STALE_FRESH seconds are left out, since their run may still open it. Cached like duds()."""
+    now = time.time() if now is None else now; cache = CACHE + "/stale.json"
+    if rs is None:
+        try:
+            c = json.load(open(cache))
+            if now - c["at"] < DUD_TTL: return {k: set(v) for k, v in c["stale"].items()}
+        except (OSError, ValueError, KeyError): pass
+        rs = records()
+    t0, t1 = iso(now - STALE_DAYS * 86400), iso(now - STALE_FRESH)
+    rows = [r for r in rs if r.get("recall") and r.get("id") and r.get("agent") and not r.get("neighbours") and r.get("shown") and t0 <= r.get("at", "")[:19] < t1]
+    first = lambda r: r["recall"][0] if isinstance(r["recall"], list) and r["recall"] else None   # "stdin" has no sender
+    need = {first(r) for r in rows if "sender" not in r and first(r)}
+    who = senders_of(need, board)
+    followed = {}
+    for r in rs:
+        if r.get("from"):
+            path = r.get("read") or re.sub(r":\d+$", "", r.get("open", ""))
+            for i in [r["from"], *r.get("also", [])]: followed.setdefault(i, set()).add(path)
+    shown, opened = {}, {}
+    for r in rows:
+        s = r.get("sender") if "sender" in r else who.get(first(r), "")
+        if not s or s in STALE_EXEMPT: continue
+        for p, _ in r["shown"]:
+            k = (s, p); shown[k] = shown.get(k, 0) + 1
+            opened[k] = opened.get(k, 0) + any(x == p or x == needle(p) or x.endswith("/" + needle(p)) for x in followed.get(r["id"], ()))
+    out = {}
+    for (s, p), n in shown.items():
+        if n >= STALE_SHOWN and 100 * opened[(s, p)] < STALE_PCT * n: out.setdefault(s, set()).add(p)
+    if len(rs) and cache:
+        try:
+            os.makedirs(CACHE, exist_ok=True); json.dump({"at": now, "stale": {k: sorted(v) for k, v in out.items()}}, open(cache, "w"))
+        except OSError: pass
+    return out
+
 def pct(a, b): return round(100 * a / b) if b else None
 
 def runs_observable(t0, t1):

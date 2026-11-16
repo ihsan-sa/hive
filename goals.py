@@ -199,7 +199,9 @@ def with_ladder(row, g):
         if lad["parked"]: row["idle"] = False
         # every open rung carries a future after: gate and none is open now: a round could only write more rungs, so hold the keeper until the earliest gate (ae5ec, 2026-11-15: 18 idle rounds a day on improve-survey)
         open_ = [r for r in lad["rungs"] if r["state"] == " "]
-        if not lad["next"] and open_ and all(r["after"] and r["checked"] for r in open_): row["idle"] = False
+        if not lad["next"] and open_ and all(r["after"] and r["checked"] for r in open_):
+            row["idle"] = False
+            row["gated_until"] = min(r["after"] for r in open_)  # UTC "YYYY-MM-DD[THH:MM]"; the floor starts nobody before it (ae5ec 11-16: a Waiting: cap of 2 h let a keeper in every 2 h on a ladder gated 11 h)
     return row
 
 def resume_arm(thread):

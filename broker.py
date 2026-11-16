@@ -1,7 +1,7 @@
 """What a sandboxed agent can ask of the outside. One per install, started by the starter (sandbox.ensure_broker), outside every sandbox.
 
 Each run gets a socket folder mounted read-only at /run/sandbox, so which socket a request came in on says who asked:
-- ctl.sock: post, done, step, module, remind. A post is signed with that name, so nobody inside can post as the person, or as anyone else.
+- ctl.sock: post, done, step, module, remind, memory. A post is signed with that name, so nobody inside can post as the person, or as anyone else.
 - egress.sock: an HTTP proxy that refuses this machine and private ranges.
 
 A step is a script to run outside, as the user. Who decides goes by the power level in settings.json (kb/consumer-sandbox.md):
@@ -294,6 +294,18 @@ def remind(name, req):
     r = subprocess.run([sys.executable, "-I", str(CORE / "remind.py"), *args], text=True, capture_output=True, timeout=60, env={**post_env(name), **({"HIVE_THREAD": thread} if thread else {})})
     return {"out": r.stdout.strip()[-4000:], "err_out": r.stderr.strip()[-2000:], "rc": r.returncode}
 
+def memory(name, req):
+    """`hive remember` / `hive forget` from inside the sandbox: ~/memory.md is read-only in there, so memory.py runs here, as that name, in the chat its run
+    record says (never a thread the request names: the chat decides whether it may save at all). memory.py checks the rest (projects/everyday E39)."""
+    args = req.get("args")
+    if not isinstance(args, list) or not args or len(args) > 40 or not all(isinstance(x, str) and len(x) <= 2000 for x in args): return {"err": "memory: bad arguments"}
+    if args[0] not in ("remember", "forget"): return {"err": "memory: remember or forget"}
+    if name == "person": return {"err": "the door can't change memory: the person does it in Settings"}
+    thread = str(run_of(name).get("thread") or run_of(name).get("post") or "")
+    if thread and not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,100}", thread): return {"err": "memory: bad thread"}
+    r = subprocess.run([sys.executable, "-I", str(CORE / "memory.py"), *args], text=True, capture_output=True, timeout=60, env={**post_env(name), "HIVE_THREAD": thread})
+    return {"out": r.stdout.strip()[-4000:], "err_out": r.stderr.strip()[-2000:], "rc": r.returncode}
+
 module_lock = threading.Lock()
 
 def module(name, req):
@@ -318,7 +330,7 @@ def serve_ctl(c, name):
             blobs = [r.read(n) for n in sizes]
             verb = req.get("verb")
             out = (post(name, req, blobs) if verb == "post" else done(name) if verb == "done" else ask(name, req, blobs) if verb == "ask"
-                   else status(name) if verb == "status" else bar(name, req) if verb == "bar" else verdict(name, req) if verb == "verdict" else module(name, req) if verb == "module" else remind(name, req) if verb == "remind" else {"err": f"no verb {verb}"})
+                   else status(name) if verb == "status" else bar(name, req) if verb == "bar" else verdict(name, req) if verb == "verdict" else module(name, req) if verb == "module" else remind(name, req) if verb == "remind" else memory(name, req) if verb == "memory" else {"err": f"no verb {verb}"})
         except (OSError, ValueError, TypeError, subprocess.SubprocessError) as x:
             out = {"err": str(x)[:300]}
         try: c.sendall((json.dumps(out) + "\n").encode())
