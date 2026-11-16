@@ -2504,6 +2504,12 @@ def main():
             if (not login and not provider_of(c, r.get("model"))) or n in alive or len(alive) >= (c.get("max_sessions") or float("inf")): continue
             if paced(c, st, n, [{"from": r.get("from")}]): continue
             own, limits = r.get("login"), st.get("limits")
+            if not provider_of(c, r.get("model")) and time.time() < r.get("reset", 0) and scope_held(limits, own, r.get("model")) \
+                    and (ask := next((p["model"] for p in reversed(st["pending"].get(n, [])) if p.get("model") in MODELS
+                                      and model_family(p["model"]) != model_family(r.get("model"))), None)):
+                # held on its model's own limit (Fable's weekly share) and a post since asks for another model: resume on that one now,
+                # not at the reset days away (a0f4b sat on Fable's limit to 2026-11-21 while the person asked to unpause, 11160905b69a)
+                r["model"], r["reset"] = ask, 0; log(event="resume_model_switched", name=n, model=ask)
             if (pv := provider_of(c, r.get("model"))):  # a provider run resumes on its provider, never on a Claude login
                 if time.time() < r["reset"] or provider_hold(c, st, n, pv, pcache, r.get("thread")): continue
                 to = own

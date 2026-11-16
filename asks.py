@@ -63,9 +63,14 @@ def ledger():
     for r in jsonl(LEDGER):
         i = r.get("id")
         if not i: continue
-        if i not in items: items[i] = dict(r)
+        if i not in items:
+            items[i] = dict(r)
+            if r.get("status"): items[i]["status_at"] = r.get("at")
         else:
             e = items[i]
+            # status_at: when the ask moved into the state it is in now. A person ask waits from then, not from when the person
+            # first asked: the page timed it from "when", so the person's own follow-up hid 10 open asks (SU-2, 11-16).
+            if r.get("status") and r["status"] != e.get("status"): e["status_at"] = r.get("at")
             e.update({k: v for k, v in r.items() if k not in ("id", "at", "by", "post", "when", "ask", "kind")})
             e["updated"] = r.get("at")
             if r.get("status") in ("done", "dropped"): e["done_at"] = r.get("at")
@@ -580,7 +585,7 @@ RECONCILE = """You judge, from the board, which of the person's asks below have 
  "owned": [{{"id": "k0012", "owner": "<agent name>"}}],
  "person": [{{"id": "k0012", "why": "<what it waits on from the person>"}}],
  "held": [{{"id": "k0012", "why": "<why it was deliberately set aside>"}}]}}
-Rules. done only when an agent post reports the thing itself finished and checked (a fix landed, an answer given, a file delivered): a plan, a partial, "working on it", or a claim with nothing shown is not done. owned when an agent says it is on it and nothing reports it finished. person when the work waits for the person's answer, decision, money or credentials. An agent post that ends with a `For you:` line asking the person to act (approve, enter a word, create an account, send a file) means person, even when the rest of the work landed: the agent's own part is delivered, and nothing is left for an agent to do until the person acts. held when an agent says it was deliberately put aside (priorities, the person's hold). An ask that is a question (the person asked what, why, whether or how something is) is done at the first agent post that answers it, with that post as evidence, even when the answer names further work or leaves a step for the person, and even when that post has a `For you:` line; if a step is left for the person, add "wait": "<that step, one plain sentence>" to its done entry, and it gets its own row. Say nothing about an ask the posts don't settle: it stays open. Prefer the person's own words over an agent's where they conflict.
+Rules. done only when an agent post reports the thing itself finished and checked (a fix landed, an answer given, a file delivered): a plan, a partial, "working on it", or a claim with nothing shown is not done. owned when an agent says it is on it and nothing reports it finished. person when the work waits for the person's answer, decision, money or credentials. An agent post that ends with a `For you:` line asking the person to act (approve, enter a word, create an account, send a file) means person, even when the rest of the work landed: the agent's own part is delivered, and nothing is left for an agent to do until the person acts. held when an agent says it was deliberately put aside (priorities, the person's hold). An ask that is a question (the person asked what, why, whether or how something is) is done at the first agent post that answers it, with that post as evidence, even when the answer names further work or leaves a step for the person, and even when that post has a `For you:` line; if a step is left for the person, add "wait": "<that step, one plain sentence>" to its done entry, and it gets its own row. An ask marked [put to the person ...] already waits on them and is read again because the person posted since or it looked settled: done when a post (the person's own counts) shows they took the step or said it is no longer wanted, with that post as evidence; owned or held when the posts say so; otherwise say nothing and it keeps waiting on them. Say nothing about an ask the posts don't settle: it stays open. Prefer the person's own words over an agent's where they conflict.
 
 {body}
 """
@@ -596,8 +601,24 @@ def split_wait(items, e, wait, post, by):
            "ask": str(wait).strip()[:300], "kind": "ask", "status": "person", "why": f"Split from {e['id']}, the step left after {post}"}
     append(LEDGER, rec); items[rec["id"]] = rec; return rec
 
+NEEDS = HOME / "needs-you.json"
+
+def page_stale_asks(path=None):
+    """Ask ids the waiting page's word model put in its stale list (modules/dash/needs_you.py)."""
+    try: return {w.get("ask") for w in json.loads((path or NEEDS).read_text()).get("stale") or [] if w.get("ask")}
+    except (OSError, ValueError, AttributeError): return set()
+
+def recheck_person(e, by, stale):
+    """A person ask nothing re-reads once it waits on them (SU-2b, 2026-11-16): the page hid it as stale, or the person posted after it went to
+    them, while the register kept it open. Read it again then: once per person post after it, and a page-stale one at most daily."""
+    if e.get("status") != "person" or e.get("kind") == "direction": return False
+    since = max(e.get("status_at") or e.get("when") or "", e.get("rechecked") or "")
+    posts = by.get(e.get("thread") or e.get("post"), [])
+    if any(str(p.get("from", "")).lower() == "person" and p.get("at", "") > since for p in posts): return True
+    return e["id"] in stale and (not e.get("rechecked") or e["rechecked"] < (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)).isoformat(timespec="seconds"))
+
 def cmd_reconcile(a):
-    posts = board(); by = thread_posts(posts); items = ledger()
+    posts = board(); by = thread_posts(posts); items = ledger(); stale = page_stale_asks()
     try: cur = json.loads(CURSOR.read_text())
     except (OSError, ValueError): cur = {}
     since = "" if (a.all or a.ids) else cur.get("reconciled", "")
@@ -606,6 +627,7 @@ def cmd_reconcile(a):
             and (any(p.get("at", "") > since and str(p.get("from", "")).lower() not in NOT_AGENTS for p in by.get(e.get("thread") or e.get("post"), []))
                  # an ask filed after its thread's agent work (k1120-k1130, 2026-11-06): read it once, since the cursor has passed that work
                  or (e.get("by") == "extract" and any(p.get("at", "") > (e.get("when") or "") and str(p.get("from", "")).lower() not in NOT_AGENTS for p in by.get(e.get("thread") or e.get("post"), []))))]
+    todo += [e for e in open_items(items) if (not a.ids or e["id"] in a.ids) and recheck_person(e, by, stale)]
     todo.sort(key=lambda e: e.get("when", ""))
     if not todo: print("nothing open to reconcile" + ("" if since == "" else f" (no agent posts since {since[:16]} in a thread with an open ask; --all looks at every open ask)")); return
     groups = {}
@@ -620,7 +642,7 @@ def cmd_reconcile(a):
         lines = [f"  {p['id']} {p['at'][:16]} {p.get('from')}{' (person)' if str(p.get('from','')).lower()=='person' else ''}: {str(p.get('text',''))[:700]}" for p in after]
         txt = "\n".join(lines)
         if len(txt) > a.chars: txt = txt[:a.chars // 2] + "\n  [...]\n" + txt[-a.chars // 2:]
-        head = "\n".join(f"- {e['id']} ({e.get('when','')[:16]}): {e['ask']}" for e in es)
+        head = "\n".join(f"- {e['id']} ({e.get('when','')[:16]}){' [put to the person ' + (e.get('status_at') or '')[:16] + ': ' + str(e.get('why') or '')[:200] + ']' if e.get('status') == 'person' else ''}: {e['ask']}" for e in es)
         blocks.append((es, f"## thread {th}, asks:\n{head}\nposts after them:\n{txt}"))
     print(f"{len(todo)} open in {len(groups)} threads, {len(blocks)} threads with posts after them")
     changed = 0; cost = 0.0
@@ -635,12 +657,18 @@ def cmd_reconcile(a):
         except ValueError: j = None
         if not j: print(f"unparsable reply, skipped batch of {len(batch)}: {out[:200]}", file=sys.stderr); batch, n = [], 0; return
         ids = {e["id"] for es, _ in batch for e in es}
+        said = {d.get("id") for key in ("done", "owned", "person", "held") for d in j.get(key, []) if isinstance(d, dict)}
+        for es, _ in batch:   # a person ask read again and not settled still waits on them: record the read, so the page shows it and it isn't read again for nothing
+            for e in es:
+                if e.get("status") == "person" and e["id"] not in said:
+                    rec = {"id": e["id"], "at": iso(), "by": "reconcile", "rechecked": iso()}; append(LEDGER, rec); e.update(rec)
         for key in ("done", "owned", "person", "held"):
             for d in j.get(key, []):
                 e = items.get(d.get("id"))
                 if not e or e["id"] not in ids or e.get("status") in CLOSED: continue
                 if key == "done" and not d.get("evidence"): continue
-                rec = {"id": e["id"], "at": iso(), "by": "reconcile", "status": key, "evidence": d.get("evidence"), "owner": d.get("owner"), "why": (d.get("why") or "")[:300]}
+                rec = {"id": e["id"], "at": iso(), "by": "reconcile", "status": key, "evidence": d.get("evidence"), "owner": d.get("owner"), "why": (d.get("why") or "")[:300],
+                       "rechecked": iso() if e.get("status") == "person" else None}
                 rec = {k: v for k, v in rec.items() if v}
                 append(LEDGER, rec); e.update(rec); changed += 1; print(f"= {e['id']} {key}: {rec.get('why') or rec.get('owner') or ''}")
                 if key == "done" and d.get("wait"): print(f"+ {split_wait(items, e, d['wait'], d['evidence'], 'reconcile')['id']} waits on the person, split from {e['id']}")
