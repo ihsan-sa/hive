@@ -9,6 +9,8 @@ const PACE_ES = {
   "Every 12 hours": "Cada 12 horas",
   "Once a day": "Una vez al día",
 };
+// The composer's Effort values (composer.js EFFORTS), for its "Effort: …" aria-label.
+const EFFORT_ES = { "Default": "Predeterminado", "Low": "Bajo", "Medium": "Medio", "High": "Alto", "Extra high": "Muy alto", "Max": "Máximo", "Claude only": "Solo Claude" };
 export default {
   // the list on the left
   "For you": "Para ti",
@@ -180,8 +182,8 @@ export default {
     [/^([\d,]+) messages and (.+)$/, "$1 mensajes y $2"],
     [/^([\d,]+) messages$/, "$1 mensajes"],
     [/^(.+), pick up work that stopped and start work nobody asked for, and sooner once nothing has run for half an hour\. It uses your limits\.$/, (_, pace) => (PACE_ES[pace] || pace) + ", retoma el trabajo que se paró y empieza trabajo que nadie pidió, y antes si nada ha corrido en media hora. Usa tus límites."],
-    [/^Model: (.+)$/, "Modelo: $1"],
-    [/^Effort: (.+)$/, "Esfuerzo: $1"],
+    [/^Model: (.+)$/, (_, m) => "Modelo: " + (m === "Default" ? "Predeterminado" : m)],
+    [/^Effort: (.+)$/, (_, e) => "Esfuerzo: " + (EFFORT_ES[e] || e)],   // E56a: the composer's aria-label read "Esfuerzo: Default"
     [/^New agents start on (.+)\. Pick another to change it\.$/, "Los agentes nuevos empiezan con $1. Elige otro para cambiarlo."],
     [/^The agent wakes on (.+)\. Pick another to change it\.$/, "El agente despierta con $1. Elige otro para cambiarlo."],
     [/^Show the (\d+) marked Likely not needed again$/, "Volver a mostrar las $1 marcadas como Probablemente innecesarias"],

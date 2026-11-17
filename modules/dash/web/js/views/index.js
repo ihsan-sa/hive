@@ -26,6 +26,7 @@ import kbtime from "./kbtime.js";
 import design from "./design.js";
 import made from "./made.js";
 import progress from "./progress.js";
+import page from "./page.js";   // an html file full screen (the file panel's Open on a phone)
 
 // Registry order is the developer look's tab order (and the Deck's left pads): keep the groups together.
 export default [
@@ -53,6 +54,7 @@ export default [
   agent,
   system,
   deck,
+  page,
 ];
 
 // Where each view sits in the app's bar: core/nav.js.

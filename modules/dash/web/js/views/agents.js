@@ -72,7 +72,7 @@ const COLS = [
   { k: "thread", get label() { return S.app.app ? "Conversation" : "Thread"; }, cls: "clip ag-tm", get: a => threadTitle(a.thread) || "", render: a => threadRef(a.thread) },
   // its own words (hive me) with their age; muted when it has said nothing and this is what its last run was asked; "was on" when the words predate the run
   { k: "on", label: "On", cls: "clip ag-on", title: "What it says it is on (hive me), and when it said so; muted: what it was asked, when it has said nothing", get: a => (a.on && a.on.text) || "",
-    render: a => { const m = a.on; return m ? h("span", { class: m.said ? null : "meta", title: m.said ? `${m.before ? "Said in an earlier run, " : "Said "}${ago(m.at)}: ${m.text}` : `Has not said what it is on; ${m.bar ? `this is its thread's status, and its last run was woken by: ` : `its last run was asked: `}${m.asked}` }, m.before ? h("span", { class: "meta" }, "was on: ") : null, labelCodes(m.text), h("span", { class: "meta ag-onage" }, " · " + ago(m.at).replace(/ ago$/, ""))) : h("span", { class: "meta" }, "–"); } },
+    render: a => { const m = a.on; return m ? h("span", { class: m.said ? null : "meta", title: m.said ? `${m.before ? "Said in an earlier run, " : "Said "}${ago(m.at)}: ${m.text}` : `Has not said what it is on; ${m.bar ? `this is its thread's status, and its last run was woken by: ` : `its last run was asked: `}${m.asked}` }, m.before ? h("span", { class: "meta" }, "was on: ") : null, labelCodes(m.text), h("span", { class: "meta ag-onage" }, " · " + ago(m.at).replace(/ ago$/, ""))) : h("span", { class: "meta ag-none" }, "–"); } },
   { k: "from", label: "Started by", get: a => a.from || "", render: a => (a.from && S.agents.has(a.from) ? agentRef(a.from) : a.from === "person" && app() ? "you" : a.from || "–") },
   { k: "model", label: "Model", cls: "ag-m", get: a => a.model, render: a => h("span", { title: a.model }, a.model) },
   { k: "account", label: "Account", get: a => a.account, render: a => a.account },
@@ -122,7 +122,7 @@ export default {
     whole(!!S.history);
     L.update = ctx.update;
     const all = gather(), s = sort(), set = (k, v) => { L[k] = v; L.limit = PAGE; ctx.update(); };
-    const sig = [matchMedia("(max-width: 640px)").matches, matchMedia(STACK_BELOW).matches, [...colsOn()].join(), L.dataKey.split("|")[0], S.agentCosts && S.agentCosts.at, L.q, L.status, L.by, L.since, L.model, L.account, L.limit, L.house, s.k, s.d].join("|"), changed = sig !== L.sig; L.sig = sig;
+    const sig = [matchMedia("(max-width: 640px)").matches, matchMedia(STACK_BELOW).matches, [...colsOn()].join(), L.dataKey.split("|")[0], S.agentCosts && S.agentCosts.at, costsPending(), L.q, L.status, L.by, L.since, L.model, L.account, L.limit, L.house, s.k, s.d].join("|"), changed = sig !== L.sig; L.sig = sig;
     if (changed || !L.found) { L.found = select(L.house); L.nHouse = L.house ? 0 : select(true).length - L.found.length; }   // nHouse: the housekeeping runs the fold hides now
     const nHouse = L.nHouse;
     const held = { settled: !!S.history, usual: !L.q && L.limit === PAGE && !L.house }, room = heldRoom("agents", ".ag-w", held), moreR = heldRoom("agents-more", moreRoom, held);   // the list grows as the older log arrives
@@ -141,7 +141,7 @@ export default {
     const fold = (k, label) => h("details", { class: "now-more ag-f", open: L[k] || null, ontoggle: (e, n) => { if (e.target === n && !!L[k] !== n.open) { L[k] = n.open; ctx.update(); } } }, h("summary", null, label));
     return metrics({
       header: pageHeader({ subnav: pageNav(), title: "Agents", hint: `Every agent that has run, ${s.k === "spawned" && s.d < 0 ? "newest first" : s.k === "spawned" ? "oldest first" : "sorted by the column you chose"}.`, after: toolbar(
-        input({ type: "search", placeholder: `Search name, ${S.app.app ? "conversation" : "thread"}, model, who started it`, "aria-label": "Search agents", value: L.q, oninput: e => set("q", e.target.value) }),
+        input({ type: "search", placeholder: matchMedia("(max-width: 640px)").matches ? `Search name, ${S.app.app ? "conversation" : "thread"}, model` : `Search name, ${S.app.app ? "conversation" : "thread"}, model, who started it`, "aria-label": "Search agents", value: L.q, oninput: e => set("q", e.target.value) }),
         seg(STATUS.filter(x => ["all", "running", "ended", "failed"].includes(x[0]) || x[0] === L.status).map(([k, l]) => [k, k === "all" ? "All" : l]), L.status, v => set("status", v), { label: "Status" }),
         fold("fOpen", "Filters" + (nf ? ` (${nf})` : "")),
         !L.fOpen ? null : h("div", { class: "toolbar ag-f ag-fp", "data-key": "filters" },

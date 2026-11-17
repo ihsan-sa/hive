@@ -1,4 +1,4 @@
-// Settings: Everyday, Accounts, Power and sandbox, Data sharing, Secrets, This device, Set once, Modules, Access from outside (R7). Shown only where can() allows each part.
+// Settings: Everyday, Accounts, Power and sandbox, Data sharing, Secrets, This device, Set once, Connectors, Modules, Access from outside (R7). Shown only where can() allows each part.
 import { status as st } from "../core/status.js";
 import { h } from "../core/dom.js";
 import { S, can, built, jget, needsAccount, post, loadApp, said, fullEnded, unreached, kept, keep, KEPT_NOTE } from "../core/store.js";
@@ -6,7 +6,7 @@ import { simpleOn, setSimple } from "../core/simple.js";
 import { stillOn, setStill } from "../core/still.js";
 import { oneKeyOn, setOneKey } from "../core/onekey.js";
 import { deviceFingerprint } from "../core/sign.js";
-import { notifyBlocked, notifyOn, notifySupported, notifyTest, pushOn, pushSupported, setNotify, setPush } from "../core/notify.js";
+import { canInstall, installApp, notifyBlocked, notifyOn, notifySupported, notifyTest, onInstallChange, pushOn, pushSupported, setNotify, setPush, standalone } from "../core/notify.js";
 import { DEFAULT_NAME, brandLogo, brandName } from "../core/brand.js";
 import { form } from "../templates.js";
 import { LANGS, chooseLang, getLang } from "../core/lang.js";
@@ -138,7 +138,7 @@ function viewSection(ctx) {
       actions: button(on ? "Show everything" : "Turn on simple view", () => { setSimple(!on); ctx.update(); }, { size: "s" }) }),
     block({ title: "Still screen", key: "still", sub: stillOn() ? "On: nothing moves by itself, not the live dots, the Map's rings or the loading shimmer." : "Off: live agents breathe, the Map shows each post, and loading shimmers. Turn it on to stop everything that moves by itself.",
       actions: button(stillOn() ? "Let things move" : "Stop all motion", () => { setStill(!stillOn()); ctx.update(); }, { size: "s" }) }),
-    langBlock(), keysBlock(ctx), voiceBlock(ctx), notifyBlock(ctx), pushBlock(ctx), phoneBlock(ctx), signBlock(ctx)));
+    langBlock(), keysBlock(ctx), voiceBlock(ctx), installBlock(ctx), notifyBlock(ctx), pushBlock(ctx), phoneBlock(ctx), signBlock(ctx)));
 }
 // Voice calls and memos: where they stand on this install (dash.py voice_view, projects/everyday/VOICE.md V1). The build runs in the
 // background after install, so this says Setting up, Didn't finish (with Try again) or Not on this install (with why) instead of a Call
@@ -250,6 +250,16 @@ function phoneBlock(ctx) {
       button(P.runs ? "Stop run-finished alerts" : "Also tell me when a run I started ends", () => phoneDo(ctx, P.runs ? "runs-off" : "runs-on", P.runs ? "Run-finished alerts off." : "You will get a line when a run you started ends."), { size: "s" }),
       button("Make a new topic", () => confirm({ title: "Make a new topic?", body: ["The topic your phone follows stops working. You'd subscribe to the new one on your phone."], ok: "Make a new topic", onOk: () => phoneDo(ctx, "topic", "New topic. Subscribe to it on your phone; the old one is dead.") }), { size: "s" }),
       P.error ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, P.error) : null, msg("phone")) : msg("phone"));
+}
+// Add to home screen (E56c): how to put the Hive on a phone's home screen, so it opens full screen like an app. Hidden once it is running
+// that way. The Install app button shows only where the browser said it can install the page (beforeinstallprompt, core/notify.js).
+function installBlock(ctx) {
+  if (standalone()) return null;
+  onInstallChange(() => ctx.update());
+  return block({ title: "Add to home screen", key: "install", sub: "Put your Hive on your home screen and it opens full screen, like an app.",
+    actions: canInstall() ? button("Install app", async () => { await installApp().catch(() => false); ctx.update(); }, { size: "s" }) : null },
+    h("p", { class: "field-h", "data-key": "install-ios" }, "iPhone or iPad: in Safari, tap Share, then Add to Home Screen."),
+    h("p", { class: "field-h", "data-key": "install-android" }, "Android or Chrome: open the browser menu, then Install app."));
 }
 // Off until you turn them on here; the browser then asks once. Kept in this browser.
 function notifyBlock(ctx) {
@@ -506,6 +516,69 @@ function setupSections(ctx) {
 }
 const secretsSection = ctx => can("secrets") || secretsLost() ? section({ title: "Secrets", level: 1, note: "send a token to the Hive; it's never shown back" }, h("div", { class: "stack secrets" }, secretParts(ctx))) : null;
 
+// ---- Connectors (projects/everyday/CONNECTORS.md, E55): the reach bundle's connectors, one row each, read from GET /api/connectors. ----
+// Nothing here turns a connector on: no route runs `conn`, and a two-way one (it talks back into the Hive) has no On at all until it runs
+// under a separate account (warden ruling). The only writes are Add/Remove of `reach` (/api/module) and a pasted token (/api/secret).
+async function loadConns(ctx, fresh) {
+  if (!can("modules")) return;
+  try { F.conns = await jget("/api/connectors" + (fresh ? "?fresh=1" : "")); F.connsErr = null; } catch (e) { F.connsErr = e.message; }
+  ctx.update();
+}
+const CONN_STATE = { on: ["working", "Running"], ready: ["queued", "Ready to turn on"], usable: ["working", "Ready to use"], nothing: ["off", "Nothing to turn on"],
+  off: ["off", "Not set up"], two_way: ["off", "Needs a separate account first"], cant_load: ["failed", "Can't load"], token_missing: ["stuck", "Token missing"],
+  restarting: ["stuck", "Keeps restarting"] };
+const CONN_HINT = { on: "Its service is running.", ready: "It has what it needs from you. An agent or a terminal turns it on.", off: "It isn't set up yet. Its row says what it needs.",
+  usable: "Nothing to turn on: the agent can use it now.", nothing: "It has no service to turn on. An agent sets it up when you ask.",
+  restarting: "Its service keeps starting over, so it may be failing. Ask an agent to look.",
+  two_way: "It would let messages from outside reach the Hive, so it stays off until it can run under a separate account on this computer.",
+  cant_load: "Its code is missing or its service failed. Remove the connectors and add them again, or ask an agent.", token_missing: "It was on, and its saved token is gone. Paste it again." };
+function connectorsSection(ctx) {
+  if (!can("modules")) return null;
+  const C = F.conns, F2 = F.connIn ||= {};
+  const bundle = async what => {
+    F.busy.reach = true; say("conns", what === "add" ? "Adding the connectors…" : "Removing the connectors…"); ctx.update();
+    try { await post("/api/module", { do: what, name: "reach" }); say("conns", what === "add" ? "Added the connectors. Each row below says what it still needs." : "Removed.", "good"); /* never the reply's own text: that is the install's output, with this machine's paths */ } catch (e) { say("conns", e.message, "bad"); }
+    delete F.busy.reach; await loadConns(ctx, true); loadMods(ctx);
+  };
+  const paste = async x => {
+    const v = (F2[x.name] || "").trim();
+    if (!v) { say("conn-" + x.name, "Paste it first.", "bad"); ctx.update(); return; }
+    F.busy["conn-" + x.name] = true; ctx.update();
+    try { await post("/api/secret", { name: x.secret, value: v }); F2[x.name] = ""; say("conn-" + x.name, "Saved. It can't be shown again.", "good"); } catch (e) { say("conn-" + x.name, e.message, "bad"); }
+    delete F.busy["conn-" + x.name]; await loadConns(ctx, true);
+  };
+  const step = x => x.two_way || x.link || x.state === "usable" ? null : x.can_finish_here ? h("span", { class: "conn-step", "data-tone": "good" }, "Finish here") : h("span", { class: "conn-step" }, "Needs an agent or a terminal");
+  const row = x => {
+    const [key, word] = CONN_STATE[x.state] || CONN_STATE.off;
+    const box = x.secret && !x.two_way && !x.link && can("secrets") && x.state !== "on" && !(x.shared && x.saved);   // a shared secret (Telnyx: the phone line's key) is never replaced from here
+    return h("li", { class: "lr conn-row", "data-key": x.name, "data-state": x.state },
+      h("div", { class: "lr-in conn-in" },
+        h("div", { class: "conn-head" },
+          h("b", { class: "conn-name" }, x.label),
+          h("span", { class: "conn-kind meta" }, x.kind === "arm" ? "Let the agent read this" : "Reach you from another app"),
+          statusLabel(key, word, { title: CONN_HINT[x.state] })),
+        h("p", { class: "conn-line" }, x.line),
+        h("p", { class: "conn-needs muted" }, step(x), step(x) ? " " : null, x.needs),
+        h("div", { class: "conn-acts" },
+          x.link ? button(x.name === "conn-ntfy" ? "Open Phone alerts" : "Open Push notifications", null, { size: "s", href: href("settings", x.link) }) : null,
+          x.readme && h("a", { class: "conn-readme", href: x.readme, target: "_blank", rel: "noreferrer noopener" }, "How to set it up")),
+        box ? h("form", { class: "frow conn-paste", onsubmit: e => { e.preventDefault(); paste(x); } },
+          h("div", { class: "frow-grow" }, field(x.can_finish_here ? "Paste the link" : "Paste the token", input({ type: "password", autocomplete: "off", value: F2[x.name] || "", placeholder: x.secret, oninput: (e, n) => { F2[x.name] = n.value; } }))),
+          button("Save", null, { type: "submit", size: "s", busy: F.busy["conn-" + x.name] })) : null,
+        x.shared ? h("p", { class: "conn-shared muted" }, x.saved ? "Its key is saved. The phone line uses the same key, so it isn't changed from here: use Secrets." : "The phone line uses this key too: saving it here changes the phone line's key.") : null,
+        msg("conn-" + x.name)));
+  };
+  const body = () => !C.installed
+    ? block({ title: "Connect other apps", sub: "Set up phone alerts with ntfy, Gotify or web push, and let the agent read a calendar, feeds or Home Assistant. Two-way chat apps like Telegram or email come too, but they need a separate account before they can be on. One Add brings them all; each stays off until you set it up.",
+        actions: button("Add", () => bundle("add"), { size: "s", kind: "primary", busy: F.busy.reach }) },
+        h("p", { class: "muted mod-none" }, "A module's code runs with the same rights as your agents, so only add ones you trust."))
+    : [h("ul", { class: "list conn-list" }, C.rows.map(row)),
+       C.removable ? h("div", { class: "lr-more" }, button("Remove the connectors", () => confirm({ title: "Remove every connector?", body: ["They all come off this Hive, with any that are on. You can add them back from this page."], ok: "Remove", kind: "danger", onOk: () => bundle("remove") }), { size: "s", kind: "quiet", busy: F.busy.reach })) : null];
+  return section({ title: "Connectors", level: 1, note: "other apps that can reach you, or that the agent can read" },
+    msg("conns"),   // above the list: after Add the line shows where the person is looking, not under 24 rows
+    C == null ? (F.connsErr ? [empty(`Couldn't read the connectors: ${F.connsErr}`, { kind: "error" }), button("Try again", () => { F.connsErr = null; ctx.update(); return loadConns(ctx, true); }, { size: "s" })] : empty("Reading…", { kind: "loading" })) : body());
+}
+
 function modulesSection(ctx) {
   if (!can("modules")) return null;
   const act = async (what, name) => {
@@ -708,17 +781,17 @@ function navDots(ctx) {
 
 export default {
   id: "settings", label: "Settings", about: "accounts, modules, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.lost = false; F.name = null; F.saved = null; if (!F.accessTyped) F.access = null;   /* unsaved access edits stay for the session (3.3.7) */ F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
+  enter(ctx) { F.navShown = null; F.keysOpen = null; F.flash = {}; F.ed = null; F.lost = false; F.name = null; F.saved = null; if (!F.accessTyped) F.access = null;   /* unsaved access edits stay for the session (3.3.7) */ F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); loadConns(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
   },
-  back(ctx) { loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update); },   // what enter reads, without enter's clearing: what the person is typing stays
-  leave() { F.goTo = null; clearInterval(upTimer); upTimer = null; clearTimeout(voiceTimer); voiceTimer = null; forget(); forgetSecrets(); },
+  back(ctx) { loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); loadConns(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update); },   // what enter reads, without enter's clearing: what the person is typing stays
+  leave() { F.goTo = null; clearInterval(upTimer); upTimer = null; clearTimeout(voiceTimer); voiceTimer = null; forget(); forgetSecrets(); F.connIn = {}; },   // tokens typed in Connectors but not saved don't outlive the screen
   render(ctx) {
     if (S.app.can == null) return h("div", { class: "page", "data-width": "narrow" }, waiting(S.failed));   // /api/app hasn't answered: don't say "only in the app" yet
     if (!S.app.app) return h("div", { class: "page", "data-width": "narrow" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));
     const [slug, row] = (ctx.arg || "").split("/");   // #settings/modules/slack-door: the section, then a row to open on (modulesSection's F.goRow)
     if (row && slug === "modules" && F.goTo !== ctx.arg) { F.goTo = ctx.arg; F.goRow = row; }   // once per link, so "Hide the full list" stays hidden
     const hive = hiveSection(ctx), [everyday, setOnce] = Array.isArray(hive) ? hive : [hive, null];
-    const secs = [everyday, loginsSection(ctx), useSection(), tiersSection(ctx), ...setupSections(ctx), secretsSection(ctx), viewSection(ctx), setOnce, modulesSection(ctx), accessSection(ctx), kbWipeSection(ctx)].filter(Boolean);
+    const secs = [everyday, loginsSection(ctx), useSection(), tiersSection(ctx), ...setupSections(ctx), secretsSection(ctx), viewSection(ctx), setOnce, connectorsSection(ctx), modulesSection(ctx), accessSection(ctx), kbWipeSection(ctx)].filter(Boolean);
     const header = pageHeader({ title: "Settings" });
     if (!secs.length) return form({ header, sections: [empty("This connection can't change any settings.")] });
     const nav = secs.map(n => n.dataset.name || n.getAttribute("aria-label")),   // data-name: the English title, which the interface language (core/lang.js) leaves alone, so #settings/this-device works in any language
@@ -726,6 +799,7 @@ export default {
     // One section at a time (#settings/<slug>); #settings, or a slug nobody can see, shows the first. The nav is real links, so Back works.
     const slugOf = t => t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     const now = nav.find(t => slugOf(t) === slug) || nav[0];
+    if (F.navShown !== now) { F.navShown = now; requestAnimationFrame(() => { const n = document.querySelector(".set-n"), a = n && n.querySelector("a[aria-current=page]"); if (n && a && n.scrollWidth > n.clientWidth) n.scrollLeft = a.offsetLeft - (n.clientWidth - a.offsetWidth) / 2; }); }   // a phone's one-row chips: the open section's chip comes into view, once per section, so a hand scroll stays put
     const item = t => h("a", { href: href("settings", slugOf(t)), "data-key": t, "aria-current": t === now ? "page" : null, title: dots[t] ? dots[t][1] : null }, h("span", null, t), dots[t] ? statusDot(dots[t][0]) : null, dots[t] ? h("span", { class: "vh" }, dots[t][1]) : null);
     return h("div", { class: "page set", "data-width": "narrow", "data-key": "settings" }, header,
       h("div", { class: "set-b" },

@@ -88,7 +88,7 @@ export function kbChat(ctx, { compact = false, cur = "" } = {}) {
   const acts = state === "answered" ? h("div", { class: "kb-ask-acts", "data-key": "acts" },
     button("New question", () => { Q.th = null; Q.open = false; ctx.update(); requestAnimationFrame(() => document.querySelector(".kb-ask-in")?.focus()); }, { size: "s", kind: "quiet", icon: "plus" }),
     button("Open as a conversation", null, { size: "s", kind: "quiet", href: threadHref(Q.th) })) : null;
-  const ta = h("textarea", { class: "kb-ask-in", rows: "1", value: Q.text, placeholder: Q.th ? "Ask a follow-up…" : "Ask the Hive to find the notes and files on…", "aria-label": "Ask the Hive",
+  const ta = h("textarea", { class: "kb-ask-in", rows: "1", value: Q.text, placeholder: Q.th ? "Ask a follow-up…" : matchMedia("(max-width: 640px)").matches ? "Ask about your notes and files…" : "Ask the Hive to find the notes and files on…", "aria-label": "Ask the Hive",
     oninput: (e, n) => { Q.text = n.value; keepText(n.value); n.form.querySelector(".kb-ask-send").disabled = !n.value.trim() || Q.busy; },
     onkeydown: (e, n) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(ctx); } } });
   const head = h("h2", { class: "kb-ask-h", "data-key": "h", onclick: compact ? () => { Q.open = !Q.open; ctx.update(); } : null },

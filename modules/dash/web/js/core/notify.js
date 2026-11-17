@@ -63,4 +63,25 @@ export async function setPush(on, publicKey, send) {
   catch (e) { await sub.unsubscribe(); throw e; }
 }
 
-if (notifySupported()) navigator.serviceWorker.register("sw.js").catch(() => {});
+// Install as an app (E56c): Chrome and Edge fire beforeinstallprompt when the page can be installed. It is kept, not cancelled, so the
+// browser's own install offer still shows; Settings > This device then offers an Install app button that calls it. Other browsers never fire it.
+let installEvt = null;
+const installSubs = new Set();
+const installChanged = () => installSubs.forEach(f => { try { f(); } catch (e) { /* a closed view */ } });
+export const standalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;   // navigator.standalone: iPhone Safari's own flag
+export const canInstall = () => !!installEvt;
+export const onInstallChange = fn => { installSubs.clear(); installSubs.add(fn); };   // one view listens at a time: the newest Settings render
+export async function installApp() {
+  const e = installEvt;
+  if (!e) return false;
+  installEvt = null;
+  await e.prompt();
+  const r = await e.userChoice.catch(() => null);
+  installChanged();
+  return !!r && r.outcome === "accepted";
+}
+addEventListener("beforeinstallprompt", e => { installEvt = e; installChanged(); });
+addEventListener("appinstalled", () => { installEvt = null; installChanged(); });
+
+// Registered wherever service workers exist, not only where Notification does: iPhone Safari has no Notification outside an installed app, and the worker is what makes the page installable (E56c).
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

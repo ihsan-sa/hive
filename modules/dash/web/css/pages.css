@@ -35,11 +35,13 @@
   .lr.u-acct{grid-template-columns:auto minmax(0,1fr) auto;row-gap:6px}
   .lr.u-acct>.meter{grid-column:2/-1;grid-row:2}
   .lr.u-acct>.u-acct-a{grid-column:2/-1}
+  .lr.u-acct>.meta{display:none}   /* E56b: the "–" for an unread week took the third cell, which sent the status word into the avatar's column and pushed the name 60 px off */
 }
 
-/* Settings on a phone: the section list is chips that wrap, so none is out of sight off the side. */
+/* Settings on a phone: the section list is one row of chips that scrolls sideways (E56b: four wrapped rows took 190 px and pushed the
+   section below y=320); the open section's chip is scrolled into view (settings.js), and the right edge fades while there is more. */
 @container app (width < 700px){
-  .set-n{position:relative;top:0;flex-wrap:wrap;padding-bottom:2px}
+  .set-n{position:relative;top:0;flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;padding-bottom:2px;mask-image:linear-gradient(90deg,#000 calc(100% - var(--seg-fade)),transparent);animation:seg-fade linear both;animation-timeline:scroll(self inline)}
   .set-n::-webkit-scrollbar{display:none}
   .set-n a{flex:none;white-space:nowrap;border:1px solid var(--line);border-radius:999px}
   .set-n hr{display:none}
@@ -51,6 +53,7 @@
   .set-n{position:relative;top:0;flex-wrap:wrap;max-width:100%;min-width:0}
   .set-n a{flex:none;white-space:nowrap}
 }
+@media (max-width:699px){.set-n{flex-wrap:nowrap;overflow-x:auto}}
 
 /* Preview pane (R7): the footer with the file's path and Copy path; the table's size line; the can't-preview card. */
 .pv-f{flex:none;display:flex;align-items:center;gap:var(--s2);padding:6px 10px 6px 14px;border-top:1px solid var(--line);background:var(--surface)}
