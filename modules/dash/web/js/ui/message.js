@@ -51,6 +51,9 @@ export function delivery(p, m) {
   if (m === "new") {
     const st = (S.woke[p.id] || [])[0];
     if (st) return { key: "seen", tone: "good", text: S.app && S.app.app ? "An agent started on it" : `${st.name} started on it`, who: st.name };   // the app look names no code (E10)
+    // E83: a reply from an agent after the question is proof one started on it, even when no start was recorded for it (an old or imported thread)
+    const rep = (S.threads.get(p.th)?.posts || []).find(x => x.t > p.t && x.from !== p.from && !OUTSIDE.has(x.from) && !isScript(x.from));
+    if (rep) return { key: "seen", tone: "good", text: S.app && S.app.app ? "An agent started on it" : `${rep.from} started on it`, who: rep.from };
     return now() - p.t < 3 * MIN ? { key: "queued", tone: "info", text: "Starting an agent…" } : { key: "unseen", tone: "bad", text: "No agent has started on this" };
   }
   if (!isAgent(m) || now() - p.t > 3 * DAY || p.from === m) return null;
