@@ -13,7 +13,7 @@ import { S, can, jget, post, poll, loadApp, fullEnded, kept, keep as keepTyped, 
 import { simpleOn, hiveName } from "../core/simple.js";
 import { foci, focusById, focusOf, focusName, listed, threadLine } from "../core/foci.js";
 import { go } from "../core/router.js";
-import { isAgent, isRunning, agentCard, agentMono, agentLabel, capFirst, ownStep, inConversation, agentStatus, threadPeople, partner, displayText, typedText, threadTitle, threadState } from "../core/model.js";
+import { isAgent, isRunning, agentCard, agentMono, agentLabel, labelCodes, capFirst, ownStep, inConversation, agentStatus, threadPeople, partner, displayText, typedText, threadTitle, threadState } from "../core/model.js";
 import { short, mdPlain, now, fix } from "../core/format.js";
 import { button, fieldErr, icon, input, invalid, statusDot } from "./kit.js";
 import { openAside } from "./aside.js";
@@ -1001,7 +1001,7 @@ function replyChip(d) {
 function quoteChip(d) {
   const q = d.quote, first = q.text.split("\n").find(l => l.trim()) || "";
   return h("div", { class: "cp-reply cp-quote", "data-key": "quote" }, icon("reply"),
-    h("span", null, h("b", null, "Quoting " + ([q.who, q.where].filter(Boolean).join(", ") || "a message")), " · ", h("q", null, firstWords(first))),
+    h("span", null, h("b", null, "Quoting " + ([q.who, q.where].filter(Boolean).join(", ") || "a message")), " · ", h("q", null, firstWords(d.th ? inConversation(d.th, () => labelCodes(first)) : labelCodes(first)))),   // the chip is read by the person: no agent code in the app look (the quote itself goes as written)
     h("button", { type: "button", class: "cp-x", title: "Remove the quote (Esc)", "aria-label": "Remove the quote", onclick: () => { d.quote = null; keep(d); refresh(); } }, "×"));
 }
 function filesRow(th, d) {

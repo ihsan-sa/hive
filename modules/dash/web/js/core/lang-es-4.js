@@ -246,8 +246,11 @@ export default {
   // E18t: what shows while a For you is open (home, a conversation's state mark)
   "new reply for you": "nueva respuesta para ti",
   "waiting to start": "esperando para empezar",
-  "done · new": "hecho · nuevo",
-  "failed, not fixed": "falló, sin arreglar",
+  "new": "nuevo",   // HA-11: the mark on a focus row whose work finished since the last visit (the row's word is the list's own now)
+  // HA-11: agents with no name of their own, told apart inside one summary (model.js labelCodes). They sit inside an agent's sentence, which stays
+  // as written, so these are for the rare line that is nothing else.
+  "another agent": "otro agente", "a third agent": "un tercer agente", "a fourth agent": "un cuarto agente", "a fifth agent": "un quinto agente",
+  "a sixth agent": "un sexto agente", "one more agent": "un agente más",
   "blocked": "bloqueada",
   "waiting": "esperando",
   "paused": "en pausa",
@@ -608,7 +611,6 @@ export default {
     // E18t
     [/^(\d+) waits? on you in its conversations$/, (_, n) => `${n} ${n === "1" ? "te espera" : "te esperan"} en sus conversaciones`],
     [/^(\d+) waits? on you$/, (_, n) => `${n} ${n === "1" ? "te espera" : "te esperan"}`],
-    [/^This conversation: (.+)$/, (_, w) => `Esta conversación: ${{ "needs you": "te necesita", working: "trabajando", "waiting to start": "esperando para empezar", "done · new": "hecho · nuevo", "failed, not fixed": "falló, sin arreglar", blocked: "bloqueada", waiting: "esperando", paused: "en pausa" }[w] || w}`],
     [/^Inbox: (\d+) unread messages?$/, (_, n) => `Bandeja de entrada: ${n} ${n === "1" ? "mensaje sin leer" : "mensajes sin leer"}`],
     [/^(\d+) older ones? below$/, (_, n) => `${n} ${n === "1" ? "más antigua" : "más antiguas"} abajo`],
     [/^Open (.+)\. Drag to reorder the focuses \(Alt\+Up or Alt\+Down moves it\)$/, (_, f) => `Abrir ${f === "Other" ? "Otras" : f}. Arrastra para reordenar los enfoques (Alt+Arriba o Alt+Abajo lo mueve)`],

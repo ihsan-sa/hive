@@ -13,11 +13,11 @@ import { simpleOn, plainName } from "../core/simple.js";
 import { button, empty, statusWord, section, waiting } from "../ui/kit.js";
 import { agentRef } from "../ui/refs.js";
 import { openPreview, fileHref } from "../ui/preview.js";
-import { loadFoci, fociFailed, focusById, focusOf, threadsOf, needsOf, askedOf, agentsOf, stateOf, pills, plainPills, needSource, scrub, threadLine, focusName, MISC, FOCI_EVERY, activityOf, shareOf, fractionWords, pct, usd, leadOf, pageSince, newSince, hiddenAsks, markSeen } from "../core/foci.js";
+import { loadFoci, fociFailed, focusById, focusOf, threadsOf, needsOf, askedOf, agentsOf, stateOf, pills, plainPills, needSource, scrub, focusName, MISC, FOCI_EVERY, activityOf, shareOf, fractionWords, pct, usd, leadOf, pageSince, newSince, hiddenAsks, markSeen } from "../core/foci.js";
 import { waitingLater } from "../core/needs.js";
 import { archived } from "../ui/threadmeta.js";
 import { draft, answer } from "../ui/composer.js";
-import { inChat, chatEscape, chatLeave, answerer, summaryWait, sumLines, lineText, flat, liftIn, updatedAt, rowDot, markEl, newMark, leadWord } from "./comms.js";
+import { inChat, chatEscape, chatLeave, answerer, summaryWait, sumLines, lineText, flat, liftIn, updatedAt, rowStand, newMark, leadWord } from "./comms.js";
 import { quickIs, laterButtons, setLater } from "../ui/quick.js";
 import { when, exact } from "../ui/when.js";
 import { yoursPosts, yoursText } from "../core/yours.js";
@@ -38,11 +38,16 @@ export function newIn(id) { draft(null).focus = id || ""; go("comms", "~new"); }
 const head = (title, note, more) => h("div", { class: "fp-h" }, h("h2", null, title), note ? h("span", { class: "sec-n" }, note) : null, more || null);
 const sec = (key, cls, title, note, ...kids) => h("section", { class: ["fp-sec", cls], "data-key": "fp-" + key, "aria-label": title, tabindex: "-1" }, head(title, note), ...kids);
 
+// A conversation on the focus page: its mark, title and time, and under them where it stands in the word and the line the top of its chat leads with
+// (comms.js rowStand; HA-11 review: this row said "paused", "waiting" and "failed, not fixed" where the chat said Stopped, Waiting on others and Blocked).
+// The line is the stand's own words. In the app and simple looks they name each agent already (model.js labelCodes), so nothing here makes a pill: pills()
+// took the code out of a path too, and "tmp/a9e03/out.csv" read "tmp/an agent/out.csv" on this page alone (test/drive_stand_words.mjs). The developer
+// look keeps its codes, as links. Ids the person cannot read are out of the line already (comms.js standSay), and pills() takes them out there.
 function threadRow(r) {
-  const line = threadLine(r.th), d = S.threads.get(r.th), dot = rowDot(r.th);
+  const d = S.threads.get(r.th), x = rowStand(r.th), s = x.s;
   return h("li", { class: "lr", "data-key": "th:" + r.th }, h("a", { class: "lr-in", href: threadHref(r.th) },
-    h("span", { class: "lr-t" }, dot ? h("span", { class: "st", "data-tone": dot.tone, title: dot.word }) : null, h("b", null, threadTitle(r.th)), markEl(r.th), d ? when(d.last, "t") : null),
-    line ? h("span", { class: "lr-x clamp-1" }, say(line)) : null));
+    h("span", { class: "lr-t" }, x.mark, h("b", null, threadTitle(r.th)), x.fresh, d ? when(d.last, "t") : null),
+    s ? h("span", { class: "lr-x clamp-1", title: x.line }, x.word, s.why ? [" \u00b7 ", s.why] : null, s.text ? [" \u00b7 ", S.app && S.app.app ? s.text : pills(s.text)] : null) : null));
 }
 // A box the person can tick (the person, 110812372f5e): it marks the item done for the agents (the focus check done command), an untick reopens it.
 function tick(c, ctx) {

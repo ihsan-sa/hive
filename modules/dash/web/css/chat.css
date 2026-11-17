@@ -463,7 +463,7 @@ html[data-read="1.3"]{--read-scale:1.3}
   .cm-head>.cm-status.cm-strip:not([data-open])>.cm-strip-b,.cm-head>.cm-status.cm-strip:not([data-open])>.cm-strip-m{display:none}
   .cm-head>.cm-status.cm-strip>.tier-chip{flex:none}
   .cm-head>.cm-status.cm-strip>.cm-st-age{flex:none;margin-left:auto;white-space:nowrap}
-  .cm-head>.cm-status.cm-strip>.cm-strip-a:hover .cm-st-t,.cm-head>.cm-status.cm-strip>.cm-strip-a:hover .cm-st-also{color:var(--ink)}
+  .cm-head>.cm-status.cm-strip>.cm-strip-a[role=button]:hover .cm-st-t,.cm-head>.cm-status.cm-strip>.cm-strip-a[role=button]:hover .cm-st-also{color:var(--ink)}   /* only a head that opens (statusBar: opens) answers the pointer */
   /* open: every word of the summary, each line its own block; a long one scrolls inside the head (160px at most; on a window under 720px high less,
      down to three lines) so the messages keep their room */
   .cm-head>.cm-status.cm-strip[data-open]{flex-wrap:wrap;padding-bottom:8px}

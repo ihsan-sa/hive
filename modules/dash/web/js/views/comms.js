@@ -11,9 +11,9 @@ import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../cor
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
 import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitOf, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
 import { workBar, workBarHeld } from "../ui/workbar.js";
-import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci, workingIn, leadOf, cardSince, newSince, hiddenAsks, markSeen as lookAt, seenLeave } from "../core/foci.js";
+import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci, workingIn, leadOf, cardSince, newSince, hiddenAsks, markSeen as lookAt, seenLeave } from "../core/foci.js";
 import { newIn } from "./focus.js";
-import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadStand, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, retryWords, fresh7, asksQuestion, fileInfo } from "../core/model.js";
+import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadStand, heldForYou, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, retryWords, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
 import { href, threadHref, go, parse } from "../core/router.js";
 import { yoursSearch, yoursText } from "../core/yours.js";
@@ -162,7 +162,7 @@ function threadEvents(th) {
   for (const s of S.sessions) {
     if (s.thread !== th || !s.end) continue;
     if (s.limited) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${s.name} stopped at a usage limit`, sub: "It carries on by itself once there's room." });
-    else if (s.retry) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${(w => w[0].toUpperCase() + w.slice(1))(agentLabel(s.name))} stopped (${retryWords(s.retry)})`, sub: "It carries on by itself; a message wakes it sooner." });
+    else if (s.retry) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${(w => w[0].toUpperCase() + w.slice(1))(agentLabel(s.name))} stopped (${retryWords(s.retry)})`, sub: "It carries on by itself." });
     else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "failed", text: simpleOn() ? "Your Hive ran into a problem" : `${(w => w[0].toUpperCase() + w.slice(1))(agentLabel(s.name))} stopped with an error (exit ${s.exit})`, sub: simpleOn() ? "Send a message and it tries again." : "Its last message above is where it got to." });
   }
   return out;
@@ -487,16 +487,6 @@ function snippet(p, ws) {
 const authorName = n => (n === "person" ? "You" : plainName(n));
 const tierLead = th => (app() ? null : h("span", { class: "ref-sw", "data-tone": tier(tierOf(th)).tone, title: tier(tierOf(th)).label }));
 
-/** One thread's state in a few words, for the list: shape, colour and the words. */
-// A row's state starts with the agent: "The agent working". Under its own title it goes by its place in that conversation, hover included (E10).
-const statePill = n => { const p = codePill(n); if (app() && p.nodeType === 1 && !/\d/.test(p.textContent)) {  p.textContent = capFirst(p.textContent); } return p; };   // an agent id (cd34e) keeps its case
-const STATE_WORDS = { asks: () => "Waiting for your answer", working: s => (simpleOn() ? "Working on it" : [statePill(s.who), " working"]), quiet: s => (simpleOn() ? null : [statePill(s.who), " quiet"]), stuck: () => (simpleOn() ? "Taking longer than it should" : "Stuck"), queue: s => (simpleOn() ? "Waiting its turn" : [codePill(s.who), " in the job queue"]),
-  queued: () => "Waiting to start", limited: () => (simpleOn() ? "Taking a break" : "Stopped at a usage limit"), failed: () => (simpleOn() ? "Ran into a problem" : "Stopped with an error"), foryou: () => "New reply for you", done: () => null };
-function stateTag(st) {
-  const w = (STATE_WORDS[st.key] || (() => null))(st);
-  return w ? h("span", { class: "cm-st", "data-tone": status(st.key).tone }, w) : null;
-}
-
 /** Threads with a post holding every word (a word in the thread's own name counts for all its posts). Looks through all of them. */
 function searchRows(c, ctx, ws) {
   const open = (name, q) => () => { if (name === (c.thread ?? null)) C.q = q; else C.next = q; ctx.update(); };
@@ -602,12 +592,16 @@ function threadRows(c, ctx) {
         lead: [tierLead(d.name), live ? h("span", { title: "an agent is on this thread now" }, statusDot("working", { live: true })) : null],
         text: `${d.posts.length} · ${lp.from}: ${short(mdPlain(lp.text).replace(new RegExp("^(@\\S+\\s+)*" + who + ":\\s*"), ""), 60)}`, sec: secOf(d.name, null), dim: faded(d.name) };
     }
-    const st = threadState(d.name, seen), par = flat && threadParent(d.name);
-    const say = inConversation(d.name, () => railSay(mdPlain(chatText(lp)))), tag = inConversation(d.name, () => fadeTag(d.name) || stateTag(st));
+    // The row says where the conversation stands in the mark and the word the top of its chat says it in (stand(), model.js threadStand), so the list
+    // never says less or other than the chat it opens (HA-11; the board on 2026-11-16: 30 of 54 rows said nothing where the chat's top said Done,
+    // Waiting on others, Asked earlier, Needs you, Stopped or Blocked). With nothing to stand on, a plain mark and no word, as the chat has no bar.
+    const s = stand(d.name), par = flat && threadParent(d.name), sLine = standLine(s);
+    const say = inConversation(d.name, () => railSay(mdPlain(chatText(lp)))), fd = inConversation(d.name, () => fadeTag(d.name));
+    const tag = standWord(s, sLine);
     const from = par ? [h("span", { class: "tm-from", title: "A helper conversation, started from " + threadTitle(par) }, "from " + short(threadTitle(par), 28)), " · "] : null;
     return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: railTitle(d.name), meta: ago(d.last).replace(" ago", ""),
-      lead: [tierLead(d.name), h("span", { title: status(st.key).label || "" }, statusDot(st.key === "done" ? "ended" : st.key, { live }))],
-      text: [from, d.name !== c.thread && hasDraft(d.name) ? [h("span", { class: "cm-draft", title: "You left unsent text in this conversation" }, "Draft"), " · "] : null, tag, tag ? " · " : null, lp.from === "person" ? ["You: ", ...say] : say], sec: secOf(d.name, st), dim: faded(d.name) };   // no agent code on the row: the conversation names its agent
+      lead: [tierLead(d.name), standMark(s)],
+      text: [from, d.name !== c.thread && hasDraft(d.name) ? [h("span", { class: "cm-draft", title: "You left unsent text in this conversation" }, "Draft"), " · "] : null, tag, tag ? " · " : null, fd, fd ? " · " : null, lp.from === "person" ? ["You: ", ...say] : say], sec: secOf(d.name, true), dim: faded(d.name) };   // no agent code on the row: the conversation names its agent
   };
   const dress = (r, th = r.key.replace(/~recent$/, "")) => {
     const im = important(th), pn = pinned(th), m = tmeta(th);
@@ -622,8 +616,7 @@ function threadRows(c, ctx) {
   // row in Needs you (or Pinned, Important), so nothing waiting on them hides in a fold. The current conversation's fold is open.
   const kidRows = (d, sec) => {
     const kids = kidsOf.get(d.name) || []; if (!kids.length) return [];
-    const open = KIDS.has(d.name) || kids.some(k => k.name === c.thread), sts = kids.map(k => threadState(k.name, seen).key);
-    const n = k => sts.filter(x => k.includes(x)).length, parts = [[["working", "queued", "quiet"], "working"], [[...NEED], "needs you"], [["done"], "done"]].map(([ks, w]) => (n(ks) ? `${n(ks)} ${w}` : null)).filter(Boolean);
+    const open = KIDS.has(d.name) || kids.some(k => k.name === c.thread), { parts } = kidCount(kids.map(k => k.name));   // counted as their rows say it
     return [{ key: d.name + "~kids", sec, href: null, depth: 1, whole: true, expanded: open, title: plural(kids.length, "helper conversation"), meta: parts.length > 1 ? h("span", { title: parts.join(" · ") }, parts[0]) : parts[0] || null,   // first part only, the rest in the tooltip
       lead: h("span", { class: "cm-stand-ch", "data-open": open ? "" : null }, icon("chevron-down")),
       onClick: e => holdScroll(e.currentTarget, () => { KIDS.has(d.name) ? KIDS.delete(d.name) : KIDS.add(d.name); ctx.update(); }) },
@@ -734,11 +727,21 @@ function sections(rs, ctx, opts) {
       h("a", { class: "tm-sec-h tm-arch-b", href: href("comms", "~archived"), "aria-current": C.conv === "~archived" ? "page" : null, title: "Conversations out of the list; bring one back from there" },
         icon("archive"), `Archived (${by.arch.length})`)) : null);
 }
+// What a row says is read from three things that are replaced whole when they change and don't move S.ver: the inbox's read marks, the summary file
+// and the foci. Each object gets a number, so the list is redrawn when one of them is new and a row says what the top of its chat says (HA-11: a row
+// kept "For you" for up to half a minute after the conversation was opened, and said nothing until then when the inbox landed after the first draw).
+const readNo = new WeakMap(); let readN = 0;
+const readSig = o => (o && typeof o === "object" ? readNo.get(o) || (readNo.set(o, ++readN), readN) : String(o));
+// What moves a row's state between two board or log lines, so S.ver stays put: an agent joins or leaves the queue, and a running one goes quiet, gets
+// stuck or picks its work up again (model.js agentState reads the clock and the live read's jobs). A row kept "working" for up to half a minute after
+// the top of its conversation said "stuck" (HA-11). A stop at a limit or an error arrives as a log line, which moves S.ver by itself.
+const liveSig = () => (S.live ? S.live.agents : []).map(a => a.name + ":" + (a.thread || "") + ":" + agentState(a).key).sort().join() + "/" +
+  (S.live ? S.live.pending : []).map(p => p.name + ":" + (p.threads || []).join("+")).sort().join();
 function syncThreads(c, ctx) {
   const tl = document.querySelector("#main .cm-tl"); if (!tl) return;
   if (!simpleOn()) loadFoci();   // the foci (core/foci.js); a store emit when they change
   const held = byFocusOn() && S.foci === undefined && !C.tq.trim();   // Focus groups its rows by the focuses: grey rows until they're read, not a flat list that re-sorts
-  const sig = [held, S.ver, C.view, impAll, C.hideFaded, S.foci && S.foci.at, S.foci && (S.foci.foci || []).map(f => f.id).join(), C.scope, C.conv, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
+  const sig = [held, S.ver, C.view, impAll, C.hideFaded, S.foci && S.foci.at, S.foci && (S.foci.foci || []).map(f => f.id).join(), C.scope, C.conv, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, liveSig(), marksSig().length, readSig(IB.items), readSig(S.needsYou), readSig(S.foci)].join("|");
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv || L.tlHeld;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
@@ -776,17 +779,46 @@ const notBuilt = () => h("span", { class: "nb", title: "Designed, not built yet:
  * words, so a conversation on the list has a bar even before an agent wrote it a summary.
  */
 const stOpen = new Set();   // threads whose summary is open (Nov 8 §8.4): a redraw (a new post) keeps it open
-const stand = th => inConversation(th, () => threadStand(th, seen, waitOf(th)));   // not held back until the count is known: like the rail's Needs you group, it settles as the reads land
-const stAge = s => `updated ${ago(s.at)}${s.since ? ` · ${plural(s.since, "message")} since` : ""}`, stBy = s => `Summary by ${s.from}`;   // whole lines, so the language table can match them (lang-es-6.js)
+// The stand as the app look says it: no post id, ask id or leading step id in its lines (R16: the person cannot read them, and the home and the
+// focus pages never showed them). Taken out here, once, so a row, the line under a phone's title and the top of the chat say the same words
+// (test/drive_focus_leaks.mjs, test/drive_stand_words.mjs). The developer look keeps them: a developer follows an id.
+const standSay = s => (s && app() ? { ...s, text: scrub(s.text), also: scrub(s.also), more: s.more.map(scrub).filter(Boolean), lines: s.lines.map(scrub).filter(Boolean) } : s);
+const stand = th => inConversation(th, () => standSay(threadStand(th, seen, waitOf(th))));   // not held back until the count is known: like the rail's Needs you group, it settles as the reads land
+// A stand in one line, for the places with no bar: the word, why the count doesn't have it when it is on the list but out of it ("You put this off":
+// the bar says that as its second fact), then the one line. standLine is that line as a hover text; standTail is what follows the word where it is
+// drawn (the line under a phone's title, a row on a phone's home), each part a text node of its own so the language table can match it whole.
+const standLine = s => (s ? [s.word, s.why, s.text].filter(Boolean).map(tr).join(" · ") : "");   // each part through the language table by itself: the joined line is in no table
+const standTail = s => [s.why ? " · " : null, s.why || null, s.text ? " · " : null, s.text || null];
+// The mark and the word of a row, made here for every list of conversations (the side list, a phone's home, the Archived page), so no list can say
+// a stand its own way: the mark is the state's dot, pulsing while an agent is on the conversation, and the word is the one the top of the chat leads with.
+const standMark = s => h("span", { class: "cm-row-st", "data-state": s ? s.key : "", title: standLine(s) }, statusDot(s ? s.key : "ended", { live: !!(s && s.running) }));
+const standWord = (s, title) => (s ? h("span", { class: "cm-st", "data-state": s.key, "data-tone": status(s.key).tone, title: title || null }, s.word) : null);
+// A helper conversation, counted for the fold in the list and the line in the chat (both count with this):
+//   "need": the one count has it (waitsOn), so the number is the one the Needs you group and the home count give. Its row says Needs you, or Failed
+//           or Stuck when the list has it because its run broke: those wait on the person too (a message is what moves them), and the row's word
+//           says which kind it is.
+//   "run":  an agent is on it now: its row says Working, Working quietly, Waiting its turn or Waiting to start.
+//   "done": its row says Done. Not one that says Quiet or nothing: no agent said that work was finished (the review of HA-11: "3 done" over rows
+//           that said Quiet).
+// A helper that says anything else (Quiet, Paused, Stopped, Waiting on others, Blocked, Asked, You replied, a failure the count doesn't have, or
+// nothing) is in no part, so the parts need not add up to the number of helpers.
+const kidStand = th => { const s = stand(th); return waitsOn(th) ? "need" : s && s.running ? "run" : s && s.word === "Done" ? "done" : ""; };
+function kidCount(ths) {
+  const sts = ths.map(kidStand), n = k => sts.filter(x => x === k).length;
+  return { run: n("run"), need: n("need"), parts: [["run", "working"], ["need", "needs you"], ["done", "done"]].map(([k, w]) => (n(k) ? `${n(k)} ${w}` : null)).filter(Boolean) };
+}
+const stAge = s => `updated ${ago(s.at)}${s.since ? ` · ${plural(s.since, "message")} since` : ""}`, stBy = (s, th) => `Summary by ${inConversation(th, () => agentLabel(s.from))}`;   // whole lines, so the language table can match them (lang-es-6.js); the app look names the author as the conversation does, not by its code
 function statusBar(th) {
   const s = th && stand(th); if (!s) return null;
-  const open = stOpen.has(th), r = (S.threadStatus || {})[th];
+  // The head opens to the whole summary. With no summary it opens only when its one line may be cut short (a second fact, which a narrow bar
+  // drops, or a long line): a bare "Working · started 5m ago" is all there, so it is not a button that does nothing.
+  const opens = !s.bare || !!s.also || s.text.length > 60, open = opens && stOpen.has(th), r = (S.threadStatus || {})[th];
   if (can("tier") && !simpleOn()) loadTiers(L.ctx && L.ctx.update);
   const tierChip = can("tier") && !simpleOn() ? threadTierChip(th, focusOf(th)) : null;
   return h("div", { class: "cm-status cm-strip", "data-key": "status", "data-open": open ? "" : null, "data-state": s.key, "data-tone": status(s.key).tone, role: "note", "aria-label": "Where it stands" },
-    h("b", { class: "cm-strip-a", role: "button", tabindex: "0", "aria-expanded": String(open), title: s.bare ? (open ? "Show less" : "Show all of it") : open ? "Hide the summary" : "Show the whole summary",
+    h("b", opens ? { class: "cm-strip-a", role: "button", tabindex: "0", "aria-expanded": String(open), title: s.bare ? (open ? "Show less" : "Show all of it") : open ? "Hide the summary" : "Show the whole summary",
       onclick: e => { e.stopPropagation(); open ? stOpen.delete(th) : stOpen.add(th); L.ctx && L.ctx.update(); },
-      onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } } },
+      onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } } } : { class: "cm-strip-a" },
       // the state and its one line stay together; the second fact is dropped first when the row is short (chat.css)
       h("span", { class: "cm-st-main" }, statusDot(s.key, { live: s.running }), h("span", { class: "cm-st-w" }, s.word), s.text ? h("span", { class: "cm-st-t" }, " · ", s.text) : null),
       // data-dup: the open summary says this line already, so it shows only while the bar is closed
@@ -795,10 +827,12 @@ function statusBar(th) {
     // The work tier, only when it isn't its focus's (a9179, rung WT-1): the focus card already says the focus's.
     tierChip,
     // bare: on the list with no summary yet, so there is no age and nothing to reply about; the conversation's own messages say the rest
-    s.bare ? null : h("span", { class: "meta cm-st-age", title: stBy(s) }, stAge(s)),
+    s.bare ? null : h("span", { class: "meta cm-st-age", title: stBy(s, th) }, stAge(s)),
     // One agent named per conversation (R6 review): the strip names who is on it; the summary's author is on hover.
-    s.bare ? null : h("span", { class: "meta cm-status-m cm-strip-m", title: stBy(s) }, stAge(s),
-      can("post") ? h("button", { type: "button", class: "cm-status-r", title: "Reply about this summary", onclick: () => quoteRef(th, { who: r.from, where: "summary", text: r.text }) }, "Reply") : null));
+    // Reply: the chip above the box and the quote on the board name the author as the conversation does (a message's Quote does the same); the quoted
+    // lines go as the agent wrote them, codes and all, since an agent reads them.
+    s.bare ? null : h("span", { class: "meta cm-status-m cm-strip-m", title: stBy(s, th) }, stAge(s),
+      can("post") ? h("button", { type: "button", class: "cm-status-r", title: "Reply about this summary", onclick: () => quoteRef(th, { who: inConversation(th, () => capFirst(agentLabel(r.from))), where: "summary", text: r.text }) }, "Reply") : null));
 }
 
 const strip = th => inConversation(th, () => stripLines(th));
@@ -808,11 +842,14 @@ function stripLines(th) {
   if (call) out.push(line("working", [who(call.agent), call.state === "hold" ? " is putting you through on your call" : " is on a call with you", h("span", { class: "meta cm-line-m" }, " · " + dur(now() - call.started * 1e3))], post ? button("Hang up", () => hangUp(call.id), { size: "s" }) : null, { key: "call", live: true }));
   // One line per state, no quoted question and no Answer: the composer is already addressed to it (the Nov 8 handoff §8.6).
   if (st.key === "asks") out.push(line("asks", [who(st.who), " waits for your answer"], null, { key: "asks" }));
-  if (st.key === "limited" && st.retry) out.push(line("limited", [who(st.who), simpleOn() ? " is taking a break and carries on by itself." : ` stopped (${retryWords(st.retry)}) ${ago(st.t)} and carries on by itself. A message wakes it sooner.`], null, { key: "limited" }));
+  // A paused run reads what the person wrote when it carries on, and not before: the starter starts nothing for a name it is about to resume, so a
+  // message does not wake it sooner (the line used to say it did, after a lost connection). With a message of theirs held for it, the line says so.
+  const held = st.key === "limited" && heldForYou(th, st) ? " It reads your message then." : null;
+  if (st.key === "limited" && st.retry) out.push(line("limited", [who(st.who), simpleOn() ? " is taking a break and carries on by itself." : ` stopped (${retryWords(st.retry)}) ${ago(st.t)} and carries on by itself.`, held], null, { key: "limited" }));
   else if (st.key === "limited") {
     const room = hasRoom(), r = nextReset();
-    out.push(line("limited", [who(st.who), simpleOn() ? " is taking a break. " : ` stopped at a usage limit ${ago(st.t)} and hasn't carried on. `, room ? "There's room again now, so it should carry on by itself soon." : r ? `It carries on by itself after ${stamp(r)}.` : "It carries on by itself once there's room."],
-      room && post ? button("Carry on", () => say(th, "Please carry on where you stopped.", st.who), { size: "s" }) : null, { key: "limited" }));
+    out.push(line("limited", [who(st.who), simpleOn() ? " is taking a break. " : ` stopped at a usage limit ${ago(st.t)} and hasn't carried on. `, room ? "There's room again now, so it should carry on by itself soon." : r ? `It carries on by itself after ${stamp(r)}.` : "It carries on by itself once there's room.", held],
+      room && post && !held ? button("Carry on", () => say(th, "Please carry on where you stopped.", st.who), { size: "s" }) : null, { key: "limited" }));
   }
   if (st.key === "failed") out.push(line("failed", [who(st.who), simpleOn() ? " ran into a problem. Send a message and it tries again." : ` stopped with an error ${ago(st.t)}. A message wakes it to try again.`], null, { key: "failed" }));
   for (const a of run) {
@@ -829,9 +866,11 @@ function stripLines(th) {
   const par = app() && threadParent(th), kids = app() ? threadChildren(th) : [];
   if (par) out.push(line("ended", ["Part of ", h("a", { href: threadHref(par) }, short(threadTitle(par), 60)), simpleOn() ? null : [": ", who(d0(th), false), " started it from there"]], null, { key: "parent" }));
   if (kids.length) {
-    const ks = kids.map(k => ({ k, st: threadState(k, seen) })).sort((a, b) => S.threads.get(b.k).last - S.threads.get(a.k).last), on = ks.filter(x => ["working", "queued", "quiet"].includes(x.st.key)).length, ask = ks.filter(x => NEED.has(x.st.key)).length;
-    const links = ks.slice(0, 5).flatMap((x, i) => [i ? ", " : "", h("a", { href: threadHref(x.k), title: status(x.st.key).label || "" }, short(threadTitle(x.k), 40))]);
-    out.push(line(on ? "working" : ask ? "asks" : "ended", [plural(kids.length, "helper conversation"), on ? ` (${on} working${ask ? `, ${ask} waiting on you` : ""})` : ask ? ` (${ask} waiting on you)` : "", ": ", ...links, ks.length > 5 ? ` and ${ks.length - 5} more` : ""],
+    // Counted as the list counts them under this conversation's row (kidCount), in the same words, and each link's hover is its row's word:
+    // the fold said "2 needs you" where this line said "1 waiting on you", and a helper waiting to start was working in one and not in the other.
+    const ks = [...kids].sort((a, b) => S.threads.get(b).last - S.threads.get(a).last), { run: on, need: ask, parts } = kidCount(ks);
+    const links = ks.slice(0, 5).flatMap((k, i) => [i ? ", " : "", h("a", { href: threadHref(k), title: standLine(stand(k)) }, short(threadTitle(k), 40))]);
+    out.push(line(on ? "working" : ask ? "asks" : "ended", [plural(kids.length, "helper conversation"), parts.length ? [" (", parts.flatMap((p, i) => (i ? [", ", p] : [p])), ")"] : "", ": ", ...links, ks.length > 5 ? ` and ${ks.length - 5} more` : ""],
       post ? button(KIDS.has(th) ? "Hide in list" : "Show in list", () => { KIDS.has(th) ? KIDS.delete(th) : KIDS.add(th); L.ctx && L.ctx.update(); }, { size: "s" }) : null, { key: "kids", live: !!on }));
   }
   // A second helper when the agent you wrote to is busy (not built): see PART1.md.
@@ -900,7 +939,7 @@ function stMenu(th) {
     h("p", { class: "cm-menu-st-a" }, statusDot(s.key, { live: s.running }), h("b", null, s.word), s.text ? " · " : null, s.text || null),
     s.also && !s.dup ? h("p", { class: "cm-menu-st-also" }, s.also) : null,   // the second fact, unless the summary's lines below say it
     s.more.map(l => h("p", null, l)),
-    s.bare ? null : h("p", { class: "meta", title: stBy(s) }, stAge(s)));
+    s.bare ? null : h("p", { class: "meta", title: stBy(s, th) }, stAge(s)));
 }
 function titleMenu(c, n, d, off, ctx) {
   const th = c.thread, full = th && app() && !simpleOn(), mine = can("post");
@@ -996,7 +1035,7 @@ function viewBar(ctx) {
       onclick: () => { C.hideFaded = !C.hideFaded; store(HIDE_KEY, C.hideFaded ? "1" : "0"); ctx.update(); } }, h("i", { "aria-hidden": "true" }), "Hide not needed"));
 }
 // The phone's line under the title: the state, why the count doesn't have it when it is on the list but out of it ("You put this off": the bar says that as its second fact, and this line has no room for one), then the one line.
-const titleSub = th => { const s = th && stand(th); return s ? h("span", { class: "cm-title-sub", "data-state": s.key, "data-tone": status(s.key).tone }, statusDot(s.key, { live: s.running }), h("b", null, s.word), s.why ? " · " : null, s.why || null, s.text ? " · " : null, s.text || null) : null; };
+const titleSub = th => { const s = th && stand(th); return s ? h("span", { class: "cm-title-sub", "data-state": s.key, "data-tone": status(s.key).tone }, statusDot(s.key, { live: s.running }), h("b", null, s.word), standTail(s)) : null; };
 function head(c, ctx) {
   if (c.thread && app()) import("../ui/preview.js").then(m => m.autoFiles(c.thread));
   const d = c.thread && S.threads.get(c.thread), n = L.matched.length, off = maskFor(c) !== SHOW.ALL && !C.q.trim() ? L.src.length - n : 0;
@@ -1108,13 +1147,6 @@ export function updatedAt(f, rows) {
   for (const r of rows) { const d = S.threads.get(r.th); if (d && d.last > t) t = d.last; }
   return t || null;
 }
-/** A conversation's dot: working or queued only; idle draws an empty cell so titles line up. */
-export function rowDot(th) {
-  const k = threadState(th).key;
-  return k === "working" ? { tone: "good", word: "working" } : k === "queued" ? { tone: "warn", word: "waiting to start" } : null;
-}
-/** The word a thread row leads with, from the thread's own bar and the register (SU-3): readers took a Done thread for stuck, and a wait for finished.
- *  A thread that waits on the person says so wherever it shows; a Done bar says Done; Blocked/Waiting come from the bar's last line. Null when it has none. */
 // "Finished since you last looked" (SU-3): most bars end in Done, so an old Done says nothing; only work that finished after this browser's previous visit is marked.
 const SEEN_BEFORE = (() => { try { const k = "h2.lastSeen", prev = Number(localStorage.getItem(k)) || 0, mark = () => localStorage.setItem(k, String(now())); mark(); setInterval(mark, 60000); addEventListener("pagehide", mark); return prev || now() - DAY; } catch { return now() - DAY; } })();
 /** Standing threads (keeper, improve, alarms) say Done after every run and are never the person's own work: only a conversation the person started counts as finished for them. */
@@ -1144,19 +1176,22 @@ function homeFinished() {
       h("summary", null, h("b", null, "Finished since your last visit"), h("span", { class: "meta" }, ` \u00b7 ${plural(it.length, "conversation")}`)),
       h("ul", { class: "cm-old-l" }, it.slice(0, 80).map(row), it.length > 80 ? h("li", { class: "meta" }, `${it.length - 80} older ones not listed`) : null)));
 }
-export function rowMark(th) {
-  if (waitingOn().some(w => w.th === th)) return { word: "needs you", tone: "info" };
-  const k = threadState(th).key;
-  if (k === "working" || k === "queued") return null;   // the dot says it
-  const r = S.threadStatus && S.threadStatus[th], last = r && String(r.text || "").trim().split("\n").pop(), m = last && /^(Done|Blocked|Waiting|Needs the person|Told to stop):/.exec(last);
-  if (!m) return null;
-  return m[1] === "Done" ? (S.threads.get(th) && S.threads.get(th).last > SEEN_BEFORE && startedByPerson(th) ? { word: "done · new", tone: "good" } : null) : m[1] === "Blocked" ? { word: /not (repaired|fixed)|failed/i.test(last) ? "failed, not fixed" : "blocked", tone: "warn" } : m[1] === "Waiting" ? { word: "waiting", tone: null } : m[1] === "Needs the person" ? { word: "needs you", tone: "info" } : { word: "paused", tone: null };   // Told to stop: set down on purpose, not broken
+/**
+ * A conversation's row outside the lists here (a focus card, the focus page): the mark and the word the conversation list and the top of the chat say
+ * (stand(), model.js threadStand), so a card can't word a state its own way. It did (HA-11 review): "paused" where the chat said Stopped, "waiting"
+ * for Waiting on others, "failed, not fixed" for Blocked, "needs you" on an ask the person had put off, and nothing at all on a Done or a Paused one.
+ * fresh is the one thing a stand doesn't say: work the person started that went Done since this browser's last visit (SU-3).
+ */
+export function rowStand(th) {
+  const s = stand(th), d = S.threads.get(th), line = standLine(s);
+  return { s, line, mark: s ? standMark(s) : null, word: standWord(s, line),
+    fresh: !!(s && s.word === "Done" && d && d.last > SEEN_BEFORE && startedByPerson(th)) ? h("span", { class: "rmk", "data-tone": "good", title: "Finished since your last visit" }, "new") : null };
 }
-export const markEl = th => { const m = rowMark(th); return m ? h("span", { class: "rmk", "data-tone": m.tone, title: "This conversation: " + m.word }, m.word) : null; };
 function cardRow(r) {
-  const d = S.threads.get(r.th), dot = rowDot(r.th), title = threadTitle(r.th);
-  return h("li", { "data-key": r.th }, h("a", { class: "fc-row", href: threadHref(r.th), title: title + (dot ? ", " + dot.word : "") },
-    dot ? h("span", { class: "st", "data-tone": dot.tone, "aria-hidden": "true" }) : h("span", { "aria-hidden": "true" }), h("b", null, title), markEl(r.th), d ? when(d.last, "t") : null));
+  const d = S.threads.get(r.th), title = threadTitle(r.th), x = rowStand(r.th);
+  // four cells always (the mark's and the word's are empty when the conversation stands on nothing), so the titles and the times line up down the card
+  return h("li", { "data-key": r.th }, h("a", { class: "fc-row", href: threadHref(r.th), title },
+    x.mark || h("span", { "aria-hidden": "true" }), h("b", null, title), h("span", { class: "fc-rw" }, x.word, x.fresh), d ? when(d.last, "t") : h("span", { "aria-hidden": "true" })));
 }
 // A card line names a file, not its path: "`projects/x/build/cut.mp4`" reads "cut.mp4" (home_plain: the cards show no file path). The title keeps the whole line.
 const fileNames = t => t.replace(/`?(?:~\/|\/home\/[^\s`/]+\/)?(?:projects|kb|modules|core)\/(?:[^\s`]*\/)?([^\s`/]+)`?/g, "$1");
@@ -1437,8 +1472,9 @@ function fociGrid(ctx, settled) {
 function archivedPane(c, ctx) {
   const mask = showMask(), back = th => tryMeta(th, { archived: false }, ctx);
   const ds = [...S.threads.values()].filter(d => archived(d.name) && (threadKinds(d) & mask) && theirs(d)).sort((a, b) => b.last - a.last);
-  const rows = ds.map(d => { const lp = d.posts.at(-1);
-    return { key: d.name, href: threadHref(d.name), title: railTitle(d.name), meta: ago(d.last).replace(" ago", ""), text: lp.from === "person" ? ["You: ", ...railSay(mdPlain(chatText(lp)))] : railSay(mdPlain(chatText(lp))),
+  // a row here says where its conversation stands as the top of its chat does, like every other list of conversations (HA-11)
+  const rows = ds.map(d => { const lp = d.posts.at(-1), s = stand(d.name), tag = standWord(s, standLine(s)), say = inConversation(d.name, () => railSay(mdPlain(chatText(lp))));
+    return { key: d.name, href: threadHref(d.name), title: railTitle(d.name), meta: ago(d.last).replace(" ago", ""), lead: standMark(s), text: [tag, tag ? " · " : null, lp.from === "person" ? ["You: ", ...say] : say],
       acts: can("post") ? button("Bring back", () => back(d.name), { size: "s", kind: "quiet", icon: "archive", title: "Back in the list", cls: "cm-arch-back" }) : null }; });
   return h("div", { class: "cm-home cm-arch", "data-key": "archived" },
     h("a", { class: "cm-arch-up only-phone", href: href("comms", "~list") }, icon("chevron-left"), "Conversations"),
@@ -1497,10 +1533,11 @@ function phoneList() {
   if (!ds.length) return null;
   return h("section", { class: "sec only-phone cm-plist", "data-key": "plist", "aria-label": "Conversations" },
     h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Conversations")),
-    h("ul", { class: "list" }, ds.map(d => { const st = threadState(d.name, seen);
+    // each row says where its conversation stands as the top of its chat does (HA-11): the mark, the word, then the one line under the title
+    h("ul", { class: "list" }, ds.map(d => { const s = stand(d.name);
       return h("li", { class: "lr", "data-key": d.name }, h("a", { class: "lr-in", href: threadHref(d.name) },
-        h("span", { class: "lr-t" }, statusDot(st.key), h("b", null, threadTitle(d.name)), h("span", { class: "meta" }, d.last ? ago(d.last) : "")),
-        st.label && st.key !== "done" ? h("span", { class: "lr-x" }, st.label) : null)); })));
+        h("span", { class: "lr-t" }, standMark(s), h("b", null, threadTitle(d.name)), h("span", { class: "meta" }, d.last ? ago(d.last) : "")),
+        s ? h("span", { class: "lr-x" }, standWord(s), standTail(s)) : null)); })));
 }
 
 // Over the whole page, not in the list: it sets what you see of the hive's talk, both in a conversation and in which ones are listed. Each one turns on and off by itself.

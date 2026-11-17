@@ -4,6 +4,20 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## A conversation says where it stands, at its top and in the list
+
+Opening a conversation used to mean reading its last few messages to learn whether it was finished, still being worked on, or waiting on you. The top of a conversation now says it before any message: a mark and a word (Needs you, Working, Stuck, Failed, Paused, Waiting on others, Done, and a few more), then one line on where it is, then a second, quieter fact such as what was asked or what the summary said. A click on the top opens the whole summary under it.
+
+The list of conversations now carries the same mark and the same word on every row, so a row never says less than the conversation it opens, or something else. On a busy Hive more than half the rows said nothing where the conversation itself said Done, Waiting on others or Needs you. A row says **Needs you** exactly when the count at the top of Chat includes that conversation, so the count, the group a row sits under and the word on the row cannot disagree. The line that counts an agent's helpers ("2 working, 1 needs you, 3 done") counts them by the same words, and a phone's home shows the word and the one line under each title.
+
+Some words changed with this. A row that said "Waiting for your answer" now says **Needs you**. One that said "Stopped with an error" says **Failed**, and the top of the conversation says when it failed and what wakes it. In Simple view a row's own words ("Working on it", "Taking a break", "Ran into a problem") gave way to the ones above, so the list and the conversation say one thing in both views.
+
+A summary often names other agents by their five-character codes, and the page says each one by what it is working on. It now leaves such a code as written when it is part of a file name, a folder, a command or a web address. When a summary names two agents that have no name of their own, it says "an agent" and "another agent", so two helpers no longer read as one.
+
+## A paused conversation says when your message will be read
+
+When an agent stopped at a usage limit, or lost its connection and was due another try, the conversation said it would carry on by itself and added "A message wakes it sooner." That was not so. The Hive holds such a run until the limit resets or the next try is due, and a message sent in the meantime waits for it. The page now says what happens: while a message of yours waits for a paused agent, the line over the message box ends with "It reads your message then.", and the top of the conversation says the same. The **Carry on** button is not offered while your message already waits, because pressing it only added a second message to the same wait.
+
 ## An agent that will carry on by itself no longer shows as Failed
 
 When an agent lost its connection to Claude (or the machine restarted under it), the Hive said it would carry on by itself, but the conversation showed the same run as **Failed** with "a message wakes it to try again" right underneath. Now the conversation says it stopped, why, and that it carries on by itself; the bar reads **Paused**, and it isn't counted as needing you. If the Hive gives up after several tries, it shows as Failed as before.
