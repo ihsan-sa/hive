@@ -47,6 +47,9 @@
   .set-n hr{display:none}
   .set-b{row-gap:var(--s4)}
   .set-s>.sec:first-child{margin-top:0}
+  /* E56f: a section's subtitle wraps onto its own line under the title instead of ending in "…" (the 600 px rule in components.css) */
+  .set-s .sec[data-level="1"]>.sec-h{flex-wrap:wrap}
+  .set-s .sec[data-level="1"]>.sec-h .sec-n{order:3;flex:1 1 100%;min-width:0;overflow:visible;white-space:normal;text-overflow:clip}
 }
 /* The same chips for a narrow window whose app container isn't measured yet (a resize, an older look). */
 @media (max-width:760px){

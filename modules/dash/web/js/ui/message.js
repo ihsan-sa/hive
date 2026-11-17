@@ -303,7 +303,8 @@ function body(p, ws) {
   const t = chatText(p);
   if (t.length > LONG) { const r = report(t, p.id, ws); if (r) return r; }
   if (!t.trim()) return (p.files || []).length ? null : h("div", { class: "msg-b" }, h("p", { class: "meta" }, "No text"));
-  const f = t.length > LONG && !OPEN.has(p.id) ? fold(t) : null;
+  // A post with footnotes shows whole: head and tail parse apart, so a note hidden in the middle leaves its mark as literal text and the Sources list renumbers (E59).
+  const f = t.length > LONG && !OPEN.has(p.id) && !/\[\^[^\]\s]+\]/.test(t) ? fold(t) : null;
   if (!f) return h("div", { class: "msg-b" }, markBody(mdIn(t, p), ws));
   return h("div", { class: "msg-b", "data-folded": "" },
     markBody(mdIn(f.head, p), ws),

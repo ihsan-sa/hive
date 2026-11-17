@@ -91,6 +91,13 @@
   .cm[data-list] .tm-sec-add{width:40px;height:40px;margin:0;opacity:1}
   .cm-home{display:flex;flex-direction:column;gap:var(--s5);padding:var(--s4) var(--s4) 0}
   .cm-home>.cm-new,.cm-home>section:first-child{order:99;position:sticky;bottom:0;z-index:6;width:auto;max-width:none;margin:0 calc(-1 * var(--s4));padding:var(--s3) var(--s4);background:linear-gradient(to bottom,transparent,var(--bg) 14px)}
+  /* E56f: the home's composer sits under the list, not over it: it is placed at the foot of the conversation pane (outside the scroller) and
+     the scroller ends where it starts, so nothing at rest ("1 waits on you" on a focus card) is hidden behind it. --cm-dock is its resting
+     height at first paint; after that it follows the composer's real height (E56h), so a growing text box doesn't cover the list's end. */
+  .cm-convo:has(>.cm-home>.cm-new){--cm-dock:122px}
+  .cm-convo:has(>.cm-home>.cm-new .cm-home-warn){--cm-dock:166px}
+  .cm-home:has(>.cm-new){margin-bottom:var(--cm-dock-live,var(--cm-dock));padding-bottom:var(--s3)}   /* E56h: comms.js sets --cm-dock-live from the composer's real height (a long draft, a note); --cm-dock is the first paint */
+  .cm-home>.cm-new{position:absolute;left:0;right:0;bottom:0;margin:0;background:var(--bg)}
   .cm-home>.cm-new>.cm-home-t,.cm-home>.cm-new>.cm-home-l,.cm-home>section:first-child h1{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
   .cm-home .cp-t{min-height:44px;max-height:120px}
   .cm-home .fc{padding:14px 14px 6px}
@@ -141,6 +148,10 @@
   .cp-effort>.cp-lab{display:inline}   /* round 16: Effort keeps its word on a phone and drops the value until one is set, or a lone "Default" reads as nothing */
   .cp-effort:not([data-picked]) .cp-ev{display:none}
   .cp-model.dd,.cp-fbtn.dd{font-size:var(--fs-meta)}   /* E56a: 12 px on a phone, not 11 (the nav labels and unread count too) */
+  /* E56f: a thread's To picker is its face alone (A, B, ◆ or +) and the chevron: at 390 px the name was cut to "the a…". The name stays in
+     the button for screen readers, and the menu names every choice. */
+  .cp-to{flex:none;position:relative}
+  .cp-to b{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 
   /* ---- pages ---- */
   .page{padding:var(--s4) max(var(--s4),env(safe-area-inset-right,0px)) var(--s7) max(var(--s4),env(safe-area-inset-left,0px))}
@@ -292,28 +303,55 @@
    or a 40 px box with the small shape painted inside it. Text under 12 px on these screens goes to 12. */
 @container app (width < 700px){
   .page .input:not(textarea){height:40px}
-  /* a switch: a 44x40 box that takes the 34x20 room it always did; the track is its ::before, the knob its ::after */
-  .switch{width:44px;height:40px;margin:-10px -5px;border-radius:0;background:none}
-  .switch::before{inset:10px 5px;border-radius:var(--r-pill);background:var(--edge);transition:background-color .15s}
-  .switch:checked{background:none}
-  .switch:checked::before{background:var(--ink)}
-  .switch::after{top:12px;left:7px}
-  .switch:focus-visible{outline:none}
-  .switch:focus-visible::before{outline:2px solid var(--focus);outline-offset:2px}
-  /* a checkbox is reached by its label: the label's box grows to 40 without moving its neighbours */
-  .check:not(.cards>.check),.tier-it-n{padding-block:11px;margin-block:-11px}   /* a card (Set once, Model) is already its own 40 px box */
-  .tier-more>summary{padding-block:11px;margin-block:-11px}
-  .tier-more[open]>summary{margin-bottom:calc(var(--s2) - 11px)}
+  /* a Settings switch: a 44x40 box that takes 44x40 of room (E56f: no negative margin, so it no longer reaches over the row above or
+     below); the track is its ::before, the knob its ::after. Only in Settings: the dense rows of Timeline, Focus, Board and Mesh keep theirs. */
+  .set-s .switch{width:44px;height:40px;margin:0;border-radius:0;background:none}
+  .set-s .switch::before{inset:10px 5px;border-radius:var(--r-pill);background:var(--edge);transition:background-color .15s}
+  .set-s .switch:checked{background:none}
+  .set-s .switch:checked::before{background:var(--ink)}
+  .set-s .switch::after{top:12px;left:7px}
+  .set-s .switch:focus-visible{outline:none}
+  .set-s .switch:focus-visible::before{outline:2px solid var(--focus);outline-offset:2px}
+  /* a checkbox is reached by its label: the label is a real 40 px row (E56f: was padding a negative margin took back, which overlapped) */
+  .check:not(.cards>.check),.tier-it-n{min-height:40px;align-items:center}   /* a card (Set once, Model) is already its own 40 px box */
+  .check:not(.cards>.check):has(.field-h){align-items:flex-start;padding-block:10px}
+  .tier-more>summary{min-height:40px;display:flex;align-items:center}
   .set summary.blk-h{min-height:40px}
-  .set-s a:not([class]){padding-block:13px}   /* a link inside a sentence ("see Usage"): padding on an inline box leaves the lines where they are */
-  .copy{min-width:40px;min-height:40px;margin-block:-8px;font-size:12px}
+  .set-s a:not([class]){padding-block:4px}   /* a link inside a sentence: a little padding only; its line is the target (E56f: 13 px reached into the lines around it) */
+  .copy{min-width:40px;min-height:40px;font-size:12px}
   /* Agents, all: the avatar and the two links in a stacked row */
-  .ag-stack a.av{height:40px;margin-block:-10px;background:none;isolation:isolate}
+  .ag-stack a.av{height:40px;background:none;isolation:isolate}
   .ag-stack a.av::before{content:"";position:absolute;inset:10px 0;z-index:-1;border-radius:6px;background:var(--hover)}
   .ag-stack a.av>.st{bottom:7px}
-  .ag-stack .ag .tb>.tr .ref{padding-block:12px;margin-block:-12px}
+  .ag-stack .ag .tb>.tr .ref{display:inline-flex;align-items:center;min-height:40px}
   .ag-stack .ag .tb>.tr>.ag-on:has(>.ag-none){display:none}   /* nothing said yet: no "–" line of its own under the name */
   /* 11 px text to 12: the work bar's shares, the charts' axes, avatar letters, the file panel's badge and line */
   .wkb-seg,.plot-y,.plot-x,.pv-badge,.pv .meta{font-size:12px}
   .av,.av[data-size=s]{font-size:12px}
+}
+
+/* E56d: the conversation list and a thread at 390 px (runs/e56d). Same way as E56b: each control's own box reaches 40 px, and a negative
+   margin (or a painted ::before) keeps what you see and the rows where they were. */
+@container app (width < 700px){
+  /* the list: search, Hide not needed, a focus's fold toggle and its name, a row's … */
+  .cm-search>.input{height:40px}
+  .cm-search>.ic{top:12px}
+  .cm[data-list] .cm-hidefaded{min-height:40px}
+  .tm-sec-hw>.tm-sec-ch{width:40px;height:40px;margin:0 0 0 -6px}   /* E56f: no vertical overhang; the row is 40. E56h: no right overhang, so it no longer runs 4 px into the name's link */
+  .tm-sec-ch+.tm-sec-link{padding-left:0}   /* the toggle's 40 px box is the gap; the name sits 4 px right of where E56f had it */
+  .tm-sec-hw>a.tm-sec-link{min-height:40px}   /* the row is 40 already (the + beside it) */
+  .cm-tl .lr-more-b{width:40px;height:40px;margin:-7px -7px -7px 0}
+  /* a thread: back sits on the screen, the title, the sender's face and name, a file or post named in a reply, the panel's tabs */
+  .cm-tt>.cm-back{margin-left:-4px}
+  .cm-title-b{height:40px}
+  .cm-title-b[data-hid]::after{top:9px}
+  .msg:has(>.msg-c)>.av{width:40px;height:40px;margin:-5px -6px -7px;background:none;isolation:isolate}
+  .msg:has(>.msg-c)>.av::before{content:"";position:absolute;inset:6px;z-index:-1;border-radius:inherit;background:var(--hover)}
+  .msg:has(>.msg-c)>.av>.st{right:3px;bottom:3px}
+  .msg-h .ref{min-height:40px}
+  .md a:is(:not([class]),.ref:is([data-kind=file],[data-kind=kbfile],[data-kind=post],[data-kind=thread])){padding-block:4px;background-clip:content-box}   /* inline in a sentence: padding on an inline box leaves the lines where they are */
+  .pv-tab{min-height:40px}
+  .pv .pv-zb{height:40px}
+  /* E56f: under 12 px no more: a chat row's time and its state word ("needs you") */
+  .cm-tl .lr-t .meta,.rmk{font-size:12px}
 }
