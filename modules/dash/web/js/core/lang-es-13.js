@@ -113,6 +113,7 @@ export default {
   "Show as": "Mostrar como",
   "Side question": "Pregunta aparte",
   "Single screen": "Una pantalla",
+  "Behind the scenes": "Entre bastidores",
   "Sources": "Fuentes",
   "Starting an agent": "Iniciando un agente",
   "Stuck:": "Atascado:",

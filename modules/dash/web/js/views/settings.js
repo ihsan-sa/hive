@@ -256,10 +256,12 @@ function phoneBlock(ctx) {
 function installBlock(ctx) {
   if (standalone()) return null;
   onInstallChange(() => ctx.update());
+  // E56f: only the line for the phone in use (an iPad says Macintosh but has touch); a computer gets both.
+  const ua = navigator.userAgent || "", os = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) ? "ios" : /Android/.test(ua) ? "android" : "";
   return block({ title: "Add to home screen", key: "install", sub: "Put your Hive on your home screen and it opens full screen, like an app.",
     actions: canInstall() ? button("Install app", async () => { await installApp().catch(() => false); ctx.update(); }, { size: "s" }) : null },
-    h("p", { class: "field-h", "data-key": "install-ios" }, "iPhone or iPad: in Safari, tap Share, then Add to Home Screen."),
-    h("p", { class: "field-h", "data-key": "install-android" }, "Android or Chrome: open the browser menu, then Install app."));
+    os !== "android" ? h("p", { class: "field-h", "data-key": "install-ios" }, "iPhone or iPad: in Safari, tap Share, then Add to Home Screen.") : null,
+    os !== "ios" ? h("p", { class: "field-h", "data-key": "install-android" }, "Android or Chrome: open the browser menu, then Install app.") : null);
 }
 // Off until you turn them on here; the browser then asks once. Kept in this browser.
 function notifyBlock(ctx) {
@@ -746,6 +748,7 @@ function accessSection(ctx) {
   return section({ title: "Access from outside", level: 1, note: "only changeable from this machine" },
     h("p", null, statusLabel(names.length ? "working" : "off", names.length ? "Set up" : "Off"), " ", names.length ? "These names can reach this Hive from the internet, through Cloudflare, once their tunnel is up:" : "Only this computer can open this Hive. You need this only to reach it from a phone or another machine."),
     names.length ? h("ul", { class: "plain", "data-key": "access-names" }, names.map(n => h("li", { "data-key": n }, h("b", { class: "mono" }, n), sites.includes(n) ? h("span", { class: "muted" }, " has its own sign-in rules. Change them under Names with their own sign-in, below.") : null))) : null,
+    foot("Each part below saves as one set with its own button, because a half-typed sign-in rule could lock people out."),   // E56f: above the parts it speaks of
     blocks(block({ title: "How access works", key: "access-how", fold: true, open: F.accessHow, onToggle: o => { F.accessHow = o; } },
       h("p", { class: "field-h" }, "Opening a name takes a Cloudflare tunnel and an Access policy, set up in Cloudflare. If you name people below, each gets limited (read, chat, kill agents) or full (everything here, from signing in until 30 minutes without using the app), and the ticks don't apply. Anyone else is refused, and emptying both lists afterwards refuses everyone. Type addresses here yourself: an agent's tools can refuse your account's address. From this machine, the secret gets everything. Through a tunnel, each request must carry a token signed by Cloudflare Access, and it can do only what's ticked here.")),
       block({ title: o.hosts.length || o.team ? "Change the settings" : "Set it up", key: "access-edit", fold: true, open: F.accessOpen ?? !!(o.hosts.length || o.team || Object.keys(o.people || {}).length), onToggle: v => { F.accessOpen = v; } },
@@ -758,8 +761,7 @@ function accessSection(ctx) {
         h("p", { class: "field-h" }, "A name here has its own Access team, audience and people, apart from the settings above. A sign-in for one name never works on another. Each needs a team, an audience and at least one person, and its tunnel must pass the public name on as the Host. Those above don't change when you save here."),
         ...siteRows,
         h("div", { class: "frow" }, button("Add a name", () => { R.push({ host: "", team: "", aud: "", emails: "", full: "", limited: "" }); F.sitesOpen = true; ctx.update(); }, { kind: "quiet" }),
-          button("Save names", saveSites, { kind: "primary", busy: isBusy("sites") }), msg("sites")))),
-    foot("Each part below saves as one set with its own button, because a half-typed sign-in rule could lock people out."));
+          button("Save names", saveSites, { kind: "primary", busy: isBusy("sites") }), msg("sites")))));
 }
 
 // Each section's state, as a dot after its name in the side nav: what the six chips up top used to say.

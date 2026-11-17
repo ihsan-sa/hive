@@ -1446,7 +1446,18 @@ function archivedPane(c, ctx) {
     h("p", { class: "meta" }, "Out of the list: archived by hand, or quiet for a day (a week when it ran longer). Something new for you brings one back by itself."),
     list(rows, { empty: "Nothing archived." }));
 }
+// E56h: on a phone the home's composer is docked at the foot of the pane (css/phone.css) and the list ends --cm-dock above it. A fixed
+// reserve let a long draft (the box grows to 120 px) cover the last rows, so the reserve follows the composer's real height. It is set on
+// <html> (morph() would drop a style it didn't render) as --cm-dock-live, only while the composer is docked (position:absolute: phone width).
+let dockSeen = null;
+const dockSet = () => { const n = dockSeen, de = document.documentElement;
+  const px = n && n.isConnected && getComputedStyle(n).position === "absolute" ? Math.ceil(n.getBoundingClientRect().height) : 0;
+  if (px) de.style.setProperty("--cm-dock-live", px + "px"); else de.style.removeProperty("--cm-dock-live"); };
+const dockRO = typeof ResizeObserver === "function" ? new ResizeObserver(dockSet) : null;
+const watchDock = () => { const n = document.querySelector(".cm-home>.cm-new"); if (dockRO && n !== dockSeen) { if (dockSeen) dockRO.unobserve(dockSeen); dockSeen = n; if (n) dockRO.observe(n); } dockSet(); };
+if (typeof window !== "undefined") window.addEventListener("resize", () => requestAnimationFrame(dockSet));
 function homePane(ctx) {
+  requestAnimationFrame(watchDock);
   const w = can("post"), n = needsN(), local = outFor(null), room = hasRoom(), digest = app();   // n: the one count (core/needs.js), the same as the Chat badge
   if (digest) { loadFoci(); loadNeedsYou(); loadFinished(ctx); if (can("tier")) loadTiers(ctx.update); }   // work tiers: the chip on each focus card   // the one needs-you load (core/needs.js): the line, the badge and the cards read S.needsYou
   // Only on arriving: taking focus on every render pulled the page back to the box after any real click elsewhere on it.
@@ -1495,7 +1506,7 @@ function phoneList() {
 // Over the whole page, not in the list: it sets what you see of the hive's talk, both in a conversation and in which ones are listed. Each one turns on and off by itself.
 const SHOW_PARTS = [[SHOW.you, "For you", "your messages, what agents ask or tell you, and each job's result"],
   [SHOW.updates, "Updates", "agents' progress updates"],
-  [SHOW.comms, "Agent comms", "agent comms: agents talking to each other and the hive's own notices"]];
+  [SHOW.comms, app() ? "Behind the scenes" : "Agent comms", "agent comms: agents talking to each other and the hive's own notices"]];
 function showSays(mask) {
   if (words(C.tq).length || words(C.q).length) return "Search looks through everything, whatever is on here.";
   if (!mask) return "Nothing is on, so no messages show. Turn one on.";
