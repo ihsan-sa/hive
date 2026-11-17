@@ -37,6 +37,10 @@
   .msg{--chat-pad:6px;padding-inline:var(--chat-pad)}
   .msg[data-who=me]>.msg-b,.msg[data-who=me]>.msg-q,.msg[data-who=me]>.msg-files{max-width:88%}
   .msg:not([data-who=me]) .md>.rc-fig:not([data-full]) .rc-stage{margin-inline:calc(-8px - var(--chat-pad))}
+  /* E75 (everyday E71): no avatar gutter on a phone (the head line names the sender), so text gets ~340 of 390 px; equations a size down */
+  .msg:not([data-who=me]):has(>.msg-c){grid-template-columns:minmax(0,1fr);padding-inline:4px}
+  .msg:not([data-who=me]):has(>.msg-c)>.av{display:none}
+  .msg .rc-eq-b{font-size:.92em}
 }
 
 /* ==== 3. Type and rhythm ==== */
@@ -500,8 +504,12 @@ html[data-read="1.3"]{--read-scale:1.3}
 .cm-title-sub{display:none}
 .cm-strip-a[role=button]{cursor:pointer}
 @media (max-width:699px){
-  .cm-title-b:has(.cm-title-sub){flex-wrap:wrap;height:auto;min-height:40px;row-gap:0;text-align:left}
-  .cm-title-sub{display:block;flex-basis:100%;min-width:0;font-size:12px;line-height:16px;font-weight:400;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* A grid, not a wrapping flex row: the title and its chevron share row 1 and the line under it spans row 2, each cell with its own width, so no browser can
+     wrap the title word by word or lay the line over it (the person's phone, 2026-11-17: a tall head with the title one word wide and the line printed on it) */
+  .cm-title-b:has(.cm-title-sub){display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;max-width:100%;height:auto;min-height:40px;row-gap:0;text-align:left}
+  .cm-title-b:has(.cm-title-sub)>.cm-title{grid-column:1;grid-row:1;min-width:0;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}
+  .cm-title-b:has(.cm-title-sub)>.ic{grid-column:2;grid-row:1}
+  .cm-title-sub{display:block;grid-column:1/-1;grid-row:2;min-width:0;max-width:100%;font-size:12px;line-height:16px;font-weight:400;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .cm-title-sub>.st{margin-right:6px;vertical-align:1px}
   .cm-title-sub>b{font-weight:600;color:var(--ink-2)}
   .cm-title-sub[data-state=asks]>b{color:var(--accent-ink)}

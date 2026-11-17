@@ -13,6 +13,7 @@ with a thin brief re-read "nothing left" and repeated it. `hive goals --brief TH
 many rounds did work rather than report a wait.
 """
 import argparse, datetime as dt, importlib.util, json, re, subprocess, sys, zlib
+from collections import Counter
 from pathlib import Path
 
 HOME = Path.home()
@@ -66,11 +67,12 @@ def section(txt, m, heading, t=None):
     for state, text in RUNG.findall(body):
         a = AFTER.search(text) or GATE.search(text.split("check:")[0]) or CHECK_ON.search(text)
         rungs.append({"state": state, "text": text.strip(), "after": a.group(1) if a else None, "checked": "check:" in text})
-    nxt = next((r for r in rungs if r["state"] == " " and r["checked"] and (not r["after"] or r["after"] <= (today if len(r["after"]) == 10 else t.strftime("%Y-%m-%dT%H:%M")))), None)
+    due = [r for r in rungs if r["state"] == " " and r["checked"] and (not r["after"] or r["after"] <= (today if len(r["after"]) == 10 else t.strftime("%Y-%m-%dT%H:%M")))]
+    nxt = due[0] if due else None
     p = PARKED.search(body); parked = None
     if p and today < p.group(1) <= (t.date() + dt.timedelta(days=PARK_MAX_D)).isoformat(): parked = {"until": p.group(1), "why": p.group(2).strip()}
     return {"thread": th.group(1).lower() if th else None, "rungs": rungs, "next": nxt, "parked": parked, "done": sum(r["state"] == "x" for r in rungs),
-            "left": sum(r["state"] == " " for r in rungs), "no_check": sum(r["state"] == " " and not r["checked"] for r in rungs)}
+            "due_more": [r["text"] for r in due[1:]], "left": sum(r["state"] == " " for r in rungs), "no_check": sum(r["state"] == " " and not r["checked"] for r in rungs)}
 
 def rounds(board, threads, since):
     """Keeper rounds in these threads since `since` (ISO): one per brief, graded on the last post of the agent that took it. {thread: [work, wait, silent]}"""
@@ -125,9 +127,21 @@ def project_goals():
                     "edited": dt.datetime.fromtimestamp(g.stat().st_mtime, dt.timezone.utc).isoformat(timespec="seconds"), "ladder": ladder(txt), "ladders": ladders(txt), "path": str(g)})
     return out
 
+HASH_NAME = re.compile(r"[a-z][0-9a-f]{4,}")   # as in hive: what new/claude/codex/warden hand out; anything else is a named identity
+
+def homes(board):
+    """A named identity (nightly, remind, weekly-fresh) runs a lane of its own, often from a timer script: its home is the thread that
+    holds over half its posts. Elsewhere its posts are reports, not rounds, so they don't make it the thread's worker. 11-10..17: the
+    dash gate posts as `nightly` into rsi-loop, so 18 rsi-loop briefs woke the product-test agent and 2 were delivered (meta-moving, ad388)."""
+    c = {}
+    for p in board:
+        f = str(p.get("from", "")).lower()
+        if f and f not in NOT_AGENTS and not HASH_NAME.fullmatch(f): c.setdefault(f, Counter())[p.get("thread") or p.get("id")] += 1
+    return {f: th for f, n in c.items() for th, k in n.most_common(1) if k * 2 > sum(n.values())}
+
 def thread_state(board, runs, t):
     """Per thread: last agent post (at, from), last person post, running agents."""
-    st = {}
+    st = {}; home = homes(board)
     for p in board:
         th = p.get("thread") or p.get("id"); s = st.setdefault(th, {"agent_at": "", "agent": "", "person_at": "", "posts": 0, "running": set()})
         s["posts"] += 1
@@ -135,7 +149,7 @@ def thread_state(board, runs, t):
         if f == "person": s["person_at"] = max(s["person_at"], p.get("at", ""))
         elif f not in NOT_AGENTS and p.get("at", "") >= s["agent_at"]:
             s["agent_at"], s["agent"] = p.get("at", ""), p.get("from")
-            if not BRIEF.search(p.get("text", "")): s["worker"] = p.get("from")
+            if not BRIEF.search(p.get("text", "")) and (HASH_NAME.fullmatch(f) or home.get(f) == th): s["worker"] = p.get("from")
             if BUILD.search(p.get("text", "")) and not BRIEF.search(p.get("text", "")): s["build_at"] = p.get("at", "")   # who did the thread's work, not who posted its last brief
     for r in runs:
         if r.get("thread"): st.setdefault(r["thread"], {"agent_at": "", "agent": "", "person_at": "", "posts": 0, "running": set()})["running"].add(r.get("name"))
@@ -195,7 +209,7 @@ def with_ladder(row, g):
     lad = g["ladder"] if g else None
     row["ladder"] = bool(lad); row["goals_path"] = g["path"] if g else None
     if lad:
-        row.update(rung=lad["next"]["text"] if lad["next"] else None, rungs_left=lad["left"], rungs_done=lad["done"], rungs_no_check=lad["no_check"], parked=lad["parked"], **({"section": lad["section"]} if lad.get("section") else {}))
+        row.update(rung=lad["next"]["text"] if lad["next"] else None, due_more=lad.get("due_more", []), rungs_left=lad["left"], rungs_done=lad["done"], rungs_no_check=lad["no_check"], parked=lad["parked"], **({"section": lad["section"]} if lad.get("section") else {}))
         if lad["parked"]: row["idle"] = False
         # every open rung carries a future after: gate and none is open now: a round could only write more rungs, so hold the keeper until the earliest gate (ae5ec, 2026-11-15: 18 idle rounds a day on improve-survey)
         open_ = [r for r in lad["rungs"] if r["state"] == " "]
@@ -308,6 +322,10 @@ def brief(row):
     if prev: to = "new"
     head = f"@{to} Keeper round on {row['name']}. The ladder is the `## {row.get('section') or 'Ladder'}` section of {row.get('goals_path') or 'this focus project goals.md (create it, one line a rung)'}: read that whole file, and obey any notes in the section.\n\n"
     rung = f"**Your rung:** {row['rung']}\n\nDo this rung. Land real work, then run its check." if row.get("rung") else "**The ladder has no rung you can take.** Your work this round is to write the next 3 to 5 rungs from the measure in that file, then do the first one."
+    more = row.get("due_more") or []   # hive-meta Moving ladder, ad388 11-17: rounds took one rung and ended `Waiting:` while more were due (rsi-loop a0efb 10:04, 4 due since 08:00Z; rsi-lab a12a7 13:04, 2 due since 12:00Z): Goal 1 ran 7.1% of the day
+    if more and row.get("rung"):
+        rung += (f"\n\n**Also due now on this ladder ({len(more)} more):** " + "; ".join('"' + re.sub(r"\s+", " ", x.replace("`", ""))[:110] + '"' for x in more[:3]) +
+                 ". When your rung is done, marked `[!]` or re-dated, take the next due one in this run, or end with `Next:` naming it so the starter carries it on. `Waiting:` is only for when no rung is due.")
     fresh = (f"\n\n**You take this fresh:** `{prev}`'s last {STREAK_NEW} rounds here were graded nothing (they posted a wait instead of doing the rung)."
              " Read the thread for context, then do the rung yourself; do not hand it back.") if prev else (
         f"\n\n**You take this fresh:** `{row['last_worker']}` would have carried {big // 1000}k tokens of context into this round (a context-cap trial, hive-meta L134)."

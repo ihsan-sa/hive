@@ -13,7 +13,7 @@ import { simpleOn, plainName } from "../core/simple.js";
 import { button, empty, statusWord, section, waiting } from "../ui/kit.js";
 import { agentRef } from "../ui/refs.js";
 import { openPreview, fileHref } from "../ui/preview.js";
-import { loadFoci, fociFailed, focusById, focusOf, threadsOf, needsOf, askedOf, agentsOf, stateOf, pills, plainPills, needSource, scrub, focusName, MISC, FOCI_EVERY, activityOf, shareOf, fractionWords, pct, usd, leadOf, pageSince, newSince, hiddenAsks, markSeen } from "../core/foci.js";
+import { loadFoci, fociFailed, focusById, focusOf, threadsOf, needsOf, askedOf, yoursN, agentsOf, stateOf, pills, plainPills, needSource, scrub, focusName, MISC, FOCI_EVERY, activityOf, shareOf, fractionWords, pct, usd, leadOf, pageSince, newSince, hiddenAsks, markSeen } from "../core/foci.js";
 import { waitingLater } from "../core/needs.js";
 import { archived } from "../ui/threadmeta.js";
 import { draft, answer } from "../ui/composer.js";
@@ -163,7 +163,11 @@ function yoursSec(f, ctx) {
         onclick: (e, n) => { e.preventDefault(); openQuick(w, n || e.target); } }, "Reply")) : null);
   };
   const tog = all.length ? h("label", { class: "fp-yr-mine meta" }, h("input", { type: "checkbox", role: "switch", class: "switch", checked: FP.mine, onchange: (e, n) => { FP.mine = n.checked; FP.yours = 3; ctx.update(); } }), "With what you said") : null;
-  return h("section", { class: "fp-sec fp-yr", "data-key": "fp-yr", "aria-label": "For you here" }, head("For you here", rows.filter(p => !answered(p)).length ? String(rows.filter(p => !answered(p)).length) : null, tog),
+  // HA-17: the number beside the heading is what waits on the person in this focus, the same count as its home card and list row (foci.js
+  // yoursN); a message said to them with no reply after it is history, not a wait, so those are counted on a line of their own under it.
+  const n = yoursN(id), unans = rows.filter(p => p.from !== "person" && !answered(p)).length;
+  return h("section", { class: "fp-sec fp-yr", "data-key": "fp-yr", "aria-label": "For you here" }, head("For you here", n ? String(n) : null, tog),
+    unans ? h("p", { class: "meta fp-yr-un", "data-key": "fp-yr-un" }, `${plural(unans, "message")} to you with no reply after ${unans === 1 ? "it" : "them"}`) : null,
     rows.length ? h("ul", { class: "fp-yr-l" }, shown.map(row)) : h("p", { class: "fp-calm" }, "Nothing was said to you in this focus yet."),
     more ? h("p", { class: "fp-more" }, button(`Show ${Math.min(more, 10)} more`, () => { FP.yours += 10; ctx.update(); }, { kind: "quiet", size: "s" })) : null,
     steerBox(f, ctx));

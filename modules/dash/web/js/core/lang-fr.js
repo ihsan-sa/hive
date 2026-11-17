@@ -72,6 +72,7 @@ export default {
   "Stopped with an error": "Arrêté à cause d'une erreur",
   "New reply for you": "Nouvelle réponse pour toi",
   "It carries on by itself once there's room.": "Il reprendra tout seul dès qu'il y aura de la marge.",
+  "A message that picks another model has it carry on now.": "Un message qui choisit un autre modèle le fait reprendre tout de suite.",
   "There's room again now, so it should carry on by itself soon.": "Il y a de nouveau de la marge, donc il devrait reprendre tout seul bientôt.",
   "This browser can't sign messages, so what you send from it goes unsigned.": "Ce navigateur ne peut pas signer les messages, donc ce que tu envoies depuis celui-ci part sans signature.",
   // the reply box
@@ -173,6 +174,7 @@ export default {
     [/^(\S+) stopped at a usage limit$/, "$1 s'est arrêté à une limite d'utilisation"],
     [/^stopped at a usage limit (\S+) ago and hasn't carried on\.$/, "s'est arrêté à une limite d'utilisation il y a $1 et n'a pas repris."],
     [/^It carries on by itself after (.+)\.$/, "Il reprendra tout seul après $1."],
+    [/^(\d\d?:\d\d(?: [AP]M)?) · It carries on by itself after (.+)\.$/, "$1 · Il reprendra tout seul après $2."],
     [/^Off\. Turn it on to get a line on your phone when your Hive asks you something or finishes a job, even with this page closed\. It uses ntfy\.sh, a free public service with no account: your Hive sends it one line(.*) and nothing else\.$/, "Désactivées. Active-les pour recevoir une ligne sur ton téléphone quand ton Hive te pose une question ou termine une tâche, même si cette page est fermée. Cela utilise ntfy.sh, un service public gratuit sans compte : ton Hive lui envoie une ligne$1 et rien d'autre."],
     [/^This browser signs what you send with a key only it holds, so an agent can't simply write a message in your name\. Its fingerprint is (\S+)\. It counts once root has pinned it\.$/, "Ce navigateur signe ce que tu envoies avec une clé que lui seul détient, pour qu'un agent ne puisse pas simplement écrire un message en ton nom. Son empreinte est $1. Elle compte dès que root l'a épinglée."],
     [/^updated (\S+) ago$/, "mis à jour il y a $1"],

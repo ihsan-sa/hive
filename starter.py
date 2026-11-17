@@ -828,7 +828,8 @@ def running(st=None, by_hand=False):
                 limits[key] = max(limits.get(key, 0), hit[0])
                 st.setdefault("resume", {})[r["name"]] = {**r, "session": hit[1] or r["session"], "reset": hit[0]}
                 log(event="limited", name=r["name"], session=hit[1] or r["session"],
-                    resets=dt.datetime.fromtimestamp(hit[0], dt.timezone.utc).isoformat(timespec="seconds"))
+                    resets=dt.datetime.fromtimestamp(hit[0], dt.timezone.utc).isoformat(timespec="seconds"),
+                    **({"scope": scope} if scope else {}))  # a model's own limit: the chat names its reset and says another model carries on now (HA-15)
                 if fresh:  # one post per episode, not one per stopped agent
                     more = len(cfg().get("logins", [])) > 1
                     post(f"Usage limit reached (`{r['name']}` first{f', the {scope.title()} limit' if scope else ''}). {f'{scope.title()} agents' if scope else 'Agents'}{f' on account {account_name(login)}' if more else ''} wait and carry on by themselves at "

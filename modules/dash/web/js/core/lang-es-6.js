@@ -70,7 +70,10 @@ export default {
     [/^(.+) waits for your answer$/, (_, n) => `${who(n)} espera tu respuesta`],
     [/^(.+) stopped answering$/, (_, n) => `${who(n)} dejó de responder`],
     // a run that ended badly after the summary was written
-    [new RegExp(`^stopped at a usage limit ${AGO}; it carries on by itself( and reads your message then)?$`), (_, t, m) => `se paró por un límite de uso ${when(t)}; sigue por sí solo${m ? THEN : ""}`],
+    // with when it carries on, the run's own reset or the Hive's (model.js carryOn, HA-15)
+    [new RegExp(`^stopped at a usage limit ${AGO}; it carries on by itself(?: after (.+?))?( and reads your message then)?$`),
+      (_, t, at, m) => `se paró por un límite de uso ${when(t)}; sigue por sí solo${at ? ` después del ${at}` : ""}${m ? THEN : ""}`],
+    [/^taking a break; it carries on by itself after (.+?)( and reads your message then)?$/, (_, at, m) => `se toma un descanso; sigue por sí solo después del ${at}${m ? THEN : ""}`],
     // a run the starter resumes by itself (lost connection, a restart): starter.py's WHY_WORDS, model.js retryWords
     [new RegExp(`^stopped \\((.+)\\) ${AGO}; it carries on by itself( and reads your message then)?$`), (_, w, t, m) => `se paró (${RETRY[w] || w}) ${when(t)}; sigue por sí solo${m ? THEN : ""}`],
     [new RegExp(`^stopped \\((.+)\\) ${AGO} and carries on by itself\\.$`), (_, w, t) => `se paró (${RETRY[w] || w}) ${when(t)} y sigue por sí solo.`],

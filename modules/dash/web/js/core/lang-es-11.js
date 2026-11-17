@@ -223,5 +223,15 @@ export default {
   "Woke": "Despertó",
   "new thread": "hilo nuevo",
 
+  "Hide what you have already seen": "Ocultar lo que ya has visto",
+  "New only": "Solo lo nuevo",
+  "No owner lane": "Sin carril de dueño",
+  "Nothing new since you last looked,": "Nada nuevo desde la última vez que miraste,",
+  "The Hive": "El Hive",
+  "The relayer": "El retransmisor",
+  "and self-test": "y autoprueba",
+  "has written": "ha escrito",
+  "is open": "está abierto",
+  "while run": "mientras se ejecuta",
   __patterns: [],
 };

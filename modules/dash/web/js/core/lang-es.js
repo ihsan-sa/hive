@@ -73,6 +73,7 @@ export default {
   "Stopped with an error": "Parado por un error",
   "New reply for you": "Nueva respuesta para ti",
   "It carries on by itself once there's room.": "Seguirá solo en cuanto haya margen.",
+  "A message that picks another model has it carry on now.": "Un mensaje que elija otro modelo hace que siga ya.",
   "There's room again now, so it should carry on by itself soon.": "Ya hay margen otra vez, así que debería seguir solo pronto.",
   "This browser can't sign messages, so what you send from it goes unsigned.": "Este navegador no puede firmar mensajes, así que lo que envíes desde él va sin firmar.",
   // the reply box
@@ -174,6 +175,7 @@ export default {
     [/^(\S+) stopped at a usage limit$/, "$1 se paró por un límite de uso"],
     [/^stopped at a usage limit (\S+) ago and hasn't carried on\.$/, "se paró por un límite de uso hace $1 y no ha seguido."],
     [/^It carries on by itself after (.+)\.$/, "Seguirá solo después del $1."],
+    [/^(\d\d?:\d\d(?: [AP]M)?) · It carries on by itself after (.+)\.$/, "$1 · Seguirá solo después del $2."],
     [/^Off\. Turn it on to get a line on your phone when your Hive asks you something or finishes a job, even with this page closed\. It uses ntfy\.sh, a free public service with no account: your Hive sends it one line(.*) and nothing else\.$/, "Desactivados. Actívalos para recibir una línea en el móvil cuando tu Hive te pregunte algo o termine un trabajo, aunque esta página esté cerrada. Usa ntfy.sh, un servicio público y gratuito sin cuenta: tu Hive le envía una línea$1 y nada más."],
     [/^This browser signs what you send with a key only it holds, so an agent can't simply write a message in your name\. Its fingerprint is (\S+)\. It counts once root has pinned it\.$/, "Este navegador firma lo que envías con una clave que solo él tiene, para que un agente no pueda escribir un mensaje en tu nombre sin más. Su huella es $1. Cuenta en cuanto root la haya fijado."],
     [/^updated (\S+) ago$/, "actualizado hace $1"],

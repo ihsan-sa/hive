@@ -4,6 +4,8 @@ const pl = (n, one, many) => (n === "1" ? one : many);
 // A focus's state (its In short), said of a focus: "el enfoque" is masculine, a conversation is not, so "blocked" has a word of its own here.
 const FST = { "on track": "va bien", "at risk": "en riesgo", blocked: "bloqueado", "needs you": "te necesita", "waiting on others": "esperando a otros", paused: "en pausa", done: "hecho" };
 const fwas = w => (w === "no longer needs you" ? "ya no te necesita" : w === "was on track" ? "antes iba bien" : "antes " + (FST[w.slice(4)] || w.slice(4)));
+// an agent named in a receipt: "the agent", or the app look's label ("Agent A", "Agent A and Agent B")
+const ag = a => a === "the agent" ? "el agente" : a.replace(/\bAgent ([A-Z]{1,2})\b/g, "Agente $1").replace(/ and /g, " y ");
 export default {
   "to you": "para ti",
   "Lately learned": "Aprendido últimamente",
@@ -565,6 +567,8 @@ export default {
   "Hide this line": "Ocultar esta línea",
   "One row per focus, a piece of your work with a goal, under where it stands: the ones that wait on you come first. Each row is the focus in a sentence or two. Click a focus name for the whole picture; Cards, beside the heading, shows every focus with its lines.": "Una fila por enfoque, una parte de tu trabajo con un objetivo, agrupadas según cómo va cada uno: los que te esperan van primero. Cada fila es el enfoque en una o dos frases. Haz clic en el nombre de un enfoque para verlo entero; Tarjetas, junto al título, muestra cada enfoque con sus líneas.",
   __patterns: [
+    // a focus page's For you here: what was said to the person with no reply after it, under the needs count (focus.js yoursSec, HA-17)
+    [/^(\d+) messages? to you with no reply after (?:it|them)$/, (_, n) => `${n} ${n === "1" ? "mensaje" : "mensajes"} para ti sin respuesta después`],
     // The home's list of focuses, the In short and what is new since the last look
     [/^In short(?:, said (.+?) ago and not since)?: (.+?)(?:, (was .+?|no longer needs you))?(, and agents are on it now)?$/, (_, t, st, w, m) => `En pocas palabras${t ? `, dicho hace ${t} y no desde entonces` : ""}: ${FST[st] || st}${w ? ", " + fwas(w) : ""}${m ? ", y hay agentes en ello ahora" : ""}`],
     [/^was (on track|at risk|blocked|waiting on others|paused|done)$/, w => fwas(w)],
@@ -739,7 +743,10 @@ export default {
     [/^Claude account (\S+) has expired\. Its agents moved to your other account\. Sign in again to bring it back\.$/, "La cuenta de Claude $1 ha caducado. Sus agentes pasaron a tu otra cuenta. Vuelve a iniciar sesión para recuperarla."],
     [/^(\d+) posts? in the last hour(?: · (\d+) waiting to start)?(?: · (\S+) of work in 24h, at list prices)?$/, (_, n, q, c) => [`${n} ${pl(n, "mensaje", "mensajes")} en la última hora`, q ? `${q} esperando para empezar` : null, c ? `${c} de trabajo en 24h, a precios de lista` : null].filter(Boolean).join(" · ")],
     [/^(Send|Start) \(Enter\)\. (\S+) reads it after its current step( ↑ past messages · Tab completes)?$/, (_, w, a, more) => `${w === "Send" ? "Enviar" : "Empezar"} (Intro). ${a === "the agent" ? "El agente" : a} lo lee tras su paso actual${more ? " ↑ mensajes anteriores · Tab completa" : ""}`],
-    [/^Queued · (.+) reads it after its current step$/, (_, a) => `En cola · ${a === "the agent" ? "el agente" : a} lo lee tras su paso actual`],
+    [/^Waiting for (.+?) · it reads this after (.+)$/, (_, a, t) => `Esperando a ${ag(a)} · lo lee después del ${t}`],
+    [/^Waiting for (.+?) · it reads this when .+ (?:is|are) free$/, (_, a) => `Esperando a ${ag(a)} · lo lee cuando quede libre`],
+    [/^Waiting for (.+) to start$/, (_, a) => `Esperando a que ${ag(a)} empiece`],
+    [/^Queued · (.+) reads it after its current step$/, (_, a) => `En cola · ${ag(a)} lo lee tras su paso actual`],
     [/^(?:([a-z][\w-]*): )?failed \(exit (\d+)\)$/, (_, a, x) => `${a ? a + ": " : ""}falló (salida ${x})`],
     [/^(\d+) errored$/, "$1 con error"],
     [/^(.+), (working|quiet|stuck|ended|killed|queued|limited|failed|paused|done|in job queue|waiting for your answer|hasn't run|sending|in use|new reply for you|not picked up)$/, (_, n, w) => `${n === "the agent" ? "el agente" : n}, ${({ working: "trabajando", quiet: "en silencio", stuck: "atascado", ended: "terminado", killed: "detenido", queued: "en cola", limited: "limitado", failed: "fallido", paused: "en pausa", done: "hecho", "in job queue": "en la cola de trabajos", "waiting for your answer": "esperando tu respuesta", "hasn't run": "no ha corrido", sending: "enviando", "in use": "en uso", "new reply for you": "nueva respuesta para ti", "not picked up": "sin recoger" })[w]}`],

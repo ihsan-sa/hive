@@ -6,7 +6,7 @@
 import { h, copyText, tr } from "../core/dom.js";
 import { S, can, jget, SYS, OUTSIDE, post as apiPost } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
-import { isScript, isAgent, isWarden, isRunning, inConversation, capFirst, agentLabel, displayText, typedText, editNote, chatText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
+import { isScript, isAgent, isWarden, isRunning, inConversation, parkedCarry, capFirst, agentLabel, displayText, typedText, editNote, chatText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
 import { focusById, focusName, focusOf } from "../core/foci.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN, fix, int } from "../core/format.js";
 import { markdown, mdCut, filesNamed } from "./markdown.js";
@@ -68,7 +68,10 @@ export function delivery(p, m) {
   if (p.interrupt && isRunning(m)) return { key: "interrupt", tone: "info", text: `Interrupt sent · ${m} gets it now`, who: m };
   // A running agent gets the post from its hook after its current step, even while the starter also holds it for the next start.
   if (isRunning(m)) return { key: "waiting", tone: "quiet", text: `Sent · reaches ${m} after its current step`, who: m };
-  if (queued) return { key: "queued", tone: "info", text: `Waiting for ${m} to start`, who: m };
+  // held for a run stopped at a usage limit: it reads this when that run carries on, which can be days away (a model's own share), so the receipt
+  // names that time, from the function the line over the box uses (core/model.js parkedCarry, HA-16); "to start" read as seconds
+  if (queued) { const co = parkedCarry(m), at = co && !co.room ? co.at : null;
+    return { key: "queued", tone: "info", text: co && !co.room ? (at ? `Waiting for ${m} · it reads this after ${stamp(at)}` : `Waiting for ${m} · it reads this when ${m} is free`) : `Waiting for ${m} to start`, who: m, start: true, at, held: !!co && !co.room }; }
   // Just posted to a sleeping agent: the starter takes a moment to wake it, so it isn't "not reached" yet.
   if (now() - p.t < 2 * MIN) return { key: "queued", tone: "info", text: `Waking ${m}…`, who: m };
   return { key: "unseen", tone: "bad", text: `Hasn't reached ${m}`, who: m };
@@ -112,7 +115,9 @@ export function messageReceipt(p) {
   el.dataset.key = top.key;
   if (top.key === "interrupt") { el.dataset.tone = "info"; el.append(icon("stop"), h("span", null, `Interrupting ${X} · it reads this, and anything queued, once its step stops`)); }
   else if (top.key === "unseen") { el.dataset.tone = "bad"; el.append(h("span", { class: "st", "data-tone": "bad", "aria-hidden": "true" }), h("span", null, top.who ? `Hasn't reached ${X}` : top.text)); }
-  else if (top.key === "queued") { el.dataset.tone = "warn"; el.append(h("span", { class: "st", "data-tone": "warn", "aria-hidden": "true" }), h("span", null, top.text)); }
+  else if (top.key === "queued") {   // a held message names its agent as the rest do (X: no code in the app look) and, when its run is paused at a limit, when it reads it (HA-16)
+    const at = same.length < 2 && top.at, words = !top.start ? top.text : top.held ? (at ? `Waiting for ${X} · it reads this after ${stamp(at)}` : `Waiting for ${X} · it reads this when ${X} ${same.length > 1 ? "are" : "is"} free`) : `Waiting for ${X} to start`;
+    el.dataset.tone = "warn"; if (at) el.dataset.at = String(at); el.append(h("span", { class: "st", "data-tone": "warn", "aria-hidden": "true" }), h("span", null, words)); }
   else if (top.key === "waiting") { el.dataset.tone = "warn"; el.append(h("span", { class: "st", "data-tone": "warn", "aria-hidden": "true" }), h("span", null, `Queued · ${X} reads it after its current step`)); }
   else if (p.interrupt) {
     const t = (DELIV.at[top.who] && DELIV.at[top.who].get(p.id)) || top.t || 0;
@@ -327,7 +332,9 @@ function copiesOf(p) {
 }
 export function relayLine(p) {
   const out = [];
-  if (p.relay_of) { const o = S.byId[p.relay_of], m = /in thread (\S+) \(/.exec(String(p.text || "")), from = (o && o.th) || (m && m[1]); out.push(h("span", { class: "msg-relay" }, icon("reply"), `Passed on${p.relay_by ? " by " + p.relay_by : ""} from `, from ? threadRef(from) : "another thread")); }
+  if (p.relay_of) { const o = S.byId[p.relay_of], m = /in thread (\S+) \(/.exec(String(p.text || "")), from = (o && o.th) || (m && m[1]); out.push(h("span", { class: "msg-relay" }, icon("reply"), `Passed on${p.relay_by ? " by " + p.relay_by : ""} from `, from ? threadRef(from) : "another thread"));
+    // R36c: the relayer's why is its own line, in the relayer's name, never inside the quoted post (which is the original author's).
+    if (p.relay_why) out.push(h("span", { class: "msg-relay msg-relay-why" }, `${p.relay_by || "The relayer"} says: ${p.relay_why}`)); }
   const cs = copiesOf(p); if (cs.length) out.push(h("span", { class: "msg-relay" }, "Passed on to ", ...cs.flatMap((c, i) => (i ? [", ", threadRef(c.th)] : [threadRef(c.th)]))));
   for (const id of p.foci || []) { const f = focusById(id); out.push(h("span", { class: "msg-relay" }, "For the focus ", f ? focusName(f) : id)); }
   return out.length ? h("div", { class: "msg-relays" }, ...out) : null;
