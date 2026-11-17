@@ -920,12 +920,12 @@ def text(cur, prev):
 
 # The one place the core names the lab's index. `hive steer` and the head of `hive progress` both read it through here;
 # the lab's scripts (index, roots, pickup_causes, durability, safety, lab, movers) move into the core after the lab's 11-17 closing verdict.
-STEER_INDEX = HOME / "projects" / "rsi-lab" / "index.py"
+STEER_INDEX = HOME / "core" / "steer" / "index.py"
 
 def cmd_steer(a):
     """hive steer [--brief|--first|--log|...]: the few numbers the hive steers by (the RSI lab's index), flags handed to it whole."""
     if not STEER_INDEX.exists():
-        sys.exit(f"hive steer: the index is not at {STEER_INDEX} (lab closed or moved); `hive progress` still prints the table.")
+        sys.exit(f"hive steer: the index is not at {STEER_INDEX} (core/steer moved); `hive progress` still prints the table.")
     os.execv(sys.executable, [sys.executable, "-I", str(STEER_INDEX)] + list(a.rest))
 
 def steer_start():

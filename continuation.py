@@ -419,9 +419,13 @@ def pct(v, q):
 def goal_files(only=None):
     return [Path(g) for g in sorted(glob.glob(str(PROJECTS / "*" / "goals.md"))) if only is None or Path(g).parent.name in only]
 
+def ladder_files(only=None):
+    """Each goals.md, plus the ladder-done.md beside it where its ticked rungs were moved (2026-11-17, rsi-loop): ticks count from both."""
+    return [f for g in goal_files(only) for f in (g, g.parent / "ladder-done.md") if f is g or f.exists()]
+
 def tick_lines(only=None):
     out = []
-    for g in goal_files(only):
+    for g in ladder_files(only):
         try: out += [l for l in g.read_text(errors="replace").splitlines() if l.startswith("- [x]")]
         except OSError: pass
     return out
@@ -495,7 +499,7 @@ def cmd_stats(a):
     dist("different agent", [m for p, q, m in near if p["from"] != q["from"]])
     only = None if a.baseline else {enabled(t)[0] for t in focus}
     days, undated, bang = Counter(), 0, 0
-    for g in goal_files(only):
+    for g in ladder_files(only):
         for line in g.read_text(errors="replace").splitlines():
             if line.startswith("- [!]"): bang += 1
             elif line.startswith("- [x]"):

@@ -34,6 +34,7 @@
 }
 /* phone: a little more width for words, and drawings run edge to edge */
 @container chat (max-width:640px){
+  .rc-fn{position:relative}.rc-fn::after{content:"";position:absolute;inset:-14px -10px}
   .msg{--chat-pad:6px;padding-inline:var(--chat-pad)}
   .msg[data-who=me]>.msg-b,.msg[data-who=me]>.msg-q,.msg[data-who=me]>.msg-files{max-width:88%}
   .msg:not([data-who=me]) .md>.rc-fig:not([data-full]) .rc-stage{margin-inline:calc(-8px - var(--chat-pad))}
