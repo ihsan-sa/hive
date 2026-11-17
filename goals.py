@@ -114,6 +114,13 @@ def focuses(text):
     """The numbered **title** (thread `x`) items of the newest block in priorities.md that has them."""
     return [{"n": int(n), "title": t.strip(), "thread": th} for n, t, th in FOCUS.findall(text)]
 
+DONE_FILE = "ladder-done.md"   # ticked rungs moved out of a long goals.md (rsi-loop, 2026-11-17: 149 ticked rungs were 78 KB every keeper round read)
+
+def archived_done(g):
+    """Ticked rungs kept in ladder-done.md beside this goals.md: they still count as done."""
+    try: return sum(l.startswith("- [x]") for l in (g.parent / DONE_FILE).read_text(errors="replace").splitlines())
+    except OSError: return 0
+
 def project_goals():
     out = []
     for g in sorted(PROJECTS.glob("*/goals.md")):   # lowercase only: the GOALS.md of cloned repos (ece298a-pll, resume) are their own files, not Hive goals
@@ -123,8 +130,10 @@ def project_goals():
         head = next((l.lstrip("# ").strip() for l in txt.splitlines() if l.strip()), g.parent.name)
         m = MEASURE.search(txt)
         measure = re.sub(r"^\W*(measure|metric)\W*", "", m.group(0).strip(), flags=re.I)[:160] if m else None
+        lad = ladder(txt)
+        if lad: lad["done"] += archived_done(g)
         out.append({"project": g.parent.name, "goal": head[:120], "measure": measure, "threads": [t.lower() for t in THREAD.findall(txt) if t.lower() != "thread"][:8],
-                    "edited": dt.datetime.fromtimestamp(g.stat().st_mtime, dt.timezone.utc).isoformat(timespec="seconds"), "ladder": ladder(txt), "ladders": ladders(txt), "path": str(g)})
+                    "edited": dt.datetime.fromtimestamp(g.stat().st_mtime, dt.timezone.utc).isoformat(timespec="seconds"), "ladder": lad, "ladders": ladders(txt), "path": str(g)})
     return out
 
 HASH_NAME = re.compile(r"[a-z][0-9a-f]{4,}")   # as in hive: what new/claude/codex/warden hand out; anything else is a named identity
