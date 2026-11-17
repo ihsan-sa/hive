@@ -348,9 +348,18 @@ def numbers(t0, t1, rs=None):
     live = [(r["id"], p) for r in win if r.get("neighbours") and r.get("id") and r.get("agent") for p, _ in r.get("shown", [])]   # neighbours.py: counted apart, so the note pointers' baseline stays comparable
     live_read = sum(1 for i, p in live if p in followed.get(i, ()))
     fr = sum(1 for r in logged if r["id"] in followed)
+    by = {}   # dead find (projects/rsi-lab/kb_measure.py finds): counted, no read, and the same agent searched again within 10 min (one of its next 3 searches)
+    for r in finds:
+        if r.get("id") and r.get("agent"): by.setdefault(r["agent"], []).append(r)
+    def sec(a): return calendar.timegm(time.strptime(a[:19], "%Y-%m-%dT%H:%M:%S"))
+    again = set()
+    for L in by.values():
+        for i, r in enumerate(L):
+            if any(0 < sec(x["at"]) - sec(r["at"]) <= 600 for x in L[i + 1:i + 4]): again.add(r["id"])
+    dead = sum(1 for r in logged if r["id"] not in followed and r["id"] in again)
     nb = [r for r in logged if any(not p.startswith("board:") for p, _ in r["shown"])]   # finds that showed a note or file; board snippets answer in place (find-follow-by-source.md)
     nbr = sum(1 for r in nb if r["id"] in followed)
-    return {"finds": len(finds), "finds_logged": len(logged), "finds_bulk": sum(1 for r in finds if r.get("id") in burst), "finds_read": fr, "find_read_pct": pct(fr, len(logged)),
+    return {"finds": len(finds), "finds_logged": len(logged), "finds_bulk": sum(1 for r in finds if r.get("id") in burst), "finds_read": fr, "find_read_pct": pct(fr, len(logged)), "finds_dead": dead, "find_dead_pct": pct(dead, len(logged)),
             "finds_nb": len(nb), "finds_nb_read": nbr, "find_nb_read_pct": pct(nbr, len(nb)),
             "finds_read_8": sum(1 for r in logged if r["id"] in near), "find_read_8_pct": pct(sum(1 for r in logged if r["id"] in near), len(logged)),
             "recalls": len(recalls), "recalls_opened": sum(1 for r in recalls if r["id"] in followed), "recall_opened_pct": pct(sum(1 for r in recalls if r["id"] in followed), len(recalls)),

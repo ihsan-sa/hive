@@ -511,7 +511,7 @@ function recBar(th) {
 function addFiles(th, list) {
   const d = draft(th); d.err = "";
   for (let f of list) {
-    if (f.size > 100 * 1048576) { d.err = `${f.name} is over 100 MB, so it can't be attached.`; continue; }
+    if (f.size > 4 * 1073741824) { d.err = `${f.name} is over 4 GB, so it can't be attached.`; continue; }
     if (/^image\.\w+$/i.test(f.name)) { const t = new Date(), p = n => String(n).padStart(2, "0"); f = new File([f], `pasted-${p(t.getHours())}${p(t.getMinutes())}${p(t.getSeconds())}.${f.name.split(".").pop()}`, { type: f.type }); }
     d.files.push({ file: f, name: f.name, size: f.size, url: IMGNAME.test(f.name) ? URL.createObjectURL(f) : null });
   }
