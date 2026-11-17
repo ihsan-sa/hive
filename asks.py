@@ -667,6 +667,9 @@ def cmd_reconcile(a):
                 e = items.get(d.get("id"))
                 if not e or e["id"] not in ids or e.get("status") in CLOSED: continue
                 if key == "done" and not d.get("evidence"): continue
+                # Owned and still owned by the same agent is no change. Written anyway (about 100 a day), each row refreshed `updated`, so moving()'s
+                # own-grace held the ask as moving forever and the orphan checks never saw it (k1731, k2077, k2146, 2026-11-17, thread meta-moving).
+                if key == "owned" and e.get("status") == "owned" and (not d.get("owner") or d.get("owner") == e.get("owner")): continue
                 rec = {"id": e["id"], "at": iso(), "by": "reconcile", "status": key, "evidence": d.get("evidence"), "owner": d.get("owner"), "why": (d.get("why") or "")[:300],
                        "rechecked": iso() if e.get("status") == "person" else None}
                 rec = {k: v for k, v in rec.items() if v}

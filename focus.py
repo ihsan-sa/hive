@@ -18,7 +18,10 @@ them that an agent writes, so it stays in plain words: no rung ids, post ids, pa
                                       that matters now, measured against the focus's aim: "On track: ...", "At risk: ...",
                                       "Blocked: ...", "Needs you: ...", "Waiting: ...", "Paused: ..." or "Done: ...". The text
                                       comes as arguments or on stdin (a quoted heredoc); without one it prints what is set. It is
-                                      kept apart from the lines, so a `set` that leaves it out keeps it; whoever changes what it
+                                      kept apart from the lines, so a `set` that leaves it out keeps it. It is read cold, by someone
+                                      who sees nothing else: it names the state, the one thing moving, and what is the person's
+                                      ("Yours: ..." as its last words; "Nothing is yours." when the card lists nothing under
+                                      Needs you), the same as the card's Needs you lines (HA-9); whoever changes what it
                                       says rewrites it, and the same text again says it still holds. --off takes it away
   hive focus set FOCUS <<'X'            the summary, markdown on stdin: `## Now` bullets (what is being done, who, where: @agent
                                       and #thread become pills; at most seven, each opening with its topic and a colon), `## Lately`
@@ -829,6 +832,10 @@ def lint(st, posts=None, only=None, waits=None, at=None):
             if lead and lead["state"] == "needs you" and not ((s or {}).get("needs") or (s or {}).get("hidden") or todo or mine):
                 out.append({"focus": f["id"], "kind": "needs nothing", "part": "lead", "what": "In short says Needs you, and nothing in the focus is listed as waiting on them", "in": lead["text"][:80],
                             "fix": f"if something still waits on them, put it under ## Needs you with its #thread (hive focus set {f['id']}) and write the For you line in that thread, so it is counted where they look; if nothing does, open the In short with the state it is in now"})
+            # HA-9 (2026-11-17): a cold reader of the In short alone got what is theirs right on 8 of 19 cards; on 3 it said On track while the card listed asks
+            if lead and lead["state"] != "needs you" and (s or {}).get("needs") and not re.search(r"\byours?\b|\bfor you\b|\bneeds you\b|\bwaits? on you\b|\bup to you\b", lead["text"], re.I):
+                out.append({"focus": f["id"], "kind": "ask not in In short", "part": "lead", "what": "the card lists something under Needs you, and the In short says nothing is theirs", "in": lead["text"][:80],
+                            "fix": f"end the In short with what is theirs, in a few words (\"Yours: ...\"), or open it with Needs you when that is the state: hive focus lead {f['id']} \"...\""})
             keys = [(c, body, ask_key(body)) for c, body in todo]
             for i, (c, body, k) in enumerate(keys):
                 # The same step twice on the person's list (2026-11-16: one decision, added by two agents a day apart).

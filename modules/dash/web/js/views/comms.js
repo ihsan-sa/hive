@@ -1248,14 +1248,15 @@ function cardMenu(f, id, ctx) {
       mv ? item("Move later", () => moveFocus(id, { step: 1 }).then(err => moved(err, ctx)), at >= all.length - 1) : null,
       item("New conversation", () => newIn(id)))] : null);
 }
-function focusCard(f, ctx) {
+function focusCard(f, ctx, onlyNew) {
   const id = f.id || null, page = href("focus", id || "misc"), rows = activeThreads(id).filter(r => !archived(r.th)), up = updatedAt(f, rows);
   if (f.misc) return h("article", { class: "fc", "data-key": "fc:misc", "data-misc": "", "data-state": "misc" },
     h("header", { class: "fc-hd" }, h("a", { class: "fc-name", href: page, title: rows.length > MISC_THREADS ? `Other: all ${rows.length} conversations` : "Other" }, "Other"), h("span", { class: "fc-tools" }),
       h("div", { class: "fc-lead" }, h("span", { class: "meta" }, "Not filed under a focus"), when(up, "t", "updated"))),
     cardRows(rows, MISC_THREADS));
   const st = stateOf(id), sum = f.summary, ag = agentsOf(id), asked = askedOf(id), nd = needsOf(id), n = Math.max(nd.length, asked.length);
-  const dnd = focusDnd(id, ctx), now = sumLines(sum, "now"), lately = sumLines(sum, "lately");
+  const dnd = focusDnd(id, ctx), since0 = onlyNew ? cardSince(f) : null, keepNew = l => !onlyNew || newSince(l.at, since0);   // New only (HA-8): the lines the person has seen are not drawn
+  const now = sumLines(sum, "now").filter(keepNew), lately = sumLines(sum, "lately").filter(keepNew);
   const pillsOf = ag.now.length ? ag.now : [];
   // The In short (core/foci.js leadOf): its state is the card's word, and the live one ("moving", "needs you") is said by the agent pills beside it
   // and the Needs you block under it. What is new to the person since they last looked at the home or this focus's page is marked.
@@ -1274,7 +1275,7 @@ function focusCard(f, ctx) {
         pillsOf.length ? h("span", { class: "fc-ag" }, pillsOf.slice(0, HOME_AGENTS).map(a => simpleOn() ? null : agentRef(a, { pill: true })),
           !simpleOn() && pillsOf.length > HOME_AGENTS ? h("span", { class: "pill pill-more", title: pillsOf.slice(HOME_AGENTS).join(", ") }, "+" + (pillsOf.length - HOME_AGENTS)) : null) : null,
         when(up, "t", "updated"))),
-    lead ? h("p", { class: "fc-short", "data-new": leadNew ? "" : null, "data-key": "fc-short", title: lead.body }, leadNew ? newMark() : null, lineText(labelCodes(fileNames(lead.body)), { pill: false, topic: false })) : null,
+    lead && (!onlyNew || leadNew) ? h("p", { class: "fc-short", "data-new": leadNew ? "" : null, "data-key": "fc-short", title: lead.body }, leadNew ? newMark() : null, lineText(labelCodes(fileNames(lead.body)), { pill: false, topic: false })) : null,
     // Needs you: the summary's own asks (the person's rule), at most two; the count and All N from the one list.
     asked.length ? h("section", { class: "fc-ask", "aria-label": "Needs you" },
       h("h3", { class: "fc-ask-h" }, h("span", { class: "st", "data-tone": "info", "aria-hidden": "true" }), `Needs you · ${n}`, n > HOME_NEEDS ? h("a", { href: page }, `All ${n}`) : null),
@@ -1288,8 +1289,8 @@ function focusCard(f, ctx) {
       now.length ? h("ol", { "aria-label": "Now" }, pickLines(now, nNow, since).map(cardEv("now", since))) : null,
       lately.length ? h("ol", { class: "fc-lately", "aria-label": "Lately" }, pickLines(lately, nLately, since).map(cardEv("lately", since))) : null,
       more ? h("a", { class: "fc-more-l", href: page, "data-key": "fc-more-l" }, `${more} more line${more === 1 ? "" : "s"}`, moreNew ? `, ${moreNew} new` : null) : null)
-      : lead ? null : h("p", { class: "fc-none" }, sum ? "Nothing listed as moving." : "No summary yet. The agents on it write one as they work."),
-    cardRows(rows, HOME_THREADS));
+      : lead || onlyNew ? null : h("p", { class: "fc-none" }, sum ? "Nothing listed as moving." : "No summary yet. The agents on it write one as they work."),
+    onlyNew ? null : cardRows(rows, HOME_THREADS));
 }
 /** Needs you on the home (the hand-off's Home, R7b S5): each thing that waits, from the same list as the count above it and the Chat badge,
  *  with the ask in full, its conversation, who asked and when, and Answer to the place to answer it. The rest behind All N. */
@@ -1407,7 +1408,7 @@ const leadKey = f => { const k = (leadOf(f) || {}).key || ""; return FO_GROUPS.s
 const groupOf = f => (f.misc ? null : yoursOf(f) ? "needs you" : leadKey(f));
 /** The group a focus is listed in, its heading and tone, and its place in the order: the one answer the home List and the rail's Focus view both read (HA-7). */
 function groupStand(f) { const key = groupOf(f), i = FO_GROUPS.findIndex(g => g[0] === (key || "")), g = FO_GROUPS[i < 0 ? FO_GROUPS.length - 1 : i]; return { key: g[0], head: g[1], tone: g[2], at: i < 0 ? FO_GROUPS.length - 1 : i }; }
-function focusRow(f) {
+function focusRow(f, onlyNew) {
   const id = f.id || null, page = href("focus", id || "misc"), rows = activeThreads(id).filter(r => !archived(r.th)), up = updatedAt(f, rows);
   if (f.misc) return h("li", { class: "fo-r", "data-key": "fo:misc", "data-misc": "" },
     h("div", { class: "fo-top" }, h("a", { class: "fo-name", href: page, title: "Other: conversations not filed under a focus" }, "Other"), h("div", { class: "fo-m" }, when(up, "t", "updated"))),
@@ -1419,7 +1420,9 @@ function focusRow(f) {
   const own = leadKey(f), moved = groupOf(f) !== own && own ? FO_GROUPS.find(g => g[0] === own) : null;
   const old = !!lead && !!lead.state && !!lead.at && Date.now() - lead.at > LEAD_OLD, turned = !!lead && !!lead.was && newSince(lead.turned, since);
   const say = t => lineText(labelCodes(fileNames(t)), { pill: false, topic: false });
-  const body = lead ? h("p", { class: "fo-short", "data-key": "fo-short" }, say(lead.key && !own ? f.lead.text : lead.body))   // a state this list has no group for stays in its sentence
+  const seenNew = onlyNew ? [...sumLines(f.summary, "now"), ...sumLines(f.summary, "lately")].filter(l => newSince(l.at, since)) : null;   // New only (HA-8): the In short only if it is new, else the newest new line
+  const body = onlyNew ? (lead && newSince(lead.since, since) ? h("p", { class: "fo-short", "data-key": "fo-short" }, say(lead.body)) : seenNew.length ? h("p", { class: "fo-short fo-none", "data-key": "fo-short" }, say(seenNew[0].text)) : null)
+    : lead ? h("p", { class: "fo-short", "data-key": "fo-short" }, say(lead.key && !own ? f.lead.text : lead.body))   // a state this list has no group for stays in its sentence
     : now.length ? h("p", { class: "fo-short fo-none", "data-key": "fo-short" }, say(now[0].text))
     : h("p", { class: "fo-short fo-none", "data-key": "fo-short" }, f.summary ? "Nothing listed as moving." : "No summary yet. The agents on it write one as they work.");
   // One link a row for the focus itself, stretched over it (the name); a link inside the In short keeps its own stop and sits above it.
@@ -1437,11 +1440,11 @@ function focusRow(f) {
         when(up, "t", "updated"))),
     body);
 }
-function fociList(fs) {
+function fociList(fs, onlyNew) {
   const group = ([key, head, tone]) => { const g = fs.filter(f => groupOf(f) === key); if (!g.length) return null;
     return h("section", { class: "fo-g", "data-key": "fog:" + key, "data-state": key || "none" },
       h("h3", { class: "fo-gh" }, h("span", { class: "sw", "data-tone": tone }, h("span", { class: "st", "data-tone": tone, "aria-hidden": "true" }), h("span", null, head)), h("span", { class: "fo-gn" }, h("span", { class: "vh" }, ", "), String(g.length), h("span", { class: "vh" }, g.length === 1 ? " focus" : " focuses"))),
-      h("ul", { class: "fo-rows" }, g.map(focusRow))); };
+      h("ul", { class: "fo-rows" }, g.map(f => focusRow(f, onlyNew)))); };
   const misc = fs.filter(f => f.misc);
   return [FO_GROUPS.map(group), misc.length ? h("section", { class: "fo-g", "data-key": "fog:misc", "data-state": "misc" }, h("h3", { class: "fo-gh" }, h("span", { class: "sw", "data-tone": "quiet" }, h("span", null, "Not in a focus"))), h("ul", { class: "fo-rows" }, misc.map(focusRow))) : null];
 }
@@ -1460,6 +1463,10 @@ function fociTold(ctx) {
 /** List or Cards, beside the Focuses heading: the person's pick, kept in this browser. */
 const fociPick = (view, ctx) => seg([["list", "List", "One row a focus, under what its In short says"], ["cards", "Cards", "A card a focus, with its lines and conversations"]], view,
   v => { FV.pick = v; store(FOCI_VIEW_KEY, v); toldOver(); ctx.update(); }, { label: "Show the focuses as" });
+// "New only" (HA-8): one switch beside the pick; it hides every focus, row and card line the person has seen, so a return shows what changed since. Kept in this browser.
+const NEWONLY_KEY = "hive.home.newonly", NEWONLY = { on: (() => { try { return localStorage.getItem(NEWONLY_KEY) === "1"; } catch (e) { return false; } })() };
+const newOnlyPick = ctx => h("button", { type: "button", class: "btn cm-newonly", "data-kind": "quiet", "data-size": "s", "data-key": "newonly", "aria-pressed": String(NEWONLY.on), title: "Hide what you have already seen",
+  onclick: () => { NEWONLY.on = !NEWONLY.on; store(NEWONLY_KEY, NEWONLY.on ? "1" : "0"); ctx.update(); } }, "New only");
 function fociGrid(ctx, settled) {
   const view = fociView(), list = view === "list";
   const px = heldRoom(list ? "home-foci-list" : "home-foci", ".cm-foci", { settled }), room = px ? `min-height:${px}px` : null;   // the cards gain lines as the waits arrive
@@ -1468,11 +1475,13 @@ function fociGrid(ctx, settled) {
   if (S.foci === undefined && !fociFailed()) return fociHeld(room, barPx, list);
   if (S.foci === undefined || S.foci.failed && fociFailed()) return h("p", { class: "meta cm-foci-msg" }, "Couldn't read the focuses. It keeps trying.");
   const fs = fociOrder();
+  const hs = S.foci.home_seen, canNew = !!(hs && hs.since), onlyNew = canNew && NEWONLY.on, shown = onlyNew ? fs.filter(f => !f.misc && cardNews(f)) : fs;
   if (!fs.length) return h("p", { class: "meta cm-foci-msg" }, "No focus yet. Agents make one when work has a goal; every conversation is in the list on the left.");
   if (FV.drawn !== view) { FV.drawn = view; store(FOCI_DRAWN_KEY, view); }   // so the next visit's grey stand-in has the same shape
-  return [workBar(S.foci.activity), h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h" }, h("h2", { class: "sec-t" }, "Focuses"), h("span", { class: "sec-n" }, String(fs.filter(f => !f.misc).length)), fociNews(fs), fociPick(view, ctx), h("a", { href: href("flow") }, "Flow")),
-    list ? h("div", { class: "cm-foci", "data-key": "foci", "data-view": "list", style: room }, fociTold(ctx), fociList(fs))
-      : h("div", { class: "cm-foci", "data-key": "foci", style: room }, fs.map(f => focusCard(f, ctx)))];
+  return [workBar(S.foci.activity), h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h" }, h("h2", { class: "sec-t" }, "Focuses"), h("span", { class: "sec-n" }, String(fs.filter(f => !f.misc).length)), fociNews(fs), canNew ? newOnlyPick(ctx) : null, fociPick(view, ctx), h("a", { href: href("flow") }, "Flow")),
+    onlyNew && !shown.length ? h("p", { class: "cm-foci-none", "data-key": "foci-none", role: "status" }, "Nothing new since you last looked, ", when(hs.since * 1e3, "t"), ".")
+    : list ? h("div", { class: "cm-foci", "data-key": "foci", "data-view": "list", "data-new-only": onlyNew ? "" : null, style: room }, fociTold(ctx), fociList(shown, onlyNew))
+      : h("div", { class: "cm-foci", "data-key": "foci", "data-new-only": onlyNew ? "" : null, style: room }, shown.map(f => focusCard(f, ctx, onlyNew)))];
 }
 /** #comms/~archived: every archived conversation, newest first, each with Bring back (the person, 11081454b6bd). Archived by hand or by age (ui/threadmeta.js). */
 function archivedPane(c, ctx) {
