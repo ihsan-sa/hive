@@ -1532,12 +1532,16 @@ button.fc-ask-i:hover{background:color-mix(in oklab,var(--accent) 12%,transparen
 a.th{color:inherit;text-decoration:underline;text-decoration-color:var(--line-2);text-underline-offset:2px}
 .fc-none{font-size:var(--fs-small);color:var(--ink-3)}
 .fc-rows{display:grid;margin:0 -6px!important}
-.fc-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:8px;align-items:center;min-height:30px;padding:0 6px;border-radius:var(--r-s);color:var(--ink)!important;font-size:var(--fs-small);text-decoration:none!important}
-.fc-row:has(.rmk){grid-template-columns:10px minmax(0,1fr) auto auto}   /* a row with a mark has four cells: the time was falling into the 10 px dot column of the next line (nightly long_390) */
+.fc-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto auto;gap:8px;align-items:center;min-height:30px;padding:0 6px;border-radius:var(--r-s);color:var(--ink)!important;font-size:var(--fs-small);text-decoration:none!important}
+/* four cells always: the mark, the title, where it stands (its word, and "new" on work finished since the last visit), the time. A cell with nothing to
+   say is empty, so a time can't fall into the next line's mark column (nightly long_390). */
 .fc-row:hover{background:var(--tint)}
 .fc-row b{font-weight:var(--w-med);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.fc-row .st{width:6px;height:6px;justify-self:center}
+.fc-row>.cm-row-st{display:grid;place-items:center;width:10px;height:10px}   /* the state's own shape (.st), as the conversation list draws it */
 .fc-row .st[data-tone=good]{box-shadow:0 0 0 2px color-mix(in oklab,var(--good) 22%,transparent)}
+.fc-rw{display:flex;align-items:center;min-width:0;white-space:nowrap}
+.fc-rw:empty{display:block}
+.fc-rw .rmk{margin-left:6px}
 .fc-ft{display:flex;align-items:center;gap:4px;margin:0 -8px;padding:4px 0 0 8px;border-top:1px solid var(--line)}
 .fc-ft>a{font-size:var(--fs-small);font-weight:var(--w-med);color:var(--ink-2);margin-right:auto}
 .fc-more{position:relative}

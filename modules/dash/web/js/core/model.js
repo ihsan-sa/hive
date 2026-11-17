@@ -118,8 +118,38 @@ export function agentMono(n) {
   return c ? c.toUpperCase() : "A";
 }
 
-/** Agent codes inside a line of text, as agentLabel says them (the app look only; a known agent, or a + 4 hex with a digit, so "added" stays a word and a6aea-mesh.png a file name). */
-export const labelCodes = text => (!text || !S.app || !S.app.app ? text : String(text).replace(/(^|[^\w@])@?(a[0-9a-f]{4})\b(?![-_.]\w)/g, (m, a, n, at) => (isAgent(n) || /\d/.test(n) ? a + (at ? agentLabel(n) : capFirst(agentLabel(n))) : m)));
+/**
+ * Agent codes inside a line of text, as agentLabel says them (the app look only; a known agent, or a + 4 hex with a digit, so "added" stays a word
+ * and so does "c0ffe", which no agent is called).
+ * A code that is part of something else stays as written: a path, a flag or a file name (a "/", "\", "=" or "-" before it, a "/", "\" or -_. and a
+ * letter after it: tmp/a0f4b/x, --to=a0f4b, a6aea-mesh.png), a web address, and a `code span` that holds more than the code. A span that is only the
+ * code reads as the agent, without its backticks.
+ * unnamed: a Map the caller keeps for one piece of text of several lines (a summary). Two agents with no name of their own both read "an agent",
+ * which says they are one: with the map the second is "another agent", the third "a third agent", in the order the lines name them.
+ */
+const CODE_IN = /(^|[^\w@/\\=-])@?([a-z][0-9a-f]{4})\b(?![-_.]\w|[/\\])/g, CODE_SKIP = /`([^`\n]+)`|\bhttps?:\/\/[^\s<>"'`]+/g, CODE_ONLY = /^\s*@?([a-z][0-9a-f]{4})\s*$/;
+const NTH = ["an agent", "another agent", "a third agent", "a fourth agent", "a fifth agent", "a sixth agent"];
+export function labelCodes(text, unnamed) {
+  if (!text || !S.app || !S.app.app) return text;
+  text = String(text);
+  const say = (n, lead) => {
+    if (!isAgent(n) && !(n[0] === "a" && /\d/.test(n))) return null;   // an agent the board knows, whatever letter its code starts with (older ones: w299e); else only a + 4 hex with a digit
+    let l = agentLabel(n);
+    if (l === n) return null;   // the label is the code itself (an agent of a code shape that has no label): left as written, not given a capital
+    if (unnamed && l === "an agent") { if (!unnamed.has(n)) unnamed.set(n, NTH[unnamed.size] || "one more agent"); l = unnamed.get(n); }
+    return lead ? capFirst(l) : l;
+  };
+  // lead: the code opens the text or a sentence of it, so its label takes a capital
+  const lead = i => /(?:^\s*|[.!?]\s+|\n\s*)["'(\[*_“‘]*$/.test(text.slice(0, i));
+  const plain = (s, off) => s.replace(CODE_IN, (m, a, n, i) => { const l = say(n, lead(off + i + a.length)); return l == null ? m : a + l; });
+  let out = "", at = 0;
+  for (const m of text.matchAll(CODE_SKIP)) {
+    out += plain(text.slice(at, m.index), at);
+    const only = m[1] != null && CODE_ONLY.exec(m[1]), l = only ? say(only[1], lead(m.index)) : null;
+    out += l == null ? m[0] : l; at = m.index + m[0].length;
+  }
+  return out + plain(text.slice(at), at);
+}
 export const capFirst = s => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 export function tierOf(th) {
@@ -152,13 +182,15 @@ export function agentState(a) {
 /** Why the starter stopped a run it will resume by itself (the "died" log event's why), in the starter's own words (core/starter.py WHY_WORDS). */
 const RETRY_WORDS = { connection: "no connection to Claude", restart: "the machine restarted", stalled: "went silent with nothing running", other: "ended before it finished", budget: "reached its budget or turn limit" };
 export const retryWords = why => RETRY_WORDS[why] || RETRY_WORDS.other;
+/** Whether a run is parked: it stopped at a usage limit, or broke off in a way the starter retries, and the starter will carry it on by itself. */
+const parkedSess = s => !!(s && s.end && ((s.limited && S.limitedNow.has(s.session)) || (s.retry && S.diedNow.has(s.session))));
 /** Any name's status: {key, label}. Cached per poll. */
 export function agentStatus(n) {
   let v = S.stCache.get(n); if (v) return v;
   const L = S.running.get(n), s = S.lastSess[n];
   if (OUTSIDE.has(n)) v = { key: "outside", label: "" };
   else if (L) { const st = agentState(L); v = { key: st.key, label: st.text }; }
-  else if (S.pending[n]) v = { key: "queued", label: "queued" };
+  else if (S.pending[n] && !parkedSess(s)) v = { key: "queued", label: "queued" };   // parked for a resume with a message queued for it: still stopped, the two rules below say how (threadRun)
   else if (!s) v = { key: "none", label: "hasn't run" };
   else if (S.killed[n] >= s.start) v = { key: "killed", label: "killed" };
   else if (s.replacedBy) v = { key: "ended", label: "replaced by " + s.replacedBy };
@@ -586,23 +618,56 @@ function runsByThread() {
   const m = new Map(); for (const a of (S.live ? S.live.agents : [])) { const l = m.get(a.thread); if (l) l.push(a); else m.set(a.thread, [a]); }
   rbt = { live: S.live, m }; return m;
 }
+/**
+ * What a thread's run is doing now, or how its last one broke, most urgent first: {key, label, who, ...}, or null when no agent is on it and its last
+ * run ended well (or it never ran). The part of threadState that is about the run and not about the person: threadStand reads it apart, so an ask the
+ * needs list doesn't count can't hide an agent that is working, stuck or failed under it.
+ */
+export function threadRun(th) {
+  const run = runsByThread().get(th) || [], last = S.lastByThread[th];
+  for (const a of run) { const st = agentState(a); if (st.key === "stuck") return { key: "stuck", label: "stuck: " + st.text, who: a.name }; }
+  const busy = run.find(a => agentState(a).key === "working") || run[0];
+  if (busy) { const st = agentState(busy); return { key: st.key, label: st.key === "working" ? "working" : st.text, who: busy.name, doing: busy.doing }; }
+  // A message for a parked agent (stopped at a usage limit, or broken off and due a retry) sits in the starter's queue until that run carries on: the
+  // starter starts nothing new for a name it is about to resume, resumes it once there is room (or the retry is due), and the run reads the queue
+  // then (starter.py: "resume limit-stopped sessions first", and the queue loop skips a name in st["resume"]). So that conversation is still paused,
+  // not about to start (HA-14: the person's two messages in two weeks that met this were read 73 minutes later, under "Waiting to start"; a retry
+  // after a lost connection can be an hour away). ids: the messages the queue holds for it.
+  // An agent is parked by its own last run, wherever that was (S.lastSess, not this conversation's last run): the queue is one per agent, so a
+  // message written here for an agent whose paused run was in another conversation waits just the same. Reading the conversation's last run said
+  // "Waiting to start" for it, with Carry on beside it (the review of HA-14).
+  const qs = (S.live ? S.live.pending : []).filter(p => (p.threads || []).includes(th));
+  const q = qs.find(p => !parkedSess(S.lastSess[p.name]));
+  if (q) return { key: "queued", label: "waiting to start", who: q.name };
+  const paused = (s, ids) => (s.limited && S.limitedNow.has(s.session) ? { key: "limited", label: "stopped at a usage limit", who: s.name, t: s.end, ids }
+    : { key: "limited", label: "stopped, carries on by itself", who: s.name, t: s.end, retry: s.retry, ids });
+  // What is paused here: this conversation's own last run, then every agent the queue holds a message for (all of them parked, or q had one). The
+  // one that holds a message of the person's leads, since that is the one their message waits on.
+  const lp = parkedSess(last), own = lp ? qs.find(p => p.name === last.name) : null;
+  const c = [...(lp ? [own ? paused(S.lastSess[last.name], own.ids || []) : paused(last, [])] : []), ...qs.filter(p => p !== own).map(p => paused(S.lastSess[p.name], p.ids || []))];
+  if (c.length) return (c.length > 1 && c.find(x => heldForYou(th, x))) || c[0];
+  if (last && last.end && last.exit && last.exit !== 143 && !last.limited) return { key: "failed", label: "stopped with an error", who: last.name, t: last.end };
+  return null;
+}
+/**
+ * Whether the starter holds a message of the person's for this conversation's paused run (run: threadRun's or threadState's answer). The queue holds
+ * unread messages, so they are among the conversation's last: the look back is bounded.
+ */
+export function heldForYou(th, run) {
+  const d = S.threads.get(th);
+  if (!d || !run || run.key !== "limited" || !run.ids || !run.ids.length) return false;
+  for (let i = d.posts.length - 1, n = 0; i >= 0 && n < 400; i--, n++) if (d.posts[i].from === "person" && run.ids.includes(d.posts[i].id)) return true;
+  return false;
+}
 /** A thread's state for the person, most urgent first: {key (a STATUS key), label, who, post}. */
 export function threadState(th, read) {
   const d = S.threads.get(th); if (!d) return { key: "none", label: "" };
   const lastYou = d.lastYou || 0;   // kept by the store as posts arrive: scanning every post of every thread on each redraw froze the page
   let ask = null; for (let i = d.posts.length - 1; i >= 0 && d.posts[i].t > lastYou; i--) { const p = d.posts[i]; if (isAgent(p.from) && p.men.includes("person")) { ask = p; break; } }
-  const run = runsByThread().get(th) || [];
-  const last = S.lastByThread[th];
   if (ask && asksQuestion(ask)) return { key: "asks", label: "waiting for your answer", who: ask.from, post: ask };
-  for (const a of run) { const st = agentState(a); if (st.key === "stuck") return { key: "stuck", label: "stuck: " + st.text, who: a.name }; }
-  const busy = run.find(a => agentState(a).key === "working") || run[0];
-  if (busy) { const st = agentState(busy); return { key: st.key, label: st.key === "working" ? "working" : st.text, who: busy.name, doing: busy.doing }; }
-  const q = (S.live ? S.live.pending : []).find(p => (p.threads || []).includes(th));
-  if (q) return { key: "queued", label: "waiting to start", who: q.name };
-  if (last && last.end && last.limited && S.limitedNow.has(last.session)) return { key: "limited", label: "stopped at a usage limit", who: last.name, t: last.end };
-  if (last && last.end && last.retry && S.diedNow.has(last.session)) return { key: "limited", label: "stopped, carries on by itself", who: last.name, t: last.end, retry: last.retry };
-  if (last && last.end && last.exit && last.exit !== 143 && !last.limited) return { key: "failed", label: "stopped with an error", who: last.name, t: last.end };
+  const run = threadRun(th); if (run) return run;
   if (ask && !(read && read(ask))) return { key: "foryou", label: "new reply for you", who: ask.from, post: ask };
+  const last = S.lastByThread[th];
   return { key: "done", label: last ? "done" : "", who: last ? last.name : null };
 }
 // ---- where a conversation stands: its summary read against the needs list and what is happening now ----
@@ -627,7 +692,8 @@ export function stRead(text) {
   const kind = m[1].toLowerCase(), [key, word] = ST_KIND[kind];
   return { lines, about: lines.slice(0, at), state: { kind, key, word, tail: m[2].trim(), line: lines[at], full: last }, last };
 }
-const RUN_WORD = { working: "Working", quiet: "Working quietly", queue: "Waiting its turn", queued: "Starting" };
+const RUN_WORD = { working: "Working", quiet: "Working quietly", queue: "Waiting its turn", queued: "Waiting to start" };   // "Waiting to start", not "Starting": at the cap on agents at once it can wait a long while, and Agents and the guide call it that
+const NOW_BAD = new Set(["stuck", "failed", "limited"]);   // what a conversation without a summary still stands on: its run broke or paused
 // A conversation that is on the needs list but out of the count (needs.js waitOf): the head's word, why it isn't counted, and its label as a second fact.
 const OFF_COUNT = { later: ["Later", "You put this off", "Later"], older: ["Asked earlier", "In Stuff to address", "Asked earlier"], moot: ["Not needed", "You said it isn't needed", "Not needed"] };
 // An entry that asks nothing (an unread reply written for the person, needs.js "foryou") is not "asked": past its time it reads "For you".
@@ -635,10 +701,10 @@ const OFF_FORYOU = ["For you", "In Stuff to address", "Earlier"];
 const sameWords = (a, b) => String(a || "").replace(/\s+/g, " ").trim() === String(b || "").replace(/\s+/g, " ").trim();
 /**
  * Where a conversation stands, for its head: {key (a STATUS key), word, text, also, why, dup, more, lines, at, from, since, running, bare}, or null when it
- * has neither a summary nor a place on the needs list. word + text is the one line to read and also a second, quieter fact; why is set when the
+ * has neither a summary nor a place on the needs list and nothing is happening in it now. word + text is the one line to read and also a second, quieter fact; why is set when the
  * conversation is on the needs list but out of the count ("You put this off"), for the places that show no second fact (a phone's line under the title);
  * more is every summary line that text doesn't already say in full; since counts the messages after the summary; bare means there is no summary, only
- * the list's entry.
+ * the list's entry or what its run is doing.
  *
  * waits is the conversation's own entry on the needs list (needs.js waitOf: {where: "now"|"older"|"later"|"moot", text, src, st}) or null. The head says
  * "Needs you" exactly when the count has the conversation, in the list's words (for a run that broke: "Failed" or "Stuck", which says what to do about
@@ -649,9 +715,17 @@ const sameWords = (a, b) => String(a || "").replace(/\s+/g, " ").trim() === Stri
  */
 export function threadStand(th, read, waits) {
   if (!th) return null;
-  const r = S.threadStatus && S.threadStatus[th], has = !!(r && String(r.text || "").trim());
-  if (!has && !waits) return null;
-  const d = S.threads.get(th), at = has ? (r.at || 0) * 1e3 : 0, sr = stRead(has ? r.text : ""), b = sr.state, live = threadState(th, read);
+  const r = S.threadStatus && S.threadStatus[th], has = !!(r && String(r.text || "").trim()), live = threadState(th, read);
+  // cur: what is happening in it now. threadState puts a message that asks the person above the run under it, and the list is the one place that
+  // decides what waits on the person: when the list counts that ask, rule 1 says so; when it doesn't (a system conversation, one the simple look
+  // keeps off the list because the person never wrote in it, an ask that was put off or said not needed), the run under it is where the
+  // conversation stands, so an agent at work there still reads Working, and one that broke Stuck or Failed.
+  const cur = (live.key === "asks" && threadRun(th)) || live;
+  // Neither a summary nor a place on the list: it still stands somewhere while an agent is on it, stopped answering, failed or paused at a limit
+  // (HA-11: a row in the conversation list says that, so the top of the chat it opens says it too). An ask or a new reply the list doesn't have
+  // is not said here, for the reason above.
+  if (!has && !waits && !RUN_WORD[cur.key] && !NOW_BAD.has(cur.key)) return null;
+  const d = S.threads.get(th), at = has ? (r.at || 0) * 1e3 : 0, sr = stRead(has ? r.text : ""), b = sr.state;
   // a summary opens with what the conversation is about, which its title says already: that line is a second fact only when it is the whole summary
   const first = sr.about[0] || "", detail = sr.about.length > 1 ? sr.about.at(-1) : "", only = sr.about.at(-1) || "";
   const Name = n => { const l = (n && agentLabel(n)) || "the agent"; return CODE_NAME.test(l) ? l : capFirst(l); };
@@ -663,7 +737,13 @@ export function threadStand(th, read, waits) {
   // dup: the second fact is one of the lines in more (or the summary's ask, re-worded), so the open summary doesn't say it twice
   const out = (key, word, text, also, used, why = "") => {
     const more = sr.lines.filter(l => l !== used); also = also && also !== text && also !== used ? also : "";
-    return { key, word, text: text || "", also, why, dup: !!also && (more.includes(also) || /^Asked: /.test(also)), more, lines: sr.lines, at, from: has ? r.from : "", since, running: !!RUN_WORD[live.key], bare: !has };
+    // The app look says an agent by what it is on, never by its code (E10), and a summary is written by agents who name each other by code: its
+    // words are said here through labelCodes, so the row, its hover, the top of the chat and the title's menu all get them the same way. The
+    // comparisons above are on the words as written.
+    // One map of the agents with no name of their own for the whole stand, filled in the order it is read: the line the row and the top show, the
+    // second fact, then the rest of the summary. So "an agent" and "another agent" are the same two agents in each of those places.
+    const un = new Map(), say = l => labelCodes(l, un), t = say(text || ""), a = say(also), m = more.map(say);
+    return { key, word, text: t, also: a, why, dup: !!also && (more.includes(also) || /^Asked: /.test(also)), more: m, lines: sr.lines.map(say), at, from: has ? r.from : "", since, running: !!RUN_WORD[cur.key], bare: !has };
   };
   const asked = !!b && b.key === "asks";
   // trouble: the list has it because its run broke, and the run is still broken (the list and the head read the same threadState, so they agree)
@@ -680,24 +760,34 @@ export function threadStand(th, read, waits) {
     return out("asks", "Needs you", text, asked ? (same || !b.tail ? detail : `Asked: ${b.tail}`) : b ? b.line : detail, same ? b.line : undefined);
   }
   // 2. an agent stopped answering
-  if (live.key === "stuck") return out("stuck", "Stuck", String(live.label || "").replace(/^stuck:\s*/, "") || `${Name(live.who)} stopped answering`, offAlso || (b ? b.line : detail));
+  if (cur.key === "stuck") return out("stuck", "Stuck", String(cur.label || "").replace(/^stuck:\s*/, "") || `${Name(cur.who)} stopped answering`, offAlso || (b ? b.line : detail));
   // 3. an agent is on it now: the list doesn't count a conversation an agent is working in, so an ask in the summary is the second fact
-  if (RUN_WORD[live.key]) {
+  if (RUN_WORD[cur.key]) {
     // A run that began before the summary wrote it on the way and is still going; one that began after it came back to the conversation.
-    const run = (runsByThread().get(th) || []).find(a => a.name === live.who), began = run && run.since ? run.since * 1e3 : 0;
-    const w = RUN_WORD[live.key], again = live.key === "queued" ? "about to carry on from the summary" : !began ? "on it now" : began > at ? "on it again since the summary" : "still on it after the summary";
-    if (asked) return out(live.key, w, you ? "carrying on after your reply" : again, offAlso || (b.tail ? `Asked: ${b.tail}` : detail));
+    const run = (runsByThread().get(th) || []).find(a => a.name === cur.who), began = run && run.since ? run.since * 1e3 : 0;
+    const w = RUN_WORD[cur.key], again = cur.key === "queued" ? "about to carry on from the summary" : !began ? "on it now" : began > at ? "on it again since the summary" : "still on it after the summary";
+    // Nothing written yet: when this run began is the one fact there is (the line under it names the agent and its step). One still waiting to
+    // start has no fact to add, so its word stands alone.
+    if (!has) return out(cur.key, w, cur.key === "queued" ? "" : began ? `started ${ago(began)}` : "on it now", offAlso);
+    if (asked) return out(cur.key, w, you ? "carrying on after your reply" : again, offAlso || (b.tail ? `Asked: ${b.tail}` : detail));
     // "Waiting: on my test run" from an agent that is running is its own note of what it is on; Done, Blocked and Told to stop are from before this run
-    if (b && b.kind === "waiting") return b.tail ? out(live.key, w, b.tail, offAlso || detail, b.line) : out(live.key, w, only, offAlso, only);
-    if (b) return out(live.key, w, again, offAlso || b.line);
-    return out(live.key, w, first, offAlso || detail, first);
+    if (b && b.kind === "waiting") return b.tail ? out(cur.key, w, b.tail, offAlso || detail, b.line) : out(cur.key, w, only, offAlso, only);
+    if (b) return out(cur.key, w, again, offAlso || b.line);
+    return out(cur.key, w, first, offAlso || detail, first);
   }
   // 4. the last run ended badly: the list has it, or it happened after the summary was written, so the summary can't know
-  if ((live.key === "failed" && (trouble === "failed" || (live.t || 0) > at)) || (live.key === "limited" && (live.t || 0) > at)) {
+  //    (with no summary there is nothing older than it to weigh it against)
+  // wrote: the starter holds a message of the person's for the paused run (one written since it stopped, or just before, that it never got to).
+  // Nobody reads it until there is room again and the run carries on, and nothing else on the page said so (HA-14), so the line says the message
+  // is not lost. A summary can't know of it either, so this leads whatever the summary's age. The same after a lost connection: the message
+  // waits for the retry: the starter starts nothing for a name it is about to resume, so a message does not wake it sooner either.
+  const wrote = heldForYou(th, cur);
+  if ((cur.key === "failed" && (trouble === "failed" || !has || (cur.t || 0) > at)) || (cur.key === "limited" && (!has || (cur.t || 0) > at || wrote))) {
     // a state line written after the failure is the newer word and follows it; else why the count doesn't have it, else the summary's state
-    const simple = simpleOn(), also = b && at > (live.t || 0) ? b.line : offAlso || (b ? b.line : detail);
-    return live.key === "limited" ? out("limited", "Paused", simple ? "taking a break; it carries on by itself" : live.retry ? `stopped (${retryWords(live.retry)}) ${ago(live.t)}; it carries on by itself` : `stopped at a usage limit ${ago(live.t)}; it carries on by itself`, also)
-      : out("failed", "Failed", simple ? "ran into a problem; a message makes it try again" : `stopped with an error ${ago(live.t)}; a message wakes it to try again`, also);
+    const simple = simpleOn(), also = b && at > (cur.t || 0) ? b.line : offAlso || (b ? b.line : detail);
+    const on = "it carries on by itself" + (wrote ? " and reads your message then" : "");
+    return cur.key === "limited" ? out("limited", "Paused", simple ? `taking a break; ${on}` : cur.retry ? `stopped (${retryWords(cur.retry)}) ${ago(cur.t)}; ${on}` : `stopped at a usage limit ${ago(cur.t)}; ${on}`, also)
+      : out("failed", "Failed", simple ? "ran into a problem; a message makes it try again" : `stopped with an error ${ago(cur.t)}; a message wakes it to try again`, also);
   }
   // 5. on the list but out of the count: put off, said not needed, or old enough to sit in Stuff to address
   if (off) {
@@ -719,6 +809,7 @@ export function threadStand(th, read, waits) {
     return b.tail ? out("quiet", word, b.tail, detail, b.line) : out("quiet", word, only, "", only);
   }
   if (b) return b.tail ? out(b.key, b.word, b.tail, detail, b.line) : out(b.key, b.word, only, "", only);
+  if (!has) return null;   // a guard, not a case: every stand without a summary returned above (the list's entry in 1 and 5, the run in 2 to 4)
   return out("done", "Quiet", first, detail, first);
 }
 export { DAY, HOUR };

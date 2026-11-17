@@ -10,7 +10,7 @@
 // /api/needs-you is read once here, every five minutes, for every page that wants it (S.needsYou).
 import { S, jget, emit } from "./store.js";
 import { threadState, isSystemThread, btwParent, displayText, agentLabel, stRead, ASK_FOR } from "./model.js";
-import { seen } from "./inbox.js";
+import { seen, IB } from "./inbox.js";
 import { simpleOn } from "./simple.js";
 import { firstSentence, mdPlain, now, DAY, MIN } from "./format.js";
 import { faded, archived, meta as tmeta } from "../ui/threadmeta.js";
@@ -73,7 +73,9 @@ function liveText({ st }) {
 // One page draw asks for the list many times (the badge in both bars, Work once per project): it is worked out once per task and
 // handed out as copies. Nothing it reads changes inside one task, and a click or poll is a new task, so it is never stale.
 // A read can land before that timer has fired, so the list also goes when what it reads has changed: the badge once kept 2 for a poll's length where the count was 3 (R74).
-const readsNow = () => [S.ver, S.foci, S.needsYou], sameReads = (a, b) => !!a && a.every((x, i) => x === b[i]);   // the foci and needs reads don't move S.ver
+// The inbox's read marks are one of the reads too (liveStates asks seen): a conversation opened and marked read inside the task that drew it kept its
+// "For you" at the top of the chat until the next draw (HA-11).
+const readsNow = () => [S.ver, S.foci, S.needsYou, IB.items], sameReads = (a, b) => !!a && a.every((x, i) => x === b[i]);   // the foci, needs and inbox reads don't move S.ver
 let memo = null, memoAt = null;
 const all = () => { const at = readsNow(); if (!memo || !sameReads(memoAt, at)) { memo = waitingOnNow(); memoAt = at; setTimeout(() => { memo = null; }, 0); } return memo; };
 export function waitingOn() { return all().filter(w => !laterOf(w)); }
