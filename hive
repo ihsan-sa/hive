@@ -46,7 +46,8 @@ def signed():
 def show(p):
     to = " ".join("@" + n for n in names(p.get("to")))
     print(f"[{p.get('id')}] {p.get('at','')[:19]} {p.get('from')}{' -> ' + to if to else ''} (thread {p.get('thread')})"
-          + (f" replying to {p['reply_to']}" if p.get("reply_to") else "") + "\n  "
+          + (f" replying to {p['reply_to']}" if p.get("reply_to") else "")
+          + (f" (passed on by {p.get('relay_by')}" + (f", who says: {p['relay_why']}" if p.get("relay_why") else "") + ")" if p.get("relay_of") else "") + "\n  "
           + str(p.get("text", "")).replace("\n", "\n  "))
     for f in p.get("files") or []: print(f"  file: {f.get('path')} ({f.get('size', 0)} bytes)")
     if p.get("from") == "person" and p.get("sig") and signed(): print("  " + _signed.line(_signed.check(p, _nonces), p))
@@ -242,9 +243,12 @@ def relay_post(src, thread, to, me, why=None, model=None):
     for q in posts():
         if q.get("relay_of") == src.get("id") and q.get("thread") == thread: return q.get("id")
     pid = dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2)
-    head = f"Passed on from {src.get('from')} in thread {src.get('thread')} ({src.get('id')})" + (f": {why.strip()}" if why and why.strip() else "")
+    # The relayer's why stays out of the text, in relay_why: the text is from the original's author, so a why inside it could pass
+    # for their words (R36c). The dash shows relay_why as the relayer's own line.
+    head = f"Passed on from {src.get('from')} in thread {src.get('thread')} ({src.get('id')})"
     q = {"id": pid, "at": now(), "from": src.get("from"), "to": ["@" + to], "thread": thread,
          "text": head + ":\n\n" + "\n".join("> " + ln for ln in str(src.get("text", "")).splitlines()), "relay_of": src.get("id"), "relay_by": me}
+    if why and why.strip(): q["relay_why"] = why.strip()
     if model or src.get("model"): q["model"] = model or src.get("model")
     if src.get("effort"): q["effort"] = src["effort"]
     if src.get("files"): q["files"] = src["files"]

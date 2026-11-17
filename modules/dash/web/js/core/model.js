@@ -1,7 +1,7 @@
 // What the data means: statuses, the agent card, hive stats, usage pace. Pure reads of the store.
 import { S, OUTSIDE, SYS } from "./store.js";
 import { simpleOn, plainName } from "./simple.js";
-import { LOC, money, now, ago, dur, median, short, mdPlain, bareLinks, firstSentence, onWords, namesNoWork, MIN, HOUR, DAY } from "./format.js";
+import { LOC, money, now, ago, dur, stamp, median, short, mdPlain, bareLinks, firstSentence, onWords, namesNoWork, MIN, HOUR, DAY } from "./format.js";
 
 export const isAgent = n => S.agents.has(n);
 /** A warden judges whether work crosses the hard limits. The starter names them w + 4 hex (core/starter.py is_warden); `warden` and `rootwarden` are the fixed names. */
@@ -359,6 +359,23 @@ export function limitStop() {
   }
   return null;
 }
+/** When a run stopped at a usage limit carries on: {at, room, own}. own: the run's own reset (the limited event's resets, ms); hive: limitStop();
+ *  scoped: that reset is a model's own share (the event's scope), not the login's.
+ *  The Hive held: its banner's time, as the top bar says (the run may move to the first login with room), or the model's own reset when that is later
+ *  (Fable's week outlasts the login's five hours). Else the run's own limit, while it lasts, holds it to its reset. own: true only for a model's own
+ *  share with the Hive free, the one case a message that picks another model carries it on now. room only when nothing holds it. */
+export function carryOn(own, hive, t = now(), scoped = false) {
+  const mine = own && own > t ? own : null;
+  if (hive) return { at: hive.until ? (scoped && mine ? Math.max(hive.until, mine) : hive.until) : null, room: false, own: false };
+  if (mine) return { at: mine, room: false, own: !!scoped };
+  return { at: null, room: true, own: false };
+}
+/** carryOn for name's last run while it is stopped at a usage limit, or null when it isn't (a run broken off and due a retry has no time to name).
+ *  The receipt under a held message reads this, and the stand line the same fields, so the two never name different times (HA-16). */
+export function parkedCarry(name) {
+  const s = S.lastSess[name];
+  return s && s.limited && S.limitedNow.has(s.session) ? carryOn(S.limitedUntil[s.session], limitStop(), now(), !!S.limitedScope[s.session]) : null;
+}
 /** A login's share of all the Claude capacity: what its plan gives a week, with Pro as 1. The person's ratio (2026-11-04): Ultra (Max 20x) is 10 Pros.
  * Max 5x is a guess at 5 until the person says. An unknown plan counts as 1. */
 export const PLAN_WEIGHT = { Pro: 1, "Max 5x": 5, "Max 20x": 10, Ultra: 10 };
@@ -639,7 +656,7 @@ export function threadRun(th) {
   const qs = (S.live ? S.live.pending : []).filter(p => (p.threads || []).includes(th));
   const q = qs.find(p => !parkedSess(S.lastSess[p.name]));
   if (q) return { key: "queued", label: "waiting to start", who: q.name };
-  const paused = (s, ids) => (s.limited && S.limitedNow.has(s.session) ? { key: "limited", label: "stopped at a usage limit", who: s.name, t: s.end, ids }
+  const paused = (s, ids) => (s.limited && S.limitedNow.has(s.session) ? { key: "limited", label: "stopped at a usage limit", who: s.name, t: s.end, until: S.limitedUntil[s.session] || null, scoped: !!S.limitedScope[s.session], ids }
     : { key: "limited", label: "stopped, carries on by itself", who: s.name, t: s.end, retry: s.retry, ids });
   // What is paused here: this conversation's own last run, then every agent the queue holds a message for (all of them parked, or q had one). The
   // one that holds a message of the person's leads, since that is the one their message waits on.
@@ -803,7 +820,9 @@ export function threadStand(th, read, waits) {
   if ((cur.key === "failed" && (trouble === "failed" || !has || (cur.t || 0) > at)) || (cur.key === "limited" && (!has || (cur.t || 0) > at || wrote))) {
     // a state line written after the failure is the newer word and follows it; else why the count doesn't have it, else the summary's state
     const simple = simpleOn(), also = b && at > (cur.t || 0) ? b.line : offAlso || (b ? b.line : detail);
-    const on = "it carries on by itself" + (wrote ? " and reads your message then" : "");
+    // when: the run's own reset (a model's own share, days away) or the Hive's, as the strip says (carryOn, HA-15); with neither, no time to name
+    const co = !cur.retry && cur.key === "limited" ? carryOn(cur.until, limitStop(), now(), cur.scoped) : null;
+    const on = (co && co.at ? `it carries on by itself after ${stamp(co.at)}` : "it carries on by itself") + (wrote ? " and reads your message then" : "");
     return cur.key === "limited" ? out("limited", "Paused", simple ? `taking a break; ${on}` : cur.retry ? `stopped (${retryWords(cur.retry)}) ${ago(cur.t)}; ${on}` : `stopped at a usage limit ${ago(cur.t)}; ${on}`, also)
       : out("failed", "Failed", simple ? "ran into a problem; a message makes it try again" : `stopped with an error ${ago(cur.t)}; a message wakes it to try again`, also);
   }

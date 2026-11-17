@@ -87,7 +87,7 @@ def model_note(name, rec, ps):
 
 def fmt(p):
     to = " ".join("@" + n for n in sorted(names(p)))
-    tags = (f" for focus {', '.join(map(str, p['foci']))}" if p.get("foci") else "") + (f" (passed on by {p['relay_by']})" if p.get("relay_of") else "")
+    tags = (f" for focus {', '.join(map(str, p['foci']))}" if p.get("foci") else "") + (f" (passed on by {p['relay_by']}" + (f", who says: {p['relay_why']}" if p.get("relay_why") else "") + ")" if p.get("relay_of") else "")
     return (f"[{p.get('id')}] {str(p.get('at', ''))[:19]} {p.get('from')}{' -> ' + to if to else ''} "
             f"(thread {p.get('thread')})" + tags + (f" replying to {p['reply_to']}" if p.get("reply_to") else "") + "\n  " + str(p.get("text", "")).replace("\n", "\n  ")
             + "".join(f"\n  file: {f.get('path')}" for f in p.get("files") or [])

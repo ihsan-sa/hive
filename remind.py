@@ -34,7 +34,8 @@ def fail(msg): raise SystemExit("remind: " + msg)
 def check_names(*names):
     """Only person or an ordinary agent code can be named. Not rootwarden, warden or a warden code, and not the words that start fresh agents."""
     for n in (x.lower() for x in names):
-        if n != "person" and (not AGENT.match(n) or WARDEN.match(n)):
+        own = n == os.environ.get("HIVE_NAME", "").lower() and (HOME / "run" / f"{n}.json").exists()   # a named agent (nightly) may remind itself, as the help says
+        if n != "person" and not own and (not AGENT.match(n) or WARDEN.match(n)) or n in ("warden", "rootwarden"):
             fail(f"@{n} can't be named in a reminder (only @person or an agent's own name, never a warden)")
 
 

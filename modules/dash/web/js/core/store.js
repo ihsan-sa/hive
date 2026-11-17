@@ -13,7 +13,7 @@ export const S = {
   live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {}, shown: [], threadStatus: {}, waitsIn: {}, agentStatus: {},
   posts: [], byId: {}, threads: new Map(), off: 0, boardStart: null,
   sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0, logStart: null, history: false,
-  agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(), diedNow: new Set(),
+  agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(), limitedUntil: {}, limitedScope: {}, diedNow: new Set(),
   ledger: [],                 // {t, kind, parts:[string | {a:name} | {th:thread}], lc}
   running: new Map(), pending: {},
   stCache: new Map(),
@@ -138,12 +138,21 @@ function ingestLog(items) {
       // the starter queued the run that just ended to resume by itself (lost connection, restart, ...): not a failure the person must act on,
       // or the thread said "will carry on by themselves" and "Failed" side by side (feedback 2026-11-16). given_up ends that.
       const s = S.lastSess[e.name]; if (s && s.session === e.session && s.end) { s.retry = e.why || "other"; S.diedNow.add(e.session); }
+    } else if (e.event === "resume_dropped_stale" || e.event === "resume_dropped_for_claude") {
+      // the starter dropped the run's resume (core/starter.py: a stale status-bar run, or one asked since for a Claude model, which a message wakes
+      // as a new run): nothing carries it on from its stop now. All 25 runs the live board still showed as paused on 2026-11-17 were these (HA-15).
+      const s = S.lastSess[e.name]; if (s) S.limitedNow.delete(s.session);
     } else if (e.event === "given_up") { const s = S.lastSess[e.name]; if (s && s.session === e.session) s.retry = null; S.diedNow.delete(e.session); }
     else if (e.event === "limited") {
       // Mark the run that just ended, not the session: a resumed agent keeps its session id, so a session-wide mark
       // would call every later normal end of that agent a usage limit.
       const s = S.lastSess[e.name]; if (s && s.session === e.session && s.end) s.limited = true;
       S.limited.push(t); S.limitedSess.add(e.session); S.limitedNow.add(e.session);
+      // when this run's own limit resets (core/starter.py logs it): a model's own bar (Fable's weekly share) can hold one run for days while the
+      // Hive has room, and the strip said "There's room again now" with Carry on beside it (HA-15)
+      const r = e.resets && Date.parse(e.resets); if (r) S.limitedUntil[e.session] = r;
+      // scope: the model whose own share it was ("fable"); none for a login-wide limit, where another model would not help
+      if (e.scope) S.limitedScope[e.session] = e.scope; else delete S.limitedScope[e.session];
     }
   }
 }
@@ -168,7 +177,7 @@ const FIRST_BYTES = 2_000_000, LOG_FIRST_BYTES = 600_000;
 let logHeld = [];   // the log items read so far, kept until the older part has arrived: ingestLog keeps no raw events to rebuild from
 let filling = false;   // the older part is on its way: a poll that lands meanwhile has nothing older of its own, and must not call the history complete (R73)
 function resetLog() {
-  Object.assign(S, { sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(), diedNow: new Set() });
+  Object.assign(S, { sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(), limitedUntil: {}, limitedScope: {}, diedNow: new Set() });
   S.ledger = S.ledger.filter(r => r.b);
 }
 async function backfill(boardUpto, logUpto) {

@@ -160,6 +160,10 @@ export function agentsOf(id) {
  *  The person does not read the raw list (too many, 11071606f4d4); agents decide by default and keep this part for what is really theirs. */
 // Less the ones the person put off (Later or Not needed, core/needs.js laterOf).
 export const askedOf = id => { const f = focusById(id), s = f && f.summary; return ((s && s.needs) || []).filter((text, i) => text && !laterOf({ src: "summary", focus: id, text, t: needAt(s, i) })); };
+/** How many things wait on the person in this focus: the home list's "for you" number and its Needs you group, and the one beside a focus
+ *  page's For you here (HA-17). The badge's own count split by focus, so the focuses add up to the badge: an ask the agents listed that has aged
+ *  into Stuff to address (needs.js olderWhy) is not in it, though askedOf still lists it. */
+export const yoursN = id => needsOf(id).length;
 /** When the summary's i-th ask was first raised (focus.py needs_at), in ms. */
 export const needAt = (s, i) => (((s && s.needs_at && s.needs_at[i]) || (s && s.at) || 0) * 1e3) || null;
 /** One word for where a focus stands, and its tone: needs you, moving, waiting, quiet. */

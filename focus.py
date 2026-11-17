@@ -498,6 +498,7 @@ def ordered(ids, recs):
 
 def find(st, key):
     key = (key or "").strip().lstrip("#").lower()
+    if not key: return None   # "" would match the first focus with no thread of its own
     for f in st["foci"]:
         if f["id"] == key or (f.get("thread") or "") == key or f["name"].lower() == key or (f.get("n") and key == str(f["n"])): return f
     return None
@@ -1044,7 +1045,10 @@ def main(argv=None):
         th = a.thread.lstrip("#")
         if not THREAD.fullmatch(th): sys.exit("hive focus tag: give a thread name")
         if a.off: append({"kind": "tag", "thread": th, "off": True}); print(f"{th} is out of its focus"); return
-        f = find(st, a.focus or "")
+        if not (a.focus or "").strip():   # no focus named: say where it is and write nothing (an empty key once filed threads at random)
+            cur = focus_of(st, th); f = find(st, cur) if cur else None
+            print(f"{th} is in {f['id']} ({f['name']})" if f else f"{th} is in no focus (hive focus tag {th} FOCUS files it)"); return
+        f = find(st, a.focus)
         if not f: sys.exit(f"hive focus tag: no focus {a.focus!r} (hive focus list)")
         append({"kind": "tag", "thread": th, "focus": f["id"]}); print(f"{th} is in {f['id']} ({f['name']})"); return
     if a.cmd == "link":

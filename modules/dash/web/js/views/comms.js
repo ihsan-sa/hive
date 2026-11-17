@@ -11,9 +11,9 @@ import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../cor
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
 import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitOf, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
 import { workBar, workBarHeld } from "../ui/workbar.js";
-import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci, workingIn, leadOf, cardSince, newSince, hiddenAsks, markSeen as lookAt, seenLeave } from "../core/foci.js";
+import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, yoursN, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci, workingIn, leadOf, cardSince, newSince, hiddenAsks, markSeen as lookAt, seenLeave } from "../core/foci.js";
 import { newIn } from "./focus.js";
-import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadStand, heldForYou, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, retryWords, fresh7, asksQuestion, fileInfo } from "../core/model.js";
+import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadStand, heldForYou, carryOn, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, retryWords, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
 import { href, threadHref, go, parse } from "../core/router.js";
 import { yoursSearch, yoursText } from "../core/yours.js";
@@ -161,7 +161,7 @@ function threadEvents(th) {
   if (!app()) return out;
   for (const s of S.sessions) {
     if (s.thread !== th || !s.end) continue;
-    if (s.limited) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${s.name} stopped at a usage limit`, sub: "It carries on by itself once there's room." });
+    if (s.limited) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${s.name} stopped at a usage limit`, sub: (u => (u ? `It carries on by itself after ${stamp(u)}.` : "It carries on by itself once there's room."))(s === S.lastSess[s.name] && S.limitedNow.has(s.session) && carryOn(S.limitedUntil[s.session], limitStop(), now(), !!S.limitedScope[s.session]).at) });   // when it carries on while it still holds, as the strip says (carryOn, HA-15); an older stop of a session that has carried on since names no new time
     else if (s.retry) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${(w => w[0].toUpperCase() + w.slice(1))(agentLabel(s.name))} stopped (${retryWords(s.retry)})`, sub: "It carries on by itself." });
     else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "failed", text: simpleOn() ? "Your Hive ran into a problem" : `${(w => w[0].toUpperCase() + w.slice(1))(agentLabel(s.name))} stopped with an error (exit ${s.exit})`, sub: simpleOn() ? "Send a message and it tries again." : "Its last message above is where it got to." });
   }
@@ -764,7 +764,6 @@ function syncThreads(c, ctx) {
 
 // ---- what's happening: the strip above the composer ----
 function hasRoom() { return !limitStop(); }
-function nextReset() { const st = limitStop(); return st && st.until; }   // the banner's time, not a second reading of the limits   // the same answer as the top bar's banner (core/model.js limitStop)
 const AGENT_WORDS = { working: "is working", quiet: "is here, quiet", stuck: "looks stuck", queue: "is waiting for the machine" };
 function line(key, text, act, opts = {}) {
   return h("div", { class: "cm-line", "data-key": opts.key || key, "data-tone": status(key).tone }, statusDot(key, { live: opts.live }), h("span", { class: "cm-line-x" }, text), act ? h("span", { class: "cm-line-a" }, act) : null);
@@ -851,8 +850,11 @@ function stripLines(th) {
   const held = st.key === "limited" && heldForYou(th, st) ? " It reads your message then." : null;
   if (st.key === "limited" && st.retry) out.push(line("limited", [who(st.who), simpleOn() ? " is taking a break and carries on by itself." : ` stopped (${retryWords(st.retry)}) ${ago(st.t)} and carries on by itself.`, held], null, { key: "limited" }));
   else if (st.key === "limited") {
-    const room = hasRoom(), r = nextReset();
-    out.push(line("limited", [who(st.who), simpleOn() ? " is taking a break. " : ` stopped at a usage limit ${ago(st.t)} and hasn't carried on. `, room ? "There's room again now, so it should carry on by itself soon." : r ? `It carries on by itself after ${stamp(r)}.` : "It carries on by itself once there's room.", held],
+    // the run's own limit (a model's own share, days away) or the Hive's (the top bar's banner time): core/model.js carryOn, as the stand line says
+    const { room, at, own } = carryOn(st.until, limitStop(), now(), st.scoped);
+    out.push(line("limited", [who(st.who), simpleOn() ? " is taking a break. " : ` stopped at a usage limit ${ago(st.t)} and hasn't carried on. `, room ? "There's room again now, so it should carry on by itself soon." : at ? `It carries on by itself after ${stamp(at)}.` : "It carries on by itself once there's room.",
+      // the starter resumes a run held on its model's own limit at once on another model a message asks for (core/starter.py resume_model_switched)
+      own && !simpleOn() ? " A message that picks another model has it carry on now." : null, held],
       room && post && !held ? button("Carry on", () => say(th, "Please carry on where you stopped.", st.who), { size: "s" }) : null, { key: "limited" }));
   }
   if (st.key === "failed") out.push(line("failed", [who(st.who), simpleOn() ? " ran into a problem. Send a message and it tries again." : ` stopped with an error ${ago(st.t)}. A message wakes it to try again.`], null, { key: "failed" }));
@@ -1401,7 +1403,7 @@ const fociView = () => FV.pick || (S.foci === undefined ? FV.drawn || "cards" : 
 // short and one whose In short opens with no state.
 const FO_GROUPS = [["needs you", "Needs you", "info"], ["blocked", "Blocked", "bad"], ["at risk", "At risk", "warn"], ["on track", "On track", "good"], ["waiting", "Waiting on others", "quiet"], ["paused", "Paused", "ended"], ["done", "Done", "ended"], ["", "No state yet", "quiet"]];
 /** How many asks of this focus are listed as the person's (the card's "Needs you" count; the ones that only may be theirs are not in it). */
-const yoursOf = f => Math.max(needsOf(f.id || null).length, askedOf(f.id || null).length);
+const yoursOf = f => yoursN(f.id || null);
 /** The state a focus's own In short opens with, "" when it has none or one this list has no group for (so no row is ever dropped). */
 const leadKey = f => { const k = (leadOf(f) || {}).key || ""; return FO_GROUPS.some(g => g[0] === k) ? k : ""; };
 /** The group a focus is listed under: Needs you as soon as an ask of it waits on the person, whatever its In short says; else its own state. */

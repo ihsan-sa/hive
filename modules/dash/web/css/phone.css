@@ -309,6 +309,7 @@
    or a 40 px box with the small shape painted inside it. Text under 12 px on these screens goes to 12. */
 @container app (width < 700px){
   .page .input:not(textarea){height:40px}
+  .ph-after .input:not(textarea){margin-block:-4px}   /* a page head's search box: the 40 px box takes the room of the 32 px one it was, so the Agents page's first row stays in the top half at 800 px (drive_agent_status) */
   /* a Settings switch: a 44x40 box that takes 44x40 of room (E56f: no negative margin, so it no longer reaches over the row above or
      below); the track is its ::before, the knob its ::after. Only in Settings: the dense rows of Timeline, Focus, Board and Mesh keep theirs. */
   .set-s .switch{width:44px;height:40px;margin:0;border-radius:0;background:none}

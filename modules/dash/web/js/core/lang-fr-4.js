@@ -564,6 +564,8 @@ export default {
   "Hide this line": "Masquer cette ligne",
   "One row per focus, a piece of your work with a goal, under where it stands: the ones that wait on you come first. Each row is the focus in a sentence or two. Click a focus name for the whole picture; Cards, beside the heading, shows every focus with its lines.": "Une ligne par focus, une partie de ton travail avec un objectif, regroupés selon où ils en sont : ceux qui t'attendent passent en premier. Chaque ligne est le focus en une phrase ou deux. Clique sur un nom de focus pour voir tout le tableau ; Cartes, à côté du titre, montre chaque focus avec ses lignes.",
   __patterns: [
+    // a focus page's For you here: what was said to the person with no reply after it, under the needs count (focus.js yoursSec, HA-17)
+    [/^(\d+) messages? to you with no reply after (?:it|them)$/, (_, n) => `${n} ${n === "1" ? "message" : "messages"} pour toi sans réponse depuis`],
     // The home's list of focuses, the In short and what is new since the last look
     [/^In short(?:, said (.+?) ago and not since)?: (.+?)(?:, (was .+?|no longer needs you))?(, and agents are on it now)?$/, (_, t, st, w, m) => `En bref${t ? `, dit il y a ${t} et pas depuis` : ""} : ${FST[st] || st}${w ? ", " + fwas(w) : ""}${m ? ", et des agents sont dessus maintenant" : ""}`],
     [/^was (on track|at risk|blocked|waiting on others|paused|done)$/, w => fwas(w)],
@@ -738,6 +740,9 @@ export default {
     [/^Claude account (\S+) has expired\. Its agents moved to your other account\. Sign in again to bring it back\.$/, "Le compte Claude $1 a expiré. Ses agents sont passés sur ton autre compte. Reconnecte-toi pour le récupérer."],
     [/^(\d+) posts? in the last hour(?: · (\d+) waiting to start)?(?: · (\S+) of work in 24h, at list prices)?$/, (_, n, q, c) => [`${n} ${pl(n, "message", "messages")} dans la dernière heure`, q ? `${q} en attente de démarrer` : null, c ? `${c} de travail en 24 h, aux prix catalogue` : null].filter(Boolean).join(" · ")],
     [/^(Send|Start) \(Enter\)\. (\S+) reads it after its current step( ↑ past messages · Tab completes)?$/, (_, w, a, more) => `${w === "Send" ? "Envoyer" : "Démarrer"} (Entrée). ${a === "the agent" ? "L'agent" : a} le lit après son étape en cours${more ? " ↑ messages précédents · Tab complète" : ""}`],
+    [/^Waiting for (.+?) · it reads this after (.+)$/, (_, a, t) => `En attente de ${a === "the agent" ? "l'agent" : a} · il le lit après ${t}`],
+    [/^Waiting for (.+?) · it reads this when .+ (?:is|are) free$/, (_, a) => `En attente de ${a === "the agent" ? "l'agent" : a} · il le lit dès qu'il est libre`],
+    [/^Waiting for (.+) to start$/, (_, a) => `En attente du démarrage de ${a === "the agent" ? "l'agent" : a}`],
     [/^Queued · (.+) reads it after its current step$/, (_, a) => `En file · ${a === "the agent" ? "l'agent" : a} le lit après son étape en cours`],
     [/^(?:([a-z][\w-]*): )?failed \(exit (\d+)\)$/, (_, a, x) => `${a ? a + " : " : ""}échec (code de sortie ${x})`],
     [/^(\d+) errored$/, "$1 en erreur"],
