@@ -3225,7 +3225,9 @@ def write_private(path, value):
 # ---------- chat: posting as the person, and what's addressed to them ----------
 HIVE_BIN = HOME / "core" / "hive"
 PERSON = "person"
-MAX_FILE = 100 * 2**20  # as hive post's own cap
+MAX_FILE = 100 * 2**20  # one request: Cloudflare in front of the dash refuses a single body over 100 MB
+MAX_CHUNK = 64 * 2**20  # one piece of a big file (under the cap, with room for headers)
+MAX_BIG = 4 * 2**30     # a whole file sent in pieces
 INCOMING = HOME_FILES / "incoming"
 THREAD_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,100}")
 UPLOAD_REF = re.compile(r"([0-9a-f]{16})/([A-Za-z0-9_][A-Za-z0-9_.-]*)")
@@ -3659,6 +3661,32 @@ def save_upload(name, length, src):
         shutil.rmtree(INCOMING / tok, ignore_errors=True)
         raise ValueError("the upload stopped early")
     return {"ref": f"{tok}/{safe}", "name": safe, "size": length}
+
+
+def save_chunk(name, tok, off, total, n, src):
+    """One piece of a big file, written at its offset in ~/files/incoming/<tok>/<name>. tok "" starts a file. A repeated piece (a retry) rewrites
+    from its offset. Returns {"id"} until the last piece lands, then what /api/post takes."""
+    if not 0 < total <= MAX_BIG: raise ValueError("a file can be up to 4 GB")
+    if not 0 <= off < total or off + n > total: raise ValueError("that piece is outside the file")
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(str(name)).name).lstrip(".-") or "file"
+    if not tok:
+        INCOMING.mkdir(parents=True, exist_ok=True)
+        if off: raise ValueError("start at the beginning")
+        tok = secrets.token_hex(8)
+        (INCOMING / tok).mkdir(mode=0o700)
+    elif not re.fullmatch(r"[0-9a-f]{16}", tok) or not (INCOMING / tok).is_dir(): raise ValueError("that upload isn't open any more")
+    path = INCOMING / tok / safe
+    have = path.stat().st_size if path.exists() else 0
+    if off > have: raise ValueError("a piece is missing")
+    with open(path, "r+b" if path.exists() else "wb") as f:
+        f.seek(off); f.truncate(off); left = n
+        while left > 0:
+            b = src.read(min(left, 2**20))
+            if not b: break
+            f.write(b); left -= len(b)
+    if left: raise ValueError("the upload stopped early")
+    if off + n < total: return {"id": tok}
+    return {"ref": f"{tok}/{safe}", "name": safe, "size": total}
 
 
 # ---------- plans and secrets ----------
@@ -6585,6 +6613,11 @@ def serve(port):
                 need = POST_CAP.get(u.path) or ("post" if u.path.startswith("/api/phone/") else None)
                 if not need or need not in self.can: return self.send_error(403)
             if u.path.startswith("/api/phone/"): return self.phone(u, n)
+            if u.path == "/api/upload" and "total" in parse_qs(u.query):   # a big file in pieces
+                q = parse_qs(u.query)
+                if not 0 < n <= MAX_CHUNK: return self.deny(413, "a piece can be up to 64 MB")
+                try: return self.send(json.dumps(save_chunk(q.get("name", ["file"])[0], q.get("id", [""])[0], int(q["off"][0]), int(q["total"][0]), n, self.rfile)).encode(), "application/json")
+                except (ValueError, OSError, KeyError, IndexError) as e: return self.deny(400, str(e))
             if u.path == "/api/upload":
                 if not 0 < n <= MAX_FILE: return self.deny(413, "a file can be up to 100 MB")
                 try: return self.send(json.dumps(save_upload(parse_qs(u.query).get("name", ["file"])[0], n, self.rfile)).encode(), "application/json")
