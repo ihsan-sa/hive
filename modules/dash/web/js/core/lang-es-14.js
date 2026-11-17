@@ -106,7 +106,15 @@ export default {
   "Install app": "Instalar app",
   "iPhone or iPad: in Safari, tap Share, then Add to Home Screen.": "iPhone o iPad: en Safari, toca Compartir y luego Añadir a pantalla de inicio.",
   "Android or Chrome: open the browser menu, then Install app.": "Android o Chrome: abre el menú del navegador y luego Instalar app.",
+  // the head's job rows (comms.js jobRows, HA-24)
+  "Job": "Trabajo",
+  "Jobs running": "Trabajos en marcha",
   __patterns: [
+    [/^started just now$/, "empezó ahora mismo"],
+    [/^started (\d+(?:[.,]\d)?[smhd]) ago$/, "empezó hace $1"],
+    [/^and (\d+) more$/, "y $1 más"],
+    [/^(.+)'s job$/, "trabajo de $1"],
+    [/^A job in (.+)$/, "Un trabajo en $1"],
     [/^Couldn't read the connectors: (.+)$/, "No se pudieron leer los conectores: $1"],
     // the Work tiers dot beside every Settings section (ui/worktiers.js): the tier names stay, as the person names them
     [/^(.+) are paused$/, "$1 están en pausa"],

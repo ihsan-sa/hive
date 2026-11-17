@@ -4,6 +4,10 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Why a board's Wi-Fi link dropped
+
+The remote bench's log for a board that dials in over Wi-Fi said only "the link dropped". It now says why: the board closed the link (with its close code), the socket ended with no close, nothing came from the board for 90 s, or a socket error (with its errno). When a board dials in again while the bench still holds its old link, the log says so and how long ago the old link was last heard from.
+
 ## Firmware: coverage, fuzzing and fault scenarios in QEMU
 
 The fw module, which builds and tests ESP32 firmware, gives every ESP-IDF project three more kinds of test, with nothing to write but a few lines in its `fw.json`:

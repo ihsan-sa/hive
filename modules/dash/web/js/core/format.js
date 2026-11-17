@@ -54,6 +54,13 @@ export function firstSentence(s) {
   return m ? m[0].trim() : short(s, 240);
 }
 
+/** What an agent asks, as one line: its question when the message has one ("Both exports pass. Which one goes to print?" is "Which one goes to print?"),
+ *  else its first sentence. The Needs you lines said the lead-in and left the question out (HA-13). */
+export function askSentence(s) {
+  const t = mdPlain(s).replace(/^(@\S+\s+)+/, "").replace(/\s+/g, " ").trim(), m = t.match(/(?:^|[.!?:]\s)([^.!?]{3,240}\?)(?=\s|$)/);
+  return m ? m[1].trim() : firstSentence(t);
+}
+
 /** The asked sentence as a line for a table: a brief's own instruction or second person ("keeper round (periodic): read ~/core/keeper.md and follow it", "The person is calling you...") says what the run is instead. */
 export function onWords(s) {
   if (/^the person is calling you\b/i.test(s)) return "On a phone call";

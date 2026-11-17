@@ -15,7 +15,7 @@ The web page is web/ next to this file (ui.html, the previous page, is at /old);
   hive-dash serve [--port P] web UI on http://127.0.0.1:P/ (loopback only; default 8077)
   hive-dash --json          the snapshot as JSON
 """
-import base64, email.utils, errno, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time, zlib
+import base64, email.utils, shlex, errno, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time, zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -103,7 +103,12 @@ def run_effort(pid):
 def bg_shells(pid):
     """How many background shells a run is parked on. Their stdout is a task file (the starter's release_shells uses the same test), and what
     they start inherits it, so only the topmost counts. The heavy queue can't see these, so without this a run waiting on one looks stuck."""
-    n, todo = 0, []
+    return len(bg_shell_pids(pid))
+
+
+def bg_shell_pids(pid):
+    """The topmost background shells under a run (bg_shells' walk), as pids."""
+    got, todo = [], []
     def kids(p):
         try:
             for t in Path(f"/proc/{p}/task").iterdir(): todo.extend((t / "children").read_text().split())
@@ -113,9 +118,94 @@ def bg_shells(pid):
         q = todo.pop()
         try: shell = "/tasks/" in os.readlink(f"/proc/{q}/fd/1")
         except OSError: shell = False
-        if shell: n += 1
+        if shell: got.append(q)
         else: kids(q)
-    return n
+    return got
+
+
+def tail_line(path, n=4096):
+    """The newest line a job wrote to its output file: the last non-empty line of the file's tail, after its last carriage return
+    (a progress bar redraws in place), terminal codes taken out, secrets hidden, cut to 160 characters. None if it wrote nothing yet."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2); size = f.tell(); f.seek(max(0, size - n)); b = f.read(n)
+    except OSError: return None
+    for ln in reversed(b.decode(errors="replace").split("\n")):
+        for part in reversed(ln.split("\r")):
+            t = " ".join(ANSI.sub("", part).replace("\x1b", "").split())
+            if t: return short(redact(t), 160)
+    return None
+
+
+def job_out(pid):
+    """(path, mtime) of the regular file a job writes to: its stdout, else its stderr, the newer if both are files. None for a pipe or a terminal."""
+    got = []
+    for fd in (1, 2):
+        try:
+            p = os.readlink(f"/proc/{pid}/fd/{fd}"); st = os.stat(f"/proc/{pid}/fd/{fd}")
+            if stat.S_ISREG(st.st_mode) and not p.endswith(" (deleted)"): got.append((p, st.st_mtime))
+        except OSError: pass
+    return max(got, key=lambda x: x[1]) if got else None
+
+
+_btime = None
+def proc_since(pid):
+    """When a process started, in epoch seconds."""
+    global _btime
+    try:
+        if _btime is None: _btime = next(int(l.split()[1]) for l in Path("/proc/stat").read_text().splitlines() if l.startswith("btime "))
+        st = Path(f"/proc/{pid}/stat").read_text(); return _btime + int(st[st.rindex(")") + 2:].split()[19]) / TICK
+    except (OSError, ValueError, IndexError, StopIteration): return None
+
+
+def shell_cmd(pid):
+    """What a background shell runs: the command inside Claude Code's wrapper (`... && eval '<cmd>' ...`, quotes as the shell reads them), else its command line."""
+    c = proc_cmd(pid); s = c[-1] if c else ""; i = s.find("&& eval ")
+    if i >= 0:
+        try:
+            lx = shlex.shlex(s[i + 8:], posix=True); lx.whitespace_split = True; w = lx.get_token()
+            if w: return w
+        except ValueError: pass
+    return " ".join(c)
+
+
+def job_lines(runs=None):
+    """HA-24: each job an agent started that is running now, with the newest line it wrote, for the head of its conversation.
+    Two kinds: a run's background shells (their stdout is the task file) and heavy's lanes (the lane's .pid file names the heavy process,
+    whose stdout the job inherits). One job seen both ways is one row, the lane's. A job writing to a pipe has no line: line None.
+    [{"agent", "thread", "kind": "shell"|lane name, "cmd", "since", "line", "at": when its file last changed}]."""
+    d, out, runs = STATE / "heavy", {}, runs if runs is not None else [jload(f, {}) or {} for f in sorted(RUN.glob("*.json"))]
+    thread_of, shell_key = {}, {}
+    def lane_since(lane, pid):
+        try: return (d / f"{lane}.who").stat().st_mtime
+        except OSError: return proc_since(pid)
+    def ppid(p):
+        try: st = Path(f"/proc/{p}/stat").read_text(); return int(st[st.rindex(")") + 2:].split()[1])
+        except (OSError, ValueError, IndexError): return 0
+    for r in runs:
+        if not alive(r.get("pid")): continue
+        name = r.get("name"); thread_of.setdefault(name, r.get("thread"))
+        for q in bg_shell_pids(r.get("pid")):
+            o = job_out(q); shell_key[int(q)] = k = o[0] if o else f"pid:{q}"
+            out[k] = {"agent": name, "thread": r.get("thread"), "kind": "shell", "cmd": short(redact(shell_cmd(q)), 200), "since": proc_since(q),
+                       "line": tail_line(o[0]) if o else None, "at": o[1] if o else None}
+    for pf in sorted(d.glob("*.pid")):
+        lane = pf.stem
+        if not re.fullmatch(r"slot\d+|quick\d+|first", lane): continue
+        try: pid = int(pf.read_text().split()[0]); who = (d / f"{lane}.who").read_text().split(None, 2)
+        except (OSError, ValueError, IndexError): continue
+        if not alive(pid) or not any("heavy" in a for a in proc_cmd(pid)[:3]): continue
+        o, up = job_out(pid), pid
+        for _ in range(12):  # a heavy job started inside a background shell is that shell's row, told by its lane
+            up = ppid(up)
+            if up <= 1 or up in shell_key: break
+        k = shell_key.get(up) or (o[0] if o else f"pid:{pid}"); was = out.pop(k, None) or {}
+        if not o and was.get("line"): o = (k, was.get("at"))
+        name = who[0] if who and who[0] not in ("?", "") else (was.get("agent") or "?")
+        out[k] = {"agent": name, "thread": was.get("thread") or thread_of.get(name), "kind": lane, "cmd": short(redact(who[2] if len(who) > 2 else ""), 200),
+                  "since": min([x for x in (was.get("since"), lane_since(lane, pid)) if x] or [None]),
+                  "line": tail_line(o[0]) if o else None, "at": o[1] if o else None}
+    return sorted(out.values(), key=lambda j: j["since"] or 0)
 
 
 def describe_tool(name, inp):
@@ -1465,8 +1555,9 @@ def drafts_in(thread, steps=False):
 def live():
     """The cheap part, polled by the web page: who is running and what the starter holds. No board parse."""
     agents, jobs = [], heavy_jobs()
+    runs = []
     for f in sorted(RUN.glob("*.json")):
-        r = jload(f, {}) or {}
+        r = jload(f, {}) or {}; runs.append({**r, "name": r.get("name", f.stem)})
         a = activity(r.get("out"))
         agents.append({
             "name": r.get("name", f.stem), "pid": r.get("pid"), "alive": alive(r.get("pid")),
@@ -1482,7 +1573,8 @@ def live():
                for n, v in (st.get("pending") or {}).items()]
     usage = {k: v for k, v in (jload(STATE / "usage.json", {}) or {}).items() if not k.startswith("_")}
     return {"signin": signin_waiting(st), "now": time.time(), "agents": agents, "jobs": {"running": sum(j["running"] for j in jobs.values()), "queued": sum(j["queued"] for j in jobs.values())}, "pending": pending, "usage": usage, "logins": logins(),
-            "limit_until": limit_hold(st), "chosen": chosen_models(st), "efforts": chosen_efforts(st), "priorities": priorities()}
+            "limit_until": limit_hold(st), "chosen": chosen_models(st), "efforts": chosen_efforts(st), "priorities": priorities(),
+            "joblines": job_lines(runs)}
 
 
 _prio = (None, {})
@@ -2506,7 +2598,8 @@ def jobs_for(view, full):
 def agents_for(view, full):
     """/api/live and /json as a caller may see them: the same rule as jobs_for. What an agent is doing or said can quote a command, so a limited sign-in sees who runs, not that."""
     if full or not isinstance(view, dict): return view
-    return {**view, "agents": [{f: v for f, v in a.items() if f not in ("doing", "said", "draft")} for a in view.get("agents") or []]}
+    return {**view, "agents": [{f: v for f, v in a.items() if f not in ("doing", "said", "draft")} for a in view.get("agents") or []],
+            **({"joblines": [{f: v for f, v in j.items() if f not in ("cmd", "line")} for j in view.get("joblines") or []]} if "joblines" in view else {})}
 
 
 def feed_for(rows, full):

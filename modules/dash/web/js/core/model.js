@@ -709,6 +709,30 @@ export function stRead(text) {
   const kind = m[1].toLowerCase(), [key, word] = ST_KIND[kind];
   return { lines, about: lines.slice(0, at), state: { kind, key, word, tail: m[2].trim(), line: lines[at], full: last }, last };
 }
+/**
+ * HA-24: the jobs a conversation's head shows, each with the newest line it wrote (dash.py job_lines, /api/live "joblines"). A job belongs to the
+ * conversation it was started for: a background shell's run says it; a heavy lane's agent is placed by its live run, else its last one. Below them,
+ * while the summary's state line says Waiting or Blocked, the jobs of what that line names: a conversation (12 hex) or an agent (its code), so a
+ * conversation waiting on another one's job sees that job move (the person asked "how's it coming" where the answer was only in the other one).
+ * A shell younger than JOB_AFTER seconds is left out: every command an agent runs has a task file while it runs, and a quick one is no job to watch.
+ * [{agent, kind, cmd, since, line, at, th, there}] newest first; there: true for a job of a conversation this one waits on.
+ */
+export const JOB_AFTER = 8;
+export function jobsFor(th) {
+  const J = (S.live && S.live.joblines) || []; if (!J.length || !th) return [];
+  const t = now() / 1e3, runs = (S.live && S.live.agents) || [];
+  const home = j => j.thread || (runs.find(a => a.name === j.agent) || {}).thread || (S.lastSess[j.agent] || {}).thread || null;
+  const shown = J.filter(j => j.kind !== "shell" || !j.since || t - j.since >= JOB_AFTER).map(j => ({ ...j, th: home(j) }));
+  const here = shown.filter(j => j.th === th);
+  const r = S.threadStatus && S.threadStatus[th], st = r ? stRead(r.text).state : null, refs = new Set(), who = new Set();
+  if (st && (st.key === "quiet" || st.key === "stuck")) {
+    for (const m of st.full.matchAll(/(?<![0-9a-f])[0-9a-f]{12}(?![0-9a-f])/g)) if (m[0] !== th) refs.add(m[0]);
+    for (const m of st.full.matchAll(/(?<![\w])a[0-9a-f]{4}(?![\w])/g)) who.add(m[0]);
+  }
+  const there = shown.filter(j => j.th !== th && (refs.has(j.th) || who.has(j.agent))).map(j => ({ ...j, there: true }));
+  const by = (a, b) => (b.at || b.since || 0) - (a.at || a.since || 0);
+  return [...here.sort(by), ...there.sort(by)];
+}
 const RUN_WORD = { working: "Working", quiet: "Working quietly", queue: "Waiting its turn", queued: "Waiting to start" };   // "Waiting to start", not "Starting": at the cap on agents at once it can wait a long while, and Agents and the guide call it that
 const NOW_BAD = new Set(["stuck", "failed", "limited"]);   // what a conversation without a summary still stands on: its run broke or paused
 // A conversation that is on the needs list but out of the count (needs.js waitOf): the head's word, why it isn't counted, and its label as a second fact.

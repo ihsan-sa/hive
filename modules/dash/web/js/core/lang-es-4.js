@@ -178,7 +178,7 @@ export default {
   "The rest of this message was cut off.": "El resto de este mensaje se ha recortado.",
   "Linking note": "Nota que enlaza",
   "Linked note": "Nota enlazada",
-  "a warden": "un guardián",
+  ", a warden": ", un guardián",   // refs.js: the title of a warden's name, tr(", a warden")
   // E18q: the owner-only screens (Needs you, Admin › jobs) and the bar shown while the Hive isn't running.
   "Not running": "Sin funcionar",
   "The Hive isn't running, so nothing you send starts an agent.": "La colmena no está funcionando, así que nada de lo que envíes inicia un agente.",
@@ -248,7 +248,7 @@ export default {
   // E18t: what shows while a For you is open (home, a conversation's state mark)
   "new reply for you": "nueva respuesta para ti",
   "waiting to start": "esperando para empezar",
-  "new": "nuevo",   // HA-11: the mark on a focus row whose work finished since the last visit (the row's word is the list's own now)
+  "new": "nueva",   // comms.js rowMarks: the mark on a conversation (la conversación) of the person's that finished since the last visit; the only screen that says "new" alone
   // HA-11: agents with no name of their own, told apart inside one summary (model.js labelCodes). They sit inside an agent's sentence, which stays
   // as written, so these are for the rare line that is nothing else.
   "another agent": "otro agente", "a third agent": "un tercer agente", "a fourth agent": "un cuarto agente", "a fifth agent": "un quinto agente",
@@ -284,7 +284,6 @@ export default {
   "Message actions": "Acciones del mensaje",
   "Reply to this message; it goes to its author": "Responder a este mensaje; va a su autor",
   "More actions": "Más acciones",
-  "Effort: Claude runs only": "Esfuerzo: solo en ejecuciones de Claude",
   "Filed under on the home": "Archivada en el inicio",
   "Leaves it in Other": "La deja en Otras",
   // E18v: the Usage page's asks
@@ -438,7 +437,6 @@ export default {
   "Open a conversation": "Abre una conversación",
   "Each job is one conversation, and they're all listed here. Click one.": "Cada trabajo es una conversación, y aquí están todas. Haz clic en una.",
   "Where it stands": "Cómo va",
-  "The line beside a conversation's title says what it is about; click it for where it stands. The agent on it keeps it current. Home, a focus, this line, then the conversation itself: each is one click deeper.": "La línea junto al título de una conversación dice de qué trata; haz clic en ella para ver cómo va. El agente que la lleva la mantiene al día. Inicio, un enfoque, esta línea y luego la conversación: cada uno está un clic más adentro.",
   "Answers land here": "Las respuestas llegan aquí",
   "Agents write back in this conversation as they go. You can close the app: the work carries on, and it's all here when you come back.": "Los agentes responden en esta conversación sobre la marcha. Puedes cerrar la app: el trabajo sigue, y todo estará aquí cuando vuelvas.",
   "Who's on it": "Quién está en ello",

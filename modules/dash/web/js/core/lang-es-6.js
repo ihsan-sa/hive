@@ -5,6 +5,8 @@
 const WHO = { "The agent": "El agente", "An agent": "Un agente", "The Hive": "El Hive", "The warden": "El guardián", "You": "Tú" };
 const LOW = { "the agent": "el agente", "an agent": "un agente", "the Hive": "el Hive", "the warden": "el guardián" };
 const who = n => WHO[n] || n.replace(/^Agent ([A-Z]{1,2})$/, "Agente $1");
+const OF = { "The agent": "del agente", "An agent": "de un agente", "The Hive": "del Hive", "The warden": "del guardián", "Your Hive": "de tu Hive" };
+const of = n => OF[n] || `de ${who(n)}`;   // "de" + who wrote: "del agente", "de Agente B"
 const when = t => (t === "just now" ? "ahora mismo" : `hace ${t.replace(/ ago$/, "")}`);   // format.js ago(): "just now", "12s ago", "5m ago", "2.5h ago", "3d ago"
 const AGO = "(just now|\\d+(?:[.,]\\d)?[smhd] ago)";
 const RETRY = { "no connection to Claude": "sin conexión con Claude", "the machine restarted": "la máquina se reinició", "went silent with nothing running": "se quedó en silencio sin nada en marcha",
@@ -65,7 +67,8 @@ export default {
     // what an agent did, by name
     [new RegExp(`^(.+) wrote back ${AGO}$`), (_, n, t) => `${who(n)} respondió ${when(t)}`],
     // a conversation with nothing written about it: who wrote last and when, and the run that read it and wrote nothing (threadStand case 7)
-    [new RegExp(`^(.+) wrote last, ${AGO}(?:; (.+) picked it up and (wrote nothing back|has written nothing back yet))?$`), (_, n, t, a, y) => `${n === "You" ? "Escribiste" : `${({ "Your Hive": "Tu Hive" })[n] || who(n)} escribió`} el último mensaje, ${when(t)}${a ? `; ${LOW[a] || who(a)} lo recogió y ${y[0] === "w" ? "no respondió nada" : "aún no ha respondido nada"}` : ""}`],
+    // "Último mensaje de …" and not "… escribió el último mensaje": at 390 the longer one ran past a phone's home row and its age was cut off (HA-19)
+    [new RegExp(`^(.+) wrote last, ${AGO}(?:; (.+) picked it up and (wrote nothing back|has written nothing back yet))?$`), (_, n, t, a, y) => `Último mensaje ${n === "You" ? "tuyo" : of(n)}, ${when(t)}${a ? `; ${LOW[a] || who(a)} lo recogió y ${y[0] === "w" ? "no respondió nada" : "aún no ha respondido nada"}` : ""}`],
     [/^(.+) picked it up and has written nothing back yet$/, (_, n) => `${who(n)} lo recogió y aún no ha respondido nada`],
     [/^(.+) waits for your answer$/, (_, n) => `${who(n)} espera tu respuesta`],
     [/^(.+) stopped answering$/, (_, n) => `${who(n)} dejó de responder`],

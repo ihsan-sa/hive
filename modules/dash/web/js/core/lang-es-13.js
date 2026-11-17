@@ -188,5 +188,10 @@ export default {
   "your exchanges": "tus intercambios",
   "your files and links": "tus archivos y enlaces",
   "· working": "· trabajando",
+  // HA-13: a conversation in no focus that waits on the person, listed in the List home's Needs you group (comms.js looseRow, fociList)
+  "in no focus": "sin enfoque",
+  "conversation": "conversación",
+  "conversations": "conversaciones",
+  "focuses and conversations": "enfoques y conversaciones",
   __patterns: [],
 };

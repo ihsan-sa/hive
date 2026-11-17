@@ -12,7 +12,7 @@ import { S, jget, emit } from "./store.js";
 import { threadState, isSystemThread, btwParent, displayText, agentLabel, stRead, ASK_FOR } from "./model.js";
 import { seen, IB } from "./inbox.js";
 import { simpleOn } from "./simple.js";
-import { firstSentence, mdPlain, now, DAY, MIN } from "./format.js";
+import { firstSentence, askSentence, mdPlain, now, DAY, MIN } from "./format.js";
 import { faded, archived, meta as tmeta } from "../ui/threadmeta.js";
 import { APP_NAV } from "./nav.js";
 
@@ -65,7 +65,7 @@ function liveStates() {
 /** The words for a live entry: who asks or says what, or how the agent stopped. */
 function liveText({ st }) {
   const who = (w => w && w[0].toUpperCase() + w.slice(1))(agentLabel(st.who || ""));   // the app look says what the agent is on, not its code
-  if (st.key === "asks") return `${who} asks: ${firstSentence(mdPlain(displayText(st.post)))}`;
+  if (st.key === "asks") return `${who} asks: ${askSentence(mdPlain(displayText(st.post)))}`;
   if (st.key === "foryou") return `${who}: ${firstSentence(mdPlain(displayText(st.post)))}`;
   return `${who} ${st.label}`;
 }
@@ -183,7 +183,8 @@ export function waitOf(th) {
   const w = all().find(x => x.src !== "summary" && (x.th === th || (x.also || []).includes(th)));
   if (!w) return null;
   const e = laterOf(w), own = w.th === th ? w : (w.folded || []).find(x => x.th === th) || w;
-  return { where: e ? (e.what === "moot" ? "moot" : "later") : isOlder(w) ? "older" : "now", text: own.text || w.text || "", src: own.src, st: own.st || null, t: own.t || w.t || 0 };
+  // w: the list's item, so the chat's top puts off or brings back the same thing its row on the list does (HA-12)
+  return { where: e ? (e.what === "moot" ? "moot" : "later") : isOlder(w) ? "older" : "now", text: own.text || w.text || "", src: own.src, st: own.st || null, t: own.t || w.t || 0, w };
 }
 // Where the full list is read: the Needs you page, when this build has one (an installed Hive hasn't; the simple look lists the live ones on the home).
 // The literal "#needs", not href("needs"): the export removes every line with that call.
