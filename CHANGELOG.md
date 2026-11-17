@@ -4,6 +4,24 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Firmware: coverage, fuzzing and fault scenarios in QEMU
+
+The fw module, which builds and tests ESP32 firmware, gives every ESP-IDF project three more kinds of test, with nothing to write but a few lines in its `fw.json`:
+
+- `fw coverage` builds the host unit tests again with gcov and says which lines, branches and functions of the portable code they never reach.
+- `fw fuzz` runs libFuzzer harnesses (clang, with AddressSanitizer and UBSan) over the code that takes input from outside: a console, a JSON API, a signed message. `fw fuzz --new NAME` writes a harness to start from, and the dictionary is made from the strings the code compares against. On the hifi receiver's firmware the first runs found five bugs, each now fixed with a test.
+- `fw qemu --scenario NAME` boots the real firmware image in QEMU and injects a fault while it runs: a sagging supply (a brown-out), a lost USB-C power contract, a stalled audio output, a full settings flash, or RAM squeezed nearly to nothing. Each scenario then checks over the network and the console that the firmware copes and recovers. Small stand-ins for the ADC, GPIO inputs and the heap are linked into the QEMU build only, so the board's own build is untouched.
+
+## Agent cards and small links on a phone
+
+On a phone, the card of an agent that had not said anything yet (the warden's, most often) squeezed the agent's name to nothing and put its status word over its picture. The name now has its own line again. A long agent name on the Agents page ends in "…" at the edge of the card instead of running under the next one, the link under each thing the Hive remembers (in Settings) is easy to tap, and on a focus card the chip in its first lines is no longer covered by an agent's name on the line below.
+
+## A conversation with no summary still says where it stands
+
+A conversation that nobody had written a summary for showed no word at its top and none on its row in the list, so you had to open it and read to learn that it was over, or that your own message was the last thing in it. Such a conversation now says **Quiet** with the one thing known about it: who wrote last and when ("An agent wrote last, 2d ago"). When you wrote last and an agent read it but wrote nothing back, it says so.
+
+When you wrote last and no agent has started on it, the word is **Not picked up**, so a message that went nowhere is easy to see. It is said only when that is certain: the message asked for an agent of this Hive (or a new one, or nobody by name), at least three minutes have passed, no agent was at work there when you wrote, and the page holds the whole log. A message that is only "stop" is never counted as not picked up, since it starts nothing on purpose.
+
 ## A conversation says where it stands, at its top and in the list
 
 Opening a conversation used to mean reading its last few messages to learn whether it was finished, still being worked on, or waiting on you. The top of a conversation now says it before any message: a mark and a word (Needs you, Working, Stuck, Failed, Paused, Waiting on others, Done, and a few more), then one line on where it is, then a second, quieter fact such as what was asked or what the summary said. A click on the top opens the whole summary under it.

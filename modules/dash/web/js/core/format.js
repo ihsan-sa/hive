@@ -3,7 +3,7 @@ export const MIN = 6e4, HOUR = 36e5, DAY = 864e5;
 export const now = () => Date.now();
 // E18l: dates and times are written in the Language setting's language when one is chosen, else the browser's own ([]).
 // Read here, not from lang.js, so this file still loads without a page (the node tests).
-export const LOC = (() => { let v = null; try { v = localStorage.getItem("lang"); } catch {} return v === "es" ? "es" : []; })();
+export const LOC = (() => { let v = null; try { v = localStorage.getItem("lang"); } catch {} return v === "es" || v === "fr" ? v : []; })();
 
 // E18m: numbers too ("7,6 GB", "12.345" in Spanish). fix(x, d) has d decimals; int(n) is a whole number with grouping.
 const NF = {};

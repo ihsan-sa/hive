@@ -40,6 +40,7 @@ export default {
   "Pin, mark important, archive": "Fijar, marcar como importante, archivar",
   "Actions for this conversation": "Acciones de esta conversación",
   "done": "hecho",
+  "not picked up": "sin recoger",
   // top bar
   "Settings": "Ajustes",
   "More views": "Más vistas",

@@ -594,7 +594,8 @@ function threadRows(c, ctx) {
     }
     // The row says where the conversation stands in the mark and the word the top of its chat says it in (stand(), model.js threadStand), so the list
     // never says less or other than the chat it opens (HA-11; the board on 2026-11-16: 30 of 54 rows said nothing where the chat's top said Done,
-    // Waiting on others, Asked earlier, Needs you, Stopped or Blocked). With nothing to stand on, a plain mark and no word, as the chat has no bar.
+    // Waiting on others, Asked earlier, Needs you, Stopped or Blocked). A conversation nothing was written about stands on who wrote last (HA-21: Quiet, or
+    // Not picked up when the person wrote last and no agent read it), so only one with no message at all has a plain mark and no word.
     const s = stand(d.name), par = flat && threadParent(d.name), sLine = standLine(s);
     const say = inConversation(d.name, () => railSay(mdPlain(chatText(lp)))), fd = inConversation(d.name, () => fadeTag(d.name));
     const tag = standWord(s, sLine);
@@ -693,7 +694,9 @@ function sections(rs, ctx, opts) {
   const byFocus = byFocusOn();
   if (byFocus) for (const f of fociOrder()) { const k = "f:" + (f.id || ""); if (!by[k]) { by[k] = []; tops.push(k); } }
   for (const r of rs) { const k = r.sec || "rest"; if (k.startsWith("f:") && !by[k]) { by[k] = []; tops.push(k); } (by[k] || by.rest).push(r); }
-  const order = new Map(tops.map((k, i) => [k, k === "f:" ? 1e9 : i])); tops.sort((a, b) => order.get(a) - order.get(b));
+  // The rail's Focus view puts the focuses in the List's groups, Needs you first, while the home shows the List (the cards keep the person's own order, which the rail then keeps too), and marks each with the List's own dot (HA-7: one function, groupStand).
+  const stands = new Map(); if (byFocus) for (const k of tops) { const f = k === "f:" ? null : focusById(k.slice(2)); if (f) stands.set(k, groupStand(f)); }
+  const order = new Map(tops.map((k, i) => [k, k === "f:" ? 1e9 : (stands.get(k) && fociView() === "list" ? stands.get(k).at : 0) * 1e4 + i])); tops.sort((a, b) => order.get(a) - order.get(b));
   const label = k => k === "f:" ? "Other" : focusName(focusById(k.slice(2)) || { name: k.slice(2) });
   const parts = [...(C.view === "recent" ? [SECS[0], SECS[2], SECS[1]] : SECS.slice(0, 3)), ...tops.map(k => [k, label(k)]), SECS[3]].filter(([k]) => by[k].length || (byFocus && k.startsWith("f:") && k !== "f:")), heads = parts.length > 1 || by.pin.length;
   L.foldSecs = heads ? parts.map(([k]) => k).filter(k => k !== "f:") : [];   // Other has no fold
@@ -713,6 +716,7 @@ function sections(rs, ctx, opts) {
       h("div", { class: "tm-sec-hw", "aria-current": here ? "true" : null, ...dnd.grab },
         fid != null ? [
           h("button", { type: "button", class: "tm-sec-ch", "aria-expanded": String(!shut), title: shut ? "Show this section" : "Fold this section", "aria-label": (shut ? "Show " : "Fold ") + label, onclick: toggle }, icon(shut ? "chevron-right" : "chevron-down")),
+          stands.get(k) ? h("span", { class: "tm-sec-st", "data-key": "sec-st", "data-state": stands.get(k).key || "none", title: stands.get(k).head }, h("span", { class: "st", "data-tone": stands.get(k).tone, "aria-hidden": "true" }), h("span", { class: "vh" }, stands.get(k).head + ": ")) : null,
           h("a", { class: "tm-sec-h tm-sec-link", href: href("focus", fid || "misc"), title: fid && can("post") ? `Open ${label}. Drag to reorder the focuses (Alt+Up or Alt+Down moves it)` : `Open ${label}`, draggable: fid && can("post") ? "false" : null, onkeydown: focusKeys(fid, ctx),
             onclick: e => { if (e.button || e.metaKey || e.ctrlKey || e.shiftKey) return; if (here) { e.preventDefault(); toggle(); } else if (FOLD.has(k)) { FOLD.delete(k); saveFold(); } } }, h("span", { class: "tm-sec-nm" }, label)), count] :
         h("button", { type: "button", class: "tm-sec-h tm-fold", "aria-expanded": String(!shut), title: shut ? "Show this section" : "Fold this section", onclick: toggle },
@@ -798,10 +802,10 @@ const standWord = (s, title) => (s ? h("span", { class: "cm-st", "data-state": s
 //           or Stuck when the list has it because its run broke: those wait on the person too (a message is what moves them), and the row's word
 //           says which kind it is.
 //   "run":  an agent is on it now: its row says Working, Working quietly, Waiting its turn or Waiting to start.
-//   "done": its row says Done. Not one that says Quiet or nothing: no agent said that work was finished (the review of HA-11: "3 done" over rows
+//   "done": its row says Done. Not one that says Quiet or Not picked up: no agent said that work was finished (the review of HA-11: "3 done" over rows
 //           that said Quiet).
-// A helper that says anything else (Quiet, Paused, Stopped, Waiting on others, Blocked, Asked, You replied, a failure the count doesn't have, or
-// nothing) is in no part, so the parts need not add up to the number of helpers.
+// A helper that says anything else (Quiet, Not picked up, Paused, Stopped, Waiting on others, Blocked, Asked, You replied, or a failure the count
+// doesn't have) is in no part, so the parts need not add up to the number of helpers.
 const kidStand = th => { const s = stand(th); return waitsOn(th) ? "need" : s && s.running ? "run" : s && s.word === "Done" ? "done" : ""; };
 function kidCount(ths) {
   const sts = ths.map(kidStand), n = k => sts.filter(x => x === k).length;
@@ -1401,6 +1405,8 @@ const yoursOf = f => Math.max(needsOf(f.id || null).length, askedOf(f.id || null
 const leadKey = f => { const k = (leadOf(f) || {}).key || ""; return FO_GROUPS.some(g => g[0] === k) ? k : ""; };
 /** The group a focus is listed under: Needs you as soon as an ask of it waits on the person, whatever its In short says; else its own state. */
 const groupOf = f => (f.misc ? null : yoursOf(f) ? "needs you" : leadKey(f));
+/** The group a focus is listed in, its heading and tone, and its place in the order: the one answer the home List and the rail's Focus view both read (HA-7). */
+function groupStand(f) { const key = groupOf(f), i = FO_GROUPS.findIndex(g => g[0] === (key || "")), g = FO_GROUPS[i < 0 ? FO_GROUPS.length - 1 : i]; return { key: g[0], head: g[1], tone: g[2], at: i < 0 ? FO_GROUPS.length - 1 : i }; }
 function focusRow(f) {
   const id = f.id || null, page = href("focus", id || "misc"), rows = activeThreads(id).filter(r => !archived(r.th)), up = updatedAt(f, rows);
   if (f.misc) return h("li", { class: "fo-r", "data-key": "fo:misc", "data-misc": "" },

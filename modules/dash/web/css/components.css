@@ -3271,6 +3271,7 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .tm-sec-hw:hover .tm-sec-n,.tm-sec-hw:focus-within .tm-sec-n{display:none}
 .tm-sec-add{opacity:0}
 @media (hover:none){.tm-sec-add{opacity:1}.tm-sec-hw .tm-sec-n{display:none}}
+.tm-sec-hw .tm-sec-st{display:inline-flex;align-items:center;flex:none;padding-left:4px}
 
 /* ───────────── §3 Focus page ───────────── */
 .fp{padding:var(--s7) var(--gutter) var(--s8)}
