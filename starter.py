@@ -95,10 +95,22 @@ FREE_AGENT = re.compile(r"f[0-9a-f]{4}")  # @free runs (OpenRouter free models):
 CODEX_AGENT = re.compile(r"c[0-9a-f]{4}")
 STOP = re.compile(r"(all |everyone )?stop( it| now| all( of)?( this| that)?| everything| everyone)?")
 
+# What the web app writes before the person's words (dash.py person_post): "@name ", "reply to message ID: ", then its head, "(from SIGNER, web app)" or
+# "(web app)", either with the simple-mode note. The same two patterns as memory.py PREFIX and WEB (test_mention holds them equal). Until 2026-11-17 the
+# head's words counted as the person's, so a stop typed in the web app was no stop: the carry-on chain went on and a later check even cleared a hold.
+WEB_PREFIX = re.compile(r"^(?:@[\w-]+\s+)*(?:reply to message [0-9a-f]+:\s*)?")
+WEB_HEAD = re.compile(r"\((?:from [^,()]+, )?web app(?:, simple mode: [^()]*? whether it can be undone)?\)")
+
 def is_stop(p):
-    """The person telling a thread to stop ("@all stop", "stop all this"): mentions and punctuation aside, nothing else."""
+    """The person telling a thread to stop ("@all stop", "stop all this"): mentions and punctuation aside, nothing else. What the web app put before
+    their words is not theirs and is left out, on the person's own posts only: one that came through a door or from a limited sign-in (`via`) is read
+    as before, so who may stop a thread does not change here."""
     if p.get("from") != "person": return False
-    text = re.sub(r"[^\w ]", " ", MENTION.sub(" ", str(p.get("text", "")))).lower()
+    text = str(p.get("text", ""))
+    if not p.get("via"):
+        pre = WEB_PREFIX.match(text); head = WEB_HEAD.match(text, pre.end())
+        text = text[(head or pre).end():]
+    text = re.sub(r"[^\w ]", " ", MENTION.sub(" ", text)).lower()
     return bool(STOP.fullmatch(" ".join(text.split())))
 
 if cont: cont.is_stop = is_stop

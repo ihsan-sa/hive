@@ -3,6 +3,7 @@
 // Merged last in lang.js, so a word the older tables already have keeps their Spanish.
 // The state words follow the rail and the focus overview: "Needs you" is "Te necesita" and "Waiting on others" is "Esperando a otros" there already.
 const WHO = { "The agent": "El agente", "An agent": "Un agente", "The Hive": "El Hive", "The warden": "El guardián", "You": "Tú" };
+const LOW = { "the agent": "el agente", "an agent": "un agente", "the Hive": "el Hive", "the warden": "el guardián" };
 const who = n => WHO[n] || n.replace(/^Agent ([A-Z]{1,2})$/, "Agente $1");
 const when = t => (t === "just now" ? "ahora mismo" : `hace ${t.replace(/ ago$/, "")}`);   // format.js ago(): "just now", "12s ago", "5m ago", "2.5h ago", "3d ago"
 const AGO = "(just now|\\d+(?:[.,]\\d)?[smhd] ago)";
@@ -19,6 +20,7 @@ export default {
   "Stuck": "Atascado",
   "You replied": "Respondiste",
   "Quiet": "Tranquila",
+  "Not picked up": "Sin recoger",
   // the one line after the word
   "on it now": "en ello ahora",
   "on it again since the summary": "otra vez en ello desde el resumen",
@@ -62,6 +64,8 @@ export default {
     [/^Summary by (.+)$/, "Resumen de $1"],
     // what an agent did, by name
     [new RegExp(`^(.+) wrote back ${AGO}$`), (_, n, t) => `${who(n)} respondió ${when(t)}`],
+    // a conversation with nothing written about it: who wrote last and when, and the run that read it and wrote nothing (threadStand case 7)
+    [new RegExp(`^(.+) wrote last, ${AGO}(?:; (.+) picked it up and (wrote nothing back|has written nothing back yet))?$`), (_, n, t, a, y) => `${n === "You" ? "Escribiste" : `${({ "Your Hive": "Tu Hive" })[n] || who(n)} escribió`} el último mensaje, ${when(t)}${a ? `; ${LOW[a] || who(a)} lo recogió y ${y[0] === "w" ? "no respondió nada" : "aún no ha respondido nada"}` : ""}`],
     [/^(.+) picked it up and has written nothing back yet$/, (_, n) => `${who(n)} lo recogió y aún no ha respondido nada`],
     [/^(.+) waits for your answer$/, (_, n) => `${who(n)} espera tu respuesta`],
     [/^(.+) stopped answering$/, (_, n) => `${who(n)} dejó de responder`],

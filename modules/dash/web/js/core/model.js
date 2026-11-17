@@ -699,9 +699,26 @@ const OFF_COUNT = { later: ["Later", "You put this off", "Later"], older: ["Aske
 // An entry that asks nothing (an unread reply written for the person, needs.js "foryou") is not "asked": past its time it reads "For you".
 const OFF_FORYOU = ["For you", "In Stuff to address", "Earlier"];
 const sameWords = (a, b) => String(a || "").replace(/\s+/g, " ").trim() === String(b || "").replace(/\s+/g, " ").trim();
+// What the starter starts a fresh agent for (starter.py SPAWN): "@new", a harness or a model's name.
+const SPAWN_WORDS = new Set(["new", "claude", "codex", "free", "opus", "sonnet", "haiku", "fable", "astra"]);
+// A message that is only "stop" (starter.py is_stop: what the web app put before the person's words left out, unless it came through a door (`via`);
+// then the names and the punctuation taken out, and the whole of it): the starter ends the conversation's runs for it, and what it starts after is
+// no pick-up of this message, so "Not picked up" would be a false alarm.
+// Who wrote last, for case 7: an agent by its name; the person as "You"; any other sender (the starter, asks, boxwatch, a door) is the Hive's own
+// machinery, whose name is a builder word ("Asks wrote last").
+const lastWriter = (n, Name) => n === "person" ? "You" : isAgent(n) || CODE_NAME.test(n) || isWarden(n) ? Name(n) : "The Hive";
+const STOP_RE = /^(all |everyone )?stop( it| now| all( of)?( this| that)?| everything| everyone)?$/;
+const WEB_PREFIX = /^(?:@[\w-]+\s+)*(?:reply to message [0-9a-f]+:\s*)?/, WEB_HEAD = /^\((?:from [^,()]+, )?web app(?:, simple mode: [^()]*? whether it can be undone)?\)/;
+const isStop = p => {
+  if (!p || p.from !== "person") return false;
+  let t = String(p.text || "");
+  if (!p.via) { const pre = t.match(WEB_PREFIX)[0].length, head = t.slice(pre).match(WEB_HEAD); t = t.slice(pre + (head ? head[0].length : 0)); }
+  return STOP_RE.test(t.replace(/(?<![\p{L}\p{N}_.])@[a-z0-9][a-z0-9_-]*/giu, " ").replace(/[^\p{L}\p{N}_\s]/gu, " ").replace(/\s+/g, " ").trim().toLowerCase());
+};
 /**
  * Where a conversation stands, for its head: {key (a STATUS key), word, text, also, why, dup, more, lines, at, from, since, running, bare}, or null when it
- * has neither a summary nor a place on the needs list and nothing is happening in it now. word + text is the one line to read and also a second, quieter fact; why is set when the
+ * has no message at all (every conversation with one stands somewhere: with no summary, no place on the needs list and no agent on it, on who wrote
+ * last, HA-21). word + text is the one line to read and also a second, quieter fact; why is set when the
  * conversation is on the needs list but out of the count ("You put this off"), for the places that show no second fact (a phone's line under the title);
  * more is every summary line that text doesn't already say in full; since counts the messages after the summary; bare means there is no summary, only
  * the list's entry or what its run is doing.
@@ -722,10 +739,11 @@ export function threadStand(th, read, waits) {
   // conversation stands, so an agent at work there still reads Working, and one that broke Stuck or Failed.
   const cur = (live.key === "asks" && threadRun(th)) || live;
   // Neither a summary nor a place on the list: it still stands somewhere while an agent is on it, stopped answering, failed or paused at a limit
-  // (HA-11: a row in the conversation list says that, so the top of the chat it opens says it too). An ask or a new reply the list doesn't have
-  // is not said here, for the reason above.
-  if (!has && !waits && !RUN_WORD[cur.key] && !NOW_BAD.has(cur.key)) return null;
-  const d = S.threads.get(th), at = has ? (r.at || 0) * 1e3 : 0, sr = stRead(has ? r.text : ""), b = sr.state;
+  // (HA-11: a row in the conversation list says that, so the top of the chat it opens says it too), and after that on who wrote last (case 7,
+  // HA-21). An ask or a new reply the list doesn't have is not said here, for the reason above. Only a conversation with no message has no stand.
+  const d = S.threads.get(th);
+  if (!has && !waits && !RUN_WORD[cur.key] && !NOW_BAD.has(cur.key) && !(d && d.posts.length)) return null;
+  const at = has ? (r.at || 0) * 1e3 : 0, sr = stRead(has ? r.text : ""), b = sr.state;
   // a summary opens with what the conversation is about, which its title says already: that line is a second fact only when it is the whole summary
   const first = sr.about[0] || "", detail = sr.about.length > 1 ? sr.about.at(-1) : "", only = sr.about.at(-1) || "";
   const Name = n => { const l = (n && agentLabel(n)) || "the agent"; return CODE_NAME.test(l) ? l : capFirst(l); };
@@ -809,7 +827,32 @@ export function threadStand(th, read, waits) {
     return b.tail ? out("quiet", word, b.tail, detail, b.line) : out("quiet", word, only, "", only);
   }
   if (b) return b.tail ? out(b.key, b.word, b.tail, detail, b.line) : out(b.key, b.word, only, "", only);
-  if (!has) return null;   // a guard, not a case: every stand without a summary returned above (the list's entry in 1 and 5, the run in 2 to 4)
-  return out("done", "Quiet", first, detail, first);
+  if (has) return out("done", "Quiet", first, detail, first);
+  // 7. nothing written about it, not on the list, no agent on it and none that broke: it stands on who wrote last and when, the one fact there is
+  //    (HA-21: on the board of 2026-11-17, 15 of 55 rows of the list said nothing at all, and so did the top of the conversation each opened).
+  const lp = d && d.posts.at(-1); if (!lp) return null;
+  // a page's edit notice (dash.py, tagged page:edit) is written as the person but asks nobody, so nobody was meant to pick it up
+  if (lp.from !== "person" || (lp.tags || []).includes("page:edit"))
+    return out("done", "Quiet", `${lastWriter(lp.from, Name)} wrote last, ${ago(lp.t)}`);
+  // The person wrote last. Someone else signed in to this Hive is named, as their message's own head names them (message.js).
+  const src = postSource(lp), me = S.app && S.app.signer, who = src && src.how === "Web" && src.name && me && src.name !== me ? src.name : "You";
+  const said = `${who} wrote last, ${ago(lp.t)}`;
+  // took: the run that read it. One the message itself started or woke, else one that began in this conversation after it, else the newest run of
+  // an agent it names. A start is stamped by the starter and a message by whoever wrote it, so a start up to two seconds before it still counts.
+  const last = S.lastByThread[th], after = s => !!s && (s.start || 0) >= lp.t - 2000, named = lp.men.map(m => S.lastSess[m]).filter(Boolean);
+  const took = (S.woke[lp.id] || []).at(-1) || (after(last) ? last : null) || named.find(after) || null;
+  if (took) { const n = agentLabel(took.name); return out("done", "Quiet", `${said}; ${n && n !== "you" ? n : "the agent"} picked it up and ${took.end ? "wrote" : "has written"} nothing back${took.end ? "" : " yet"}`); }
+  // "Not picked up" is a claim that nothing read the message, so it is made only when that is known:
+  //   - the whole log is held (S.logStart 0): with only its last day, a start further back is not here to be found;
+  //   - no run was going when it was written: a message reaches a running agent between its steps, and no start says so;
+  //   - it asks for an agent of this Hive, or a new one: "@hives" and names this Hive never ran start nothing here, and "stop" ends runs;
+  //   - the starter has had three minutes: a start is logged seconds after the message, and the page reads the log a moment later still.
+  //   (the two clocks again: a run that ended up to two seconds before the message may still have read it)
+  const going = s => !!s && (s.start || 0) < lp.t && (!s.end || s.end > lp.t - 2000);
+  const mine = lp.men.every(m => isAgent(m) || SPAWN_WORDS.has(m));
+  if (S.logStart === 0 && now() - lp.t > 3 * MIN && mine && !isStop(lp) && !going(last) && !named.some(going)
+      && !(S.sessions || []).some(s => s.thread === th && going(s)))   // any run in it, not only the newest: an older one may still be at work (only rows that reach here pay this)
+    return out("nobody", "Not picked up", said);
+  return out("done", "Quiet", said);
 }
 export { DAY, HOUR };

@@ -224,6 +224,7 @@ class Hunt:
         for k in ("allow_secondary", "allow_page_signal"):
             if k in spec and not isinstance(spec[k], bool): raise ValueError(f"spec {k} must be true or false, not {spec[k]!r}")
         if spec.get("goal") is not None and not isinstance(spec["goal"], str): raise ValueError(f"spec goal must be a sentence of text, not {type(spec['goal']).__name__}")
+        if spec.get("out") is not None and not isinstance(spec["out"], str): raise ValueError(f"spec out must be a folder path (text), not {type(spec['out']).__name__}")
         self.target = int(spec.get("target", 25))
         self.per_org = int(spec.get("per_org", 2))
         self.workers = int(spec.get("workers", 4))

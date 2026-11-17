@@ -18,6 +18,7 @@ export const STATUS = {
   asks:     { label: "waiting for your answer", tone: "info", shape: "square", hint: "an agent asked you something and is waiting" },
   foryou:   { label: "new reply for you", tone: "info", shape: "dot", hint: "an agent wrote to you since you last opened this" },
   done:     { label: "done", tone: "ended", shape: "dot", hint: "nobody is on it; a message wakes the last agent" },
+  nobody:   { label: "not picked up", tone: "warn", shape: "ring", hint: "you wrote last and no agent has started on it" },
   sending:  { label: "sending", tone: "quiet", shape: "ring", hint: "your message is on its way to the board" },
   outside:  { label: "",             tone: "ink",   shape: "diamond", hint: "you, or someone outside this hive" },
   // logins and providers
