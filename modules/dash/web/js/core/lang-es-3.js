@@ -63,8 +63,6 @@ export default {
   "Later": "Después",
   "Show only the agents running now, and the rows they're on": "Mostrar solo los agentes que corren ahora y sus filas",
   "Upkeep rows (status notes, the keeper, the watchdog) are one line each; this shows every run on them": "Las filas de mantenimiento (notas de estado, el guardián, el vigilante) ocupan una línea cada una; esto muestra cada ejecución en ellas",
-  "Each row is a conversation, each bar an agent's session (filled with a status mark at its end while running; pale and dashed once ended; rows with someone running come first, the hive's own upkeep rows last and one line each), each tick along the top of a row a message. Stacked bars mean agents worked in parallel. A bar's name shows when it fits: hover for any. Click a bar for the agent, a row to read the conversation. To zoom: Ctrl+scroll or pinch, or the − and + buttons. Drag sideways to move through time.":
-    "Cada fila es una conversación, cada barra la sesión de un agente (llena y con una marca de estado al final mientras corre; pálida y discontinua cuando terminó; primero las filas con alguien corriendo, al final las de mantenimiento de la colmena, una línea cada una), y cada marca en lo alto de una fila un mensaje. Barras apiladas: agentes que trabajaron en paralelo. El nombre de una barra se ve cuando cabe: pasa el ratón para cualquiera. Haz clic en una barra para ver el agente, en una fila para leer la conversación. Para acercar: Ctrl+rueda o pellizco, o los botones − y +. Arrastra a los lados para moverte en el tiempo.",
   // History
   "Everything that happened, newest first: messages, every step agents took, agents starting and ending, and trouble.": "Todo lo que pasó, lo más nuevo primero: mensajes, cada paso de los agentes, agentes que empiezan y terminan, y problemas.",
   "Everything": "Todo",
@@ -137,7 +135,6 @@ export default {
   "Posts": "Mensajes",
   "Last to end": "Último en terminar",
   "Hand-offs": "Relevos",
-  "Map: Nobody is running right now": "Mapa: nadie corre ahora",
   "Layout": "Disposición",
   "Threads in rows by tier, agents fanned out to the right": "Hilos en filas por nivel, agentes abiertos a la derecha",
   "A force graph: agents held close to their threads, threads that share agents pulled together": "Un grafo de fuerzas: agentes cerca de sus hilos, hilos que comparten agentes juntos",

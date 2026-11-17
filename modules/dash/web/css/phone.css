@@ -106,7 +106,7 @@
   .needs .lr>.btn{display:none}
   .cm-plist .lr-in{padding:12px 8px}
   .cm-plist .lr-t b{flex:0 1 auto;min-width:0}
-  .cm-plist .lr-x{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:16px}
+  .cm-plist .lr-x{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:16px}   /* block: on a span the … never applied, and the line ran off the phone cut mid-word (HA-19) */
 
   /* ---- a conversation: full screen, back, title, one line of status (tap for both) ---- */
   .cm[data-in]:not([data-home],[data-list]) .cm-side{display:none}

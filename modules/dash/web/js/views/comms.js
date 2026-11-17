@@ -13,7 +13,7 @@ import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitO
 import { workBar, workBarHeld } from "../ui/workbar.js";
 import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, yoursN, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci, workingIn, leadOf, cardSince, newSince, hiddenAsks, markSeen as lookAt, seenLeave } from "../core/foci.js";
 import { newIn } from "./focus.js";
-import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadStand, heldForYou, carryOn, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, retryWords, fresh7, asksQuestion, fileInfo } from "../core/model.js";
+import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadStand, jobsFor, heldForYou, carryOn, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, retryWords, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
 import { href, threadHref, go, parse } from "../core/router.js";
 import { yoursSearch, yoursText } from "../core/yours.js";
@@ -27,7 +27,7 @@ import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
 import { message, messageHead, messageReceipt, localMessage, draftMessage, markWords, pollDelivered, marksSig, delivery, onJump, helperFolds, chatPages, pageEdit } from "../ui/message.js";
 import { chatView } from "../rich/artifact.js";
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
-import { openQuick, quickOpen, closeQuick, quickPanel, laterButtons } from "../ui/quick.js";
+import { openQuick, quickOpen, closeQuick, quickPanel, laterButtons, setLater } from "../ui/quick.js";
 import { when } from "../ui/when.js";
 import { loadTiers, focusTierChip, threadTierChip } from "../ui/worktiers.js";
 import { downloadMarkdown, printScript } from "../ui/export.js";
@@ -643,13 +643,17 @@ let foldFresh = (() => { try { return localStorage.getItem(FOLD_KEY) === null; }
 function saveFold() { try { localStorage.setItem(FOLD_KEY, JSON.stringify([...FOLD])); } catch (e) { /* this page only */ } }
 // Collapse or expand all (the person, 11061437ab67): the section heads and the helper folds in the list now. syncThreads fills L.foldSecs and L.foldKids.
 // Which way it goes follows the sections, so a list with most of them open offers Collapse all; a list with no heads goes by its helper folds.
-const foldShut = () => { const ss = L.foldSecs || [], ks = L.foldKids || []; return ss.length ? ss.every(k => FOLD.has(k)) : !ks.some(n => KIDS.has(n)); };
+// HA-18: the open conversation always has a row. When every section that holds it is folded, the first of them opens for this visit (L.lift); FOLD,
+// the person's own choice, is not touched, so the fold is back when they leave. Folding it again during the visit keeps it shut until the next one.
+const VISIT = { conv: undefined, shut: new Set() };
+const isShut = k => FOLD.has(k) && k !== L.lift;
+const foldShut = () => { const ss = L.foldSecs || [], ks = L.foldKids || []; return ss.length ? ss.every(isShut) : !ks.some(n => KIDS.has(n)); };
 const foldWord = () => foldShut() ? "Expand all" : "Collapse all";
 const foldNone = () => !(L.foldSecs || []).length && !(L.foldKids || []).length;
 function foldAll(ctx) {
   const open = foldShut(), ss = L.foldSecs || [], ks = L.foldKids || [];
   if (open) { ss.forEach(k => FOLD.delete(k)); ks.forEach(n => KIDS.add(n)); }
-  else { ss.forEach(k => FOLD.add(k)); KIDS.clear(); }
+  else { ss.forEach(k => FOLD.add(k)); KIDS.clear(); if (L.lift) VISIT.shut.add(L.lift); }
   saveFold(); ctx.update();
 }
 // The list in parts: Pinned, Needs you, the rest, and a link to the Archived page at the end (#comms/~archived). A search is one list.
@@ -685,7 +689,7 @@ const focusKeys = (fid, ctx) => !fid || !can("post") ? null : e => {
 const SECS = [["pin", "Pinned"], ["imp", "Important"], ["need", "Needs you"], ["rest", null]];
 // Recent view: Important shows its 10 newest rows; the rest sit behind an "N more" row (sidebar-sim, a9ac6/ae868).
 let impAll = false;
-const IMP_CAP = 10, capImp = (k, rows) => k === "imp" && C.view === "recent" && !impAll && rows.length > IMP_CAP ? rows.slice(0, IMP_CAP) : rows;
+const IMP_CAP = 10, capImp = (k, rows) => k === "imp" && C.view === "recent" && !impAll && rows.length > IMP_CAP ? rows.filter((r, i) => i < IMP_CAP || r.current) : rows;   // the open conversation keeps its row (HA-18)
 const moreImp = (k, rows, ctx) => k === "imp" && C.view === "recent" && !impAll && rows.length > IMP_CAP
   ? h("button", { type: "button", class: "tm-sec-more meta", onclick: () => { impAll = true; ctx.update(); } }, `${rows.length - IMP_CAP} more`) : null;
 function sections(rs, ctx, opts) {
@@ -701,12 +705,15 @@ function sections(rs, ctx, opts) {
   const parts = [...(C.view === "recent" ? [SECS[0], SECS[2], SECS[1]] : SECS.slice(0, 3)), ...tops.map(k => [k, label(k)]), SECS[3]].filter(([k]) => by[k].length || (byFocus && k.startsWith("f:") && k !== "f:")), heads = parts.length > 1 || by.pin.length;
   L.foldSecs = heads ? parts.map(([k]) => k).filter(k => k !== "f:") : [];   // Other has no fold
   if (foldFresh && heads) { foldFresh = false; L.foldSecs.forEach(k => k !== L.here && FOLD.add(k)); saveFold(); }   // a focus page open beside it keeps its own section open
+  if (VISIT.conv !== C.conv) { VISIT.conv = C.conv; VISIT.shut.clear(); }
+  const curAt = heads ? parts.map(([k]) => k).filter(k => by[k].some(r => r.current)) : [];
+  L.lift = curAt.length && curAt.every(k => k !== "f:" && FOLD.has(k)) && !curAt.some(k => VISIT.shut.has(k)) ? curAt[0] : null;
   const sec = (k, label, rows) => {
     if (!heads) return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k }, list(rows, { ...opts, empty: "" }));
     if (k === "f:") return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k },   // Other: a plain heading, its rows always shown
       h("div", { class: "tm-sec-hw" }, h("p", { class: "tm-sec-h tm-sec-other" }, label)), list(rows, { ...opts, empty: "" }));
-    const here = L.here === k, shut = FOLD.has(k), fid = k.startsWith("f:") ? k.slice(2) : null;   // the focus page open beside it: its section is marked; pressing its heading again folds it, the page stays
-    const toggle = () => { FOLD.has(k) ? FOLD.delete(k) : FOLD.add(k); saveFold(); ctx.update(); };
+    const here = L.here === k, shut = isShut(k), fid = k.startsWith("f:") ? k.slice(2) : null;   // the focus page open beside it: its section is marked; pressing its heading again folds it, the page stays
+    const toggle = () => { if (k === L.lift) VISIT.shut.add(k); else { FOLD.has(k) ? FOLD.delete(k) : FOLD.add(k); saveFold(); } ctx.update(); };
     // The count is its own span after the name, with a dot before it when a row waits on you or is working (the Nov 8 handoff §2.1); + takes its place on hover.
     const tone = rows.some(r => waitsOn(r.th)) ? "info" : rows.some(r => threadState(r.th).key === "working") ? "good" : null;
     const count = h("span", { class: "tm-sec-n", title: plural(rows.length, "conversation") + (tone === "info" ? ", one waits on you" : tone ? ", one working" : "") }, tone ? h("span", { class: "st", "data-tone": tone, "aria-hidden": "true" }) : null, String(rows.length));
@@ -745,7 +752,7 @@ function syncThreads(c, ctx) {
   const tl = document.querySelector("#main .cm-tl"); if (!tl) return;
   if (!simpleOn()) loadFoci();   // the foci (core/foci.js); a store emit when they change
   const held = byFocusOn() && S.foci === undefined && !C.tq.trim();   // Focus groups its rows by the focuses: grey rows until they're read, not a flat list that re-sorts
-  const sig = [held, S.ver, C.view, impAll, C.hideFaded, S.foci && S.foci.at, S.foci && (S.foci.foci || []).map(f => f.id).join(), C.scope, C.conv, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, liveSig(), marksSig().length, readSig(IB.items), readSig(S.needsYou), readSig(S.foci)].join("|");
+  const sig = [held, S.ver, C.view, impAll, C.hideFaded, S.foci && S.foci.at, S.foci && (S.foci.foci || []).map(f => f.id).join(), C.scope, C.conv, C.imp, tmetaSig(), [...FOLD].join(), [...VISIT.shut].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, liveSig(), marksSig().length, readSig(IB.items), readSig(S.needsYou), readSig(S.foci)].join("|");
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv || L.tlHeld;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
@@ -811,6 +818,19 @@ function kidCount(ths) {
   return { run: n("run"), need: n("need"), parts: [["run", "working"], ["need", "needs you"], ["done", "done"]].map(([k, w]) => (n(k) ? `${n(k)} ${w}` : null)).filter(Boolean) };
 }
 const stAge = s => `updated ${ago(s.at)}${s.since ? ` · ${plural(s.since, "message")} since` : ""}`, stBy = (s, th) => `Summary by ${inConversation(th, () => agentLabel(s.from))}`;   // whole lines, so the language table can match them (lang-es-6.js); the app look names the author as the conversation does, not by its code
+// HA-12: the chat's top offers what the Needs you list offers, where the person is reading. While the conversation waits on them (Needs you,
+// Asked earlier) it has Later and Not needed; put off (Later, Not needed) it has Bring back. The same item as its row on the list (waitOf's w),
+// so the count, the rail's group and the top's word change together. menu: the phone's title menu, which closes on a pick like its other items.
+// Not the thread's own Not needed (the title menu's fade): that greys the conversation; this settles the ask.
+const topWait = th => { const wo = th && can("post") ? waitOf(th) : null; return wo && wo.w ? wo : null; };
+function topActs(th, menu) {
+  const wo = topWait(th); if (!wo) return null;
+  const done = () => { if (menu) C.menu = null; L.ctx && L.ctx.update(); };
+  const bs = wo.where === "now" || wo.where === "older" ? laterButtons(wo.w)
+    : [button("Bring back", e => { if (e) e.stopPropagation(); setLater(wo.w, "back"); }, { size: "s", kind: "quiet", cls: "nd-back" })];
+  for (const b of bs) { const go = b._on && b._on.click; (b._on ||= {}).click = e => { go && go(e); done(); }; }
+  return h("span", { class: "cm-st-acts", role: "group", "aria-label": "Later or not needed" }, bs);
+}
 function statusBar(th) {
   const s = th && stand(th); if (!s) return null;
   // The head opens to the whole summary. With no summary it opens only when its one line may be cut short (a second fact, which a narrow bar
@@ -829,6 +849,7 @@ function statusBar(th) {
     s.more.length ? h("span", { class: "cm-strip-b" }, s.more.map(l => h("span", { class: "cm-st-l" }, l))) : null,
     // The work tier, only when it isn't its focus's (a9179, rung WT-1): the focus card already says the focus's.
     tierChip,
+    topActs(th),
     // bare: on the list with no summary yet, so there is no age and nothing to reply about; the conversation's own messages say the rest
     s.bare ? null : h("span", { class: "meta cm-st-age", title: stBy(s, th) }, stAge(s)),
     // One agent named per conversation (R6 review): the strip names who is on it; the summary's author is on hover.
@@ -836,6 +857,29 @@ function statusBar(th) {
     // lines go as the agent wrote them, codes and all, since an agent reads them.
     s.bare ? null : h("span", { class: "meta cm-status-m cm-strip-m", title: stBy(s, th) }, stAge(s),
       can("post") ? h("button", { type: "button", class: "cm-status-r", title: "Reply about this summary", onclick: () => quoteRef(th, { who: inConversation(th, () => capFirst(agentLabel(r.from))), where: "summary", text: r.text }) }, "Reply") : null));
+}
+
+/**
+ * HA-24: under the bar, each job running for this conversation with the newest line it wrote and how old that line is (model.js jobsFor,
+ * dash.py job_lines): a long build or sweep said nothing in the chat until it ended, so the person asked how it was going. Then the jobs of a
+ * conversation this one says it waits on, each a link to that conversation. One line a row, the line cut, at every width.
+ * The simple look says none of it; a sign-in without the right to read agents' work gets who runs a job and since when, not its command or line.
+ */
+function jobRows(th) {
+  if (simpleOn()) return null;
+  const js = inConversation(th, () => jobsFor(th)); if (!js.length) return null;
+  const say = t => (app() ? scrub(t) : t);
+  return h("div", { class: "cm-jobs", "data-key": "jobs", role: "status", "aria-label": "Jobs running" },
+    js.slice(0, 4).map(j => {
+      const age = j.line && j.at ? ago(j.at * 1e3) : j.since ? `started ${ago(j.since * 1e3)}` : "";
+      const lead = j.there ? h("a", { class: "cm-job-w", href: threadHref(j.th), title: `A job in ${threadTitle(j.th)}` }, short(threadTitle(j.th), 40)) : h("span", { class: "cm-job-w" }, "Job");
+      return h("div", { class: "cm-job", "data-key": `job:${j.agent}:${j.kind}:${Math.round(j.since || 0)}`, "data-there": j.there ? "" : null },
+        statusDot("working", { live: true }), lead,
+        h("span", { class: "cm-job-c", title: j.cmd || null }, j.cmd ? short(say(j.cmd), 60) : inConversation(th, () => `${capFirst(agentLabel(j.agent))}'s job`)),
+        j.line ? h("span", { class: "cm-job-l", title: j.line }, say(j.line)) : null,
+        age ? h("span", { class: "meta cm-job-age" }, age) : null);
+    }),
+    js.length > 4 ? h("span", { class: "meta cm-job-more" }, `and ${js.length - 4} more`) : null);
 }
 
 const strip = th => inConversation(th, () => stripLines(th));
@@ -945,7 +989,8 @@ function stMenu(th) {
     h("p", { class: "cm-menu-st-a" }, statusDot(s.key, { live: s.running }), h("b", null, s.word), s.text ? " · " : null, s.text || null),
     s.also && !s.dup ? h("p", { class: "cm-menu-st-also" }, s.also) : null,   // the second fact, unless the summary's lines below say it
     s.more.map(l => h("p", null, l)),
-    s.bare ? null : h("p", { class: "meta", title: stBy(s, th) }, stAge(s)));
+    s.bare ? null : h("p", { class: "meta", title: stBy(s, th) }, stAge(s)),
+    topActs(th, true));
 }
 function titleMenu(c, n, d, off, ctx) {
   const th = c.thread, full = th && app() && !simpleOn(), mine = can("post");
@@ -960,7 +1005,8 @@ function titleMenu(c, n, d, off, ctx) {
     mine ? act(im ? "Not important" : "Mark important", "star", () => tryMeta(th, { important: !im }, ctx), im ? "Take the important mark off" : "Keep it above the others in the list") : null) : [];
   const more = full ? part(
     mine ? act(arch ? "Unarchive" : "Archive", "archive", () => { tryMeta(th, { archived: !arch }, ctx); if (!arch) go("comms"); }, arch ? "Back in the list" : "Out of the list until something new is for you") : null,
-    mine ? act(fd ? "Needed again" : "Not needed", "check", () => tryMeta(th, { faded: !fd }, ctx), fd ? fadeWhy(th) : "Grey it in the list: still there to open and write in, and back by itself when something new is for you") : null) : [];
+    // while it waits on the person, the Not needed above (topActs) is the one: two of that name in one menu would do different things
+    mine && (fd || !topWait(th)) ? act(fd ? "Needed again" : "Not needed", "check", () => tryMeta(th, { faded: !fd }, ctx), fd ? fadeWhy(th) : "Grey it in the list: still there to open and write in, and back by itself when something new is for you") : null) : [];
   const prio = th && simpleOn() ? null : th && can("tier") ? button([h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority", h("small", null, t.label)], () => { C.menu = null; askTier(th); }, { size: "s", kind: "quiet", title: "Where this sits in the hive's priority list" })
     : th ? h("p", { class: "meta cm-tier", title: "This thread's priority" }, h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority: " + t.label) : null;
   const fs = full && mine && S.foci ? fociOrder().filter(f => !f.misc) : [], cur = full ? focusOf(th) : null;
@@ -1073,6 +1119,7 @@ function head(c, ctx) {
       c.thread ? h("button", { type: "button", class: "btn cm-more-b", "data-kind": "icon", "aria-label": "More tools", title: "More tools", "aria-expanded": String(more),
         onclick: e => { e.stopPropagation(); C.more = more ? null : c.thread; ctx.update(); } }, icon("more")) : null),
     statusBar(c.thread),   // where it stands: its own row under the title and the tools (hidden on a phone, where the title's sub line says it)
+    c.thread ? jobRows(c.thread) : null,   // HA-24: the jobs running for it, each with its newest line
     C.menu === "title" || (C.menu === "asides" && c.thread) ? scrim(() => { C.menu = null; ctx.update(); }) : null,
     C.menu === "title" ? titleMenu(c, n, d, off, ctx) : null,
     C.menu === "asides" && c.thread ? asideMenu(c.thread) : null,
@@ -1442,11 +1489,28 @@ function focusRow(f, onlyNew) {
         when(up, "t", "updated"))),
     body);
 }
+/** HA-13: what waits on the person in a conversation no listed focus holds (in no focus, or in one that is gone), by conversation: [th, [waits]].
+ *  The badge counts these too, and the List home had no row for them (2 of the 9 counted on 2026-11-16), so its Needs you group said less than the badge. */
+const looseWaits = () => { const ids = new Set(foci().map(f => f.id)), m = new Map();
+  for (const w of waitingNow()) { if (!w.th || ids.has(w.focus || focusOf(w.th))) continue; if (!m.has(w.th)) m.set(w.th, []); m.get(w.th).push(w); }
+  return [...m].sort((a, b) => Math.max(...b[1].map(w => w.t || 0)) - Math.max(...a[1].map(w => w.t || 0))); };
+/** Such a conversation's row in Needs you: its title, one tap from its chat, with the line its top says (what it asks), as a focus row has its In short. */
+function looseRow([th, ws]) {
+  const s = stand(th), t = Math.max(0, ...ws.map(w => w.t || 0)), line = (s && [s.why, s.text].filter(Boolean).map(tr).join(" \u00b7 ")) || firstLine(ws[0].text);
+  return h("li", { class: "fo-r fo-th", "data-key": "fo-th:" + th, "data-th": th, "data-you": "" },
+    h("div", { class: "fo-top" },
+      h("a", { class: "fo-name", href: threadHref(th), title: threadTitle(th) }, railTitle(th)),
+      h("div", { class: "fo-m" }, h("span", { class: "fo-was", "data-key": "fo-nofocus" }, "in no focus"),
+        h("span", { class: "fo-you", "data-key": "fo-you" }, h("span", { class: "st", "data-tone": "info", "aria-hidden": "true" }), `${ws.length} for you`), t ? when(t, "t") : null)),
+    line ? h("p", { class: "fo-short", "data-key": "fo-short" }, line) : null);
+}
 function fociList(fs, onlyNew) {
-  const group = ([key, head, tone]) => { const g = fs.filter(f => groupOf(f) === key); if (!g.length) return null;
+  const loose = looseWaits();
+  const group = ([key, head, tone]) => { const g = fs.filter(f => groupOf(f) === key), more = key === "needs you" ? loose : []; if (!g.length && !more.length) return null;
+    const n = g.length + more.length, what = !more.length ? (n === 1 ? " focus" : " focuses") : !g.length ? (n === 1 ? " conversation" : " conversations") : " focuses and conversations";
     return h("section", { class: "fo-g", "data-key": "fog:" + key, "data-state": key || "none" },
-      h("h3", { class: "fo-gh" }, h("span", { class: "sw", "data-tone": tone }, h("span", { class: "st", "data-tone": tone, "aria-hidden": "true" }), h("span", null, head)), h("span", { class: "fo-gn" }, h("span", { class: "vh" }, ", "), String(g.length), h("span", { class: "vh" }, g.length === 1 ? " focus" : " focuses"))),
-      h("ul", { class: "fo-rows" }, g.map(f => focusRow(f, onlyNew)))); };
+      h("h3", { class: "fo-gh" }, h("span", { class: "sw", "data-tone": tone }, h("span", { class: "st", "data-tone": tone, "aria-hidden": "true" }), h("span", null, head)), h("span", { class: "fo-gn" }, h("span", { class: "vh" }, ", "), String(n), h("span", { class: "vh" }, what))),
+      h("ul", { class: "fo-rows" }, g.map(f => focusRow(f, onlyNew)), more.map(looseRow))); };
   const misc = fs.filter(f => f.misc);
   return [FO_GROUPS.map(group), misc.length ? h("section", { class: "fo-g", "data-key": "fog:misc", "data-state": "misc" }, h("h3", { class: "fo-gh" }, h("span", { class: "sw", "data-tone": "quiet" }, h("span", null, "Not in a focus"))), h("ul", { class: "fo-rows" }, misc.map(focusRow))) : null];
 }

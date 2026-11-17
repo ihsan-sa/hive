@@ -57,7 +57,6 @@ export default {
   "How much work was done": "Cuánto trabajo se hizo",
   "The figures": "Las cifras",
   "At API list prices: what this would cost if billed per token. A measure of work, not what the plan charges.": "A precios de lista de la API: lo que costaría si se cobrara por token. Una medida del trabajo, no lo que cobra el plan.",
-  "Last 24h": "Últimas 24 h",
   "All of it": "Todo",
   "Per agent-hour": "Por hora de agente",
   "Per message": "Por mensaje",
@@ -128,9 +127,8 @@ export default {
 
   // Settings › Work tiers
   "what may start new work, and until when": "qué puede empezar trabajo nuevo, y hasta cuándo",
-  "Every focus, thread and timer sits in a tier. Pause a tier and nothing new in it starts; what is already running finishes. A pause with an end lifts by itself.": "Cada enfoque, conversación y temporizador está en un nivel. Pausa un nivel y nada nuevo empieza en él; lo que ya está en marcha termina. Una pausa con fin se levanta sola.",
+  "Every focus, thread and timer sits in a tier. Pause a tier and nothing new in it starts; what is already running finishes. A pause with an end lifts by itself. To move several, tick them, or drag a row onto another tier.": "Cada enfoque, conversación y temporizador está en un nivel. Pausa un nivel y nada nuevo empieza en él; lo que ya está en marcha termina. Una pausa con fin se levanta sola. Para mover varios, márcalos o arrastra una fila a otro nivel.",
   "Runs until your accounts reach their own limits.": "Funciona hasta que tus cuentas llegan a sus propios límites.",
-  "Nothing is in this tier. Move a focus here from its own tier.": "No hay nada en este nivel. Mueve un enfoque aquí desde su propio nivel.",
   "Stop point, name and more": "Punto de parada, nombre y más",
   "Make default": "Hacer predeterminado",
   "Name": "Nombre",
@@ -190,7 +188,6 @@ export default {
 
   // Settings › Data sharing
   "what's sent, and whether it is; changes save as you make them": "qué se envía, y si se envía; los cambios se guardan al hacerlos",
-  "Failure reports and a daily check-in are on unless you turn them off, so the Hive developer can fix problems and count active Hives. Usage reports are off unless you turn them on. A failure report holds what failed, when and why (up to 2,000 characters). The check-in is one small message a day that says this Hive is running, and whether an agent has been started in it yet (yes or no). A usage report counts agent runs, restarts, limit hits and fallbacks, with the time span it covers. Every report has the Hive version, the OS and a random install id. The receiver also notes the country, region and internet provider each report comes from, never the IP address. Secrets, emails, your user name and your home folder are scrubbed on this machine first. Chat text, file contents and thread names are never sent.": "Los informes de fallos y un aviso diario están activados salvo que los desactives, para que el desarrollador del Hive pueda arreglar problemas y contar los Hives activos. Los informes de uso están desactivados salvo que los actives. Un informe de fallo contiene qué falló, cuándo y por qué (hasta 2.000 caracteres). El aviso diario es un mensaje pequeño al día que dice que este Hive funciona, y si ya se ha iniciado algún agente en él (sí o no). Un informe de uso cuenta las ejecuciones de agentes, reinicios, límites alcanzados y alternativas usadas, con el periodo que cubre. Cada informe lleva la versión del Hive, el sistema operativo y un id de instalación al azar. El receptor también anota el país, la región y el proveedor de internet de donde viene cada informe, nunca la dirección IP. Los secretos, los correos, tu nombre de usuario y tu carpeta personal se borran antes en esta máquina. El texto de los chats, el contenido de los archivos y los nombres de las conversaciones nunca se envían.",
   "Failure reports and a daily check-in": "Informes de fallos y un aviso diario",
   "What failed, when and why, and one small message a day saying this Hive is running and whether an agent has been started yet (yes or no).": "Qué falló, cuándo y por qué, y un mensaje pequeño al día que dice que este Hive funciona y si ya se ha iniciado algún agente (sí o no).",
   "Usage reports": "Informes de uso",

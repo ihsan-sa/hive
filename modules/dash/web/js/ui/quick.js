@@ -45,7 +45,9 @@ export function setLater(w, what) {
   const key = laterKey(w), F = S.foci || (S.foci = { foci: [], tags: {} });
   const rest = (F.later || []).filter(e => e.key !== key);
   const fid = w.focus || (F.tags || {})[w.th] || null;
-  F.later = what === "back" ? rest : [{ key, what, th: w.th, focus: fid, text: w.text || "", t: w.t || null, from: "person", at: Date.now() / 1e3 }, ...rest];
+  // a new foci object, not F changed in place: the rail redraws when S.foci is a new one (comms.js syncThreads readSig), and kept its row's old word
+  // until the next read of the foci (HA-12's drive: Later on the chat's top moved the count and the top, not the rail)
+  S.foci = { ...F, later: what === "back" ? rest : [{ key, what, th: w.th, focus: fid, text: w.text || "", t: w.t || null, from: "person", at: Date.now() / 1e3 }, ...rest] };
   if (Q.w && keyOf(Q.w) === keyOf(w) && what !== "back") closeQuick();
   emit({ foci: true });
   return post("/api/focus", { later: { what, key, th: w.th, focus: fid, text: w.text || "", t: w.t || null } }).then(() => loadFoci(true), () => loadFoci(true));
