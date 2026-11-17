@@ -8,6 +8,7 @@
 import { h, tr } from "../core/dom.js";
 import { stamp, ago, fix } from "../core/format.js";
 import { button, icon, copyPress, scrim } from "./kit.js";
+import { href } from "../core/router.js";
 
 /** A file's kind, from its name: picks the renderer and the badge. */
 export const KINDS = [
@@ -235,6 +236,7 @@ function header(it, r) {
     h("div", { class: "pv-a" }, tabs, it.kb ? h("span", { class: "meta pv-live", title: "This panel shows the file's newest version and updates itself" }, "") : null, h("span", { class: "pv-sp" }), copy, saveAs(it, r),
       dl ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: dl, download: it.name, title: "Download " + it.name }, "Download") : null,
       it.kb && kindOf(it.name) !== "html" ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: "#knowledge/" + encodeURIComponent(it.kb), title: "Open in Knowledge" }, "Open")   // a page opens running, like an attached one; Knowledge would show its code
+        : kindOf(it.name) === "html" && matchMedia("(max-width:699px)").matches ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: href("page", viewHref(it)), title: "Open full screen" }, "Open")   // a phone: full screen inside the app, with a way back (views/page.js); a new tab there has none
         : h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: viewHref(it), target: "_blank", rel: "noopener noreferrer", title: "Open in a new tab" }, "Open")));
 }
 

@@ -30,7 +30,7 @@ UI_DIR = Path(__file__).resolve().parent / "web"  # the rebuilt page: index.html
 DISPLAY_PAGES = ("/single-screen", "/dual-screen", "/dual-screen/1", "/dual-screen/2")  # TV pages: web/display.html; which tiles each shows is in js/display/layouts.js
 UI_CT = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".woff2": "font/woff2",
          ".webmanifest": "application/manifest+json; charset=utf-8", ".png": "image/png", ".ico": "image/x-icon"}
-APP_FILES = re.compile(r"(?:/new)?/(manifest\.webmanifest|call\.webmanifest|sw\.js|icons/[a-z0-9-]+\.(?:png|ico))")  # what lets a browser install the page as an app; plain files, served with no sign-in because the browser fetches them before it has one
+APP_FILES = re.compile(r"(?:/new)?/(manifest\.webmanifest|call\.webmanifest|sw\.js|favicon\.ico|icons/[a-z0-9-]+\.(?:png|ico))")  # what lets a browser install the page as an app; plain files, served with no sign-in because the browser fetches them before it has one
 THREAD_HOURS = 12
 
 
@@ -2791,7 +2791,7 @@ FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcoun
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
 GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read", "/api/ran": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/work-tiers": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
-           "/api/config": "config", "/api/export": "config", "/api/modules": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
+           "/api/config": "config", "/api/export": "config", "/api/modules": "modules", "/api/connectors": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/kb/wipe": "files", "/api/kb/copies": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/kb/wipe": "files", "/api/kb/putback": "files", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
@@ -3623,7 +3623,7 @@ def set_secret(name, value, signer, delete=False):
     f, who = SECRETS / name, signer or "this machine"
     if delete:
         if not f.is_file(): raise ValueError("no secret has that name")
-        f.unlink()
+        f.unlink(); _CONN_CACHE.clear()   # Settings > Connectors reads which secrets exist: a change from the Secrets section shows there at once
         dash_note(f"Secret `{name}` removed by {who}, in the web app.", "secrets")
         return {"ok": True}
     if not isinstance(value, str) or not value.strip(): raise ValueError("the value is empty")
@@ -3631,7 +3631,7 @@ def set_secret(name, value, signer, delete=False):
     SECRETS.mkdir(parents=True, exist_ok=True)
     SECRETS.chmod(0o700)
     had = f.exists()
-    write_text_private(f, value.strip() + "\n")
+    write_text_private(f, value.strip() + "\n"); _CONN_CACHE.clear()
     dash_note(f"Secret `{name}` {'replaced' if had else 'set'} by {who}, in the web app. It's in `~/.config/hive/secrets/{name}`, mode 600. Don't print it.", "secrets")
     return {"ok": True}
 
@@ -4791,6 +4791,86 @@ def modules_view():
         m["repo"] = module_repo(m["name"])
         m["where"] = module_where(m["name"]) if m["state"] == "installed" else None
     return rows
+
+
+# Settings > Connectors (projects/everyday/CONNECTORS.md, E55): read-only. The rows come from connectors.json; their state is read from
+# the module list (is `reach` in), the secrets folder (names only) and `systemctl --user is-active`. Nothing here runs `conn`: turning a
+# connector on stays an agent's or a terminal's step, and the only writes on that screen are the existing /api/module and /api/secret.
+CONNECTORS = Path(__file__).resolve().parent / "connectors.json"
+
+
+def connector_repo():
+    """The reach bundle's GitHub page, from the module catalog (core/modules.json on an install, core/dist/modules.json on a source tree), or None."""
+    for f in (HOME / "core" / "modules.json", HOME / "core" / "dist" / "modules.json"):
+        m = re.fullmatch(r"(https://github\.com/[\w.-]+/[\w.-]+?)(?:\.git)?/?", str(((jload(f, {}) or {}).get("reach") or {}).get("repo") or ""))
+        if m: return m[1]
+    return None
+
+
+_CONN_CACHE = {}   # {secrets cap (bool): (at, view)}; set_secret empties it, so a token saved from the Secrets section shows at once
+UNIT_NAME = re.compile(r"[\w@.-]+")   # connectors.json's unit names go to systemctl as argv; a bad edit there is dropped, not run
+
+
+def unit_file(u):
+    """A table unit as systemctl wants it: arm-watch.timer stays, a bare conn@ntfy gets .service (bare in the table, so the export's address scan passes)."""
+    return u if re.search(r"\.(service|timer|socket|path)$", u) else u + ".service"
+
+
+def connector_states(rows, installed, folder, have, active, repo=None):
+    """Each row's state: cant_load, restarting, token_missing, on, two_way, ready, usable, nothing or off. folder(name) is its code
+    folder or None; have is the set of secret names present, or None for a caller without the secrets cap (then no state tells which
+    secrets exist: no Ready, Set up or Token missing, and no saved flag); active maps a unit to its is-active word; repo is the
+    bundle's GitHub page, for each row's README link.
+    ready: it has a unit and its secret is saved, so an agent or a terminal can turn it on. usable: no unit, and its secret is saved, so
+    the agent can use it now (a pasted calendar link). nothing: no unit and no secret, so there's nothing to turn on (an agent sets it up).
+    off: anything else not running, including a unit with no secret (ntfy, web push, feeds), which still needs its own setup."""
+    out = []
+    for c in rows:
+        r = {k: c.get(k) for k in ("name", "kind", "label", "line", "needs", "secret", "can_finish_here", "two_way", "link", "shared")}
+        r["readme"] = f"{repo}/blob/main/{c['name']}/README.md" if repo else None
+        if not installed: r["state"] = None
+        else:
+            unit, sec = c.get("unit") or "", c.get("secret")
+            d, a = folder(c["name"]), active.get(unit, "")
+            has = None if have is None or not sec else sec in have
+            if have is not None and sec: r["saved"] = has
+            if d is None or not (d / "module.json").is_file() or a == "failed": r["state"] = "cant_load"
+            elif a in ("activating", "deactivating", "reloading"): r["state"] = "restarting"   # a crash loop sits in activating (auto-restart)
+            elif a == "active": r["state"] = "token_missing" if has is False else "on"
+            elif c.get("two_way"): r["state"] = "two_way"
+            elif has: r["state"] = "ready" if unit else "usable"
+            elif not unit and not sec: r["state"] = "nothing"
+            else: r["state"] = "off"
+        out.append(r)
+    return out
+
+
+def connectors_view(fresh=False, secrets=True):
+    """{installed, removable (reach is a module here, not loose folders), rows}; cached 30 s like the module list's slow parts, unless fresh (asked right after a write on that screen).
+    secrets: the caller has the secrets cap; without it the states say nothing about which secrets exist (E55 review 6)."""
+    hit = _CONN_CACHE.get(bool(secrets))
+    if not fresh and hit and time.time() - hit[0] < 30: return hit[1]
+    rows = (jload(CONNECTORS, {}) or {}).get("connectors", [])
+    try: mods = {m["name"]: m for m in modules_view()}
+    except (OSError, subprocess.SubprocessError, KeyError, TypeError): mods = {}
+    bundle, local = HOME / "modules" / "reach", HOME / "modules"
+    removable = (mods.get("reach") or {}).get("state") == "installed"
+    installed = removable or (local / "conn").is_dir()   # reach as a bundle, or its folders laid out one by one (this box)
+    def folder(name):
+        for d in (bundle / name, local / name):
+            if d.is_dir(): return d
+        return None
+    have = {s["name"] for s in secrets_view()} if secrets else None
+    units = [c["unit"] for c in rows if c.get("unit") and UNIT_NAME.fullmatch(c["unit"])]
+    active = {}
+    if installed and units:
+        try:
+            r = subprocess.run(["systemctl", "--user", "is-active", *map(unit_file, units)], capture_output=True, text=True, timeout=10)
+            active = dict(zip(units, r.stdout.split()))
+        except (OSError, subprocess.SubprocessError): pass
+    view = {"installed": installed, "removable": removable, "rows": connector_states(rows, installed, folder, have, active, connector_repo())}
+    _CONN_CACHE[bool(secrets)] = (time.time(), view)
+    return view
 
 
 def module_do(what, name):
@@ -6198,7 +6278,7 @@ def serve(port):
             if not self.admit(u.path, page=page): return
             m = APP_FILES.fullmatch(u.path)
             if m:
-                f = UI_DIR / m[1]
+                f = UI_DIR / ("icons/hive.ico" if m[1] == "favicon.ico" else m[1])   # /favicon.ico: browsers ask for it on pages without an icon link (sign-in, raw files); E56c
                 if not f.is_file() or f.is_symlink(): return self.send_error(404)
                 return self.send(f.read_bytes(), UI_CT.get(f.suffix, "text/javascript; charset=utf-8"), cache="no-cache")
             if self.route != "open":  # the open dash never asks; its reads and switches stay as they were
@@ -6239,7 +6319,7 @@ def serve(port):
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
             elif u.path == "/api/brand/logo":
                 self.send_logo()
-            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/voice", "/api/signin", "/api/plans", "/api/secrets", "/api/slack-door", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/accounts", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history", "/api/mail", "/api/export") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/connectors", "/api/voice", "/api/signin", "/api/plans", "/api/secrets", "/api/slack-door", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/accounts", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history", "/api/mail", "/api/export") and self.route == "open":
                 self.send_error(404)
             elif u.path == "/api/kb/home":
                 self.send(json.dumps(kb_home()).encode(), J)
@@ -6302,6 +6382,8 @@ def serve(port):
                 self.send(json.dumps(update_view()).encode(), J)
             elif u.path == "/api/modules":
                 self.send(json.dumps(modules_view()).encode(), J)
+            elif u.path == "/api/connectors":   # read-only (CONNECTORS.md): there is no POST twin, and nothing here runs `conn`
+                self.send(json.dumps(connectors_view(fresh=q.get("fresh") == ["1"], secrets="secrets" in self.can)).encode(), J)
             elif u.path == "/api/voice":
                 self.send(json.dumps(voice_view()).encode(), J)
             elif u.path == "/api/signin":

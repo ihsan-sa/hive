@@ -334,6 +334,19 @@ a.lr-in:hover{background:var(--hover);color:inherit}
 .mod-gn{font-weight:400;color:var(--ink-2)}
 .mod-none{font-size:var(--fs-small);margin:var(--s1) 0}
 .mod-browse{margin-top:var(--s2)}
+/* Settings > Connectors (E55): name, kind and state on one line; the line, what it needs, then the README link and a paste box */
+.conn-in{display:block}
+.conn-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px var(--s2)}
+.conn-name{overflow-wrap:anywhere}
+.conn-kind{font-size:var(--fs-small)}
+.conn-head .sw{margin-left:auto}
+.conn-line{margin:2px 0 0}
+.conn-needs{font-size:var(--fs-small);margin:2px 0 0}
+.conn-step{font-weight:600;color:var(--ink-2)}
+.conn-step[data-tone=good]{color:var(--good-ink,var(--ink))}
+.conn-acts{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);margin-top:var(--s1);font-size:var(--fs-small)}
+.conn-readme{display:inline-flex;align-items:center;min-height:24px}
+.conn-paste{margin-top:var(--s1)}
 @container (max-width:640px){.mod-row{grid-template-columns:minmax(0,1fr) auto;row-gap:2px}.mod-about{grid-column:1/-1;grid-row:2}}
 .list[data-dense] .lr-in{padding:6px 8px}
 
@@ -1071,6 +1084,14 @@ a.msg-file .msg-open svg{width:14px;height:14px}
 .pv[data-kind=files]~.pv-grip,body:has(.pv[data-kind=files]) .pv-grip{display:none}
 body[data-pv]:has(.pv[data-kind=files]) :is(#top,#main){margin-right:0}
 }
+/* A page full screen inside the app (views/page.js, #page/...): it covers the bars, a slim bar on top keeps the way back. */
+.pgv{position:fixed;inset:0;z-index:45;display:flex;flex-direction:column;background:var(--surface);color:var(--ink)}
+.pgv-bar{display:flex;align-items:center;gap:var(--s2);min-height:48px;padding:var(--s1) var(--s3);padding-top:max(var(--s1),env(safe-area-inset-top));border-bottom:1px solid var(--line-2)}
+.pgv-back{flex:none;min-height:40px}
+.pgv-n{flex:1;min-width:0;margin:0;font-size:var(--fs-body,14px);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pgv-frame{flex:1;width:100%;min-height:0;border:0;background:#fff}
+.pgv-none{padding:var(--s4)}
+body[data-view=page] :is(#top,#mnav){display:none}   /* the page has the whole screen; its own bar has Back */
 body[data-pv-drag]{cursor:col-resize;user-select:none}
 body[data-pv-drag] .pv-frame{pointer-events:none}
 .pv-grip{position:fixed;top:8px;bottom:8px;right:calc(min(var(--pv-w,560px),100% - 16px) + 8px);width:8px;margin-right:-4px;z-index:41;cursor:col-resize;touch-action:none;outline:none}
@@ -1849,6 +1870,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cm-strip:not([data-open]) .cm-line-m{display:none}
 .cm-strip-n{flex:none;color:var(--ink-3)}
 .cp>.cm-strip{width:calc(100% - 28px);max-width:calc(var(--chat-col) - 28px);margin:0 auto;box-sizing:border-box}
+.cm-strip:empty:is(*,[data-open]){min-height:0;padding:0;border:0}   /* E56a: with no line it takes no room (34 px of tinted strip above the reply box); kept in the tree, so the status region still announces a line that comes */
 .cm-hint{display:none}
 .cm-home-t{font-size:30px;line-height:1.2;letter-spacing:-.025em;text-align:center;margin:0 0 var(--s4)}   /* the subtitle is hidden, so the heading carries the gap to the composer */
 .cm-home-l{display:none}

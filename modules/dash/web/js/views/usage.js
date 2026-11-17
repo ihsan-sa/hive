@@ -251,7 +251,7 @@ function appAccounts(U, t, R) {
       h("span", { class: "av", "aria-hidden": "true" }, (r.name || "?")[0].toUpperCase()),
       h("span", { class: "u-acct-m" },
         h("span", { class: "lr-t" }, h("b", null, r.name), r.tag ? h("span", { class: "meta" }, "Claude · " + r.tag) : null),
-        h("span", { class: "lr-s" }, [`Week ${w ? w.value : "?"}`, f ? `5 hours ${f.value}` : null, ...ms.map(g => `${g.label} ${g.value}`)].filter(Boolean).join(" · ")),
+        ((t2) => t2 ? h("span", { class: "lr-s" }, t2) : null)([w && w.value !== "?" ? `Week ${w.value}` : null, f ? `5 hours ${f.value}` : null, ...ms.map(g => `${g.label} ${g.value}`)].filter(Boolean).join(" · ")),   // E56b: no "Week ?" before the week is read; "not read yet" below says it
         h("span", { class: "gauge-rs meta" }, reset(w) || "not read yet"), f && reset(f) ? h("span", { class: "gauge-rs meta" }, "5 hours " + reset(f)) : null,
         // a model's own limit (Fable's): its reset shows once it's nearly full, and that its agents wait while the starter holds them
         ...ms.filter(g => g.held || g.pct >= 90).map(g => h("span", { class: "gauge-rs meta" }, `${g.label} ${reset(g) || ""}`.trim() + (g.held ? `; ${g.label} agents wait, other models keep working` : "")))),
