@@ -3548,6 +3548,8 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 /* the Focuses head on the home: how many changed since the last look, with the same bar */
 .cm-foci-new{display:inline-flex;align-items:baseline;gap:6px;min-width:0;font-size:var(--fs-meta);color:var(--ink-3)}
 .cm-foci-new[data-new]{color:var(--ink)}
+.cm-newonly[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.cm-foci-none{margin:12px 0;font-size:var(--fs-meta);color:var(--ink-2)}
 .cm-foci-new>i{align-self:center;flex:none;width:2px;height:12px;background:var(--ink)}
 /* The home's Focuses as a list (comms.js fociList; the person, 11160014bf8b): one row a focus, under what its In short says, the In short in full.
    The name is the row's one link, stretched over the whole row; a link inside the sentence sits above it. A row with news since the person last
