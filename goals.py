@@ -40,6 +40,9 @@ ROUND = re.compile(r"\bkeeper round\b", re.I)
 BUILD = re.compile(r"\b(built|landed|committed|shipped|implemented|prototype|first version)\b", re.I)   # a post that says something was built
 BUILD_D = 1.0   # a project with no ladder and a build post this recent needs one now (Nov 6 build rule), not after IDLE_D
 BRIEF = re.compile(r"^@\S+ keeper round\b", re.I)   # a round's brief: to @new, or to the thread's last worker
+ASK = "Every open rung on this ladder waits on a date"   # how the brief for a ladder with only dated rungs opens (brief()); thread_state reads it back from the board as asked_at
+ASK_AHEAD_H = 6    # no ask when the first dated rung opens within this many hours: that rung is the next round's work
+ASK_EVERY_H = 24   # one ask a day for a ladder: a round that weighed it and found nothing is not asked again every hour
 
 def now(): return dt.datetime.now(dt.timezone.utc)
 
@@ -148,17 +151,32 @@ def homes(board):
         if f and f not in NOT_AGENTS and not HASH_NAME.fullmatch(f): c.setdefault(f, Counter())[p.get("thread") or p.get("id")] += 1
     return {f: th for f, n in c.items() for th, k in n.most_common(1) if k * 2 > sum(n.values())}
 
-def thread_state(board, runs, t):
-    """Per thread: last agent post (at, from), last person post, running agents."""
-    st = {}; home = homes(board)
+def started(log=None):
+    """Names the starter has ever started (a `start` event in ~/log.jsonl): the only ones a mention can wake (starter.known_agents). A named identity that
+    never ran is a script's posting name. 11-17/18: `weekly-fresh` posted once in hive-stars and became its worker, so 14 keeper briefs went to
+    `@weekly-fresh`, were logged unknown_mention and started nobody; the focus sat 39 h with a rung due (ae49e, thread 11181219a2f8)."""
+    out = set()
+    try:
+        with open(log or LOG, "rb") as f:
+            for line in f:
+                if b'"start"' not in line: continue
+                try: out.add(str(json.loads(line)["name"]).lower())
+                except (ValueError, KeyError, TypeError): pass
+    except OSError: pass
+    return out
+
+def thread_state(board, runs, t, ran=None):
+    """Per thread: last agent post (at, from), last person post, running agents. `ran`: the names that have ever run (started(), read when not given)."""
+    st = {}; home = homes(board); ran = started() if ran is None else ran
     for p in board:
         th = p.get("thread") or p.get("id"); s = st.setdefault(th, {"agent_at": "", "agent": "", "person_at": "", "posts": 0, "running": set()})
         s["posts"] += 1
         f = str(p.get("from", "")).lower()
+        if ASK in (p.get("text") or "") and BRIEF.match(p["text"]): s["asked_at"] = max(s.get("asked_at", ""), p.get("at", ""))   # the floor posts its briefs as `starter`, a keeper as itself: either counts
         if f == "person": s["person_at"] = max(s["person_at"], p.get("at", ""))
         elif f not in NOT_AGENTS and p.get("at", "") >= s["agent_at"]:
             s["agent_at"], s["agent"] = p.get("at", ""), p.get("from")
-            if not BRIEF.search(p.get("text", "")) and (HASH_NAME.fullmatch(f) or home.get(f) == th): s["worker"] = p.get("from")
+            if not BRIEF.search(p.get("text", "")) and (HASH_NAME.fullmatch(f) or (home.get(f) == th and f in ran)): s["worker"] = p.get("from")   # a brief has to reach someone: a name that never ran can't be woken
             if BUILD.search(p.get("text", "")) and not BRIEF.search(p.get("text", "")): s["build_at"] = p.get("at", "")   # who did the thread's work, not who posted its last brief
     for r in runs:
         if r.get("thread"): st.setdefault(r["thread"], {"agent_at": "", "agent": "", "person_at": "", "posts": 0, "running": set()})["running"].add(r.get("name"))
@@ -188,15 +206,15 @@ def goals(t=None):
                 if th in fth: claimed.setdefault(th, g); break
     for f in fs:
         s = st.get(f["thread"], {}); g = claimed.get(f["thread"]); row = {"kind": "focus", "name": f"{f['n']}. {f['title']}", "thread": f["thread"], "measure": pmeasure.get(f["thread"]), **state_row(s, f["thread"], open_asks, t, idle_d=FOCUS_IDLE_H / 24)}
-        rows.append(with_ladder(row, g))
+        rows.append(with_ladder(row, g, t))
     taken = {g["project"] for g in claimed.values()}
     for g in projects:
         for lad in g.get("ladders") or []:   # a topic ladder of its own (hive-meta's Reflection ladder, thread meta-reflect): a goal at a focus's pace in that thread
             if lad["thread"] in fth or any(r["thread"] == lad["thread"] for r in rows): continue
-            s = dict(st.get(lad["thread"], {})); rows.append(with_ladder({"kind": "project", "name": f"{g['project']}: {lad['section']}", "goal": g["goal"], "thread": lad["thread"], "measure": g["measure"], "edited_d": days(g["edited"], t), **state_row(s, lad["thread"], open_asks, t, idle_d=FOCUS_IDLE_H / 24)}, {"ladder": lad, "path": g["path"]}))
+            s = dict(st.get(lad["thread"], {})); rows.append(with_ladder({"kind": "project", "name": f"{g['project']}: {lad['section']}", "goal": g["goal"], "thread": lad["thread"], "measure": g["measure"], "edited_d": days(g["edited"], t), **state_row(s, lad["thread"], open_asks, t, idle_d=FOCUS_IDLE_H / 24)}, {"ladder": lad, "path": g["path"]}, t))
         lad = g["ladder"] if g["project"] not in taken else None   # a project with a ladder no focus takes moves at a focus's pace, in the thread its heading names
         if lad and lad["thread"]:
-            s = dict(st.get(lad["thread"], {})); rows.append(with_ladder({"kind": "project", "name": g["project"], "goal": g["goal"], "thread": lad["thread"], "measure": g["measure"], "edited_d": days(g["edited"], t), **state_row(s, lad["thread"], open_asks, t, idle_d=FOCUS_IDLE_H / 24)}, g)); continue
+            s = dict(st.get(lad["thread"], {})); rows.append(with_ladder({"kind": "project", "name": g["project"], "goal": g["goal"], "thread": lad["thread"], "measure": g["measure"], "edited_d": days(g["edited"], t), **state_row(s, lad["thread"], open_asks, t, idle_d=FOCUS_IDLE_H / 24)}, g, t)); continue
         th = g["project"]; cands = [th] + [k for k in g["threads"] if k != th] + [k for k in st if k != th and k not in g["threads"] and (k.startswith(th + "-") or k.startswith(th + "_"))]
         best = max(cands, key=lambda k: st.get(k, {}).get("agent_at", ""))
         s = dict(st.get(best, {})); s["running"] = set().union(*(st.get(k, {}).get("running", set()) for k in cands))
@@ -207,14 +225,23 @@ def goals(t=None):
         if g["ladder"] and g["ladder"]["left"] and g["project"] not in taken and not row.get("needs_ladder"):
             # a `## Ladder` whose heading names no thread lives in the project's own thread: without this the row had no ladder, so the floor
             # never started it (the voice board and its film sat unstarted after the person's resume, 2026-11-12, post 11121012cbf5)
-            with_ladder(row, g)
+            with_ladder(row, g, t)
         rows.append(row)
     covered = {r["thread"] for r in rows} | {th for r in rows for th in (r.get("threads") or [])}
     loose = [e for e in open_asks if e.get("thread") not in covered]
     return {"at": t.isoformat(timespec="seconds"), "rows": rows, "directions": len(directions), "open_asks": len(open_asks), "loose_asks": len(loose),
             "loose_threads": sorted({e.get("thread") for e in loose}, key=lambda x: str(x))}
 
-def with_ladder(row, g):
+def ask_due(row, t):
+    """True when a ladder whose open rungs all wait on a date is owed its daily ask: the first of them opens ASK_AHEAD_H or more hours from now and no ask was posted in its thread in the last ASK_EVERY_H hours."""
+    try: gate = dt.datetime.fromisoformat(row["gated_until"]).replace(tzinfo=dt.timezone.utc)
+    except ValueError: return False
+    if (gate - t).total_seconds() < ASK_AHEAD_H * 3600: return False
+    try: last = dt.datetime.fromisoformat(row.get("asked_at") or "")
+    except ValueError: return True
+    return (t - (last if last.tzinfo else last.replace(tzinfo=dt.timezone.utc))).total_seconds() >= ASK_EVERY_H * 3600
+
+def with_ladder(row, g, t=None):
     lad = g["ladder"] if g else None
     row["ladder"] = bool(lad); row["goals_path"] = g["path"] if g else None
     if lad:
@@ -223,8 +250,11 @@ def with_ladder(row, g):
         # every open rung carries a future after: gate and none is open now: a round could only write more rungs, so hold the keeper until the earliest gate (ae5ec, 2026-11-15: 18 idle rounds a day on improve-survey)
         open_ = [r for r in lad["rungs"] if r["state"] == " "]
         if not lad["next"] and open_ and all(r["after"] and r["checked"] for r in open_):
-            row["idle"] = False
             row["gated_until"] = min(r["after"] for r in open_)  # UTC "YYYY-MM-DD[THH:MM]"; the floor starts nobody before it (ae5ec 11-16: a Waiting: cap of 2 h let a keeper in every 2 h on a ladder gated 11 h)
+            # a date is when a reading can be taken, not a reason for the goal to stand still until then: once a day such a ladder gets one round that is asked what else
+            # would move its measure (ae49e, 2026-11-18: 17 of 28 ladders with an open rung had only dated ones, and nothing in the hive asked any of them for more)
+            if not lad["parked"] and ask_due(row, t or now()): row["ask_more"] = True
+            else: row["idle"] = False
     return row
 
 LOG = HOME / "log.jsonl"
@@ -331,6 +361,11 @@ def brief(row):
     if prev: to = "new"
     head = f"@{to} Keeper round on {row['name']}. The ladder is the `## {row.get('section') or 'Ladder'}` section of {row.get('goals_path') or 'this focus project goals.md (create it, one line a rung)'}: read that whole file, and obey any notes in the section.\n\n"
     rung = f"**Your rung:** {row['rung']}\n\nDo this rung. Land real work, then run its check." if row.get("rung") else "**The ladder has no rung you can take.** Your work this round is to write the next 3 to 5 rungs from the measure in that file, then do the first one."
+    if row.get("ask_more") and not row.get("rung"):
+        rung = (f"**The ladder has no rung you can take.** {ASK}; the first opens {row['gated_until'].replace('T', ' ')} UTC. A date is when a reading can be taken, not a reason for the goal to stand still until then. "
+                "Your work this round is to ask what else would move the Measure in that file before then (a cause nobody has tried, a check that can run on what exists now, a part of the goal the dated rungs leave out), "
+                "write the next 3 to 5 rungs from that, each with a `check:`, and do the first one. If you weigh real candidates and none would move it, write one line under the rungs, in place of any older one, "
+                "`Weighed YYYY-MM-DD: what you considered and why each would not move the Measure`, so tomorrow's round starts from there. \"The rungs are dated\" is not a finding.")
     more = row.get("due_more") or []   # hive-meta Moving ladder, ad388 11-17: rounds took one rung and ended `Waiting:` while more were due (rsi-loop a0efb 10:04, 4 due since 08:00Z; rsi-lab a12a7 13:04, 2 due since 12:00Z): Goal 1 ran 7.1% of the day
     if more and row.get("rung"):
         rung += (f"\n\n**Also due now on this ladder ({len(more)} more):** " + "; ".join('"' + re.sub(r"\s+", " ", x.replace("`", ""))[:110] + '"' for x in more[:3]) +
@@ -361,7 +396,7 @@ def state_row(s, threads, open_asks, t, idle_d=IDLE_D):
     idle = not running and (idle_d is None or idle_d >= limit)
     at = s.get("agent_at")
     return {"threads": threads, "last_agent": s.get("agent"), "last_worker": s.get("worker"), "last_agent_d": idle_d, "quiet_s": (t - dt.datetime.fromisoformat(at)).total_seconds() if at and idle_d is not None else None, "person_d": days(s.get("person_at"), t), "running": running,
-            "open_asks": len(mine), "owned_asks": sum(1 for e in mine if e.get("status") == "owned"), "idle": idle}
+            "open_asks": len(mine), "owned_asks": sum(1 for e in mine if e.get("status") == "owned"), "idle": idle, "asked_at": s.get("asked_at") or None}
 
 def focus_quiet(t=None, hours=4.0):
     """Focuses of the person's with no agent post for `hours` and nobody running: the number progress.py reports as focus_quiet (lower is better)."""
@@ -452,7 +487,7 @@ def main():
         if not a.post: print(b); return
         if r.get("parked") and not a.force:   # a keeper hand-picking threads posted rounds into a parked ladder every 4 h (fund-rsi, 2026-11-08)
             sys.exit(f"{th} is parked until {r['parked']['until']}: {r['parked']['why'][:120]}\nNo round posted; --force posts one anyway.")
-        if r.get("gated_until") and not r.get("rung") and not a.force:   # every open rung gated to a later date: a round could only write more rungs (improve-survey, 2026-11-16: keeper rounds at 04:03 and 07:03 after the floor fix)
+        if r.get("gated_until") and not r.get("rung") and not r.get("ask_more") and not a.force:   # every open rung gated to a later date and today's ask already made: another round could only repeat it (improve-survey, 2026-11-16: keeper rounds at 04:03 and 07:03 after the floor fix)
             sys.exit(f"{th} has no rung before {r['gated_until']}Z (every open rung carries after:). No round posted; --force posts one anyway.")
         cmd = ["hive", "post", "--thread", th] + post_model_args(b, a.model)
         sys.exit(subprocess.run(cmd, input=b, text=True).returncode)

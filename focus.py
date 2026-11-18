@@ -258,6 +258,14 @@ def same_ask(a, b):
     line's. A Needs you line and a reworded Now line then count once (2026-11-16 review: the card said 3 wait where the agents listed 2)."""
     return same_key(ask_key(a), ask_key(b))
 
+def aligned(lead, card):
+    """HA-9h: an In short an agent saves gets its state word and "Yours:" tail made to agree with the card's Needs you lines, in code
+    (rollup.align), as the timer's own writer already does; a cold reader got these wrong on the live cards the agents wrote."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent)); import rollup   # hive runs this with -I: the folder is not on the path
+        return rollup.align(lead, card, MAX_LEAD)[:LEAD_CUT] or lead
+    except Exception: return lead
+
 def set_lead(f, text, r):
     """Put the In short of record `r` on focus `f`; no text takes it away. {text, state, body, from, at, since, was, turned}: `since`
     is when it began to say this and `at` when it was last written, so the same text again says "read against the lines, still holds";
@@ -837,6 +845,16 @@ def lint(st, posts=None, only=None, waits=None, at=None):
             if lead and lead["state"] != "needs you" and (s or {}).get("needs") and not re.search(r"\byours?\b|\bfor you\b|\bneeds you\b|\bwaits? on you\b|\bup to you\b", lead["text"], re.I):
                 out.append({"focus": f["id"], "kind": "ask not in In short", "part": "lead", "what": "the card lists something under Needs you, and the In short says nothing is theirs", "in": lead["text"][:80],
                             "fix": f"end the In short with what is theirs, in a few words (\"Yours: ...\"), or open it with Needs you when that is the state: hive focus lead {f['id']} \"...\""})
+            # HA-9i (2026-11-18): the one thing an In short names must be a Now line; a cold reader marked the rest wrong
+            if lead and (s or {}).get("now"):
+                try:
+                    sys.path.insert(0, str(Path(__file__).resolve().parent)); import rollup
+                    _card = "## Now\n" + "\n".join("- " + n for n in s["now"]) + "\n## Needs you\n" + "\n".join("- " + n for n in s.get("needs") or [])
+                    _ok = rollup.on_now(lead["text"], _card) and not rollup.stray_figures(lead["text"], _card)
+                except Exception: _ok = True
+                if not _ok:
+                    out.append({"focus": f["id"], "kind": "one thing not on card", "part": "lead", "what": "the In short names a figure or date that no Now line carries, or shares no words with any Now line", "in": lead["text"][:80],
+                                "fix": f"name in the In short the thing a Now line says (a figure or date it states), or add the line: hive focus lead {f['id']} \"...\""})
             keys = [(c, body, ask_key(body)) for c, body in todo]
             for i, (c, body, k) in enumerate(keys):
                 # The same step twice on the person's list (2026-11-16: one decision, added by two agents a day apart).
@@ -1101,6 +1119,9 @@ def main(argv=None):
             text = split_lead(raw)[0] or " ".join(raw.split())
             if len(text) > LEAD_CUT:
                 print(f"hive focus lead: {len(text)} characters, In short keeps {LEAD_CUT}: the end was CUT OFF. It is one or two sentences; the rest belongs in the lines.", file=sys.stderr); text = text[:LEAD_CUT]
+            try: sys.path.insert(0, str(Path(__file__).resolve().parent)); import rollup; _card = rollup.card_text(f)
+            except Exception: _card = (f.get("summary") or {}).get("text") or ""
+            text = aligned(text, _card)
             same = bool(cur) and norm(cur["text"]) == norm(text)
             append({"kind": "lead", "focus": f["id"], "text": text})
             st = state(); f = find(st, f["id"])
@@ -1119,6 +1140,7 @@ def main(argv=None):
         parts = parse_summary(text)
         if not parts["now"] and not parts["lately"]: sys.exit("hive focus set: empty; give ## Now and ## Lately bullets" + (f" (In short alone: hive focus lead {f['id']})" if lead else ""))
         append({"kind": "summary", "focus": f["id"], "text": text})
+        if lead: lead = aligned(lead, text)
         new_lead = bool(lead) and not (cur and norm(cur["text"]) == norm(lead))
         if new_lead:
             if len(lead) > LEAD_CUT: print(f"hive focus set: In short is {len(lead)} characters and keeps {LEAD_CUT}: the end was CUT OFF.", file=sys.stderr)

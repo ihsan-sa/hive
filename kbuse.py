@@ -327,6 +327,9 @@ def repeats(rs):
         last[k] = (t, last[k][1])
     return out
 
+def qwords(q):
+    return set(re.findall(r"[a-z0-9]{3,}", str(q or "").lower())) - {"the", "and", "for", "how", "with", "that"}
+
 def numbers(t0, t1, rs=None):
     """The window's use of the knowledge base; t0, t1 as YYYY-MM-DDTHH:MM:SS, UTC. Records from before the logging have no id and stay out of every share."""
     rs = records() if rs is None else rs
@@ -355,7 +358,8 @@ def numbers(t0, t1, rs=None):
     again = set()
     for L in by.values():
         for i, r in enumerate(L):
-            if any(0 < sec(x["at"]) - sec(r["at"]) <= 600 for x in L[i + 1:i + 4]): again.add(r["id"])
+            w = qwords(r.get("q"))   # a next search on another subject (no word in common) is a topic switch, not a retry: 35 of 48 on 2026-11-18
+            if any(0 < sec(x["at"]) - sec(r["at"]) <= 600 and w & qwords(x.get("q")) for x in L[i + 1:i + 4]): again.add(r["id"])
     dead = sum(1 for r in logged if r["id"] not in followed and r["id"] in again)
     nb = [r for r in logged if any(not p.startswith("board:") for p, _ in r["shown"])]   # finds that showed a note or file; board snippets answer in place (find-follow-by-source.md)
     nbr = sum(1 for r in nb if r["id"] in followed)

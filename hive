@@ -43,6 +43,28 @@ def signed():
         _signed, _nonces = m, m.first_nonces(posts())
     return _signed or None
 
+def sig_nonce():
+    """The nonce of what the browser signed (the dash's HIVE_POST_SIG), or None."""
+    try: s = json.loads(os.environ.get("HIVE_POST_SIG") or "null")
+    except ValueError: return None
+    n = s.get("nonce") if isinstance(s, dict) else None
+    return n if isinstance(n, str) and re.fullmatch(r"[0-9a-f]{8,64}", n) else None
+
+def sent_before(nonce, tail=1 << 21):
+    """Id of the person's post in the board's last 2 MB that carries this signature nonce, or None. The same signed message sent twice
+    (the browser or the tunnel resends a POST whose answer was lost: 1118011777d3 then 111801172fe3, 2026-11-18) is one message."""
+    if not nonce or not BOARD.exists(): return None
+    with BOARD.open("rb") as f:
+        f.seek(0, 2); f.seek(max(0, f.tell() - tail)); data = f.read()
+    if nonce.encode() not in data: return None
+    for line in reversed(data.splitlines()):
+        if nonce.encode() not in line: continue
+        try: q = json.loads(line)
+        except ValueError: continue
+        s = q.get("sig")
+        if q.get("from") == "person" and isinstance(s, dict) and s.get("nonce") == nonce: return q.get("id")
+    return None
+
 def show(p):
     to = " ".join("@" + n for n in names(p.get("to")))
     print(f"[{p.get('id')}] {p.get('at','')[:19]} {p.get('from')}{' -> ' + to if to else ''} (thread {p.get('thread')})"
@@ -368,6 +390,9 @@ def cmd_post(a):
             sys.exit(f"hive post: nothing posted. A post that pings the person should be short ({len(text)} chars; keep it under {PING_MAX}): "
                      "put the details in the thread in a post without the mention, then send a few plain lines with the `For you:` line.")
     if a.reply_to and not any(p.get("id") == a.reply_to for p in posts()): sys.exit(f"hive post: --reply-to {a.reply_to}: no such post")
+    once = sig_nonce() if a.as_ == "person" else None
+    if once and (first := sent_before(once)):   # a resend of a signed message already on the board: answer with its id, post nothing
+        print(first, flush=True); print(f"hive post: already on the board as {first} (the same signed message sent again), so not posted twice", file=sys.stderr); return
     pid = dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2)
     files = attach([attachable(f) for f in a.file or []], pid)
     p = {"id": pid, "at": now(), "from": a.as_ or os.environ.get("HIVE_NAME", "anon"),
@@ -408,7 +433,11 @@ def cmd_post(a):
             p["sig"] = sig
         except ValueError as x: print(f"hive post: posted, but not signed ({x})", file=sys.stderr)
     with BOARD.open("a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(p) + "\n")
+        fcntl.flock(f, fcntl.LOCK_EX)
+        if once and (first := sent_before(once)):   # two copies racing: the first to take the lock posts, this one answers with its id
+            if files: shutil.rmtree(FILES / pid, ignore_errors=True)
+            print(first, flush=True); print(f"hive post: already on the board as {first} (the same signed message sent again), so not posted twice", file=sys.stderr); return
+        f.write(json.dumps(p) + "\n")
     print(pid, flush=True)
     me = (a.as_ or os.environ.get("HIVE_NAME", "")).lower()
     if reason: reason_bar(p)

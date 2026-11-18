@@ -29,6 +29,7 @@ if [ "$(id -u)" = 0 ]; then
   echo "Claude Code is in place. The Hive's install isn't finished yet, so keep this window open..."
   P=""; [ -z "${HIVE_PLAIN:-}" ] || P="HIVE_PLAIN=1 "
   case "${HIVE_SERVER:-}" in 0|1) P="${P}HIVE_SERVER=$HIVE_SERVER ";; esac
+  [ "${HIVE_VOICE:-}" != 0 ] || P="${P}HIVE_VOICE=0 "   # su - clears the environment, and the Mac rig skips the voice build with this
   su - "$U" -c "$P"'PATH="$HOME/.local/bin:$PATH" XDG_RUNTIME_DIR=/run/user/$(id -u) ~/core/install.sh' \
     || die "the install as $U failed; fix the error above and rerun this"
   [ -n "${HIVE_PLAIN:-}" ] || { echo; echo "To print that address again:  sudo -iu $U hive web"; }
@@ -223,6 +224,7 @@ fi
 # Settings > This device > Voice calls tells the person where it stands (modules/dash voice_view, projects/everyday/VOICE.md): a skip leaves its reason in ~/.hive/voice-skipped,
 # and the build leaves voice-setup.pid while it runs and voice-setup.rc (its exit code) when it ends. HIVE_VOICE=test with HIVE_VOICE_CMD runs the block without a service
 # and with that command in place of the real setup (the everyday harness: no download, no unit).
+# 3>&-: get.sh's fd 3 is the terminal or, inside a Mac or Windows VM, the session's output, and a build holding it keeps that session open until it ends (the Mac rig's hang, 2026-11-18).
 vskip=""
 if [ -e "$HOME/.hive-installed" ] || [ -e "$HOME/.hive-voice-added" ]; then vskip=-   # not a first install: nothing to say here
 elif [ -e "$HOME/.hive-account" ]; then vskip=own-account
@@ -241,7 +243,7 @@ if [ -z "$vskip" ]; then
     touch "$HOME/.hive-voice-added"; mkdir -p "$HOME/.hive"; rm -f "$HOME/.hive/voice-skipped" "$HOME/.hive/voice-setup.rc"
     vcmd='phone setup; p=$?; voice setup; v=$?; [ $p = 0 ] && exit $v; exit $p'
     [ "${HIVE_VOICE:-1}" = test ] && [ -n "${HIVE_VOICE_CMD:-}" ] && vcmd=$HIVE_VOICE_CMD
-    ( export PATH="$HOME/.local/bin:$PATH" VCMD="$vcmd"; nohup setsid sh -c 'echo $$ >"$HOME/.hive/voice-setup.pid"; sh -c "$VCMD"; echo $? >"$HOME/.hive/voice-setup.rc"' >"$HOME/.hive/voice-setup.log" 2>&1 </dev/null & )
+    ( export PATH="$HOME/.local/bin:$PATH" VCMD="$vcmd"; nohup setsid sh -c 'echo $$ >"$HOME/.hive/voice-setup.pid"; sh -c "$VCMD"; echo $? >"$HOME/.hive/voice-setup.rc"' >"$HOME/.hive/voice-setup.log" 2>&1 </dev/null 3>&- & )
     echo "NOTE: voice calls are installing in the background (a few minutes; log: ~/.hive/voice-setup.log). Remove: hive module remove phone voice."
     command -v ffmpeg >/dev/null || echo "NOTE: voice memos need ffmpeg, which isn't here: install it, then run: voice setup."
   else vskip=failed-add; echo "NOTE: the voice modules didn't install. Try again with: hive module add phone && phone setup."; fi

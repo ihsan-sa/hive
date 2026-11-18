@@ -270,13 +270,32 @@ def title_on(text, name, title, org=""):
 
 
 # A verb right after "Name, Title," says what this person did; a capitalised word there would be another employer (folded text loses case, so only known verbs and -ed words count).
-_VERB_AFTER = re.compile(r",\s*(?:spoke|said|says|leads|runs|opened|told|wrote|added|noted|stated|explained|announced|welcomed|presented|discussed|introduced|praised|launched|led|oversees|joined)\b|,\s*(?!(?:college|university|school|institute)\b)[a-z]{3,}ed\s+(?!college\b|university\b)")
+_VERB_AFTER = re.compile(r",\s*(?:spoke|said|says|leads|runs|opened|told|wrote|added|noted|stated|explained|announced|welcomed|presented|discussed|introduced|praised|launched|led|oversees|joined|was (?:appointed|named|elected|selected|invited|honou?red|recogni[sz]ed)|is (?:a|an|the|responsible|leading)|has (?:led|been|served|worked|overseen|built|helped)|will (?:lead|serve|speak|present|oversee|join)|who (?:leads|oversees|is|has|will|serves|directs)|offers|shares|brings|explains|adds|notes|believes|serves|recalls|recalled)\b|,\s*(?!(?:college|university|school|institute)\b)[a-z]{3,}ed\s+(?!college\b|university\b)")
 
 
 def _alone_name(line):
     """A line that is just someone's name, as on a staff card."""
     m = re.fullmatch(rf"\s*{HONOR}({NAME}){SUFFIX}\s*", line)
     return bool(m) and plausible_name(m.group(1))
+
+
+def _own(org, phrase):
+    """Does this phrase name the organisation itself and nothing else: "Central Piedmont", "ASU", "the George Mason College of Public Health", "Purdue's".
+    Every distinctive word of the org must be there, and no word that isn't the org's: "Michigan State" is not the University of Michigan,
+    "Purdue Research Foundation" and "Purdue from 1998 to 2010" are not Purdue."""
+    if not org: return False
+    noise = ORG_NOISE - {"state"}
+    org_toks = set(re.findall(r"[a-z0-9]+", fold(org)))
+    words = [t for t in re.findall(r"[a-z0-9]+", fold(org_core(org))) if t not in noise]
+    initials = "".join(t[0] for t in re.findall(r"[a-z0-9]+", fold(org)) if t not in ("the", "of", "and", "at", "for", "in"))
+    for p in (fold(phrase), re.sub(r"\b(?:college|school|department|division|office|center|centre|institute|faculty) of\b.*$", "", fold(phrase))):
+        toks = re.findall(r"[a-z0-9]+", re.sub(r"['’]s\b", "", p))
+        if len(toks) == 1 and len(initials) >= 3 and toks[0] == initials: return True
+        if toks and words and all(w in toks for w in words) and set(toks) <= org_toks | noise: return True
+    return False
+
+
+_SAID = r"(?:said|says|added|adds|noted|notes|explained|explains|stated|according to)"
 
 
 def title_slot(text, name, title, org=""):
@@ -295,7 +314,7 @@ def title_slot(text, name, title, org=""):
             words = _title_words(part)
             if not words: continue
             # Stopwords and punctuation may vary, but the role's words stay in order.
-            pat = r"[\s,]*(?:(?:of|for|the|and|at|in)\s+)*".join(re.escape(w) for w in words)
+            pat = r"[\s,&]*(?:(?:of|for|the|and|at|in)\s+)*".join(re.escape(w) for w in words)
             m = re.match(pat + r"(?![\w'-])", candidate)
             if not m:
                 # A second explicit post in a compound title belongs to the same name.
@@ -310,6 +329,19 @@ def title_slot(text, name, title, org=""):
             # An appointment sentence names the unit the post sits in: "... appointed Dean within the College of X."
             if appt and re.fullmatch(r",\s*[a-z][\w ,&'-]{2,80}\.?", tail): return True  # the unit's name continues past a comma
             if appt and re.fullmatch(r"(?:within|in|at)\s+(?:the\s+)?[\w ,&'-]{3,120}\.?", tail): return True
+            # "... at Central Piedmont." / "... at the George Mason College of Public Health, was appointed ...": the place is the org itself.
+            place, _, rest = tail.partition(",")
+            at = re.fullmatch(r"(?:at|of|with)\s+(?:the\s+)?(.+?)\.?", place.strip())
+            if at and _own(org, at.group(1)) and (not rest.strip(" .") or _VERB_AFTER.match("," + rest)): return True
+            place, _, rest = tail.lstrip(",").partition(",")  # "Chief Learning Officer, Cuyahoga Community College"
+            if tail.startswith(",") and _own(org, place) and len(place.split()) <= 8 and (not rest.strip(" .") or _VERB_AFTER.match("," + rest)): return True
+            # A title cut at 110 characters ends early: the rest of the post, then the org itself, with no comma between.
+            cut = re.fullmatch(r"[\w&'’ -]{1,60}?(?:\s(?:at|of|with)\s+(?:the\s+)?([\w&'’ -]+?))?\.?", tail)
+            if len(title) >= 100 and cut and cut.group(1) and _own(org, cut.group(1)): return True
+            if len(title) >= 100 and org and re.fullmatch(r"[\w&'’ -]{1,60}\.?", tail) and set(re.findall(r"[a-z0-9]+", tail)) <= set(re.findall(r"[a-z0-9]+", fold(org))): return True
+            acr = re.fullmatch(r"\(([a-z&]{2,10})\)\.?", tail)  # "Information Technology Services (ITS)": the initials of the post's last words
+            if acr and "".join(w[0] for w in re.findall(r"[a-z]+", candidate[:m.end()]) if w not in ("of", "and", "the", "for"))[-len(acr.group(1).replace("&", "")):] == acr.group(1).replace("&", ""): return True
+            if re.fullmatch(r",?\s*(?:at|on)\s+(?:\+?[\d(][\d ().-]{6,}\d|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)(?:\s+or\s+\S+)?\.?", tail): return True
             if org and re.fullmatch(r"(?:at|of|,)\s*" + re.escape(fold(org_core(org))) + r"(?:(?:" + _VERB_AFTER.pattern + r").*)?\.?", tail): return True
             # A short role may be followed by a department, or another role.
             extension = re.sub(r"^(?:of|for|and)\s+", "", tail)
@@ -333,12 +365,18 @@ def title_slot(text, name, title, org=""):
             m = rx.search(sent)
             if not m: continue
             head, tail = sent[:m.start()].strip(), sent[m.end():].strip()
+            # '"...," said Dr. Jane Doe, Dean ...': what was quoted is not the slot; what follows "said" is.
+            quoted = re.fullmatch(r"(?:.*[\"”’,]\s*)?" + _SAID + r"\s*(.*)", head, flags=re.I | re.S)
+            if quoted: head = quoted.group(1).strip()
+            head = re.sub(r"^(?:[—–-]+|(?:.*[,.]\s+)?(?:please\s+)?contact)\s*", "", head, flags=re.I | re.S).strip()  # "—Jane Doe, Dean", "contact Jane Doe, Dean, at ..."
             head = re.sub(r"^(?:said\s+)?(?:Dr|Prof|Mr|Ms|Mrs)\.?$", "", head, flags=re.I).strip()
             if head.lower() == "said": head = ""
             tail = re.sub(rf"^{SUFFIX}", "", " " + tail).strip()
             tail = re.sub(r"^,?\s*(?:(?:Ph\.?\s?D\.?|Ed\.?\s?D\.?|MBA|M\.?D\.?),?\s*)+", "", tail, flags=re.I)
             if not head:
                 value = re.sub(r"^(?:[,|–—-]\s*|(?:currently\s+)?(?:(?:has been|was|is) (?:appointed|named|promoted|elevated) (?:as |to )?|(?:is|serves as|has been)\s+))", "", tail, count=1, flags=re.I)
+                own = re.match(r"((?:[\w&.-]+\s+){0,4}[\w&.-]+)['’]s\s+", value)
+                if own and _own(org, own.group(1)) and set(re.findall(r"[a-z0-9]+", fold(own.group(1)))) <= set(re.findall(r"[a-z0-9]+", fold(org))) | {"the"}: value = value[own.end():]
                 appt = bool(re.match(r"(?:(?:has been|was|is) (?:appointed|named|promoted|elevated)\b)", tail, re.I))
                 if tail and role(value, appt): return " ".join(sent.split())[:300]
                 # "Jane Doe (Dean of Students)": the whole rest of the sentence in brackets.
@@ -347,7 +385,9 @@ def title_slot(text, name, title, org=""):
             # "Our Dean of Students, Jane Doe, welcomes you.": the post, then the name set off by commas, then a verb.
             lead = re.fullmatch(r"(?:our|the|its)\s+(.*?),", head, flags=re.I)
             if lead and role(lead.group(1)) and (_VERB_AFTER.match(fold(tail)) or re.match(r",\s*(?:welcomes|invites|greets|hosts|encourages)\b", tail)): return " ".join(sent.split())[:300]
-            if role(head.rstrip(":")) and (not tail or re.fullmatch(r"(?:opened the event|spoke)\.?", tail, re.I)):
+            ws = head.rstrip(":").split()
+            before = any((j == 0 or _own(org, " ".join(ws[:j]))) and role(" ".join(ws[j:])) for j in range(min(5, len(ws))))
+            if before and (not tail or re.fullmatch(r"(?:opened the event|spoke)\.?|\((?:pictured|left|right|cent(?:er|re)|above|below|top|bottom|front|back|middle|seated|standing)\b[^()]*\)\.?|,?\s*" + _SAID + r"\b.*|(?:" + _VERB_AFTER.pattern + ").*", tail, re.I | re.S)):
                 return " ".join(sent.split())[:300]
             # A sentence with no post of its own, then "She is Dean of Students." with nobody else named between.
             if not _ROLE_RE.search(sent):

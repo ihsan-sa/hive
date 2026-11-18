@@ -10,6 +10,8 @@ Every run the starter logs (~/log.jsonl start/end) gets a grade in ~/outcomes.js
   not_asked  the post asked this agent nothing concrete
   not_run    it hit a provider's usage limit and exited non-zero within a minute, posting nothing (no model): it never ran, so it is no bad work
              either (R30, 2026-11-14: Codex at its limit read as 29.6% delivered when the runs that did run delivered 70%, i0203)
+A run the starter stopped because the person edited the message it was answering (or asked for another answer) is not_asked by rule too (marked
+`superseded`): the run resumed on the new version carries the ask.
 A model or effort switch (`hive model X`) splits one piece of work over two runs: the run that only switched is not_asked by rule (marked `switch`), and the
 run that resumed on the switch post is graded against the post that woke the first one (`origin`), so the work is counted once, against what was asked.
 Every run woken by the person is graded; of the rest, whole chains: a fixed share of roots (ROOT_PCT) has every run handed on from it graded, so a chain's rate means a chain.
@@ -133,6 +135,23 @@ def switch_only(run, mine, log):
     ids = {p.get("id") for p in mine}
     return any(r.get("event") == "start" and r.get("name") == run["name"] and ids & set(r.get("woke") or [r.get("post")]) for r in log)
 
+def parked(run, log):
+    """The run ended because the starter stopped it while it sat on a background shell, to resume it with new posts (a `woken` event for it at its end).
+    Its exit shows -9; shown to the grader as a crash, ae214's mid-build run read as "nothing ... and the run exited -9" (2026-11-18 05:31)."""
+    return run.get("exit") not in (0, None) and any(r.get("event") == "woken" and r.get("name") == run["name"] and r.get("session") == run.get("session")
+                                                    and run["started"] <= r.get("at", "") <= run["ended"] for r in log)
+
+def superseded(run, log, by_id):
+    """The person edited the message this run was answering, or asked for another answer, and the starter stopped the run for it and resumed the
+    agent on the new version (starter overtakes, everyday E12d). The resumed run carries the ask, so this one is outside the score: graded by the
+    model, aa174's stopped run read as "nothing" against the person though the next run answered the edit (2026-11-18 17:57)."""
+    if run.get("exit") in (0, None): return False
+    for r in log:
+        if r.get("event") == "woken" and r.get("name") == run["name"] and r.get("session") == run.get("session") and run["started"] <= r.get("at", "") <= run["ended"]:
+            sup = [i for i in r.get("posts") or [] if (q := by_id.get(i)) and str(q.get("from", "")).lower() == "person" and (q.get("edit_of") or q.get("retry_of"))]
+            if sup: return any(x.get("event") == "start" and x.get("name") == run["name"] and set(sup) & set(x.get("woke") or [x.get("post")]) for x in log)
+    return False
+
 NOTICE_MAX = 300   # a job-done notice is short: "heavy: `cmd` finished rc 0 after 76m13s.", "PR 357 CI finished: test=success, ..."
 
 def job_notice(p, name):
@@ -243,7 +262,7 @@ def completion_share(since, log=None, posts=None):
 def clip(s, n): s = str(s or "").strip(); return s if len(s) <= n else s[:n] + " …"
 
 def block(run, post, mine, after):
-    lines = [f"RUN {run['key']}: agent {run['name']}, woken by {run['from']} in thread {run['thread']}, ran {run['started'][11:16]} to {run['ended'][11:16]} UTC, exit {run['exit']}",
+    lines = [f"RUN {run['key']}: agent {run['name']}, woken by {run['from']} in thread {run['thread']}, ran {run['started'][11:16]} to {run['ended'][11:16]} UTC, " + ("ended its turn waiting on a background job, then was restarted to hand it a new post (not a crash: its work goes on in its next run)" if run.get("parked") else f"exit {run['exit']}"),
              f"  WAKING POST ({post.get('from') if post else '?'}): {clip((post or {}).get('text'), 1500)}"]
     shown = mine if len(mine) <= 6 else mine[:5] + mine[-1:]   # the first few, and the last: the result comes at the end
     for i, p in enumerate(shown):
@@ -353,13 +372,14 @@ def cmd_grade(a):
         post, mine, after = posts_of(r, posts, by_id)
         ask = origin(r, post, log, by_id) if post and carried(post, r["name"]) else post   # resumed after a switch or woken by its own job notice: graded on the ask carried over
         r = {**r, **({"root": root[r["key"]]} if root.get(r["key"], r["key"]) != r["key"] else {}), **({"completion_wake": True} if completion_wake(r, by_id, mine, ticks) else {}), **({"self_wake": True} if post and self_wake(r, post) else {}), **({"round": True} if ask and ROUND.search(str((post if ask is not post and job_notice(post, r["name"]) else ask).get("text", ""))[:80]) else {})}   # marks for the spot-check and the step-up; the grade doesn't look at them
-        sw = switch_only(r, mine, log)
+        sw = switch_only(r, mine, log); sup = not sw and superseded(r, log, by_id)
+        if parked(r, log): r = {**r, "parked": True}
         post = ask
-        g = "not_asked" if sw else "not_run" if not_run(r, mine, lims) else mechanical(r, post, mine)
+        g = "not_asked" if sw or sup else "not_run" if not_run(r, mine, lims) else mechanical(r, post, mine)
         if g:
-            why = "only switched model or effort; the run it resumed as carries the ask" if sw else "hit a usage limit and exited within a minute; resumed at the reset" if g == "not_run" \
+            why = "only switched model or effort; the run it resumed as carries the ask" if sw else "stopped for the person's edit or retry; the run it resumed as carries the ask" if sup else "hit a usage limit and exited within a minute; resumed at the reset" if g == "not_run" \
                 else "the post asked nothing" if g == "not_asked" else "posted nothing" + (" though named" if g == "silent" else "")
-            if not a.dry: append(LEDGER, {**r, **({"switch": True} if sw else {}), "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
+            if not a.dry: append(LEDGER, {**r, **({"switch": True} if sw else {}), **({"superseded": True} if sup else {}), "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
             graded += 1
         else: model_runs.append((r, post, mine, after))
     chosen = pick(model_runs, a.sample, root=root) if not (a.all or other) else model_runs
