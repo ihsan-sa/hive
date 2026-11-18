@@ -1396,6 +1396,10 @@ def cmd_continue(a):
     """hive continue: core/continuation.py (the continuation pilot: chains, hops, drops, and the numbers it is judged on)."""
     os.execv(sys.executable, [sys.executable, "-I", str(CORE / "continuation.py")] + a.rest)
 
+def cmd_judge(a):
+    """hive judge: core/judge.py (the stop judge's trial: a separate model decides whether a run's work is done when it stops)."""
+    os.execv(sys.executable, [sys.executable, "-I", str(CORE / "judge.py")] + a.rest)
+
 def cmd_goals(a):
     """hive goals: core/goals.py (every goal with who is moving it: focuses, project goals.md, asks)."""
     os.execv(sys.executable, [sys.executable, "-I", str(CORE / "goals.py")] + a.rest)
@@ -1509,6 +1513,9 @@ def cmd_outcomes(a):
 sp.add_parser("outcomes", help="hive outcomes list [--since 24h] [--grade G] | stats | grade: per-run grades (delivered, partial, nothing, silent...) of whether a run did what its waking post asked (core/outcomes.py)")
 if sys.argv[1:2] == ["outcomes"]: cmd_outcomes(argparse.Namespace(rest=sys.argv[2:]))
 sp.add_parser("continue", help="hive continue list [--json] | stats [--baseline] [--since D] [--until D]: the continuation pilot, where a run ending on `Next:` in a thread whose goals.md has `Continue: on` is carried on (core/continuation.py)")
+sp.add_parser("judge", help="hive judge stats [--since D] [--lift] [--json] | log [-n N] | replay [--hours H] [--models a,b] | case SNAPSHOT: the stop judge, a trial on half the goal threads each day: when a run stops with nothing else carrying its work on, a separate model reads the goal, its open rungs and the run's posts and says done, blocked, wait or continue; continue and wait wake the agent once. Disagree with a wake by posting a line `Judge missed: why` and stopping. On while ~/.hive/judge-trial.json is in its window (core/judge.py)")
+sp.add_parser("skill", help="hive skill list | file NAME <<'X' (SKILL.md with description: and trigger: regex) | rm NAME | match CMD: learned skills, methods a run filed for a step that keeps failing across runs; a later run whose command matches the trigger is pointed at the skill (core/skills.py, projects/hive-meta/moving.md section 8)")
+if sys.argv[1:2] == ["skill"]: os.execv(sys.executable, [sys.executable, "-I", str(CORE / "skills.py")] + sys.argv[2:])
 sp.add_parser("goals", help="hive goals [--idle] [--json]: every goal (the person's focuses in kb/priorities.md, each project's goals.md, the asks) with its thread, last agent post, who is running and open asks; idle goals named (core/goals.py)")
 sp.add_parser("asks", help="hive asks list | check | own ID | done ID --evidence POST | hold|person|drop ID --why | add --post ID --ask ... | directions | extract: the register of what the person asked for, so nothing is dropped (core/asks.py)")
 if sys.argv[1:2] == ["asks"]: cmd_asks(argparse.Namespace(rest=sys.argv[2:]))
@@ -1524,6 +1531,7 @@ if sys.argv[1:2] == ["tier"]: cmd_tier(argparse.Namespace(rest=sys.argv[2:]))
 sp.add_parser("away", help="hive away [--since 12h] [--full] [--json]: while you were away: a 15-line brief of what was made, decided, needs you and broke; --full for all of it")
 if sys.argv[1:2] == ["away"]: cmd_away(argparse.Namespace(rest=sys.argv[2:]))
 if sys.argv[1:2] == ["continue"]: cmd_continue(argparse.Namespace(rest=sys.argv[2:]))
+if sys.argv[1:2] == ["judge"]: cmd_judge(argparse.Namespace(rest=sys.argv[2:]))
 if sys.argv[1:2] == ["goals"]: cmd_goals(argparse.Namespace(rest=sys.argv[2:]))
 if sys.argv[1:2] == ["improve"]: cmd_progress(argparse.Namespace(rest=sys.argv[2:]))  # their own flags: handed over whole
 if sys.argv[1:2] == ["fresh"]: os.execv(sys.executable, [sys.executable, "-I", str(CORE / "fresh.py")] + sys.argv[2:])

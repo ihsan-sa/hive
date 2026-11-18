@@ -191,7 +191,7 @@ make_app() {
   A="$HOME/Applications/Hive.app"
   [ ! -e "$A" ] || grep -qs 'made by the Hive install' "$A/Contents/MacOS/Hive" || { echo "$A is something else, so I left it."; return 0; }
   rm -rf "$A"; mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources" || return 0
-  printf '#!/bin/sh\n# made by the Hive install\nexec "%s/bin/hive" open\n' "$D" > "$A/Contents/MacOS/Hive"; chmod +x "$A/Contents/MacOS/Hive"
+  printf '#!/bin/sh\n# made by the Hive install\n# The Hive desktop app, if it is installed, is the one way in; this icon just hands over to it.\na=${HIVE_DESKTOP_APP:-/Applications/Hive.app}\n[ -d "$a" ] && exec open "$a"\nexec "%s/bin/hive" open\n' "$D" > "$A/Contents/MacOS/Hive"; chmod +x "$A/Contents/MacOS/Hive"
   cat > "$A/Contents/Info.plist" <<'PL'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

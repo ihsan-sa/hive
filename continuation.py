@@ -11,7 +11,7 @@ Duplicates are worse than a lost step: a crash loses a continuation rather than 
 
 CLI: hive continue list [--json] | stats [--baseline] [--since D] [--until D]
 """
-import argparse, datetime as dt, glob, json, os, re, sys
+import argparse, datetime as dt, glob, json, os, re, subprocess, sys
 from collections import Counter, defaultdict
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -19,6 +19,7 @@ import goals as G
 
 HOME = Path.home()
 DIR, BOARD, STATUS, PROJECTS, CONFIG, OUTCOMES = HOME / ".hive" / "continue", HOME / "board.jsonl", HOME / ".hive" / "thread-status.jsonl", HOME / "projects", Path(__file__).resolve().parent / "config.json", HOME / "outcomes.jsonl"
+JUDGE_TRIAL, JUDGE_DIR = HOME / ".hive" / "judge-trial.json", HOME / ".hive" / "judge"   # the stop judge's trial (judge.py)
 AGENT = re.compile(r"^[a-z][0-9a-f]{4,}$")
 # A step is the person's only when its line says so: it is for them, asks them, or waits on their word. Naming the person is not that: 48 of the 49
 # drops this rule made from 2026-11-06 to 2026-11-10 were agent work that mentioned the person ("the right person's section", "as the person gets it").
@@ -63,8 +64,9 @@ def record(event, **e):
     DIR.mkdir(parents=True, exist_ok=True)
     with (DIR / "log.jsonl").open("a") as f: f.write(json.dumps({"at": iso(), "event": event, **e}) + "\n")
 _dropped = []  # post ids dropped during the current on_run_end, so the other-thread pass logs each post once
+_why = []      # the reasons of those drops, which ask_judge reads: a step another agent or a stop already has is not the judge's
 def drop(intent, reason):
-    _dropped.append(intent.get("post"))
+    _dropped.append(intent.get("post")); _why.append(reason)
     record("drop", reason=reason, **{k: intent.get(k) for k in ("chain", "hop", "thread", "post", "name", "line")})
 
 def tail_posts(word):
@@ -316,7 +318,7 @@ def on_run_end(r, c, st, alive):
     """One intent at most, from the run's own thread (_on_run_end). A Next the run left in another thread gets no intent: it is logged as an
     other_thread drop, so the floor or keeper that carries it on is not the only trace (R28, 2026-11-14: a9179 ran in product-test and posted
     its ui-redesign Next there, which left no record at all, since only the run's newest post anywhere was read)."""
-    _dropped.clear()
+    _dropped.clear(); _why.clear()
     out = _on_run_end(r, c, st, alive)
     done = set(_dropped) | {(out or {}).get("post")}
     if r.get("thread") not in SYSTEM_THREADS:
@@ -351,21 +353,26 @@ def _on_run_end(r, c, st, alive):
     return intent
 
 def enqueue(st, c, alive, stays_on):
-    """Turn each waiting intent into one pending post, once: the done marker makes a restart's replay a no-op. It waits while its producer is running."""
+    """Turn each waiting intent into one pending post, once: the done marker makes a restart's replay a no-op. It waits while its producer is running.
+    A judge's intent is marked by its own key (the run end it judged), so a step the run itself stated from the same post stays apart; a wait holds until its not_before."""
     out = []
     for f in sorted(DIR.glob("*.json")):
         try: k = json.loads(f.read_text())
         except (OSError, ValueError): continue
-        if (DIR / "done" / safe(k.get("post"))).exists(): f.unlink(missing_ok=True); continue
+        mark = DIR / "done" / safe(k.get("key") or k.get("post"))
+        if mark.exists(): f.unlink(missing_ok=True); continue
         if k["name"] in (alive or {}): continue
+        if (k.get("not_before") or 0) > now().timestamp(): continue
+        if k.get("judge") and not judge_acts():
+            claim(mark); drop(k, "judge_off"); f.unlink(missing_ok=True); continue
         if (why := check(k, st, c, alive)):
-            claim(DIR / "done" / safe(k["post"])); drop(k, why); f.unlink(missing_ok=True); continue
-        if not claim(DIR / "done" / safe(k["post"])): f.unlink(missing_ok=True); continue
-        q = {"id": k["post"], "thread": k["thread"], "from": "starter", "continue": {x: k[x] for x in ("chain", "hop", "line", "post", "since", "at", "run")}}
+            claim(mark); drop(k, why); f.unlink(missing_ok=True); continue
+        if not claim(mark): f.unlink(missing_ok=True); continue
+        q = {"id": k["post"], "thread": k["thread"], "from": "starter", "continue": {x: k[x] for x in ("chain", "hop", "line", "post", "since", "at", "run", "judge") if x in k}}
         stays_on(st, c, k["name"], q)
         st.setdefault("pending", {}).setdefault(k["name"], []).append(q)
         f.unlink(missing_ok=True)
-        record("enqueue", chain=k["chain"], hop=k["hop"], thread=k["thread"], post=k["post"], name=k["name"], line=k["line"])
+        record("enqueue", chain=k["chain"], hop=k["hop"], thread=k["thread"], post=k["post"], name=k["name"], line=k["line"], **({"judge": k["judge"]["verdict"]} if k.get("judge") else {}))
         out.append(q)
     return out
 
@@ -383,7 +390,8 @@ def before_launch(n, ps, st, c, alive):
 def launched(who, ps):
     for q in ps:
         if (k := q.get("continue")):
-            record("launch", ran=who, model=q.get("model"), chain=k["chain"], hop=k["hop"], thread=q.get("thread"), post=k["post"], line=k["line"], source_run=k.get("run"), posts=[p["id"] for p in ps])
+            record("launch", ran=who, model=q.get("model"), chain=k["chain"], hop=k["hop"], thread=q.get("thread"), post=k["post"], line=k["line"], source_run=k.get("run"), posts=[p["id"] for p in ps],
+                   **({"judge": k["judge"].get("verdict")} if k.get("judge") else {}))
 
 def ladder_brief(thread):
     """What `hive goals --brief` prints for this thread, also for a project whose ladder heading names no thread (the CLI finds no row for those)."""
@@ -393,12 +401,64 @@ def ladder_brief(thread):
     return G.brief(G.with_ladder({"name": project, "thread": thread}, {"path": str(path), "ladder": G.ladder(txt)})).removeprefix("@new ")
 
 def wake_note(k, thread, heir):
+    if (j := k.get("judge")): return judge_note(k, j, thread, heir)
     head = (f"\n\nThis is a continuation (chain {k['chain']}, hop {k['hop']}). " + ("The agent before you" if heir else "Your last step") + f" (post {k['post']}) ended on: {k['line']}\n"
             "That line is your job: do the step and run its check, unless the thread shows it was overtaken, in which case say so and stop. "
             "End your result post with the next `Next: <one concrete step, with its check>` if there is one you can take, or with a `Done:`, `Blocked:`, `Needs the person:` or `Waiting:` line if not; when that post is your last act, send it with `hive post --end` so the run stops there.\n"
             "Before you write that line, re-read the ladder in the project's goals.md against what you just learned: tick what is done, and add, split or strike rungs if the goal "
             "has moved (the person, 2026-10-14 and k0492: goals get re-evaluated as work gets done, by the agent that did it, not by a round that comes later). Say in the post which rungs changed.")
     return head + (f"\n\nThe ladder this thread works from, for what comes after that step:\n{b}" if heir and (b := ladder_brief(thread)) else "")
+
+def judge_note(k, j, thread, heir):
+    """The wake the stop judge gave: the run stopped, and a separate model read the thread and its goal and said the work was not finished."""
+    who = "The agent before you" if heir else "Your last run"
+    if j.get("verdict") == "wait":
+        body = (f"{who} (post {k['post']}) stopped to wait. The stop judge granted a wait of {j.get('minutes')} min, which is now over, and nothing has been posted in this thread since. "
+                f"What it was waiting for: {k['line'].removeprefix('Next: ')}\nThe judge's reason: {j.get('why')}\n"
+                "Check whether what was awaited has arrived (the board, the job, the file). If it has, carry the work on. If not, post one line saying what you checked and when to look again, and stop.")
+    else:
+        body = (f"{who} (post {k['post']}) stopped. The stop judge, a separate model shown the goal, its open rungs and what was posted, says the work is not finished. "
+                f"The step it named: {k['line'].removeprefix('Next: ')}\nIts reason: {j.get('why')}\n"
+                "Do that step and run its check, unless the thread shows it was overtaken or is not yours to take.")
+    tail = ("\nIf you think the judge is wrong (the work is done, or the step waits on the person or someone else), post one line starting `Judge missed:` with why, and stop: that is logged, and it is how the judge gets corrected. "
+            "Otherwise end your result post with `Next: <one concrete step, with its check>` if there is one you can take, or with a `Done:`, `Blocked:`, `Needs the person:` or `Waiting:` line if not; "
+            "when that post is your last act, send it with `hive post --end` so the run stops there.")
+    return f"\n\nThis is a stop-judge wake (chain {k['chain']}, hop {k['hop']}). " + body + tail + (f"\n\nThe ladder this thread works from:\n{b}" if heir and (b := ladder_brief(thread)) else "")
+
+# --- the stop judge (judge.py): the starter asks it at a clean run end that nothing else carries on, and never waits for it
+JUDGE_SKIP = {"stop", "other_running", "other_queued", "superseded", "overlap", "budget_chain", "budget_day", "post_done", "run_claimed", "agent_queued"}
+
+def judge_trial(t=None, path=None):
+    """The live trial's settings, or None: no file, unreadable, or outside its from..until."""
+    try: d = json.loads(Path(path or JUDGE_TRIAL).read_text())
+    except (OSError, ValueError): return None
+    if not isinstance(d, dict): return None
+    t = t or now().timestamp()
+    if (epoch(d.get("from", "")) or 0) > t or t >= (epoch(d.get("until", "")) or 0): return None
+    return d
+
+def judge_acts():
+    """Whether a judge's wake may go: the trial is on and out of shadow."""
+    tr = judge_trial()
+    return bool(tr) and not tr.get("shadow", True)
+
+def ask_judge(r, c, st, alive, held=False, skip=False):
+    """After on_run_end gave no intent: hand the run end to judge.py, detached, so a slow model never holds the starter up. Returns the snapshot path, or None.
+    Not for a warden or free agent (skip), a thread its tier holds (held), a system thread, or a step on_run_end dropped because a stop or another agent has it."""
+    name, thread = str(r.get("name") or "").lower(), r.get("thread")
+    if skip or held or not name or not thread or thread in SYSTEM_THREADS or not judge_trial(): return None
+    if set(_why) & JUDGE_SKIP: return None
+    pending = {n: sorted({q.get("thread") or q.get("id") for q in ps if not q.get("continue")}) for n, ps in (st.get("pending") or {}).items()}
+    snap = {"run": {k: r.get(k) for k in ("name", "session", "at", "post", "thread", "from", "model")}, "alive": {n: x.get("thread") for n, x in (alive or {}).items()},
+            "pending": {n: ts for n, ts in pending.items() if ts}, "reasons": list(_why)}
+    (JUDGE_DIR / "snap").mkdir(parents=True, exist_ok=True)
+    path = JUDGE_DIR / "snap" / f"{safe(name)}-{safe(r.get('at'))}.json"
+    path.write_text(json.dumps(snap))
+    env = {k: v for k, v in os.environ.items() if k not in ("HIVE_NAME", "HIVE_THREAD")}
+    with (JUDGE_DIR / "run.log").open("a") as err:
+        subprocess.run(["setsid", "--fork", sys.executable, "-I", str(Path(__file__).resolve().parent / "judge.py"), "run", str(path)],
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err, env=env, cwd=str(HOME), timeout=20)
+    return path
 
 # --- hive continue: what it did, and whether it helped. Regexes from kb/why-hive-agents-stop-evidence-2026-11-02-06-meta-moving.md.
 ELIGIBLE = re.compile(r"^(next|next rung|next step|left|what is left|still left|remaining|todo|to do)\b.*:", re.I | re.M)
@@ -441,7 +501,7 @@ def list_rows():
         first = next((p for p in mine if substantive(str(p.get("text", ""))) or any(p["id"] in l for l in ticks)), None)
         rows[e["chain"]].append({"hop": e.get("hop"), "ran": e.get("ran"), "at": e.get("at"), "line": e.get("line"), "post": e.get("post"), "model": e.get("model"),
                                  "minutes": round((epoch(first["at"]) - t0) / 60, 1) if first and t0 else None,
-                                 "rungs": sum(any(p["id"] in l for l in ticks) for p in mine), "grade": grades.get((e.get("post"), e.get("ran")))})
+                                 "rungs": sum(any(p["id"] in l for l in ticks) for p in mine), "grade": grades.get((e.get("post"), e.get("ran"))), "judge": e.get("judge")})
     return rows
 
 def cmd_list(a):
@@ -452,7 +512,7 @@ def cmd_list(a):
         print(f"{chain}: {len(hops)} hop{'s' * (len(hops) != 1)}")
         for h in hops:
             mins = "-" if h["minutes"] is None else f"{h['minutes']} min"
-            print(f"  {h['hop']:>2} {h['ran']:<8} {str(h['at'])[:16]}  to first result {mins:<10} rungs {h['rungs']}  grade {h['grade'] or '-'}  {str(h['line'])[:70]}")
+            print(f"  {h['hop']:>2} {h['ran']:<8} {str(h['at'])[:16]}  to first result {mins:<10} rungs {h['rungs']}  grade {h['grade'] or '-'}  {'judge:' + h['judge'] + ' ' if h.get('judge') else ''}{str(h['line'])[:70]}")
 
 def focus_threads(all_threads):
     """The focus set of the baseline: the explicit threads, plus names on `thread` lines or in `## Ladder` of any goals.md, that exist on the board."""
@@ -517,7 +577,8 @@ def cmd_stats(a):
     print(f"duplicate launches: {pairs} pairs in {len(threads)} threads")
     if not a.baseline:
         cnt = Counter(e.get("event") for e in ev)
-        print(f"intents {cnt['intent']}, enqueued {cnt['enqueue']}, launched {cnt['launch']}; drops by reason:", dict(Counter(e.get("reason") for e in ev if e.get("event") == "drop")) or "none")
+        jl = sum(1 for e in ev if e.get("event") == "launch" and e.get("judge"))
+        print(f"intents {cnt['intent']}, enqueued {cnt['enqueue']}, launched {cnt['launch']} ({jl} from the stop judge); drops by reason:", dict(Counter(e.get("reason") for e in ev if e.get("event") == "drop")) or "none")
         graded = [h["grade"] for hops in list_rows().values() for h in hops if h["grade"]]
         if graded: print(f"delivered share of chained runs: {sum(g == 'delivered' for g in graded)}/{len(graded)}")
 
