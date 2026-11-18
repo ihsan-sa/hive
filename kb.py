@@ -940,6 +940,7 @@ def cmd_recall(a):
     rec = {"recall": a.post or "stdin", "top": [h["path"] for h in hits], "ms": int((time.time() - t0) * 1000)}
     if sender: rec["sender"] = sender  # kbuse.stale keys on it
     if held: rec.update(held=len(held), held_paths=[fmt_path(h["path"]) for h in held])
+    if hits or held: rec.update(scores=[h.get("s") for h in hits], held_scores=[h.get("s") for h in held])  # what a bar would have cut: person posts have none (RECALL_BAR), calibrated from these (rsi-lab kb2, 11-18)
     if quiet: rec["quiet"] = True  # every message is still searched; what was ranked and not shown, so what the silence cost can be counted (did the run read it anyway?)
     if a.who: os.environ["HIVE_NAME"] = a.who
     if kbuse and hits:
