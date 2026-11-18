@@ -6,7 +6,7 @@
 // The thread list and the message list are data-own: morph leaves them alone and sync() below writes them, once the
 // render has been mounted. A poll with nothing new touches nothing in them; a new post is appended, not redrawn, before
 // the messages still on their way (.cm-out), which sync() keeps apart.
-import { h, morph, tr } from "../core/dom.js";
+import { h, morph, tr, replaceKeep } from "../core/dom.js";
 import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
 import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitOf, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
@@ -299,7 +299,7 @@ function paint(box, ctx) {
   L.out = h("div", { class: "cm-out", "data-key": "out" });
   L.jump = h("button", { type: "button", class: "cm-jump", hidden: true, onclick: () => { box.scrollTop = box.scrollHeight; } });
   const q = C.q.trim();   // a search narrows the messages: say so where they are, so a sent one never seems lost (11040214d468)
-  box.replaceChildren(
+  replaceKeep(box,
     ...(q ? [h("div", { class: "cm-qbar", role: "status" }, h("span", null, `Showing ${plural(L.all.length, "match", "matches")} for “${short(q, 40)}”`),
       button("Clear search", () => { C.q = ""; C.find = false; ctx.update(); }, { size: "s", kind: "quiet", icon: "close" }))] : []),
     ...(older ? [h("div", { class: "cm-older" }, button(`Show older (${older} more)`, () => { C.limit += STEP; L.rebuild = true; L.keep = true; ctx.update(); }, { size: "s" }))] : []),

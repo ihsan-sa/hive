@@ -450,6 +450,7 @@ def diversify(hits, n, perdoc=None):
         if h["source"] not in have: top.append(h); have.add(h["source"])
     return top
 
+SNIP_TOP = 260
 def snippet(c, h, words, width=130):
     r = c.execute("SELECT head, body FROM fts WHERE rowid=?", (h["id"],)).fetchone()
     if not r: return "", ""
@@ -621,8 +622,8 @@ def render(c, q, n=12, frm=None, to=None, src=None):
     for h in hits: by[h["source"]] += 1; files[h["path"]] += 1
     cap = "+" if total >= 400 else ""
     out = [f"{total}{cap} passages in {len(files)}{cap} files  " + " ".join(f"{s}:{k}" for s, k in by.most_common()) + (f"  [{'; '.join(tried[1:])}]" if tried[1:] else "")]
-    for h in top:
-        t, line = snippet(c, h, words); h["shown_line"] = line
+    for k, h in enumerate(top):
+        t, line = snippet(c, h, words, SNIP_TOP if k < 3 else 130); h["shown_line"] = line   # audit-unread: 35% of unread searches had the right place with a snippet too thin to answer; places 1-3 get a longer window
         out.append(f"{fmt_path(h['path'])}:{line}" + (f" {h['date']}" if h['date'] else "") + f"  {t}" + (f"  [superseded by {fmt_path(h['sup'])}]" if h.get("sup") else "") + ("  [draft]" if h["source"] == "draft" else ""))
     if not hits and not top:
         out.append("Nothing. Not proof it isn't there: try other words, a shorter form, or `rg -il WORD ~/kb ~/archive/knowledge`. If you give up: kb miss \"QUESTION\"")
@@ -930,6 +931,7 @@ def cmd_recall(a):
         except Exception: pass
         try: bad = bad | kbuse.stale().get(sender, set()) if sender else bad
         except Exception: pass
+    bad |= {h["path"] for h in hits if h["path"].startswith(("core/", "modules/"))}   # 7 days to 2026-11-18: 45 such pointers shown, 0 opened (projects/kb-search/recall-opened.md); only the injection drops them, the sweep still sees them
     ranked = hits[:a.n]; hits = recall_gate(hits, bad, person, a.midrun, a.n, quiet); held = [h for h in ranked if h not in hits]
     if a.who: seen = recall_shown(a.who); hits = [h for h in hits if h["path"] not in seen]
     if hits:

@@ -459,7 +459,7 @@ function appMessage(p, opts) {
       relayLine(p),
       p.reply_to ? quote(p) : null,
       EDIT.id === p.id ? editBox(p, opts) : boxes.length && !q.disp ? null : body(q, ws),
-      boxes.length ? h("div", { class: "msg-boxes" }, boxes.map(id => boxEmbed(p.id, id))) : null,
+      boxes.length ? h("div", { class: "msg-boxes", "data-key": "boxes" }, boxes.map(id => boxEmbed(p.id, id))) : null,
       files.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f))) : null,
       tagChips(p),
       split ? didFold(p, split) : null,
