@@ -44,6 +44,11 @@ jobs:
         timeout-minutes: 75
         env: { HIVE_APP_REAL: "1" }
         run: node test/real.js "${{ matrix.app }}"
+      # What opening the download looks like on a Mac: the zip unpacked with the browser's download mark, then double-clicked.
+      - if: runner.os == 'macOS'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: bash test/downloaded.sh dist/*.zip
       - uses: actions/upload-artifact@v4
         if: always()
         with:
