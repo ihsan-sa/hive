@@ -13,12 +13,12 @@ echo "== mark it as downloaded"
 xattr -r -w com.apple.quarantine "0081;$(printf %x "$(date +%s)");Safari;$(uuidgen)" "$app"
 xattr -p com.apple.quarantine "$app"
 echo "== Gatekeeper's verdict"; spctl -a -vv -t exec "$app" 2>&1
-echo "== double-click"; open "$app"; echo "open exit $?"; sleep 20; shot 1-first-open; echo "app: $(running)"
+echo "== double-click"; ( open "$app"; echo "open exit $?" ) & sleep 25; shot 1-first-open; echo "app: $(running)"
 osascript -e 'tell application "System Events" to get name of every window of every process whose visible is true' 2>&1 | head -5
 osascript -e 'tell application "System Events" to tell process "CoreServicesUIAgent" to get value of every static text of every window' 2>&1 | head -5
 log show --last 2m --predicate 'process == "syspolicyd" OR process == "CoreServicesUIAgent"' --style compact 2>/dev/null | grep -iE 'hive|gatekeeper|quarantine|verif' | tail -15
-pkill -f "$app/Contents/MacOS/Hive"; pkill CoreServicesUIAgent; sleep 2
+pkill -x open; pkill -f "$app/Contents/MacOS/Hive"; pkill CoreServicesUIAgent; sleep 2
 echo "== after removing the mark (xattr -dr com.apple.quarantine)"
-xattr -dr com.apple.quarantine "$app"; open "$app"; echo "open exit $?"; sleep 20; shot 2-mark-removed; echo "app: $(running)"
-pkill -f "$app/Contents/MacOS/Hive"
+xattr -dr com.apple.quarantine "$app"; ( open "$app"; echo "open exit $?" ) & sleep 25; shot 2-mark-removed; echo "app: $(running)"
+pkill -x open; pkill -f "$app/Contents/MacOS/Hive"
 exit 0
