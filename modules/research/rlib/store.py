@@ -37,6 +37,12 @@ class Case:
             self.db.executescript(SCHEMA)
             self.db.commit()
 
+    def close(self):
+        try: self.db.close()
+        except Exception: pass
+
+    def __del__(self): self.close()
+
     def cached_search(self, q, source, hours=24):
         with self.lock: r = self.db.execute("select at, hits, error from searches where q=? and source=?", (q, source)).fetchone()
         if not r or r["error"]: return None

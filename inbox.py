@@ -162,8 +162,72 @@ def unanswered(name, rec):
         return (f"You posted in another thread, but nothing in {where}, where the ask was made: {who} no answer there (they read "
                 f"that thread's channel). Post one or two lines in {where} now (the answer, or where it is), then stop.")
     return (f"You are ending this run without posting anything to the board, so {who} no answer: text outside hive post "
-            f"reaches nobody. Post your answer now in {where} with "
-            "hive post --thread T and a quoted heredoc, then stop. If you truly have nothing to say, just stop again.")
+            f"reaches nobody.{asked(rec)} Post your answer now in {where} with "
+            "hive post --thread T and a quoted heredoc, then stop. Only if that post asks nothing of you (a thanks, an FYI) stop "
+            "again without one: a question or a task always gets a post (a7d1b took the old \"nothing to say\" way out on the "
+            "person's \"do you think ill hear back\", 1116225256aa, R46c).")
+
+def waking_post(rec):
+    """The post that started this run (the run record's "post"), or None. The board's tail first, then the whole board."""
+    pid = str(rec.get("post") or "")
+    if not pid: return None
+    try:
+        with BOARD.open("rb") as fh:
+            size = os.fstat(fh.fileno()).st_size
+            for start in (max(0, size - 300_000), 0):
+                fh.seek(start)
+                for line in fh.read().decode(errors="replace").splitlines():
+                    if pid not in line: continue
+                    try: p = json.loads(line)
+                    except ValueError: continue
+                    if isinstance(p, dict) and p.get("id") == pid: return p
+                if start == 0: break
+    except OSError: pass
+    return None
+
+def asked(rec, n=300):
+    """ " The post that woke you (ID, from X): "..."" for a hold, so the agent sees the ask it is answering; "" if not found."""
+    p = waking_post(rec)
+    if not p: return ""
+    text = " ".join(str(p.get("text", "")).split())
+    return f" The post that woke you ({p.get('id')}, from {p.get('from')}): \"{text[:n]}{'…' if len(text) > n else ''}\""
+
+# A post that only says what the run will do: "Taking R-1117-c: …", "On it.", "I'll post the PR in about 2 h". Matched on its start,
+# under INTENT_MAX characters, and with no Done/Blocked/Needs the person/Told to stop last line (or reason).
+INTENT = re.compile(r"^\W*(?:[a-z][0-9a-f]{4}:\s*)?(?:taking|on it|picking|starting|start|looking|will|i'?ll|i will|i am|i'm|"
+                    r"working on|back on|going to|checking|reading|got it|on the|now|let me|first)\b", re.I)
+INTENT_MAX = 400
+FINAL_WORDS = ("Done", "Blocked", "Needs the person", "Told to stop")
+
+def intent_post(p):
+    text = str(p.get("text", "")).strip()
+    if len(text) > INTENT_MAX or not INTENT.match(text): return False
+    lines = [l.strip().strip("*_ ").strip() for l in text.splitlines() if l.strip()]
+    while len(lines) > 1 and re.fullmatch(r"(?:@[\w.-]+[\s,.]*)+", lines[-1]): lines.pop()
+    last = str(p.get("reason") or "") or (lines[-1] if lines else "")
+    return not any(last.lower().startswith(w.lower() + ":") for w in FINAL_WORDS)
+
+def intent_only(name, rec):
+    """Why this stop should wait: a run woken by an ask (the person, another Hive, a named agent) posted, but every post only says
+    what it will do. Once per run. Six such sleepers in 2026-11-15..17 were graded nothing for a run whose only post was "Taking
+    …" (hive-meta R46c; a0069 1117110441f6 had made the fix and passed the stop gate on a Waiting bar). Over 11-12..18 this
+    shape matched 11 of 976 woken runs, none of them with work posted. Every hold goes to ~/.hive/stop-gate.jsonl as "intent_only"."""
+    if os.environ.get("HIVE_DOOR") or not rec.get("at") or not waker(rec, name) or WARDEN.fullmatch(name) or name.startswith("f"): return None
+    ps = own_posts(name, rec["at"])
+    if not ps or not all(intent_post(p) for p in ps): return None
+    if any((p.get("model") or p.get("effort")) and name in names(p) for p in ps): return None  # a model switch resumes at once
+    mark = STATE / "nudged-intent" / name
+    try:
+        if mark.read_text() == rec["at"]: return None
+    except OSError: pass
+    try: mark.parent.mkdir(parents=True, exist_ok=True); mark.write_text(rec["at"])
+    except OSError: return None  # can't mark it: don't risk asking every stop
+    stop_log(name, rec, "intent_only", posts=[p.get("id") for p in ps])
+    return ("Your posts this run only say what you will do (" + ", ".join(str(p.get("id")) for p in ps[-3:]) + "), and this run is "
+            f"judged on its own: one that ends on an intent counts as nothing.{asked(rec)} Before you stop, do it and post the result, "
+            "or post what is done so far and why the rest can't be done in this run (Blocked: or Needs the person: with the reason, "
+            "or Waiting: naming the job, reminder or post that will wake you). If your post was the whole answer (all that was asked "
+            "was a yes, a time or an acknowledgement), stop again.")
 
 def owns_open(name, rec):
     """Once per run: asks this agent owns that are still open as it stops. Watchdog trips on 2026-11-04 (k0558, k0559, k0486)
@@ -352,7 +416,7 @@ def end_decision(name, rec, post):
     (these checks are once-only, so what they say can't wait for a Stop that would no longer repeat it). A post handed over by a tool call beside this
     one holds it first: ending would throw it away unread, and the starter counts it as delivered. The reply call this saves is 1.46% of run money."""
     if delivered_since(name, post_time(post) - END_FRESH_S): why = "A post reached you around this one, so read it first."
-    else: why = "\n\n".join(x for x in (unanswered(name, rec) or owns_open(name, rec), stop_gate(name, rec), rungs_owed(name, rec), focus_nudge(name, rec)) if x)
+    else: why = "\n\n".join(x for x in (unanswered(name, rec) or intent_only(name, rec) or owns_open(name, rec), stop_gate(name, rec), rungs_owed(name, rec), focus_nudge(name, rec)) if x)
     if why:
         d = STATE / "end-held"; d.mkdir(parents=True, exist_ok=True); (d / name).write_text(post["id"])
         return "Not ended on that post, because:\n\n" + why
@@ -648,7 +712,7 @@ def main():
             why = end_decision(name, rec, end)
             print(json.dumps({"continue": False, "stopReason": "ended on its post (hive post --end)"} if why is None else {"hookSpecificOutput": {"hookEventName": event, "additionalContext": why}}))
             return
-        if event == "Stop" and (why := "\n\n".join(x for x in (unanswered(name, rec) or open_at_stop(name, rec), stop_gate(name, rec), rungs_owed(name, rec)) if x)):
+        if event == "Stop" and (why := "\n\n".join(x for x in (unanswered(name, rec) or intent_only(name, rec) or open_at_stop(name, rec), stop_gate(name, rec), rungs_owed(name, rec)) if x)):
             print(json.dumps({"decision": "block", "reason": "\n\n".join(x for x in (why, focus_nudge(name, rec)) if x)}))
         elif event == "Stop" and (fn := focus_nudge(name, rec)):
             print(json.dumps({"decision": "block", "reason": fn}))

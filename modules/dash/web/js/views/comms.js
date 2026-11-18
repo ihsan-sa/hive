@@ -645,7 +645,8 @@ function saveFold() { try { localStorage.setItem(FOLD_KEY, JSON.stringify([...FO
 // Which way it goes follows the sections, so a list with most of them open offers Collapse all; a list with no heads goes by its helper folds.
 // HA-18: the open conversation always has a row. When every section that holds it is folded, the first of them opens for this visit (L.lift); FOLD,
 // the person's own choice, is not touched, so the fold is back when they leave. Folding it again during the visit keeps it shut until the next one.
-const VISIT = { conv: undefined, shut: new Set() };
+// A section once opened so stays open for the visit, so opening another one that holds the conversation does not fold it again (k2408: run_important).
+const VISIT = { conv: undefined, shut: new Set(), lift: null };
 const isShut = k => FOLD.has(k) && k !== L.lift;
 const foldShut = () => { const ss = L.foldSecs || [], ks = L.foldKids || []; return ss.length ? ss.every(isShut) : !ks.some(n => KIDS.has(n)); };
 const foldWord = () => foldShut() ? "Expand all" : "Collapse all";
@@ -705,15 +706,17 @@ function sections(rs, ctx, opts) {
   const parts = [...(C.view === "recent" ? [SECS[0], SECS[2], SECS[1]] : SECS.slice(0, 3)), ...tops.map(k => [k, label(k)]), SECS[3]].filter(([k]) => by[k].length || (byFocus && k.startsWith("f:") && k !== "f:")), heads = parts.length > 1 || by.pin.length;
   L.foldSecs = heads ? parts.map(([k]) => k).filter(k => k !== "f:") : [];   // Other has no fold
   if (foldFresh && heads) { foldFresh = false; L.foldSecs.forEach(k => k !== L.here && FOLD.add(k)); saveFold(); }   // a focus page open beside it keeps its own section open
-  if (VISIT.conv !== C.conv) { VISIT.conv = C.conv; VISIT.shut.clear(); }
+  if (VISIT.conv !== C.conv) { VISIT.conv = C.conv; VISIT.shut.clear(); VISIT.lift = null; }
   const curAt = heads ? parts.map(([k]) => k).filter(k => by[k].some(r => r.current)) : [];
-  L.lift = curAt.length && curAt.every(k => k !== "f:" && FOLD.has(k)) && !curAt.some(k => VISIT.shut.has(k)) ? curAt[0] : null;
+  if (curAt.length && curAt.every(k => k !== "f:" && FOLD.has(k)) && !curAt.some(k => VISIT.shut.has(k))) VISIT.lift = curAt[0];
+  L.lift = VISIT.lift && curAt.includes(VISIT.lift) && FOLD.has(VISIT.lift) && !VISIT.shut.has(VISIT.lift) ? VISIT.lift : null;
   const sec = (k, label, rows) => {
     if (!heads) return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k }, list(rows, { ...opts, empty: "" }));
     if (k === "f:") return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k },   // Other: a plain heading, its rows always shown
       h("div", { class: "tm-sec-hw" }, h("p", { class: "tm-sec-h tm-sec-other" }, label)), list(rows, { ...opts, empty: "" }));
     const here = L.here === k, shut = isShut(k), fid = k.startsWith("f:") ? k.slice(2) : null;   // the focus page open beside it: its section is marked; pressing its heading again folds it, the page stays
-    const toggle = () => { if (k === L.lift) VISIT.shut.add(k); else { FOLD.has(k) ? FOLD.delete(k) : FOLD.add(k); saveFold(); } ctx.update(); };
+    // folding a section the open conversation is in keeps it shut for this visit too, or the lift above would open it again at once (k2408: drive_threads)
+    const toggle = () => { if (k === L.lift) VISIT.shut.add(k); else { if (FOLD.has(k)) FOLD.delete(k); else { FOLD.add(k); VISIT.shut.add(k); } saveFold(); } ctx.update(); };
     // The count is its own span after the name, with a dot before it when a row waits on you or is working (the Nov 8 handoff §2.1); + takes its place on hover.
     const tone = rows.some(r => waitsOn(r.th)) ? "info" : rows.some(r => threadState(r.th).key === "working") ? "good" : null;
     const count = h("span", { class: "tm-sec-n", title: plural(rows.length, "conversation") + (tone === "info" ? ", one waits on you" : tone ? ", one working" : "") }, tone ? h("span", { class: "st", "data-tone": tone, "aria-hidden": "true" }) : null, String(rows.length));
@@ -1504,8 +1507,11 @@ function looseRow([th, ws]) {
         h("span", { class: "fo-you", "data-key": "fo-you" }, h("span", { class: "st", "data-tone": "info", "aria-hidden": "true" }), `${ws.length} for you`), t ? when(t, "t") : null)),
     line ? h("p", { class: "fo-short", "data-key": "fo-short" }, line) : null);
 }
+/** The loose conversations to draw: under New only (HA-8), only those with a wait newer than the person's last look (k2408: drive_new_only). */
+const looseShown = onlyNew => { const hs = S.foci && S.foci.home_seen, since = hs && hs.since ? hs.since * 1e3 : null;
+  return onlyNew ? looseWaits().filter(([, ws]) => ws.some(w => newSince(w.t, since))) : looseWaits(); };
 function fociList(fs, onlyNew) {
-  const loose = looseWaits();
+  const loose = looseShown(onlyNew);
   const group = ([key, head, tone]) => { const g = fs.filter(f => groupOf(f) === key), more = key === "needs you" ? loose : []; if (!g.length && !more.length) return null;
     const n = g.length + more.length, what = !more.length ? (n === 1 ? " focus" : " focuses") : !g.length ? (n === 1 ? " conversation" : " conversations") : " focuses and conversations";
     return h("section", { class: "fo-g", "data-key": "fog:" + key, "data-state": key || "none" },
@@ -1545,7 +1551,7 @@ function fociGrid(ctx, settled) {
   if (!fs.length) return h("p", { class: "meta cm-foci-msg" }, "No focus yet. Agents make one when work has a goal; every conversation is in the list on the left.");
   if (FV.drawn !== view) { FV.drawn = view; store(FOCI_DRAWN_KEY, view); }   // so the next visit's grey stand-in has the same shape
   return [workBar(S.foci.activity), h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h" }, h("h2", { class: "sec-t" }, "Focuses"), h("span", { class: "sec-n" }, String(fs.filter(f => !f.misc).length)), fociNews(fs), canNew ? newOnlyPick(ctx) : null, fociPick(view, ctx), h("a", { href: href("flow") }, "Flow")),
-    onlyNew && !shown.length ? h("p", { class: "cm-foci-none", "data-key": "foci-none", role: "status" }, "Nothing new since you last looked, ", when(hs.since * 1e3, "t"), ".")
+    onlyNew && !shown.length && !looseShown(true).length ? h("p", { class: "cm-foci-none", "data-key": "foci-none", role: "status" }, "Nothing new since you last looked, ", when(hs.since * 1e3, "t"), ".")
     : list ? h("div", { class: "cm-foci", "data-key": "foci", "data-view": "list", "data-new-only": onlyNew ? "" : null, style: room }, fociTold(ctx), fociList(shown, onlyNew))
       : h("div", { class: "cm-foci", "data-key": "foci", "data-new-only": onlyNew ? "" : null, style: room }, shown.map(f => focusCard(f, ctx, onlyNew)))];
 }

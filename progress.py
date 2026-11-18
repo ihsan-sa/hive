@@ -324,8 +324,8 @@ def cmd_log(a):
         if a.control:
             fields["control"] = a.control; fields["control_before"], err = run_check(a.control)
             if err: sys.exit(f"hive improve log: the control doesn't work yet ({err}).")
-        if re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d)?Z?", rev):  # a date with an hour: due then; revisit stays a bare date (compared with today)
-            fields["due_at"] = rev.rstrip("Z") + (":00" if len(rev.rstrip("Z")) == 16 else "") + "+00:00"; rev = rev[:10]
+        if re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d)?(Z|\+00:00)?", rev):  # a date with an hour: due then; revisit stays a bare date (compared with today)
+            r0 = re.sub(r"(Z|\+00:00)$", "", rev); fields["due_at"] = r0 + (":00" if len(r0) == 16 else "") + "+00:00"; rev = rev[:10]
         else: fields["due_at"] = iso(now() + span(rev)) if re.fullmatch(r"\d+[hdw]", rev) else rev + "T00:00:00+00:00"
         # The trial rule (from the fund's forecast trials, projects/rsi-lab/fund.md): the size expected, what the number rests on and the
         # cheap alternative to beat are written before landing, and the check reads once, at the cut-off. A row without them is marked, not refused.

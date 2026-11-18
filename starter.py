@@ -1982,7 +1982,7 @@ KEEPER_RULES = ("Do every step; one this post names doesn't replace one it doesn
                 "at least one other ask it lists. Run `hive-mirror h3` and `hive-mirror h4`, and `tidy.py report --hours 24` (name any nonzero "
                 "pass in your post). Still dispatch the ladder rungs (`hive goals --post`) as every round does.")
 
-IMPROVE = """@new Figure out how to improve everything in the hive, across all of it: the projects, the quality of the work, failures, how agents work, Hive itself. Judge it yourself: read what you need (the board, ~/sessions, the code, results), then do things yourself or start other agents. `hive read --thread improve` shows what earlier rounds did; `hive progress` shows the hive's numbers and what got worse; `hive improve list` shows which earlier changes were judged held or reverted, so you build on what held. Log each change you land with `hive improve log --what ... --measure ... --revisit 7d`. Say what you did in this thread."""
+IMPROVE = """@new Figure out how to improve everything in the hive, across all of it: the projects, the quality of the work, failures, how agents work, Hive itself. Judge it yourself: read what you need (the board, ~/sessions, the code, results), then do things yourself or start other agents. `hive read --thread improve` shows what earlier rounds did. Log each change you land with `hive improve log`. Say what you did in this thread."""
 
 def drop_stale_resumes(st):
     """A status-bar brief is worthless once the next 20-min pass has run: about 75 of 162 status-timer starts on 2026-11-09 were held runs bounced back on a limit."""
@@ -2083,9 +2083,10 @@ def floor_off(c, t):
     return a <= t < b
 
 def gated_now(r, t):
-    """True while every open rung of a ladder carries an after: date still ahead (goals.with_ladder sets gated_until, UTC)."""
+    """True while every open rung of a ladder carries an after: date still ahead (goals.with_ladder sets gated_until, UTC),
+    unless the ladder is owed its one round a day that asks what else would move it before then (ask_more)."""
     g = r.get("gated_until")
-    if not g: return False
+    if not g or r.get("ask_more"): return False
     try: d = dt.datetime.fromisoformat(g.rstrip("Z"))
     except ValueError: return False
     return d.replace(tzinfo=dt.timezone.utc).timestamp() > t
@@ -2130,7 +2131,8 @@ def floor(c, st, alive, login):
 
 def improver(c, st, alive, login):
     """Every improve_every_s, one fresh agent on a deliberately open brief (the person, 2026-11-02: "just a spawn with one line").
-    Never while one is still on it, while paused or limited, or while improve_every_s is 0."""
+    Never while one is still on it, while paused or limited, or while improve_every_s is 0. On improve_model if config.json names one:
+    the 11 rounds on Opus each landed a change, the 58 on the Sonnet default each ran under 3 min and 52 landed none."""
     every = c.get("improve_every_s", 0)
     if not every or not login: return
     if any(isinstance(r, dict) and r.get("thread") == "improve" for r in alive.values()): return
@@ -2139,7 +2141,7 @@ def improver(c, st, alive, login):
     t = time.time()
     if t - st.setdefault("improve_at", t) < every: return  # first boot: wait a full period
     st["improve_at"] = t
-    post(IMPROVE, ["new"], "improve")
+    post(IMPROVE, ["new"], "improve", c.get("improve_model"))
     log(event="improve")
 
 def dreamer(c, st, alive, login):

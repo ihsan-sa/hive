@@ -580,6 +580,7 @@ table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 .frow>.frow-grow{flex:1;min-width:12rem}   /* the field that takes the row; data-size=s stops it at a name's width */
 .frow>.frow-grow[data-size=s]{max-width:20rem}
 .frow>.frow-end{margin-left:auto;display:flex;gap:var(--s2)}   /* the row's buttons, at its end */
+.mem-list .mem-t{flex:1 1 12rem;min-width:0;overflow-wrap:anywhere}   /* a long memory line wraps; its Delete stays on screen (drive_app_long 390) */
 .fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr));gap:var(--s4);align-items:start}
 .fgrid>.check{grid-column:1/-1}
 .sec>.field{margin-top:var(--s3)}
