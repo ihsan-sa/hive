@@ -66,7 +66,7 @@ export const join = (items, sep) => items.flatMap((x, i) => (i ? [sep, x] : [x])
 export function morph(a, b) {
   if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName ||
       (a.nodeType === 1 && a.getAttribute("data-key") !== b.getAttribute("data-key"))) {
-    a.replaceWith(b); return b;
+    b = live(b); a.replaceWith(b); return b;
   }
   if (a.nodeType === 3) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return a; }
   if (a.nodeType !== 1) return a;
@@ -92,14 +92,36 @@ function morphKids(a, b) {
     if (k != null) { m = keyed.get(k) || null; if (m) keyed.delete(k); }
     else if (cur && !(cur.nodeType === 1 && cur.hasAttribute("data-key"))) m = cur;
     if (m) { if (m !== cur) a.insertBefore(m, cur); cur = morph(m, nb).nextSibling; }
-    else a.insertBefore(nb, cur);
+    else a.insertBefore(live(nb), cur);
   }
   while (cur) { const n = cur.nextSibling; cur.remove(); cur = n; }
 }
 /** Put tree into container, morphing over what is there. */
 export function mount(container, tree) {
   if (container.firstChild && !container.firstChild.nextSibling) morph(container.firstChild, tree);
-  else container.replaceChildren(tree);
+  else replaceKeep(container, tree);
+}
+/** container.replaceChildren(...nodes), but each live element a bare stand-in names (ui/pybox.js: a copy carrying _real) is moved into
+ * its stand-in's place before the old children go: with moveBefore a running frame keeps its page and state. A full redraw of the chat
+ * (views/comms.js paint, on every new post) used to leave the empty copies in place, and the person's Python box vanished (111720446fc3). */
+export function replaceKeep(container, ...nodes) {
+  const old = [...container.childNodes];
+  container.append(...nodes);
+  for (const g of container.querySelectorAll("[data-own]")) {
+    const r = g._real; if (!r || r === g) continue;
+    if (r.isConnected && g.parentNode.moveBefore) try { g.parentNode.moveBefore(r, g); } catch (e) { g.parentNode.insertBefore(r, g); }
+    else g.parentNode.insertBefore(r, g);
+    g.remove();
+  }
+  const keep = new Set(nodes);
+  for (const n of old) if (n.parentNode === container && !keep.has(n)) n.remove();
+}
+// A bare stand-in for a live element (ui/pybox.js: a copy carrying _real) is only for morph to meet and keep the real one. When a
+// new subtree goes in whole, put the live element in each stand-in's place, never the empty copy (the person, 111720: the box vanished).
+function live(n) {
+  if (n._real) return n._real;
+  if (n.nodeType === 1) for (const g of n.querySelectorAll("[data-own]")) if (g._real) g.replaceWith(g._real);
+  return n;
 }
 
 // ---- events: one delegated listener per type; handlers live on nodes as _on and survive morph ----

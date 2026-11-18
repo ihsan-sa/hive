@@ -24,7 +24,13 @@ const theme = () => { const t = document.documentElement.dataset.theme; return t
 const hex = n => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => b.toString(16).padStart(2, "0")).join("");
 export function boxEmbed(pid, id) {
   const k = pid + ":" + id, had = LIVE.get(k);
-  if (had) return had.el.isConnected ? had.el.cloneNode(false) : had.el;
+  if (had) {
+    // A redraw that couldn't match the live frame (a parent rebuilt or shifted) leaves the bare copy standing in the chat, empty:
+    // the box "vanishes" (the person, 111720: "it just disappeared after appearing"). Put the real one back in the copy's place.
+    if (!had.el.isConnected && had.ghost && had.ghost.isConnected) had.ghost.replaceWith(had.el);
+    if (!had.el.isConnected) return had.el;
+    const c = had.el.cloneNode(false); c._real = had.el; had.ghost = c; return c;
+  }
   const page = coursePage(); if (!page) return null;
   for (const [kk, v] of LIVE) if (LIVE.size > 24 && !v.el.isConnected) { v.ac.abort(); LIVE.delete(kk); }
   const key = hex(16), ac = new AbortController();
