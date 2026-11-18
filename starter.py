@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Hive starter: watch ~/board.jsonl, start a session per @mention, pace on weekly usage, log, back up ~ to git."""
-import concurrent.futures, datetime as dt, json, os, re, secrets, shutil, signal, subprocess, sys, tempfile, time, urllib.request, uuid
+import concurrent.futures, datetime as dt, json, os, re, secrets, shutil, signal, subprocess, sys, tempfile, time, urllib.request, uuid, zlib
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests load this file by path, under -I
 import spend
@@ -28,7 +28,15 @@ def log(**e):
 def load(name, default):
     try: return json.loads((STATE / name).read_text())
     except (OSError, ValueError): return default
-def save(name, v): (STATE / name).write_text(json.dumps(v, indent=1))
+fsynced = {}  # STATE file -> when save() last flushed it to disk
+def save(name, v):
+    """All or nothing: written beside the file and moved into place, so a power cut can't leave it empty or half written (one left a
+    hive's files empty, 111816060ea8). Flushed to disk at most once a minute a file, since starter.json is saved on every pass."""
+    p = STATE / name; tmp = p.with_name(f".{p.name}.tmp")
+    with tmp.open("w") as f:
+        f.write(json.dumps(v, indent=1))
+        if time.time() - fsynced.get(name, 0) >= 60: f.flush(); os.fsync(f.fileno()); fsynced[name] = time.time()
+    os.replace(tmp, p)
 
 def post(text, to=(), thread=None, model=None):
     p = {"id": dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now(), "from": "starter",
@@ -760,13 +768,29 @@ def carry_on(st, r, why, told):
                                               "reset": 0 if why == "restart" else time.time() + delays[min(n - 1, len(delays) - 1)]}
     if n == 1: told.setdefault(why, []).append(r["name"])
 
+def run_file_bad(f, e):
+    """A run file that won't read. A power cut left one empty, and every pass of a hive's starter crashed on it for 16 hours (111816060ea8).
+    One a minute old or more is moved aside to NAME.json.bad and logged; a younger one may still be being written, so it stays, and
+    True says to count its run as alive for now (no second start under its name)."""
+    try:
+        if time.time() - f.stat().st_mtime < 60: return True
+        os.replace(f, f.with_name(f.name + ".bad"))
+    except OSError: return False  # gone already: its run ended
+    log(event="run_file_bad", file=f.name, err=f"{type(e).__name__}: {e}"[:200])
+    return False
+
 def running(st=None, by_hand=False):
     """by_hand: the first pass after a deliberate stop in this boot (see stop_stamp): a run that's gone was stopped, not lost."""
     alive, told, stopped = {}, {}, []
     note_sleep()
     grace, quiet = cfg().get("done_grace_s", 900), cfg().get("stall_s", 1800)
     for f in RUN.glob("*.json"):
-        r = json.loads(f.read_text())
+        try:
+            r = json.loads(f.read_text())
+            if not isinstance(r, dict) or not all(k in r for k in ("name", "session", "pid")): raise ValueError("not a run record")
+        except (OSError, ValueError) as e:
+            if run_file_bad(f, e): alive[f.stem] = {"name": f.stem}
+            continue
         if r.get("by") == "phone":   # a call's front-desk agent (modules/phone, IM-2): the phone service starts and ends it; only a leftover is cleared here
             if run_gone(r):
                 f.unlink(missing_ok=True); log(event="end", name=r["name"], session=r["session"], pid=r["pid"], exit=None, why="phone run gone")
@@ -1126,7 +1150,7 @@ def slow_replies(posts, st, alive, t=None):
 def recent_posts(n=400):
     out = []
     try:
-        for line in BOARD.read_text().splitlines()[-n:]:
+        for line in BOARD.read_text(errors="replace").splitlines()[-n:]:  # a bad byte must not stop every pass
             try: out.append(json.loads(line))
             except ValueError: pass
     except OSError: pass
@@ -1136,7 +1160,7 @@ def posted_since(name, at):
     """Did agent `name` post to the board at or after `at`?"""
     try:
         since = dt.datetime.fromisoformat(at).timestamp()
-        for line in BOARD.read_text().splitlines()[-2000:]:
+        for line in BOARD.read_text(errors="replace").splitlines()[-2000:]:
             p = json.loads(line)
             if p.get("from") == name and dt.datetime.fromisoformat(p["at"]).timestamp() >= since: return True
     except Exception: return True  # can't tell: stay quiet
@@ -1162,7 +1186,7 @@ def woke_posts(r):
     ids = list(dict.fromkeys([r.get("post")] + list(r.get("woke") or [])))
     found = {}
     try:
-        for line in BOARD.read_text().splitlines()[-4000:]:
+        for line in BOARD.read_text(errors="replace").splitlines()[-4000:]:
             p = json.loads(line)
             if p.get("id") in ids: found[p["id"]] = p
     except Exception: pass
@@ -1833,7 +1857,8 @@ def claude_launch(c, name, sid, model, prov, login, kind, posts, prompt, system,
     if sb:  # the delivered file is mounted by inode, so it's emptied before the run rather than removed after
         sb.prepare(name)
         if not resume: (STATE / "delivered" / name).write_text("")
-        sb.ensure_broker(); sb.ready(name)
+        sb.ensure_broker()
+        if not sb.ready(name): log(event="broker_not_ready", name=name)  # the run starts anyway and fails to post: this says why, in the log a report pack carries (111816060ea8)
         cmd, env = sb.wrap(cmd, env, name)
     else: env.pop("_BOX_KEEP", None)
     return cmd, env, login, effort, arm
@@ -1939,7 +1964,9 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
         rec = {"name": name, "pid": proc.pid, "session": sid, "at": now(), "post": first["id"], "login": login,
                "thread": first.get("thread"), "from": first.get("from"), "out": str(path), "proc": proc_start(proc.pid), "boot": boot_id(), **({"resumed": True} if resume else {}), **({"woke": list(extra)} if extra else {}), **({"slept": posts} if slept else {}), **({"heir_of": heir_of["name"]} if heir_of else {}), **({"all_since": all_since} if all_since else {}), **({"model": model} if model else {}), **({"fallback": fb} if fb else {}), **({"trial": trial} if trial else {}), **({"cut": cut} if cut is not None else {}),
                "harness": prov[1].get("harness", "claude-code") if prov else "claude-code", **({"provider": prov[0]} if prov else {}), **({"effort": env["CLAUDE_EFFORT"]} if env.get("CLAUDE_EFFORT") else {}), **({"effort_trial": arm or "off"} if arm is not None else {}), **({"warm": True} if w else {})}
-        (RUN / f"{name}.json").write_text(json.dumps(rec))
+        tmp = RUN / f".{name}.json.tmp"  # on disk before it has its name: a cut left a new one empty (111816060ea8)
+        with tmp.open("w") as f: f.write(json.dumps(rec)); f.flush(); os.fsync(f.fileno())
+        os.replace(tmp, RUN / f"{name}.json")
         return rec
     if w:  # hand over: the run record first (hive reads the thread from it: a warm process has no HIVE_THREAD), then the opening message on stdin
         proc, login, env = w["proc"], w["login"], w["env"]  # and EOF, so the CLI runs this one turn and exits like `-p` (it waits for more while stdin is open)
@@ -2193,14 +2220,122 @@ def tidier(c, st, alive, login):
     except (OSError, subprocess.TimeoutExpired): pass
     log(event="tidy", n=due.stdout.count("\n- ") + 1)
 
+LOOSE, SHA = re.compile(r"[0-9a-f]{38}|[0-9a-f]{62}"), re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")  # a loose object's file name; a commit id
+# What git says when ~'s repo is damaged (lost objects, a broken index or ref), not busy or misconfigured: the backup mends it.
+BROKEN = re.compile(r"object file \S+ is empty|could not parse HEAD|bad (tree )?object HEAD|index file (smaller than expected|corrupt)"
+                    r"|bad signature 0x|unexpected diff status|loose object \S+ \(stored in .+\) is corrupt|unable to unpack \S+ header"
+                    r"|unable to read tree|reference broken")
+git_fsync, backup_seen = [], []
+
+def home_git(*args, input=None):
+    """git in ~, made to flush each object it writes to disk. Git doesn't by default: after a power cut the newest objects came back
+    empty and every backup after failed on them (111816060ea8). With a sandbox, kb is agents' to write: a repo in it has its own
+    .git/config, and git would run what that says to check its status, out here."""
+    if not git_fsync:
+        try: v = tuple(int(n) for n in re.findall(r"\d+", subprocess.run(["git", "--version"], capture_output=True, text=True).stdout)[:2])
+        except (OSError, ValueError): v = ()
+        git_fsync[:] = (["-c", "core.fsync=committed", "-c", "core.fsyncMethod=batch"] if v >= (2, 37) else ["-c", "core.fsync=committed"]
+                        if v >= (2, 36) else ["-c", "core.fsyncObjectFiles=true"])  # batch: one flush for a whole `git add`
+    sb = box()
+    cmd = ["git", *(["-c", "diff.ignoreSubmodules=all", "-c", "core.fsmonitor=false"] if sb else []), *git_fsync, *args]
+    try: return subprocess.run(cmd, cwd=HOME, capture_output=True, text=True, errors="replace", input=input,
+                               env={**os.environ, "GIT_NO_LAZY_FETCH": "1"} if sb else None)
+    except OSError as e: return subprocess.CompletedProcess(cmd, 127, "", str(e))
+
+def commit_home():
+    r = home_git("add", "-A")
+    return r if r.returncode else home_git("commit", "-qm", "auto backup")
+
 def backup(c, st):
     if time.time() - st.get("committed", 0) < c["commit_s"]: return
     st["committed"] = time.time()
-    # With a sandbox, kb is agents' to write. A repo in it has its own .git/config, and git would run what that says to check its status, out here.
-    git = "GIT_NO_LAZY_FETCH=1 git -c diff.ignoreSubmodules=all -c core.fsmonitor=false" if box() else "git"
-    r = subprocess.run(f"{git} add -A && {git} commit -qm 'auto backup'", shell=True, cwd=HOME, capture_output=True, text=True)
+    try:
+        if not backup_seen:  # the first since the starter started, as it does after a power cut: an empty object file is one the cut lost
+            backup_seen.append(1)
+            if (gd := git_dir()) and bad_objects(gd): heal_backup(st, "empty object files")
+        r = commit_home()
+        if r.returncode and "File exists" in r.stderr and stale_locks(): r = commit_home()
+        if r.returncode and BROKEN.search(r.stderr + r.stdout) and heal_backup(st, r.stderr + r.stdout): r = commit_home()
+    except Exception as e:  # mending must never stop the starter
+        return log(event="backup-failed", rc=-1, err=f"{type(e).__name__}: {e}"[:300])
     if r.returncode and "nothing to commit" not in r.stdout + r.stderr:  # nothing-to-commit exits 1 too; anything else is a real failure
         log(event="backup-failed", rc=r.returncode, err=(r.stderr or r.stdout)[-300:])
+
+def git_dir():
+    r = home_git("rev-parse", "--absolute-git-dir")
+    return Path(r.stdout.strip()) if not r.returncode and r.stdout.strip() else None
+
+def bad_objects(gd, deep=False):
+    """Loose object files with nothing readable in them: empty, or (deep, 3 s for 7000) not zlib from the first byte. Git writes each
+    to a temporary file and renames it whole, so only a power cut that kept a new file's name but not its data leaves one."""
+    out = []
+    for p in (gd / "objects").glob("[0-9a-f][0-9a-f]/*"):
+        if not LOOSE.fullmatch(p.name): continue
+        try:
+            if not p.stat().st_size: out.append(p)
+            elif deep:
+                with open(p, "rb") as f: zlib.decompressobj().decompress(f.read(1024))
+        except zlib.error: out.append(p)
+        except OSError: pass
+    return out
+
+def stale_locks():
+    """Locks git left when it was killed mid-backup or the machine went down: older than the boot or than an hour, so nothing holds
+    them, and every backup after would fail on them. True when one went."""
+    if not (gd := git_dir()): return False
+    since = time.time() - 3600
+    try: since = max(since, time.time() - time.clock_gettime(time.CLOCK_BOOTTIME) - 60)
+    except (AttributeError, OSError): pass
+    gone = []
+    for p in [*gd.glob("*.lock"), *(gd / "refs").rglob("*.lock")]:
+        try:
+            if p.stat().st_mtime < since: p.unlink(); gone.append(str(p.relative_to(gd)))
+        except OSError: pass
+    if gone: log(event="backup-unlocked", locks=gone)
+    return bool(gone)
+
+def whole_commit(sha):
+    """The commit and every one before it parse, and every tree and blob in its snapshot reads."""
+    if home_git("rev-list", "--quiet", sha).returncode: return False
+    ls = home_git("ls-tree", "-r", "-t", "-z", sha)
+    if ls.returncode: return False
+    ids = [f[2] for e in ls.stdout.split("\0") if len(f := e.split("\t", 1)[0].split()) == 3 and f[1] != "commit"]  # a commit: a submodule's
+    return not ids or " missing" not in home_git("cat-file", "--batch-check", input="\n".join(ids) + "\n").stdout
+
+def heal_backup(st, why):
+    """Mend ~'s repo after a power cut lost its newest objects (111816060ea8: every backup failed for a week after one). Empty object
+    files go, HEAD goes back to the newest commit in its reflog that reads whole, the index is rebuilt from that, and reflog entries
+    for what was lost go, or gc would fail on them. Nothing that reads is touched, and with no whole commit to go back to it only
+    logs. At most once an hour. True when the backup is worth trying again."""
+    if time.time() - st.get("backup_healed", 0) < 3600 or not (gd := git_dir()): return False
+    st["backup_healed"] = time.time()
+    gone = bad_objects(gd, deep=True)
+    for p in gone:  # an empty one holds nothing, a garbled one is kept aside: either way git writes the object again when it next adds it
+        try:
+            if p.stat().st_size: (keep := gd / "corrupt-objects").mkdir(exist_ok=True); p.rename(keep / (p.parent.name + p.name))
+            else: p.unlink()
+        except OSError: pass
+    head = home_git("rev-parse", "-q", "--verify", "HEAD").stdout.strip()
+    ids = [head]
+    for f in [gd / "logs/HEAD", *sorted((gd / "logs/refs/heads").rglob("*"))]:
+        try: lines = f.read_text(errors="replace").splitlines()
+        except OSError: continue
+        for ln in reversed(lines): ids += ln.split(" ", 2)[1::-1] if ln.count(" ") >= 2 else []  # newest first: each entry's new, then old
+    tried = [s for s in dict.fromkeys(ids) if SHA.fullmatch(s) and s.strip("0")][:30]
+    if not (good := next((s for s in tried if whole_commit(s)), None)):
+        if st.get("backup_broken") != head: st["backup_broken"] = head; log(event="backup-broken", why=why[-200:], lost=len(gone), tried=len(tried))
+        return bool(gone)
+    if good != head:
+        r = home_git("update-ref", "-m", "auto backup: back to the newest commit that reads whole", "HEAD", good)
+        try: ref = (gd / "HEAD").read_text(errors="replace").strip().removeprefix("ref:").strip()  # git won't name a branch it can't read
+        except OSError: ref = ""
+        if r.returncode and ref.startswith("refs/heads/") and ".." not in ref:  # the branch file itself was lost: nor will it update it
+            (gd / ref).unlink(missing_ok=True); home_git("update-ref", "-m", "auto backup: back to the newest commit that reads whole", ref, good)
+    (gd / "index").unlink(missing_ok=True)
+    home_git("read-tree", good)  # an entry for a lost object would go into the next commit as it is: the index again, from what reads
+    home_git("reflog", "expire", "--stale-fix", "--expire=never", "--expire-unreachable=never", "--all")
+    log(event="backup-healed", why=why[-200:], lost=len(gone), head=head[:12], to=good[:12])
+    return True
 
 def hook_inbox(c):
     """Make sure each login's settings.json runs inbox.py after every tool call (one that fails too: a command stopped for the
@@ -2316,6 +2451,20 @@ def tier_of(model):
     if not m: return "claude"
     return "codex (no extra cost)" if m[1] == "codex" else "kimi (subscription, no extra cost)" if m[1] == "kimi" else "free" if m[2].endswith(":free") else "paid, real money"
 
+PAUSE_TELL = float(os.environ.get("HIVE_PAUSE_TELL") or 300)  # a pause is announced once it has lasted this long
+def pause_notice(c, signed_in):
+    """What the person is told when no login can take work: true for this install's fallback (config.json fallback and providers), not always Codex."""
+    if not signed_in:
+        return "No Claude account is signed in yet, so only your own asks start, on another provider if one is set up. Sign in under Settings > Accounts."
+    def names(chain): return sorted({pv[0] for m in chain if (pv := provider_of(c, m)) and not pv[1].get("paused")})
+    fb = c.get("fallback") or {}
+    own = names(agents_chain(c))
+    person = names(fb.get("chain", [])) if "person" in fb.get("for", ["person"]) or "*" in fb.get("for", []) else []
+    head = "Every login is paused or past its stop line; "
+    if own: return head + f"work carries on on the fallback ({', '.join(own)}), and your own asks also on a login that isn't paused."
+    if person: return head + f"the hive's own work waits for a login, and your own asks run on {', '.join(person)}."
+    return head + "no fallback provider is set up on this install, so nothing starts until a login has room again."
+
 def fallback_model(c, st, chain, cache):
     """The first model in chain (provider:model strings, config.json fallback) whose provider has room now, else None.
     A provider module may also say no for one model (model_room: OpenRouter free models' daily request count)."""
@@ -2393,6 +2542,64 @@ def nap(secs):
         except OSError: pass
 
 
+def first_state():
+    """starter.json, or where to begin without it. Missing (a new install): the board's start. There but unreadable (a power cut
+    mid-save, 111816060ea8): moved aside to starter.json.bad and the board read from its end, since from its start every agent ever
+    called would start again; the person is told that a post still waiting for its agent may need sending again."""
+    p = STATE / "starter.json"
+    try: st = json.loads(p.read_text())
+    except FileNotFoundError: return {"offset": 0, "pending": {}}
+    except (OSError, ValueError) as e: err = f"{type(e).__name__}: {e}"[:200]
+    else:
+        if isinstance(st, dict) and isinstance(st.get("offset"), int) and isinstance(st.setdefault("pending", {}), dict): return st
+        err = "not the starter's state"
+    try: os.replace(p, p.with_name("starter.json.bad"))
+    except OSError: pass
+    size = BOARD.stat().st_size if BOARD.exists() else 0
+    log(event="state_unreadable", err=err, offset=size)
+    post("The starter's saved state was damaged, probably by a power cut, so it went on from the newest post. A post that was still "
+         "waiting for its agent may have been dropped: if one of yours got no answer, send it again.", ["person"])
+    return {"offset": size, "pending": {}}
+
+CRASHED = "crashed.json"  # the starter's crash run: {sig, since, n, logged, told}
+up_since = [time.time()]  # when this process started, for crash_mended
+
+def crashed(e):
+    """The starter stopped on an error. A hive's starter crash-looped for 16 hours on Nov 10 and logged only a symptom (111816060ea8):
+    now the error and where it was go to the log, once an hour for the same one, and from its third time in a row the person is told,
+    once a day, since no agent starts until it's mended. Never raises: it runs on the way out."""
+    try:
+        import traceback
+        tb = traceback.extract_tb(e.__traceback__)
+        tb = [fr for fr in tb if Path(fr.filename).resolve().parent == Path(__file__).resolve().parent] or tb  # the line of ours, not json's
+        where = f"{Path(tb[-1].filename).name}:{tb[-1].lineno}" if tb else "?"
+        sig, t = f"{type(e).__name__} at {where}", time.time()
+        c = load(CRASHED, {})
+        if not isinstance(c, dict) or c.get("sig") != sig: c = {"sig": sig, "since": t, "n": 0, "logged": 0, "told": 0}
+        c["n"] = c.get("n", 0) + 1
+        if t - c.get("logged", 0) >= 3600:
+            c["logged"] = t
+            log(event="starter_crash", err=f"{type(e).__name__}: {e}"[:300], where=where, n=c["n"],
+                tb="".join(traceback.format_exception(type(e), e, e.__traceback__))[-2000:])
+        if c["n"] >= 3 and t - c.get("told", 0) >= 86400:
+            c["told"] = t
+            post(f"The starter keeps stopping on an error ({sig}), so no agent can start. Running `hive update` may mend it; "
+                 "the error is in the log as starter_crash.", ["person"])
+        save(CRASHED, c)
+    except Exception: pass
+
+def crash_mended():
+    """Ten minutes up after a crash run: it's over. Logged, and the person told if they were told of it. Looked at once a process."""
+    if up_since[0] is None or time.time() - up_since[0] < 600: return
+    up_since[0] = None
+    if not (STATE / CRASHED).exists(): return
+    if not isinstance(c := load(CRASHED, {}), dict): c = {}
+    try:
+        (STATE / CRASHED).unlink(missing_ok=True)
+        log(event="starter_recovered", n=c.get("n"), since=c.get("since"), sig=c.get("sig"))
+        if c.get("told"): post("The starter runs again, so agents start as before.", ["person"])
+    except OSError: pass
+
 def main():
     for d in (RUN, STATE, HOME / "sessions"): d.mkdir(exist_ok=True)
     # One starter per home: two would both read the board and start every agent twice. A second one waits here and takes over
@@ -2413,7 +2620,7 @@ def main():
     wire_deny(cfg())
     wire_precompact(cfg())
     wire_cite(cfg())
-    st = load("starter.json", {"offset": 0, "pending": {}})
+    st = first_state()
     efforts[0] = st.setdefault("efforts", {})
     u, paused, pcache = {}, False, {}
     while True:
@@ -2421,6 +2628,7 @@ def main():
         size = BOARD.stat().st_size if BOARD.exists() else 0
         if size < st["offset"]:  # board was rewritten (a git stash under ~ did it twice on 2026-11-04): don't replay it, but say so in the log
             log(event="board_shrunk", was=st["offset"], size=size); st["offset"] = size
+            save("starter.json", st)  # kept now, so a restart (or a crash later in this pass) does not log the same cut again and again: 276 of them in one hive, thread 111816060ea8
         if size > st["offset"]:
             with BOARD.open("rb") as f:
                 f.seek(st["offset"]); chunk = f.read()
@@ -2514,12 +2722,12 @@ def main():
             st["paused_logins"] = off; log(event="logins_paused", logins=off)
         if (pick_login(c, room) is None) != paused:
             paused = not paused; st["all_paused"] = paused
-            signed_in = any((Path(l).expanduser() / ".credentials.json").exists() for l in c["logins"])
-            post(("Every login is paused or past its stop line; work carries on on the fallback (Codex), and your own asks also on a login that isn't paused."
-                  if signed_in else "No Claude account is signed in yet, so only your own asks start, on another provider if one is set up."
-                  " Sign in under Settings > Accounts.")
-                 if paused else "Usage has room again; starting sessions.", ["person"])
+            if paused: st["pause_at"], st["pause_told"] = time.time(), False  # told below once it has lasted PAUSE_TELL s, so a flaky pause that flips on and off says nothing
+            elif st.pop("pause_told", False): post("Usage has room again; starting sessions.", ["person"])  # "room again" only for a pause that was told
             log(event="paused" if paused else "resumed", usage=u)
+        if paused and not st.get("pause_told") and time.time() - st.get("pause_at", 0) >= PAUSE_TELL:
+            st["pause_told"] = True
+            post(pause_notice(c, any((Path(l).expanduser() / ".credentials.json").exists() for l in c["logins"])), ["person"])
         login = pick_login(c, room, st.get("limits"))  # None: every login is paused, past the stop line or held on a limit
         hold = box_holds() or launch_held(st) or daily_cap_holds(c, st)
         for n, r in ([] if hold else list(st.get("resume", {}).items())):  # a provider run held on its limit, asked since for a Claude model: its session can't move, so the post wakes it as a new run
@@ -2607,8 +2815,10 @@ def main():
                 tidier(c, st, alive, login)
             warm_boot(c, st, login)
         save("starter.json", st)
+        crash_mended()
         backup(c, st)
         nap(c["poll_s"])
 
 if __name__ == "__main__":
-    main()
+    try: main()
+    except Exception as e: crashed(e); raise

@@ -563,7 +563,8 @@ def cmd_who(a):
     runs = sorted(RUN.glob("*.json"))
     if not runs: print("No agents are running.")
     for f in runs:
-        r = json.loads(f.read_text())
+        try: r = json.loads(f.read_text()); r["name"], r["pid"]
+        except (OSError, ValueError, TypeError, KeyError): print(f"{f.name}: a run file that won't read (the starter moves it aside within a minute)"); continue
         try: os.kill(r["pid"], 0); alive = "running"
         except OSError: alive = "gone"
         print(f"@{r['name']:<16} {alive:<8} since {r['at'][:19]}  woken by {r['post']}{'  in ' + r['thread'] if r.get('thread') else ''}  login {login_name(c, r['login'])}  model {r.get('model', 'default')}")

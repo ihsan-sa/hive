@@ -496,6 +496,38 @@ def _pack_text(b):
     except UnicodeDecodeError: return None
     return scrub(t).encode("utf-8")
 
+PACK_TAIL = 256 << 10   # the broker log's tail, and the most of the pause history, that go in the pack
+UPDATE_KEYS = ("tag", "newest", "checked", "at", "failed", "error")   # update.json fields kept; anything else in it stays out
+
+def _tail(path, cap):
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2); size = f.tell(); f.seek(max(0, size - cap)); b = f.read()
+    except OSError: return None
+    t = b.decode("utf-8", "replace")
+    return t[t.index("\n") + 1:] if size > cap and "\n" in t else t
+
+def _pack_state(sd):
+    """Small diagnostic files from the install's state folder (~/.hive), as {name in the zip: text}: the sandbox broker's log tail, the pause
+    state (paused logins, the flips with their times) and which release is installed. Fixed fields and tails only, so no credential
+    or token can ride along; the caller scrubs the text as well."""
+    out = {}
+    t = _tail(os.path.join(sd, "broker.log"), PACK_TAIL)
+    if t is not None: out["state/broker.log.tail"] = t
+    def js(name):
+        try: return json.load(open(os.path.join(sd, name)))
+        except (OSError, ValueError): return None
+    paused = js("paused.json"); st = js("starter.json")
+    parts = ["paused logins (set by hand or the dashboard): %s" % json.dumps(paused if isinstance(paused, list) else None)]
+    if isinstance(st, dict):
+        parts.append("starter: all_paused=%s paused_logins=%s" % (json.dumps(st.get("all_paused")), json.dumps(st.get("paused_logins"))))
+    flips = _tail(os.path.join(sd, "pauses.jsonl"), 32 << 10)
+    parts.append("pause flips, oldest first (at, paused, why, by):\n" + (flips or "none recorded"))
+    out["state/pause.txt"] = "\n".join(parts) + "\n"
+    u = js("update.json")
+    if isinstance(u, dict): out["state/update.json"] = json.dumps({k: u[k] for k in UPDATE_KEYS if k in u}, indent=1) + "\n"
+    return out
+
 def pack(yes=False):
     """Everything as one zip: the whole board and log, every project folder, post attachments and the kb, text files
     scrubbed. Left out: .git and build caches, key and .env files, any file over 50 MB, anything past 100 MB in all.
@@ -531,6 +563,8 @@ def pack(yes=False):
                         arc = os.path.join(d, os.path.relpath(p, top))
                         if PACK_SECRET.match(fn): skipped.append(arc); continue
                         add(z, p, arc)
+        for arc, text in _pack_state(os.path.join(hm, ".hive")).items():
+            z.writestr(arc, scrub(text).encode("utf-8")); n += 1
         z.writestr("PACK.txt", "Hive %s, %d files, %d bytes before zipping.\nLeft out (too big, past the 100 MB total, or looked like a key):\n%s\n"
                    % (installed_version(), n, total, "\n".join(skipped) or "nothing"))
     size = os.path.getsize(name)
