@@ -828,10 +828,10 @@ def kb_numbers(t0, t1):
     # kb_finds counts every search, tests and bursts too (2026-11-15: 407, of which 342 were one tester's replay); kb_finds_counted is what kb_find_read_pct divides by (63).
     return {"kb_finds": x["finds"], "kb_finds_counted": x["finds_logged"], "kb_find_read_pct": x["find_read_pct"], "kb_dead_find_pct": x["find_dead_pct"], "kb_recall_injections": x["recalls"], "kb_recall_opened_pct": x["recall_opened_pct"], "kb_misses_explicit": x["misses"], "kb_miss_candidates": x["candidates"]}
 
-LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "runs_reaped_repeat", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d", "outcomes_silent", "outcomes_nothing", "outcomes_intent_only", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "person_asks", "summary_flagged", "needs_gap"}
+LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "runs_reaped_repeat", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d", "artifacts_stale", "outcomes_silent", "outcomes_nothing", "outcomes_intent_only", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "person_asks", "summary_flagged", "needs_gap"}
 NEUTRAL = {"decided_lines", "reversals_per_100", "kb_finds", "kb_finds_counted", "kb_find_read_pct", "kb_dead_find_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "model_steps_up", "model_steps_down", "runs", "runs_woken", "person_replies", "keeper_rounds", "improve_rounds", "core_commits", "rsi_rounds", "reverted", "spend_usd", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "outcomes_graded", "followup_misses"}  # activity and cost: context, not a score (the person: don't ration work for pace)
 HEADLINE = ["kb_finds", "kb_finds_counted", "kb_find_read_pct", "kb_dead_find_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "runs", "model_steps_up", "model_steps_down", "fail_pct", "runs_reaped", "runs_reaped_signalled", "runs_reaped_repeat", "runs_woken", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_landed", "improvements_judged", "improvements_sized", "reviews_independent", "held", "reverted",
-            "improvements_overdue", "reviews_independent", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "decided_lines", "reversals_per_100", "person_asks", "summary_flagged", "needs_gap", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "asks_orphaned", "leftovers_orphaned", "asks_stale", "outcomes_intent_only", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "followup_closed_pct", "followup_misses", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
+            "improvements_overdue", "reviews_independent", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "decided_lines", "reversals_per_100", "person_asks", "summary_flagged", "needs_gap", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "asks_orphaned", "leftovers_orphaned", "asks_stale", "outcomes_intent_only", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "followup_closed_pct", "followup_misses", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "artifacts_stale", "spend_usd"]
 
 def scoreboard(since):
     log, posts, items = jsonl(LOG), jsonl(BOARD), ledger()
@@ -844,6 +844,7 @@ def scoreboard(since):
     prev["spend_usd"] = None if both is None or cur_cost is None else round(both - cur_cost, 2)
     od = due_groups(items)
     fq = focus_quiet()
+    cur["artifacts_stale"] = fresh_count()  # core/fresh.py: downstream artifacts older than their source
     cur.update(stalled_threads=stalled_now(), improvements_overdue=len(od), overdue_ids=[e["id"] for g in od for e in g],
                focus_quiet=None if fq is None else len(fq), focus_quiet_threads=fq or [],
                projects_unmeasured=len(projects_unmeasured()), projects_unmeasured_names=projects_unmeasured(), at=iso(t1), since=since, **summary_numbers(), **asks_numbers(iso(t1)))
@@ -852,6 +853,12 @@ def scoreboard(since):
     for k in ("stalled_threads", "improvements_overdue", "focus_quiet", "projects_unmeasured", "person_asks", "summary_flagged", "needs_gap", "asks_open", "leftovers_open", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d"):
         if older and k in older: prev[k] = older[k]
     return cur, prev
+
+def fresh_count():
+    try:
+        spec = importlib.util.spec_from_file_location("fresh", CORE / "fresh.py"); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+        return m.stale_count()
+    except Exception: return None
 
 def asks_numbers(t1):
     """From the asks register (core/asks.py): open and owned, orphaned (nobody moving them for 6 h), unowned (open with no owner for 6 h, busy thread or not), oldest open in days."""
@@ -913,6 +920,7 @@ def text(cur, prev):
     if cur.get("summary_flagged"): lines.append(f"Where things stand has {cur['summary_flagged']} stale, duplicate or wrong-owner items (`hive summary lint`)")
     if cur.get("needs_gap"): lines.append(f"Threads open on the person that Where things stand lacks: {cur['needs_gap']} (`hive summary lint`, count finding)")
     if cur.get("focus_quiet"): lines.append(f"Focuses of the person with nobody on them for over 4 h: {cur['focus_quiet']} ({', '.join(cur.get('focus_quiet_threads', []))}; `hive goals --idle`, start a fresh agent on each)")
+    if cur.get("artifacts_stale"): lines.append(f"Stale artifacts: {cur['artifacts_stale']} (`hive fresh` names them)")
     if cur.get("projects_unmeasured_names"): lines.append(f"Projects whose goals.md names no measure: {', '.join(cur['projects_unmeasured_names'])}")
     w = worst(cur, prev)
     if w: lines.append("Got worse, worst first: " + ", ".join(f"{k} {b}->{a}" for _, k, b, a in w[:4]))

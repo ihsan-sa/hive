@@ -220,7 +220,10 @@ def goals(t=None):
         s = dict(st.get(best, {})); s["running"] = set().union(*(st.get(k, {}).get("running", set()) for k in cands))
         row = {"kind": "project", "name": g["project"], "goal": g["goal"], "thread": best, "measure": g["measure"], "edited_d": days(g["edited"], t), **state_row(s, cands, open_asks, t)}
         built = [d for d in (days(st.get(k, {}).get("build_at"), t) for k in cands) if d is not None]
-        if not row["running"] and built and min(built) <= BUILD_D:   # built within a day and no ladder: idle now, and the round writes it a ladder
+        # "no ladder" has to be checked, not assumed: a ladder a focus row carries, one of its own with rungs left, or topic ladders all count (ae49e, 2026-11-18:
+        # five projects with a ladder were listed to the keeper as needing one, and hive-app's six open rungs dropped off its row for a day after every build post)
+        has_ladder = g["project"] in taken or (g["ladder"] and g["ladder"]["left"]) or g.get("ladders")
+        if not row["running"] and built and min(built) <= BUILD_D and not has_ladder:   # built within a day and no ladder: idle now, and the round writes it a ladder
             row.update(idle=True, needs_ladder=True, ladder=False, goals_path=g["path"], rung=None, last_agent_d=min(built))
         if g["ladder"] and g["ladder"]["left"] and g["project"] not in taken and not row.get("needs_ladder"):
             # a `## Ladder` whose heading names no thread lives in the project's own thread: without this the row had no ladder, so the floor
@@ -476,8 +479,9 @@ def main():
         for th, v in res.items(): print(f"{th}: {v[0]} work, {v[1]} wait, {v[2]} silent")
         print(f"all: {tot[0]} of {n} rounds did work ({100 * tot[0] // n if n else 0}%), {tot[1]} wait, {tot[2]} silent, over {a.rounds:g} days"); return
     if a.ladder_threads:
+        seen = set()   # a thread once: two rows can share one (a focus and a project whose latest thread it is), and two lines were two rounds within seconds
         for r in g["rows"]:
-            if r["idle"] and (r["kind"] == "focus" or r.get("ladder") or r.get("needs_ladder")): print(r["thread"])
+            if r["idle"] and (r["kind"] == "focus" or r.get("ladder") or r.get("needs_ladder")) and r["thread"] not in seen: seen.add(r["thread"]); print(r["thread"])
         return
     if a.brief or a.post:
         th = a.post or a.brief

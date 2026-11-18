@@ -1499,6 +1499,7 @@ p = sp.add_parser("step", help="hive step ask --why \"...\" --script PATH | stat
 p.add_argument("do", choices=["ask", "status", "list", "approve", "deny", "verdict"]); p.add_argument("id_or_script", nargs="?"); p.add_argument("verdict", nargs="?")
 p.add_argument("--why", default=""); p.add_argument("--script"); p.set_defaults(f=cmd_step)
 sp.add_parser("improve", help="hive improve log --what ... --measure ... --check CMD --want up|down [--kind fix|behaviour --control CMD] (a script judges it), or --no-check WHY | attach ID --check CMD --want up|down (late: never a held) | autojudge | num FIELD | judge ID held|reverted|inconclusive --why ... | reading ID --why ... (read a number, changed nothing: not owed a verdict) | list [--due] | show ID: the ledger of changes meant to make the hive better, each judged later by someone else (core/progress.py)")
+sp.add_parser("fresh", help="hive fresh [--json] [--brief]: the freshness table (core/fresh.py): one row per downstream artifact with its source, failing when the source changed after it; exit 1 if any row fails")
 sp.add_parser("steer", help="hive steer [--brief|--first|--log]: the few numbers the hive steers by, first one first (the RSI lab's index; hive progress heads with its --brief)")
 sp.add_parser("progress", help="hive progress [--since 1d] [--snapshot] [--post] [--json]: the hive's numbers for the window against the window before, with what got worse (core/progress.py)")
 def cmd_outcomes(a):
@@ -1525,6 +1526,7 @@ if sys.argv[1:2] == ["away"]: cmd_away(argparse.Namespace(rest=sys.argv[2:]))
 if sys.argv[1:2] == ["continue"]: cmd_continue(argparse.Namespace(rest=sys.argv[2:]))
 if sys.argv[1:2] == ["goals"]: cmd_goals(argparse.Namespace(rest=sys.argv[2:]))
 if sys.argv[1:2] == ["improve"]: cmd_progress(argparse.Namespace(rest=sys.argv[2:]))  # their own flags: handed over whole
+if sys.argv[1:2] == ["fresh"]: os.execv(sys.executable, [sys.executable, "-I", str(CORE / "fresh.py")] + sys.argv[2:])
 if sys.argv[1:2] == ["progress"]: cmd_progress(argparse.Namespace(rest=["progress"] + sys.argv[2:]))
 if sys.argv[1:2] == ["steer"]: cmd_progress(argparse.Namespace(rest=["steer", "--"] + sys.argv[2:]))  # the lab's index, flags handed over whole
 def cmd_help(a):

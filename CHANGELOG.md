@@ -4,6 +4,15 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Smaller fixes, 2026-11-18
+
+- `hive fresh` lists each downstream doc or copy with its source and fails when the source changed after it.
+- A project that already has a list of next steps is no longer treated as having none right after a build, so its open steps keep getting rounds, and a conversation gets one round at a time, not two.
+- The improver can run on a model of its own, set in the config, and its brief is one short line again.
+- On a Mac, the install no longer sits silent after "The sandbox works" while voice calls build in the background.
+- A focus whose remaining steps all wait on a date now gets one round a day that asks what else would move it, instead of standing still until the date.
+- A focus whose last post came from a timer script is woken again: its wake-up was addressed to the script name, which starts nobody.
+
 ## Why a board's Wi-Fi link dropped
 
 The remote bench's log for a board that dials in over Wi-Fi said only "the link dropped". It now says why: the board closed the link (with its close code), the socket ended with no close, nothing came from the board for 90 s, or a socket error (with its errno). When a board dials in again while the bench still holds its old link, the log says so and how long ago the old link was last heard from.

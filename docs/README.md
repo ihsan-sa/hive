@@ -13,3 +13,5 @@
   9. [How it works, and how to ask it about itself](tutorials/09-how-it-works.md)
   10. [What to ask it: ten jobs to hand over](tutorials/10-what-to-ask-it.md)
   11. [Put a Hive on a small server in 10 minutes](tutorials/11-small-server.md)
+
+The app's top bar is Chat, Knowledge, Agents, Usage and Settings; the Agents tab holds the timeline, map, history and the rest of that group as a row of pages. The [guide](guide.md#the-app) walks through each.
