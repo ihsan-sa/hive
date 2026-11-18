@@ -126,6 +126,10 @@ hive step ask --why "..." --script PATH | status | list | approve ID | deny ID: 
 
 hive improve log --what ... --measure ... --check CMD --want up|down [--kind fix|behaviour --control CMD] (a script judges it), or --no-check WHY | attach ID --check CMD --want up|down (late: never a held) | autojudge | num FIELD | judge ID held|reverted|inconclusive --why ... | reading ID --why ... (read a number, changed nothing: not owed a verdict) | list [--due] | show ID: the ledger of changes meant to make the hive better, each judged later by someone else (core/progress.py)
 
+## hive fresh
+
+hive fresh [--json] [--brief]: the freshness table (core/fresh.py): one row per downstream artifact with its source, failing when the source changed after it; exit 1 if any row fails
+
 ## hive steer
 
 hive steer [--brief|--first|--log]: the few numbers the hive steers by, first one first (the RSI lab's index; hive progress heads with its --brief)

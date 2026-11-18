@@ -217,6 +217,7 @@ class Hunt:
     """A list to a target. It keeps trying other angles and other organisations until it reaches the target or truly runs out, and it never pads: a row is in the list only if a saved page backs it.
     Running again on the same case picks up where the last run stopped; pages and searches are reused."""
     def __init__(self, spec, case, log=print):
+        spec = {k: v for k, v in spec.items() if v is not None or k not in ("target", "per_org", "workers", "max_seconds", "read_per_search", "stale_days")}  # a null number means the default
         self.s, self.case, self.log = spec, case, log
         for k in ("target", "per_org", "workers", "max_seconds", "read_per_search", "stale_days", "max_age_years"):
             v = spec.get(k)

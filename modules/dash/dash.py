@@ -2974,6 +2974,13 @@ def session_value(web):
     return hmac.new(str(web["secret"]).encode(), b"session", hashlib.sha256).hexdigest()
 
 
+def proof_value(web, port, nonce):
+    """What the desktop app asks for before it sends the key (GET /api/proof?n=...): shows that this server holds the secret without
+    anyone sending it. Tied to the port, so an answer passed on from a Hive on another port doesn't fit, and to the word "proof",
+    so it can never be the session cookie's value."""
+    return hmac.new(str(web["secret"]).encode(), f"proof:{port}:{nonce}".encode(), hashlib.sha256).hexdigest()
+
+
 def cookie_name(port): return f"app_session_{port}"  # cookies ignore ports, so two installs on one machine mustn't share a name
 
 
@@ -6397,6 +6404,10 @@ def serve(port):
             display = bool(shown) and shown[1] in DISPLAY_PAGES
             page = u.path in ("/", "/index.html", "/login", "/old", "/new", "/new/", "/call", "/call/") or display
             if not self.admit(u.path, page=page): return
+            if u.path == "/api/proof":   # before sign-in on purpose: the asker has not sent the key yet, and learns nothing it could use as one
+                n, w = (q.get("n") or [""])[0], web_cfg()
+                if self.route != "local" or not w or not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", n): return self.send_error(404)
+                return self.send(proof_value(w, port, n).encode(), "text/plain; charset=utf-8")
             m = APP_FILES.fullmatch(u.path)
             if m:
                 f = UI_DIR / ("icons/hive.ico" if m[1] == "favicon.ico" else m[1])   # /favicon.ico: browsers ask for it on pages without an icon link (sign-in, raw files); E56c
