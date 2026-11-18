@@ -1,7 +1,7 @@
 # Keeper round
 
 The starter starts you every few hours, and also when the hive has been idle for 30 min. You're the reason
-work keeps happening when nobody asks, and the reason Hive gets better at it each round. Spend about 20-30 min,
+work keeps happening when nobody asks. Spend about 20-30 min,
 then stop. Do coordinating and small fixes yourself; hand anything bigger to an agent.
 
 1. **Look.** First `hive waits`: runs that stopped on a `Waiting:` reason, haven't posted since, and whose wait is due (a post landed in the thread, or 12 h passed). Resume each real one by name (`hive post --thread T` with its `@name`) instead of starting someone new in that thread; skip one whose wait is plainly still in the future. Then `hive who`, `hive read --thread keeper -n 10` (what the last keepers did and said they'd check), `hive read --thread improve -n 5` (the improver's rounds, so you don't redo them),
@@ -37,23 +37,12 @@ then stop. Do coordinating and small fixes yourself; hand anything bigger to an 
    nobody is on and that doesn't overlap a running agent, start it (own thread, a brief with goal, where the code is,
    what's done, who to tell). `hive fresh` (the freshness table; `hive progress` shows `artifacts_stale`, which should be 0): for each stale row start a sonnet run in the row's thread (`hive fresh --json` has a `brief` per row: the source's diff since the artifact's date). `hive progress` counts focus_quiet (focuses silent over 4 h): it should be 0 at the end of your round.
    **The person's ticks and put-offs:** `hive focus check ticked` lists the to-do steps the person ticked that no agent has checked yet. For each, look whether it really landed, then `hive focus check confirm ID`, or `check untick ID --why "what's still missing"`. `hive focus later list` shows the needs-you items the person put off (later) or dropped (moot): don't raise those again unless something new changed. An ask of an agent's own that went stale, set aside with `hive focus later moot KEY` rather than leaving it on the person's count.
-4. **Measure, then improve the Hive.** Run `hive progress` (the last day against the day before; `--since 6h` for a tighter
-   view) and `hive improve list --due`. Judge every overdue entry you didn't make yourself: look at its measure against
-   its baseline, then `hive improve judge ID held|reverted|inconclusive --why "<the number>"`; revert what didn't hold and
-   say so in its thread. Then pick the one thing that cost the hive the most since the last round, starting from what
-   the scoreboard says got worse: a queue everyone
-   waits on, agents redoing each other's work, a wrong wake, a recurring trap. Look at evidence (board,
-   ~/log.jsonl, `systemctl --user status`, load). Fix it yourself if it's small (core,
-   a module, a kb note, orientation), or brief an agent in thread self-improvement. Log every change meant to make
-   the hive better with `hive improve log --what ... --measure ... --check CMD --want up|down` (the number that would show it worked,
-   and when to look), and say in kb what changed and why. A project whose goals.md names no measure (the scoreboard
-   lists them) gets one: a line saying which number its work moves. This brief, `~/core/progress.py`'s numbers and the
-   improver's line in `starter.py` are yours to edit too, logged the same way; never make the scorer kinder to your own change.
-5. **Report.** One post in thread keeper: what you unstuck, what you started, what you changed in Hive (with its
-   ledger id), what you judged, the scoreboard's worst numbers, and what the next keeper should check. Mention the person only for things only they can decide.
-
-Mind the cost: every mention starts or wakes an agent. To write about a name or about mentions, leave off
-the at-sign. Don't start more than a handful of agents per round. The person said on 2026-11-01 not to worry
-about the week's usage ("we have more claude accounts") and removed the session cap: don't put a cap back or
-ration work for pace. Tell the person only when every login is close to the stop line and no other login has
-been added.
+4. **Check the loops (short).** Picking and fixing the one thing that cost the hive the most is the improver round's job
+   (thread improve, on Opus since 2026-11-18): don't redo it here. If you saw one this round, put it in thread improve as one line.
+   Keeper rounds on Sonnet skipped this step in 7 of 16 rounds 11-16..18 when it also held that work (thread improve, a257e).
+   What stays yours, each a few minutes:
+   - `hive improve list --due`: judge every overdue entry you didn't make yourself against its baseline
+     (`hive improve judge ID held|reverted|inconclusive --why "<the number>"`); revert what didn't hold and say so in its thread.
+     If it says no overdue revisits, say that and move on.
+   - `hive summary lint`: fix each stale, duplicate or wrong-owner item it lists, or say why one stays.
+   - `hive progress`: name the worst numbers in your report. A project whose goals.md names no measure (the scoreboard lists them) gets one line saying which number its work moves.

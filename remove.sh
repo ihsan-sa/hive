@@ -24,7 +24,7 @@ bwrap_note() {
 # The app-menu icon get.sh made, in the account that ran it (yours). Only the one it made.
 launcher_gone() {
   D="${XDG_DATA_HOME:-$HOME/.local/share}"
-  if grep -qs '^# made by the Hive install' "$D/applications/hive.desktop"; then rm -f "$D/applications/hive.desktop" "$D/icons/hicolor/512x512/apps/hive.png"; fi
+  if grep -qs '^# made by the Hive install' "$D/applications/hive.desktop"; then rm -f "$D/applications/hive.desktop" "$D/icons/hicolor/512x512/apps/hive.png"; grep -qs "^# made by the Hive install" "$D/hive-launch.sh" && rm -f "$D/hive-launch.sh"; fi
 }
 
 # What can stay: your projects, notes (the knowledge base) and board (your chats, with their files). Each stays unless you say to delete it.

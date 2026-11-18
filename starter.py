@@ -923,7 +923,15 @@ def guarded(fn, *a):
 
 def continuations(st, c, alive):
     """Runs that ended clean can write an intent (a run that ended on `Next:` in a thread with `Continue: on`), and intents become one wake each."""
-    while ended_clean: guarded("on_run_end", ended_clean.pop(0), c, st, alive)
+    while ended_clean:
+        r = ended_clean.pop(0)
+        if not cont: continue
+        try: got = cont.on_run_end(r, c, st, alive)
+        except Exception as e:  # an error is not "nothing carries the work on": the judge is not asked, so it cannot wake a run beside an intent already written
+            log(event="continue_error", fn="on_run_end", why=f"{type(e).__name__}: {e}"[:300]); continue
+        if not got and guarded("judge_trial"):  # nothing carries the work on: the stop judge (judge.py) is asked, detached, while its trial is on
+            n = str(r.get("name") or "")
+            guarded("ask_judge", r, c, st, alive, bool(tier_held(c, r.get("thread"))), is_warden(n) or bool(FREE_AGENT.fullmatch(n)))
     guarded("enqueue", st, c, alive, stays_on)
 
 def drop_killed(st):
@@ -1980,7 +1988,8 @@ def keeper(c, st, alive, login):
 KEEPER_RULES = ("Do every step; one this post names doesn't replace one it doesn't. Never leave the asks list as you found it: every "
                 "set-aside ask `hive asks check` lists gets a new register line (reopen, hold, person, done or drop, with --why), and so does "
                 "at least one other ask it lists. Run `hive-mirror h3` and `hive-mirror h4`, and `tidy.py report --hours 24` (name any nonzero "
-                "pass in your post). Still dispatch the ladder rungs (`hive goals --post`) as every round does.")
+                "pass in your post). Still dispatch the ladder rungs (`hive goals --post`) as every round does. Step 4 is short now: "
+                "`hive improve list --due`, `hive summary lint` and the watchdog count, each named in your post.")
 
 IMPROVE = """@new Figure out how to improve everything in the hive, across all of it: the projects, the quality of the work, failures, how agents work, Hive itself. Judge it yourself: read what you need (the board, ~/sessions, the code, results), then do things yourself or start other agents. `hive read --thread improve` shows what earlier rounds did. Log each change you land with `hive improve log`. Say what you did in this thread."""
 

@@ -259,6 +259,8 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
     $launch = Join-Path $bin 'hive-open.ps1'
     $body = @(
       "`$ErrorActionPreference = 'SilentlyContinue'",
+      "`$app = Join-Path `$env:LOCALAPPDATA 'Programs\Hive\Hive.exe'",
+      "if (Test-Path `$app) { Start-Process `$app; exit }",
       "Start-Process '$conhost' -ArgumentList '$keep' -WindowStyle Hidden",
       "`$u = (& wsl.exe -d $distro -u hive --cd ~ -- bash -lc 'hive open --print' | Select-Object -First 1)",
       "if (`$u -like 'http*') { Start-Process `$u } else { Write-Host 'The Hive did not start. Open a window and run: hive open'; Start-Sleep 8 }"

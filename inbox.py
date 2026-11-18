@@ -707,6 +707,13 @@ def main():
             import livecheck
             if (lc := livecheck.check(payload)): check = "\n\n".join(x for x in (lc, check) if x)
         except Exception: pass
+    sk = ""
+    if event == "PostToolUse":  # a learned skill whose trigger this command matched: point at it once a run (core/skills.py; off unless config.json "skill_pointer")
+        try:
+            import skills
+            run = re.sub(r"\W", "", str(rec.get("at", "")))
+            sk = skills.pointer(payload, STATE / "skills-pointed" / f"{name}-{run}")
+        except Exception: pass
     if not ps:
         if event == "PostToolUse" and not first and not check and (end := end_post(name, rec, payload)):
             why = end_decision(name, rec, end)
@@ -719,8 +726,8 @@ def main():
         elif event == "Stop":
             try: run_end_bars(name, rec)
             except Exception: pass  # a bar never holds up a stop
-        elif first or check:
-            print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": "\n\n".join(x for x in (first, check) if x)}}))
+        elif first or check or sk:
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": "\n\n".join(x for x in (first, check, sk) if x)}}))
         return
     note = person_note(ps)
     msg = ("New on the board for you while you work (you'll get these automatically; answer with "
@@ -730,6 +737,7 @@ def main():
     else:
         if first and not note: msg += "\n\n" + first   # the person note already asks for a post
         if check: msg += "\n\n" + check
+        if sk: msg += "\n\n" + sk
         print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": msg}}))
 
 if __name__ == "__main__":

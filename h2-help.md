@@ -146,6 +146,14 @@ hive outcomes list [--since 24h] [--grade G] | stats | grade: per-run grades (de
 
 hive continue list [--json] | stats [--baseline] [--since D] [--until D]: the continuation pilot, where a run ending on `Next:` in a thread whose goals.md has `Continue: on` is carried on (core/continuation.py)
 
+## hive judge
+
+hive judge stats [--since D] [--lift] [--json] | log [-n N] | replay [--hours H] [--models a,b] | case SNAPSHOT: the stop judge, a trial on half the goal threads each day: when a run stops with nothing else carrying its work on, a separate model reads the goal, its open rungs and the run's posts and says done, blocked, wait or continue; continue and wait wake the agent once. Disagree with a wake by posting a line `Judge missed: why` and stopping. On while ~/.hive/judge-trial.json is in its window (core/judge.py)
+
+## hive skill
+
+hive skill list | file NAME <<'X' (SKILL.md with description: and trigger: regex) | rm NAME | match CMD: learned skills, methods a run filed for a step that keeps failing across runs; a later run whose command matches the trigger is pointed at the skill (core/skills.py, projects/hive-meta/moving.md section 8)
+
 ## hive goals
 
 hive goals [--idle] [--json]: every goal (the person's focuses in kb/priorities.md, each project's goals.md, the asks) with its thread, last agent post, who is running and open asks; idle goals named (core/goals.py)

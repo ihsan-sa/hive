@@ -43,6 +43,15 @@ def needle(p):
     """what a later command must hold to count as reading p (logruler.needle)"""
     return p[6:] if p.startswith("board:") else p[2:] if p.startswith("A/") else p
 
+GENERIC = {"README.md", "goals.md", "NOTES.md", "design.md", "index.md", "LEARNINGS.md"}
+def touched_by(path, blob):
+    """a later call holds this shown path: whole (needle), or its last two parts or a distinctive file name, so a `cd`, a $VAR or a checkout copy still counts (2026-11-18: 10 of 40 unread finds)"""
+    n = needle(path)
+    if n in blob: return True
+    parts = n.split("/"); base = parts[-1]
+    if len(parts) >= 2 and "/".join(parts[-2:]) in blob: return True
+    return len(base) >= 14 and base not in GENERIC and base in blob
+
 def live_file(who): return f"{LIVE}/{who}.json"
 
 def load(who):
@@ -143,14 +152,14 @@ def observe(who, p):
     ok = not (isinstance(res, dict) and (res.get("is_error") or res.get("interrupted")))
     reads = reads_of(tool, inp, p.get("cwd")) if ok else []
     if not reads and not os.path.exists(live_file(who)) and "projects/kb-search" not in json.dumps(inp): return
-    st = load(who); blob = json.dumps(inp) if ok else ""; now = time.time()
+    st = load(who); blob = json.dumps(inp) if ok and "HIVE_MESSAGE" not in json.dumps(inp) else ""; now = time.time()   # a post's text only names files
     tester = "projects/kb-search" in blob and not st.get("tester")   # runs on the search project: their searches are tests (logruler leaves them out)
     if tester: st["tester"] = True
     for e in st["live"]:
         if e["calls"] < 0: e["calls"] = 0; continue
         e["calls"] += 1
         for path, _ in e["shown"]:
-            if path not in e["touched"] and needle(path) in blob:
+            if path not in e["touched"] and touched_by(path, blob):
                 e["touched"].append(path); log({"touch": path, "find": e["id"], "calls": e["calls"], "tool": tool, "session": sid})
     for path, lo, hi in reads:
         m = [e for e in reversed(st["live"]) if e["calls"] >= 1 and now - e["t"] <= WINDOW and shows(e, path, lo, hi)]
@@ -336,7 +345,8 @@ def numbers(t0, t1, rs=None):
     win = [r for r in rs if t0 <= r.get("at", "")[:19] < t1]
     followed, near = {}, set()   # search id -> paths read or opened from its list; ids with a shown path in a later call within READS
     for r in rs:
-        if "touch" in r and r.get("calls", 99) <= READS: near.add(r.get("find"))
+        if "touch" in r and r.get("calls", 99) <= READS:
+            near.add(r.get("find")); followed.setdefault(r.get("find"), set()).add(r["touch"])   # a touch of a shown file within READS calls is a read
         if r.get("from"):
             path = r.get("read") or re.sub(r":\d+$", "", r.get("open", ""))
             for i in [r["from"], *r.get("also", [])]: followed.setdefault(i, set()).add(path)

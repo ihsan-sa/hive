@@ -139,7 +139,9 @@ launcher() {
   in_hive 'cat ~/modules/dash/web/icons/icon-512.png' </dev/null > "$D/icons/hicolor/512x512/apps/hive.png" 2>/dev/null || return 0
   if [ "$OWN" = 1 ]; then x="$HOME/.local/bin/hive open"
   else p=$(printf '%s' "$addr" | sed -n 's|^http://localhost:\([0-9]*\)/.*|\1|p'); [ -n "$p" ] || return 0; x="xdg-open http://localhost:$p/"; fi
-  printf '[Desktop Entry]\nType=Application\nName=Hive\nComment=Open your Hive\nExec=%s\nIcon=hive\nTerminal=false\nCategories=Utility;\n# made by the Hive install\n' "$x" > "$D/applications/hive.desktop" 2>/dev/null || return 0
+  # If the Hive desktop app (the .deb) is installed, the icon opens it, so there is one way in; otherwise it does what it always did.
+  printf '#!/bin/sh\n# made by the Hive install\nfor a in /opt/Hive/hive-app /usr/bin/hive-app; do [ -x "$a" ] && exec "$a"; done\nexec %s\n' "$x" > "$D/hive-launch.sh" 2>/dev/null && chmod +x "$D/hive-launch.sh" || return 0
+  printf '[Desktop Entry]\nType=Application\nName=Hive\nComment=Open your Hive\nExec=%s\nIcon=hive\nTerminal=false\nCategories=Utility;\n# made by the Hive install\n' "$D/hive-launch.sh" > "$D/applications/hive.desktop" 2>/dev/null || return 0
   command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$D/applications" >/dev/null 2>&1 || true
   echo "There's now a Hive icon in your app menu. Click it to open the Hive again."
 }
