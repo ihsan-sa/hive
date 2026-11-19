@@ -254,6 +254,17 @@ const title = page => page.locator('#title').textContent();
   console.log('ok hive stopped');
   await app.close();
 
+  // A Hive that is slow to listen (20 s): the window says it is starting the whole time, never "didn't start", then shows the Hive.
+  await new Promise(r => { server.close(r); server.closeAllConnections(); });
+  ({ app, page } = await start());
+  const title = () => page.evaluate(() => document.querySelector('#title')?.textContent);
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Opening the Hive', null, { timeout: 20000 });
+  for (let i = 0; i < 10; i++) { await new Promise(r => setTimeout(r, 2000)); assert.strictEqual(await title(), 'Opening the Hive', 'still starting, not "didn\'t start"'); }
+  await new Promise(r => server.listen(port, '127.0.0.1', r));
+  await page.waitForSelector('#app', { timeout: 20000 });
+  console.log('ok slow start');
+  await app.close();
+
   // The installer fails part way (no network, a download that breaks): the screen says it stopped, shows what the installer said,
   // nothing is half-shown as installed, and Try again carries on once the cause is gone.
   wipe(); failInstall = true;
