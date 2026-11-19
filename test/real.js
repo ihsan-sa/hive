@@ -39,4 +39,18 @@ let logText = '';
   if (html.length < 500) throw new Error('the Hive\'s page is nearly empty: ' + html);
   console.log(`ok real ${process.platform}: the window shows ${await where()} (${await page.title()})`);
   await app.close();
+  // Second launch: the Hive is installed now, so the app must go straight to it, never showing the install step.
+  const app2 = await _electron.launch({ executablePath: bin, args: process.platform === 'linux' ? ['--no-sandbox'] : [], env });
+  const page2 = await app2.firstWindow();
+  const where2 = () => app2.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.webContents.getURL().split('#')[0])[0] || '');
+  const end2 = Date.now() + 3 * 60000; let sawSetup = false;
+  for (;;) {
+    const t2 = await page2.evaluate(() => document.querySelector('#title')?.textContent || '').catch(() => '');
+    if (t2 === 'Set up the Hive' || t2 === 'Before it installs') sawSetup = true;
+    const at2 = await where2();
+    if (/^http:\/\/(localhost|127\.0\.0\.1):\d+\//.test(at2)) { console.log(`ok second launch ${process.platform}: straight to ${at2}${sawSetup ? ' (but the install step showed first)' : ''}`); if (sawSetup) throw new Error('second launch showed the install step'); break; }
+    if (Date.now() > end2) throw new Error(`second launch ended at "${t2}" (${at2})`);
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  await app2.close();
 })().catch(e => { console.error('FAILED', e.message || e); console.error('the installer\'s output up to then:\n' + logText.slice(-6000)); process.exit(1); });

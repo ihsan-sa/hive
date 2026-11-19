@@ -1,0 +1,44 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Download Hive</title>
+<style>
+body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem}
+.btn{display:block;padding:.8rem 1rem;margin:.5rem 0;border:1px solid #888;border-radius:8px;text-decoration:none;color:inherit}
+.btn.pick{background:#1a56db;color:#fff;border-color:#1a56db}
+details{margin:1rem 0}
+</style>
+<h1>Download Hive</h1>
+<p>One file, double-click, and you are in the Hive. The terminal install line still works too.</p>
+<div id="buttons">
+  <a class="btn" id="btn-win" data-os="win" href="downloads/Hive-Setup.exe">Windows 10/11 — Hive-Setup.exe</a>
+  <a class="btn" id="btn-mac" data-os="mac" href="downloads/Hive-mac.dmg">macOS 13+ — Hive.dmg</a>
+  <a class="btn" id="btn-linux" data-os="linux" href="downloads/Hive-linux-amd64.deb">Linux — Hive.deb</a>
+</div>
+<p id="note"></p>
+<details id="help-win"><summary>Windows says "Windows protected your PC"</summary>
+<p>That is expected: the app is not signed yet. Press <b>More info</b>, then <b>Run anyway</b>. Windows may ask permission once, and may need one restart; open Hive again afterwards and it carries on.</p></details>
+<details id="help-mac"><summary>Mac says "Hive" Not Opened</summary>
+<ol><li>Press <b>Done</b> (not Move to Trash).</li>
+<li>Open <b>System Settings</b>, <b>Privacy &amp; Security</b>, scroll down to <b>Security</b>. It says "Hive" was blocked to protect your Mac. Press <b>Open Anyway</b>, then confirm with your password or Touch ID.</li>
+<li>Hive opens. The Mac asks this once only.</li></ol></details>
+<details id="help-linux"><summary>Linux</summary>
+<p>Double-click the .deb (or run <code>sudo apt install ./Hive-linux-amd64.deb</code>), then open Hive from your applications.</p></details>
+<script>
+function detectOS(ua, platform) {
+  ua = String(ua || ''); platform = String(platform || '');
+  if (/Android|iPhone|iPad|iPod/i.test(ua)) return null;
+  if (/Win/i.test(platform) || /Windows/i.test(ua)) return 'win';
+  if (/Mac/i.test(platform) || /Macintosh|Mac OS X/i.test(ua)) return 'mac';
+  if (/Linux|X11|CrOS/i.test(ua) || /Linux/i.test(platform)) return 'linux';
+  return null;
+}
+function pick(doc, nav) {
+  const os = detectOS(nav.userAgent, nav.platform);
+  const els = doc.querySelectorAll('.btn');
+  for (const b of els) if (b.dataset.os === os) { b.className = 'btn pick'; }
+  const n = doc.getElementById('note');
+  if (n) n.textContent = os ? '' : 'Pick your system below.';
+  return os;
+}
+if (typeof document !== 'undefined') pick(document, navigator);
+</script>
