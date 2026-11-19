@@ -467,6 +467,9 @@ def snippet(c, h, words, width=130):
         j = bi   # the window keeps its end, so a fact it showed before is still shown
         while j > skip and j > bi - 20 and not body[j - 1].isspace(): j -= 1
         if j == bi or body[j - 1].isspace() or j == 0: bi = j
+    if width > 130:   # a518b audit-unread: 5 of 11 right-place unread finds were cut before the useful words; end a top snippet at the sentence or table row (at most 90 more characters)
+        m = re.search(r"[.!?:|](?=\s|$)|\n", body[end:end + 90])
+        if m: end += m.end()
     t = re.sub(r"\s+", " ", body[bi:end]).strip()
     line = h["line"] + body[:bi].count("\n")
     return t, line
