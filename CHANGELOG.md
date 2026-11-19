@@ -4,6 +4,10 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## lab loads training checkpoints and random weights
+
+`lablib.load(name, revision="step1000")` loads a model at one of its published training checkpoints (Pythia has `step0` to `step143000`), and `lablib.load(name, random_seed=0)` builds the same model shape with random weights from a seed: the same seed gives the same weights. Cached activations and fitted lenses are keyed by checkpoint and seed, so they never mix with the trained model's, and the published lens is not used for either. Pythia models now load (a lens layout mismatch with newer transformers is handled). `examples/checkpoints.py` shows two checkpoints and a seed twice; run it with `lab run examples/checkpoints.py`.
+
 ## Smaller fixes, 2026-11-18
 
 - `hive fresh` lists each downstream doc or copy with its source and fails when the source changed after it.
