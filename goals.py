@@ -369,9 +369,15 @@ def card_flags(thread, run=None):
     except Exception: return ""
     mine = [i for i in items if i.get("focus") == fid and i.get("kind") in CARD_KINDS]
     if not mine: return ""
-    lines = "\n".join(f"- {i['kind']}: {i['what']} (in: {(i.get('in') or '')[:60]}) → {i['fix'][:110]}" for i in mine[:6])
+    n = 12 if len(mine) >= 8 else 6
+    lines = "\n".join(f"- {i['kind']}: {i['what']} (in: {(i.get('in') or '')[:60]}) → {i['fix'][:110]}" for i in mine[:n])
+    more = (f"\n- and {len(mine) - n} more (`hive focus lint {fid}` lists all)" if len(mine) > n else "")
+    if len(mine) >= 8:
+        # 2026-11-19 (HA-4 read, 52 flags left a day after the brief carried them): rounds took their rung and left a "before or after" line; a pile this size is the first job.
+        return (f"\n\n**First job this run, before your rung: the focus card carries {len(mine)} lint flags** (`hive focus lint {fid}`; over 7 means earlier rounds skipped them). "
+                f"Go through them: tick a to-do that happened (`hive focus check done ID`), re-date one still ahead, or say what happened on a passed day. Finish with the count under 5 and say the before and after numbers in your post:\n" + lines + more)
     return (f"\n\n**The focus card's own lint flags {len(mine)} line{'s' if len(mine) != 1 else ''} on your focus** (`hive focus lint {fid}`); you own this ladder, so clear them in this run "
-            f"(tick a to-do that happened, re-date one still ahead, say what happened on a passed day), before or after your rung:\n" + lines + (f"\n- and {len(mine) - 6} more" if len(mine) > 6 else ""))
+            f"(tick a to-do that happened, re-date one still ahead, say what happened on a passed day), before or after your rung:\n" + lines + more)
 
 def brief(row):
     """The brief a keeper round posts for one focus. Every clause is here because a thin hand-written brief produced the 'nothing changed' rounds."""
