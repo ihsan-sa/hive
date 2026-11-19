@@ -31,7 +31,9 @@ jobs:
       - if: runner.os == 'Linux'
         run: xvfb-run -a node test/e2e.js && HIVE_APP_BIN="$PWD/${{ matrix.app }}" xvfb-run -a node test/e2e.js
       # The same stand-in test on a Mac (no accept step there): the setup, failure and repair screens, the proof check, one copy at a time.
-      - if: runner.os == 'macOS'
+      # On Windows the stand-in site serves a PowerShell install.ps1, and a compiled stand-in wsl.exe leads the PATH.
+      - if: runner.os != 'Linux'
+        shell: bash
         continue-on-error: true
         run: node test/e2e.js && HIVE_APP_BIN="$PWD/${{ matrix.app }}" node test/e2e.js
       # The real install through the packaged app, on this throwaway machine: the site's installer, then the Hive's own web app in the window.

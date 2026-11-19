@@ -8,12 +8,42 @@ const os = require('os');
 const path = require('path');
 const { _electron } = require('playwright-core');
 
+const win = process.platform === 'win32';    // Windows: install.ps1 run by PowerShell, hive.cmd, and wsl.exe (a compiled stand-in on PATH)
 const mac = process.platform === 'darwin';   // the Mac installer has no accept step and keeps the Hive's command in ~/.hive/bin
 const root = path.join(__dirname, '..');
 const home = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'hive-app-e2e-'));
 const shots = path.join(root, 'test', 'shots'); fs.mkdirSync(shots, { recursive: true });
 
+// Windows: the Hive's command lives under this LOCALAPPDATA (a private one, so real.js's later run never meets the stand-in).
+const localApp = path.join(home, 'AppData', 'Local');
+const ps1 = () => {
+  const bad = (home + '\\broken');
+  return `Write-Host "The Hive will run in your own account, as you."
+if ($env:HIVE_ACCEPT -ne '1') { Write-Host "there's no terminal to ask you on, and nothing changed. If you accept the above, set HIVE_ACCEPT=1"; return }
+Write-Host 'Setting up the Hive'
+if ($env:HIVE_STUB_RESTART -eq '1') { Write-Host 'WSL is installed. Restart Windows, then run the same line again.'; return }
+$b = Join-Path $env:LOCALAPPDATA 'Hive\\bin'
+New-Item -ItemType Directory -Force -Path $b | Out-Null
+Remove-Item -Force '${bad}' -ErrorAction SilentlyContinue
+$cmd = @(
+  '@echo off',
+  'if exist "${bad}" goto bad',
+  'echo http://localhost:${port}/login#SECRETKEY',
+  'exit /b 0',
+  ':bad',
+  'echo The app didn''t start. Look at: systemctl --user status h2-dash',
+  'exit /b 1') -join "\`r\`n"
+[IO.File]::WriteAllText((Join-Path $b 'hive.cmd'), $cmd + "\`r\`n")
+New-Item -ItemType Directory -Force -Path '${home}\\hive' | Out-Null
+New-Item -ItemType File -Force -Path '${home}\\hive\\.hive-installed' | Out-Null
+Write-Host "The Hive is installed. Open this address: http://localhost:${port}/login#SECRETKEY"
+`;
+};
 const server = http.createServer((req, res) => {
+  if (req.url === '/install.ps1') {
+    res.setHeader('content-type', 'text/plain; charset=utf-8');
+    return res.end(failInstall ? "Write-Host 'Downloading the Hive'\nWrite-Host 'could not reach github.com (stub failure)'\nreturn\n" : ps1());
+  }
   if ((req.url === '/install.sh' || req.url === '/install-mac.sh') && failInstall) {
     res.end('#!/bin/sh\necho "Downloading the Hive"\necho "could not reach github.com (stub failure)"\nexit 5\n');
   } else if (req.url === '/install.sh' || req.url === '/install-mac.sh') {
@@ -55,14 +85,36 @@ const asked = [], seen = [];   // the proof questions, and the page loads, the s
 async function start() {
   const env = { ...process.env, HOME: home, HIVE_APP_TEST: '1', HIVE_APP_WATCH_MS: '700', ...(needRestart ? { HIVE_STUB_RESTART: '1' } : {}), HIVE_SITE: `http://127.0.0.1:${port}`, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share') };
   delete env.HIVE_DIR;
+  if (win) {   // the stand-in wsl.exe first on PATH (Windows keeps the name's case: Path), and a private LOCALAPPDATA
+    const k = Object.keys(env).find(x => x.toLowerCase() === 'path') || 'Path';
+    env[k] = wslDir + ';' + (env[k] || ''); env.LOCALAPPDATA = localApp; env.USERPROFILE = home;
+  }
   const app = await _electron.launch(process.env.HIVE_APP_BIN ? { executablePath: process.env.HIVE_APP_BIN, args: ['--no-sandbox'], env } : { executablePath: require('electron'), args: [root, '--no-sandbox'], env });
   const page = await app.firstWindow();
   return { app, page };
 }
+// Windows: a stand-in wsl.exe (the real one needs a distro): `bash -lc 'hive open --print'` runs the stand-in Hive's hive.cmd; keeping WSL up just sleeps.
+const wslDir = path.join(home, 'wslbin');
+function buildWsl() {
+  if (!win) return;
+  fs.mkdirSync(wslDir, { recursive: true });
+  fs.writeFileSync(path.join(wslDir, 'wsl.cs'), `using System; using System.Diagnostics; using System.IO;
+class P { static int Main(string[] a) {
+  if (string.Join(" ", a).Contains("sleep")) { System.Threading.Thread.Sleep(60000); return 0; }
+  string c = Path.Combine(Environment.GetEnvironmentVariable("LOCALAPPDATA"), "Hive", "bin", "hive.cmd");
+  var i = new ProcessStartInfo("cmd.exe", "/c \"\"" + c + "\"\"") { UseShellExecute = false };
+  var p = Process.Start(i); p.WaitForExit(); return p.ExitCode; } }
+`);
+  const csc = path.join(process.env.windir || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
+  const r = require('child_process').spawnSync(csc, ['/nologo', `/out:${path.join(wslDir, 'wsl.exe')}`, path.join(wslDir, 'wsl.cs')], { encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, 'compiling the stand-in wsl.exe: ' + r.stdout + r.stderr);
+}
+// A machine with no Hive on it.
+function wipe() { for (const d of ['hive', '.hive', 'AppData']) fs.rmSync(path.join(home, d), { recursive: true, force: true }); }
 const title = page => page.locator('#title').textContent();
 
 (async () => {
-  await new Promise(r => server.listen(0, '127.0.0.1', r)); port = server.address().port;
+  await new Promise(r => server.listen(0, '127.0.0.1', r)); port = server.address().port; buildWsl();
   let { app, page } = await start();
 
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
@@ -162,7 +214,7 @@ const title = page => page.locator('#title').textContent();
 
   // The installer fails part way (no network, a download that breaks): the screen says it stopped, shows what the installer said,
   // nothing is half-shown as installed, and Try again carries on once the cause is gone.
-  fs.rmSync(path.join(home, 'hive'), { recursive: true, force: true }); fs.rmSync(path.join(home, '.hive'), { recursive: true, force: true }); failInstall = true;
+  wipe(); failInstall = true;
   ({ app, page } = await start());
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
   await page.getByRole('button', { name: 'Install' }).click();
@@ -198,7 +250,7 @@ const title = page => page.locator('#title').textContent();
 
   // A PC without WSL: the Windows installer turns it on and says to restart. The screen must say so, in plain words, and offer only Close.
   // (Stands in for it by the same words from the installer; the real words are in core/dist/get.ps1.)
-  fs.rmSync(path.join(home, 'hive'), { recursive: true, force: true }); fs.rmSync(path.join(home, '.hive'), { recursive: true, force: true }); needRestart = true;
+  wipe(); needRestart = true;
   ({ app, page } = await start());
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
   await page.getByRole('button', { name: 'Install' }).click();
