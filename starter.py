@@ -1944,7 +1944,8 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
                   + (f" Posts for you that came in meanwhile: {', '.join(extra)} (`hive read` them)." if extra else ""))
     elif resume:
         prompt = (RESUME_WHY.get(why, "Your run stopped on a usage limit and the limit has now reset.") + " Continue where you left off "
-                  f"(check `hive read --thread {first.get('thread', first['id'])}` for anything new first).")
+                  f"(check `hive read --thread {first.get('thread', first['id'])}` for anything new first)."
+                  + (f" Posts for you that came in while you waited: {', '.join(extra)} (`hive read` them; they won't wake you again)." if extra else ""))
     # Fresh starts only: over 3 days (to 2026-11-06) pointers in a first prompt got a strict follow-up (kb open or a read of the note) 50% of the time,
     # on a resume wake 11% (5 of 44), by hook 21% (hive-meta recall-measure.md). The hook (inbox.recall_note) still delivers them mid-run.
     if kind != "warden" and not asked and not resume:
@@ -2756,6 +2757,17 @@ def main():
             else: continue
             st["resume"].pop(n)
             waiting = st["pending"].pop(n, []) if r.get("reaped") else []  # hand queued posts to the resumed run
+            if not r.get("reaped") and "shells" not in r and st["pending"].get(n):
+                # A limit resume: posts queued while it waited predate the resumed run, so the inbox hook (posts newer than the run's
+                # start) never hands them over, and they woke it again after it had answered them (a7d1b 2026-11-17, a4b0e 2026-11-18:
+                # 2 of 63 limit resumes in a week). Hand plain ones over now; a continuation, a fallback or a provider ask keeps its own start.
+                try: got = set((STATE / "delivered" / n).read_text().split())
+                except OSError: got = set()
+                plain = lambda p: not (p.get("continue") or p.get("free") or p.get("fallback") or provider_of(c, p.get("model")))
+                waiting = [p for p in st["pending"][n] if plain(p) and p["id"] not in got]
+                keep = [p for p in st["pending"][n] if not plain(p)]
+                if keep: st["pending"][n] = keep
+                else: st["pending"].pop(n)
             if "shells" in r:   # woken mid-run: the inbox hook already handed it some of these (an edit's first version, everyday E12d)
                 try: got = set((STATE / "delivered" / n).read_text().split())
                 except OSError: got = set()

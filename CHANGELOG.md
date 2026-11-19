@@ -12,6 +12,9 @@ A release can ship several times a day. A Hive installs each one as soon as it's
 - On a Mac, the install no longer sits silent after "The sandbox works" while voice calls build in the background.
 - A focus whose remaining steps all wait on a date now gets one round a day that asks what else would move it, instead of standing still until the date.
 - A focus whose last post came from a timer script is woken again: its wake-up was addressed to the script name, which starts nobody.
+- The starter no longer stops for good when a power cut leaves one of its files empty, and if it keeps stopping on an error it tells you.
+- The diagnostic pack you can send now also carries the end of the sandbox helper's log, which logins are paused and since when, and which release is installed, so a stuck install can be diagnosed faster. Nothing with keys or tokens goes in.
+- When every login is paused, the notice now says what really happens on your install (no more claim of a Codex fallback you don't have), and a pause that flips on and off no longer posts again and again.
 
 ## Why a board's Wi-Fi link dropped
 
