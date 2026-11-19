@@ -40,7 +40,10 @@ then stop. Do coordinating and small fixes yourself; hand anything bigger to an 
 4. **Check the loops (short).** Picking and fixing the one thing that cost the hive the most is the improver round's job
    (thread improve, on Opus since 2026-11-18): don't redo it here. If you saw one this round, put it in thread improve as one line.
    Keeper rounds on Sonnet skipped this step in 7 of 16 rounds 11-16..18 when it also held that work (thread improve, a257e).
-   What stays yours, each a few minutes:
+   What stays yours, each a few minutes. Start with `python3 -I ~/core/keeper_checks.py`: one call, under a second, that prints the
+   watchdog's age and posts, the person's noticed-first posts and the runs graded silent or nothing since the last keeper post, and
+   the lint count. Name each of its four lines in your report and act on what they list. A step the last keeper wrote down as not
+   done is yours first this round: don't copy its "Not done" line forward (11-18..19, eight rounds in a row did, word for word).
    - `hive improve list --due`: judge every overdue entry you didn't make yourself against its baseline
      (`hive improve judge ID held|reverted|inconclusive --why "<the number>"`); revert what didn't hold and say so in its thread.
      If it says no overdue revisits, say that and move on.
