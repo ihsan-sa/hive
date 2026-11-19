@@ -114,11 +114,13 @@ console.log(`ok ${n} tests`);
 // Mac: short on disk space is said before the install starts.
 {
   const { spawnSync } = require('child_process');
+  if (process.platform !== 'win32') { // no /bin/sh on Windows; the check only runs on Macs
   const run = gb => spawnSync('/bin/sh', ['-c', lib.diskCheck() + 'echo passed'], { env: { ...process.env, HIVE_MIN_FREE_GB: String(gb) }, encoding: 'utf8' });
   const low = run(99999999); assert.strictEqual(low.status, 1); assert.match(low.stdout, /not enough free disk space/); assert.ok(!/passed/.test(low.stdout));
   const ok = run(0); assert.strictEqual(ok.status, 0); assert.match(ok.stdout, /passed/);
   assert.match(lib.installCommand('darwin', {}, false).args[1], /^need=\$\{HIVE_MIN_FREE_GB:-15\}/);
   assert.ok(!/free=/.test(lib.installCommand('linux', {}, false).args[1]));
+  }
   console.log('ok disk space');
 }
 
@@ -127,4 +129,13 @@ console.log(`ok ${n} tests`);
   const { SITE } = require('../lib');
   if (!process.env.HIVE_SITE) assert.strictEqual(SITE, 'https://hivelab.ca');
   console.log('ok site name');
+}
+
+{
+  const { redact } = require('../lib');
+  for (const k of ['key=abcd1234efgh5678', 'token: "abcd1234efgh5678"', 'Authorization: Bearer abcd1234efgh5678', 'HIVE_KEY=abcd1234efgh5678']) {
+    assert.ok(!/abcd1234efgh5678/.test(redact('before ' + k + ' after')), k);
+  }
+  assert.strictEqual(redact('Downloading 12 files, key ok'), 'Downloading 12 files, key ok');
+  console.log('ok redact keys');
 }
