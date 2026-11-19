@@ -160,4 +160,16 @@ function windowState(saved, displays) {
   return out;
 }
 
-module.exports = { diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };
+// The app's own log (in its data folder): redacted lines, one file kept as .1 once it passes max bytes.
+function appendLog(file, text, max = 1000000) {
+  const fs = require('fs');
+  try {
+    try { if (fs.statSync(file).size > max) fs.renameSync(file, file + '.1'); } catch { }
+    fs.appendFileSync(file, new Date().toISOString() + ' ' + redact(String(text)).replace(/\s*\n\s*/g, ' | ').slice(0, 4000) + '\n');
+  } catch { }
+}
+function tailLog(file, bytes = 20000) {
+  try { const b = require('fs').readFileSync(file, 'utf8'); return b.slice(-bytes); } catch { return ''; }
+}
+
+module.exports = { appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };

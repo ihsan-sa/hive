@@ -155,6 +155,12 @@ const title = page => page.locator('#title').textContent();
   await new Promise(r => setTimeout(r, 1500));
   const at2 = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.webContents.getURL()));
   assert.ok(at2.length === 1 && at2[0].startsWith(`http://127.0.0.1:${port}/`), 'a redirect stayed out of the window: ' + at2);
+  // The Hive's own page may use notifications; anything else it asks for (location, say) is refused.
+  const notif = await page.evaluate(() => Notification.requestPermission());
+  assert.strictEqual(notif, 'granted', 'the Hive page may show notifications');
+  const geo = await page.evaluate(() => new Promise(r => navigator.geolocation.getCurrentPosition(() => r('allowed'), e => r(e.code === 1 ? 'denied' : 'error ' + e.code), { timeout: 5000 })));
+  assert.strictEqual(geo, 'denied', 'location is refused');
+  console.log('ok permissions');
   await app.close();
 
   // Second start: straight in, no setup.

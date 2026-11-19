@@ -8,6 +8,8 @@ const fs = require('fs');
 const lib = require('./lib');
 
 let win = null, hiveUrl = null, child = null, kept = false, fails = 0;
+const logFile = () => path.join(app.getPath('userData'), 'app.log');
+const log = t => lib.appendLog(logFile(), t);
 const setupFile = path.join(__dirname, 'setup.html');
 
 // Runs a command with no terminal of its own (so an installer that would ask on one says so instead of hanging), calling out(text) as it prints.
@@ -68,6 +70,7 @@ async function proves(url) {
 }
 
 async function showSetup(state, note) {
+  log('screen ' + state + (note ? ': ' + note : ''));
   if (!isSetup(win.webContents)) await win.loadFile(setupFile);
   send('state', state, { platform: process.platform, note: note || '' });
 }
@@ -94,6 +97,7 @@ async function open() {
   // The address is the key. It goes only to a server that shows it already has it; anything else on that port gets nothing.
   if (!await proves(url)) return showSetup('nostart', "What answers on the Hive's address didn't show that it is the Hive, so the app didn't sign in to it. If the Hive on this computer is an older one, Repair brings it up to date. If not, another program may be using the Hive's port.");
   hiveUrl = url;
+  log('opened the Hive');
   watch();
   try { await win.loadURL(url); fails = 0; }
   catch (e) { hiveUrl = null; return showSetup('nostart', sorry); }
@@ -125,6 +129,7 @@ async function install(accept) {
   if (pend) send('log', lib.redact(lib.plain(pend)));
   child = null;
   let what = lib.installResult(r.code, r.text, process.platform);
+  log('installer exit ' + r.code + ' -> ' + what + ': ' + lib.plain(r.text).slice(-1500));
   // "Done" with no Hive to show for it (Windows' installer ends the same way when it stops) is a stop: keep what it said on the screen.
   if (what === 'done' && !lib.openCommand(process.platform, process.env)) what = 'failed';
   if (what === 'done') return open();
@@ -206,7 +211,7 @@ function permissions() {
 const fromSetup = e => e.senderFrame && isSetupUrl(e.senderFrame.url) && win && e.sender === win.webContents;
 ipcMain.on('install', (e, accept) => { if (fromSetup(e)) install(accept); });
 ipcMain.on('retry', e => { if (fromSetup(e)) open(); });
-ipcMain.on('copy', (e, text) => { if (fromSetup(e)) clipboard.writeText(lib.redact(text).slice(0, 200000)); });
+ipcMain.on('copy', (e, text) => { if (fromSetup(e)) clipboard.writeText(lib.redact(text).slice(0, 200000) + '\n\nApp log (latest):\n' + lib.tailLog(logFile())); });
 ipcMain.on('version', e => { e.returnValue = fromSetup(e) ? app.getVersion() : ''; });
 ipcMain.on('quit', e => { if (fromSetup(e)) app.quit(); });
 

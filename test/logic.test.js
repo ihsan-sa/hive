@@ -139,3 +139,17 @@ console.log(`ok ${n} tests`);
   assert.strictEqual(redact('Downloading 12 files, key ok'), 'Downloading 12 files, key ok');
   console.log('ok redact keys');
 }
+
+{
+  const { appendLog, tailLog } = require('../lib');
+  const f = require('path').join(require('os').tmpdir(), 'ab190-applog-' + process.pid);
+  for (const x of [f, f + '.1']) try { require('fs').unlinkSync(x); } catch { }
+  appendLog(f, 'opened http://127.0.0.1:1/login#SECRETKEYVALUE12345\nsecond');
+  const got = tailLog(f);
+  assert.ok(/opened/.test(got) && !/SECRETKEYVALUE/.test(got) && /\| second/.test(got), 'redacted, one line');
+  appendLog(f, 'x'.repeat(100), 50); appendLog(f, 'after', 50);
+  assert.ok(require('fs').existsSync(f + '.1'), 'rotated');
+  assert.ok(!/opened/.test(tailLog(f)) && /after/.test(tailLog(f)));
+  for (const x of [f, f + '.1']) try { require('fs').unlinkSync(x); } catch { }
+  console.log('ok app log');
+}
