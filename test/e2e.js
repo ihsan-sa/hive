@@ -8,30 +8,35 @@ const os = require('os');
 const path = require('path');
 const { _electron } = require('playwright-core');
 
+const mac = process.platform === 'darwin';   // the Mac installer has no accept step and keeps the Hive's command in ~/.hive/bin
 const root = path.join(__dirname, '..');
 const home = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'hive-app-e2e-'));
 const shots = path.join(root, 'test', 'shots'); fs.mkdirSync(shots, { recursive: true });
 
 const server = http.createServer((req, res) => {
-  if (req.url === '/install.sh') {
+  if ((req.url === '/install.sh' || req.url === '/install-mac.sh') && failInstall) {
+    res.end('#!/bin/sh\necho "Downloading the Hive"\necho "could not reach github.com (stub failure)"\nexit 5\n');
+  } else if (req.url === '/install.sh' || req.url === '/install-mac.sh') {
     // Stands in for get.sh --this-account: warns, wants HIVE_ACCEPT=1 with no terminal, then makes ~/hive with a hive command.
     res.end(`#!/bin/sh
-[ "$1" = --this-account ] || { echo "expected --this-account"; exit 2; }
+[ "$HIVE_MAC_TEST" = 1 ] || [ "$1" = --this-account ] || { echo "expected --this-account"; exit 2; }
 echo "The Hive will run in your own account, as you, with its files in $HOME/hive."
-if [ "$HIVE_ACCEPT" != 1 ]; then
+if [ "$HIVE_ACCEPT" != 1 ] && [ "$HIVE_MAC_TEST" != 1 ]; then
   if ( : </dev/tty ) 2>/dev/null; then echo "BUG: the app gave the installer a terminal"; exit 3; fi
   echo "there's no terminal to ask you on, and nothing changed. If you accept the above, set HIVE_ACCEPT=1"; exit 1
 fi
-[ "$HIVE_NO_LAUNCHER" = 1 ] || { echo "launcher not skipped"; exit 4; }
+[ "$HIVE_NO_LAUNCHER" = 1 ] || [ "$HIVE_MAC_TEST" = 1 ] || { echo "launcher not skipped"; exit 4; }
 printf 'Installing Claude Code\\rSetting up the Hive\\n'
 [ "$HIVE_STUB_RESTART" != 1 ] || { echo "WSL is installed. Restart Windows, then run the same line again."; exit 0; }
-mkdir -p "$HOME/hive/.local/bin"
-cat > "$HOME/hive/.local/bin/hive" <<X
+if [ "$HIVE_MAC_TEST" = 1 ]; then B="$HOME/.hive/bin"; else B="$HOME/hive/.local/bin"; fi
+mkdir -p "$B"
+rm -f "$HOME/broken"   # a repair run puts a broken install right
+cat > "$B/hive" <<X
 #!/bin/sh
 [ ! -e "$HOME/broken" ] || { echo "The app didn't start. Look at: systemctl --user status h2-dash"; exit 1; }
 echo "http://localhost:${port}/login#SECRETKEY"
 X
-chmod +x "$HOME/hive/.local/bin/hive"; touch "$HOME/hive/.hive-installed"
+chmod +x "$B/hive"; touch "$HOME/hive/.hive-installed"
 echo "The Hive is installed. Open this address: http://localhost:${port}/login#SECRETKEY"
 `);
   } else if (req.url.startsWith('/api/proof?n=')) {
@@ -44,7 +49,7 @@ echo "The Hive is installed. Open this address: http://localhost:${port}/login#S
   else if (req.url === '/thread') { res.setHeader('content-type', 'text/html'); res.end('<h1 id="thread">A thread</h1>'); }
   else { res.statusCode = 404; res.end('no'); }
 });
-let port, impostor = '', needRestart = false;
+let port, impostor = '', needRestart = false, failInstall = false;
 const asked = [], seen = [];   // the proof questions, and the page loads, the stand-in server got
 
 async function start() {
@@ -64,13 +69,15 @@ const title = page => page.locator('#title').textContent();
   await page.screenshot({ path: path.join(shots, '1-welcome.png') });
   await page.getByRole('button', { name: 'Install' }).click();
 
-  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs');
-  const warn = await page.locator('#log').textContent();
-  assert.ok(warn.includes('The Hive will run in your own account'), 'the installer\'s own warning is on the screen');
-  assert.ok(!warn.includes('BUG'), warn);
-  assert.ok(!fs.existsSync(path.join(home, 'hive')), 'nothing installed before the yes');
-  await page.screenshot({ path: path.join(shots, '2-accept.png') });
-  await page.getByRole('button', { name: 'Accept and install' }).click();
+  if (!mac) {
+    await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs');
+    const warn = await page.locator('#log').textContent();
+    assert.ok(warn.includes('The Hive will run in your own account'), 'the installer\'s own warning is on the screen');
+    assert.ok(!warn.includes('BUG'), warn);
+    assert.ok(!fs.existsSync(path.join(home, 'hive')), 'nothing installed before the yes');
+    await page.screenshot({ path: path.join(shots, '2-accept.png') });
+    await page.getByRole('button', { name: 'Accept and install' }).click();
+  }
 
   await page.waitForSelector('#app', { timeout: 20000 });
   assert.strictEqual(new URL(page.url()).port, String(port));
@@ -109,6 +116,21 @@ const title = page => page.locator('#title').textContent();
   await page.waitForSelector('#app', { timeout: 20000 });
   await app.close();
 
+  // Repair on the "didn't start" screen: runs the installer again (with its accept step), which puts the install right, and the Hive opens.
+  fs.writeFileSync(path.join(home, 'broken'), '');
+  ({ app, page } = await start());
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === "The Hive didn't start");
+  await page.getByRole('button', { name: /^Repair/ }).click();
+  if (!mac) {
+    await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs', null, { timeout: 20000 });
+    assert.ok(fs.existsSync(path.join(home, 'broken')), 'nothing changed before the yes');
+    await page.getByRole('button', { name: 'Accept and install' }).click();
+  }
+  await page.waitForSelector('#app', { timeout: 20000 });
+  assert.ok(!fs.existsSync(path.join(home, 'broken')), 'the installer put it right');
+  console.log('ok repair');
+  await app.close();
+
   // Another program on the Hive's port (one that answers wrongly, one that has no answer): the window is never sent the address with the key.
   for (const kind of ['wrong', 'old']) {
     impostor = kind; seen.length = 0; asked.length = 0;
@@ -138,14 +160,52 @@ const title = page => page.locator('#title').textContent();
   await page.waitForSelector('#app', { timeout: 20000 });
   await app.close();
 
-  // A PC without WSL: the Windows installer turns it on and says to restart. The screen must say so, in plain words, and offer only Close.
-  // (Stands in for it by the same words from the installer; the real words are in core/dist/get.ps1.)
-  fs.rmSync(path.join(home, 'hive'), { recursive: true, force: true }); needRestart = true;
+  // The installer fails part way (no network, a download that breaks): the screen says it stopped, shows what the installer said,
+  // nothing is half-shown as installed, and Try again carries on once the cause is gone.
+  fs.rmSync(path.join(home, 'hive'), { recursive: true, force: true }); fs.rmSync(path.join(home, '.hive'), { recursive: true, force: true }); failInstall = true;
   ({ app, page } = await start());
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
   await page.getByRole('button', { name: 'Install' }).click();
-  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs');
-  await page.getByRole('button', { name: 'Accept and install' }).click();
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'The install stopped', null, { timeout: 20000 }).catch(async e => {
+    // Linux asks for the accept first; the stub script ignores that, so accept if it is showing.
+    if (await page.getByRole('button', { name: 'Accept and install' }).count()) { await page.getByRole('button', { name: 'Accept and install' }).click(); await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'The install stopped', null, { timeout: 20000 }); } else throw e;
+  });
+  assert.ok((await page.locator('#log').textContent()).includes('stub failure'), 'what the installer said stays on the screen');
+  assert.ok(await page.getByRole('button', { name: 'Try again' }).count() && await page.getByRole('button', { name: 'Close' }).count());
+  await page.screenshot({ path: path.join(shots, '7-install-stopped.png') });
+  assert.ok(!fs.existsSync(path.join(home, 'hive', '.hive-installed')), 'no Hive left behind');
+  failInstall = false;
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs', null, { timeout: 20000 }).then(() => page.getByRole('button', { name: 'Accept and install' }).click()).catch(() => {});
+  await page.waitForSelector('#app', { timeout: 20000 });
+  console.log('ok install-failed screen');
+  await app.close();
+
+  // One copy at a time: a second start while one runs leaves at once and the first stays (still one window); closing the window quits (Linux, Windows).
+  ({ app, page } = await start());
+  await page.waitForSelector('#app', { timeout: 20000 });
+  const second = await start().catch(e => ({ failed: e }));
+  if (second.app) await second.app.close().catch(() => {});
+  assert.ok(second.failed, 'a second copy did not stay open');
+  const wins = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
+  assert.strictEqual(wins, 1, 'still one window in the first copy');
+  if (process.platform !== 'darwin') {
+    const gone = new Promise(r => app.process().once('exit', r));
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach(w => w.close()));
+    await Promise.race([gone, new Promise((_, rej) => setTimeout(() => rej(new Error('closing the window did not quit')), 10000))]);
+  } else await app.close();
+  console.log('ok single instance');
+
+  // A PC without WSL: the Windows installer turns it on and says to restart. The screen must say so, in plain words, and offer only Close.
+  // (Stands in for it by the same words from the installer; the real words are in core/dist/get.ps1.)
+  fs.rmSync(path.join(home, 'hive'), { recursive: true, force: true }); fs.rmSync(path.join(home, '.hive'), { recursive: true, force: true }); needRestart = true;
+  ({ app, page } = await start());
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
+  await page.getByRole('button', { name: 'Install' }).click();
+  if (!mac) {
+    await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs');
+    await page.getByRole('button', { name: 'Accept and install' }).click();
+  }
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Restart Windows', null, { timeout: 20000 });
   const body = await page.locator('body').innerText();
   assert.ok(body.includes('WSL 2') && body.includes('has to restart') && body.includes('open Hive again and it carries on'), 'the restart words: ' + body);
