@@ -123,6 +123,15 @@ console.log(`ok ${n} tests`);
   }
   console.log('ok disk space');
 }
+{
+  const d = '/dl', none = () => false;
+  assert.strictEqual(lib.downloadPath(d, '../../etc/passwd', none), '/dl/passwd');
+  assert.strictEqual(lib.downloadPath(d, 'a\\b\\c.txt', none), '/dl/c.txt');
+  assert.strictEqual(lib.downloadPath(d, '.bashrc', none), '/dl/bashrc');
+  assert.strictEqual(lib.downloadPath(d, '', none), '/dl/download');
+  assert.strictEqual(lib.downloadPath(d, 'x.pdf', p => p === '/dl/x.pdf'), '/dl/x (1).pdf');
+  console.log('ok download name');
+}
 
 // site name matches the one the site's own install/uninstall lines use
 {
@@ -152,4 +161,12 @@ console.log(`ok ${n} tests`);
   assert.ok(!/opened/.test(tailLog(f)) && /after/.test(tailLog(f)));
   for (const x of [f, f + '.1']) try { require('fs').unlinkSync(x); } catch { }
   console.log('ok app log');
+}
+{
+  // The shell ships no third-party code of its own: Electron and the build tools are dev-only, nothing is bundled from npm at run time.
+  const pkg = require('../package.json');
+  assert.deepStrictEqual(Object.keys(pkg.dependencies || {}), [], 'no runtime dependencies');
+  const sh = require('child_process').spawnSync('npm', ['audit', '--omit=dev', '--audit-level=high'], { cwd: require('path').join(__dirname, '..'), encoding: 'utf8', shell: process.platform === 'win32', timeout: 60000 });
+  assert.ok(sh.status === 0 || /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|audit endpoint|network/i.test(sh.stderr + sh.stdout), 'no high-severity advisory in what ships: ' + sh.stdout);
+  console.log('ok no runtime deps');
 }

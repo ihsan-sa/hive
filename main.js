@@ -206,6 +206,15 @@ function permissions() {
   };
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb, d) => cb(ok(wc, perm, d && d.requestingUrl)));
   session.defaultSession.setPermissionCheckHandler((wc, perm, origin) => ok(wc, perm, origin));
+  // A file the Hive page offers is saved to Downloads under its own name, with no dialog and nothing opened in the window.
+  session.defaultSession.on('will-download', (_e, item, wc) => {
+    const dir = (process.env.HIVE_APP_TEST && process.env.HIVE_APP_DOWNLOADS) || app.getPath('downloads');
+    try { fs.mkdirSync(dir, { recursive: true }); } catch { }
+    if (!hiveUrl || !lib.sameApp(item.getURL(), hiveUrl)) return item.cancel();
+    const dest = lib.downloadPath(dir, item.getFilename(), fs.existsSync);
+    item.setSavePath(dest);
+    log('download ' + path.basename(dest));
+  });
 }
 
 const fromSetup = e => e.senderFrame && isSetupUrl(e.senderFrame.url) && win && e.sender === win.webContents;

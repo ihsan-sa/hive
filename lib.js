@@ -172,4 +172,14 @@ function tailLog(file, bytes = 20000) {
   try { const b = require('fs').readFileSync(file, 'utf8'); return b.slice(-bytes); } catch { return ''; }
 }
 
-module.exports = { appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };
+// Where a download goes: the folder, the file's own name (no path parts, nothing hidden), and "name (1).ext" if that exists.
+function downloadPath(dir, name, exists) {
+  const path = require('path');
+  let base = path.basename(String(name || '').replace(/\\/g, '/')).replace(/[\x00-\x1f<>:"|?*]/g, '_').replace(/^\.+/, '').trim() || 'download';
+  const ext = path.extname(base), stem = base.slice(0, base.length - ext.length);
+  let out = path.join(dir, base);
+  for (let i = 1; exists(out) && i < 1000; i++) out = path.join(dir, `${stem} (${i})${ext}`);
+  return out;
+}
+
+module.exports = { downloadPath, appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };

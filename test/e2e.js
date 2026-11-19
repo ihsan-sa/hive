@@ -78,7 +78,8 @@ echo "The Hive is installed. Open this address: http://localhost:${port}/login#S
     if (impostor === 'down') return req.destroy();
     if (impostor) { res.statusCode = impostor === 'old' ? 404 : 200; return res.end(impostor === 'old' ? 'no' : 'f'.repeat(64)); }
     res.end(require('crypto').createHmac('sha256', 'SECRETKEY').update(`proof:${port}:${req.url.split('n=')[1]}`).digest('hex'));
-  } else if (req.url.startsWith('/login')) { seen.push(req.url); res.setHeader('content-type', 'text/html'); res.end('<title>Hive web app</title><h1 id="app">The web app</h1><a id="out" href="https://example.com/">out</a><a id="in" href="/thread">in</a><a id="away" href="/away">away</a>'); }
+  } else if (req.url.startsWith('/login')) { seen.push(req.url); res.setHeader('content-type', 'text/html'); res.end('<title>Hive web app</title><h1 id="app">The web app</h1><a id="out" href="https://example.com/">out</a><a id="in" href="/thread">in</a><a id="away" href="/away">away</a><a id="dl" href="/file.txt" download>file</a>'); }
+  else if (req.url === '/file.txt') { res.setHeader('content-type', 'text/plain'); res.setHeader('content-disposition', 'attachment; filename="notes.txt"'); res.end('hello from the hive'); }
   else if (req.url === '/away') { res.statusCode = 302; res.setHeader('location', 'https://example.com/'); res.end(); }
   else if (req.url === '/thread') { res.setHeader('content-type', 'text/html'); res.end('<h1 id="thread">A thread</h1>'); }
   else { res.statusCode = 404; res.end('no'); }
@@ -87,7 +88,7 @@ let port, impostor = '', needRestart = false, failInstall = false, slowInstall =
 const asked = [], seen = [];   // the proof questions, and the page loads, the stand-in server got
 
 async function start(extra = {}) {
-  const env = { ...process.env, HOME: home, HIVE_APP_TEST: '1', HIVE_APP_WATCH_MS: '700', ...(needRestart ? { HIVE_STUB_RESTART: '1' } : {}), HIVE_SITE: siteOverride || `http://127.0.0.1:${port}`, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'), ...extra };
+  const env = { ...process.env, HOME: home, HIVE_APP_TEST: '1', HIVE_APP_DOWNLOADS: path.join(home, 'Downloads'), HIVE_APP_WATCH_MS: '700', ...(needRestart ? { HIVE_STUB_RESTART: '1' } : {}), HIVE_SITE: siteOverride || `http://127.0.0.1:${port}`, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'), ...extra };
   delete env.HIVE_DIR;
   if (win) {   // the stand-in wsl.exe first on PATH (Windows keeps the name's case: Path)
     const k = Object.keys(env).find(x => x.toLowerCase() === 'path') || 'Path';
@@ -165,6 +166,16 @@ const title = page => page.locator('#title').textContent();
   const geo = await page.evaluate(() => new Promise(r => navigator.geolocation.getCurrentPosition(() => r('allowed'), e => r(e.code === 1 ? 'denied' : 'error ' + e.code), { timeout: 5000 })));
   assert.strictEqual(geo, 'denied', 'location is refused');
   console.log('ok permissions');
+  // A file link on the Hive page saves into the Downloads folder (twice: the second gets a new name), and the window stays on the page.
+  await page.evaluate(() => { document.querySelector('#dl').click(); });
+  const dl = path.join(home, 'Downloads');
+  for (let i = 0; i < 50 && !fs.existsSync(path.join(dl, 'notes.txt')); i++) await new Promise(r => setTimeout(r, 200));
+  assert.strictEqual(fs.readFileSync(path.join(dl, 'notes.txt'), 'utf8'), 'hello from the hive');
+  await page.evaluate(() => { document.querySelector('#dl').click(); });
+  for (let i = 0; i < 50 && !fs.existsSync(path.join(dl, 'notes (1).txt')); i++) await new Promise(r => setTimeout(r, 200));
+  assert.ok(fs.existsSync(path.join(dl, 'notes (1).txt')), 'a second download keeps the first');
+  assert.ok(page.url().startsWith(`http://127.0.0.1:${port}/`), 'the window stayed on the Hive page');
+  console.log('ok download');
   await app.close();
 
   // Second start: straight in, no setup.
