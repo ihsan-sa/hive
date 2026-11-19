@@ -25,6 +25,7 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm test
       - run: npx electron-builder ${{ matrix.flags }} --publish never
+      - run: node test/size.js dist
       - if: runner.os == 'macOS'
         run: codesign --verify --deep --strict --verbose=2 "$(dirname "$(dirname "$(dirname "${{ matrix.app }}")")")"
       - run: ${{ matrix.run }} node test/smoke.js "${{ matrix.app }}"
