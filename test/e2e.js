@@ -120,9 +120,13 @@ const title = page => page.locator('#title').textContent();
 
 (async () => {
   await new Promise(r => server.listen(0, '127.0.0.1', r)); port = server.address().port; buildWsl();
+  const t0 = Date.now();
   let { app, page } = await start();
 
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
+  const startupMs = Date.now() - t0;   // launch to the setup screen showing (cold, packaged or not)
+  assert.ok(startupMs < 10000, `the window shows its first screen within 10 s (took ${startupMs} ms)`);
+  console.log(`ok startup time (${startupMs} ms)`);
   await page.screenshot({ path: path.join(shots, '1-welcome.png') });
   await page.getByRole('button', { name: 'Install' }).click();
 
