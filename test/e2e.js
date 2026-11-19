@@ -24,6 +24,7 @@ if [ "$HIVE_ACCEPT" != 1 ]; then
 fi
 [ "$HIVE_NO_LAUNCHER" = 1 ] || { echo "launcher not skipped"; exit 4; }
 printf 'Installing Claude Code\\rSetting up the Hive\\n'
+[ "$HIVE_STUB_RESTART" != 1 ] || { echo "WSL is installed. Restart Windows, then run the same line again."; exit 0; }
 mkdir -p "$HOME/hive/.local/bin"
 cat > "$HOME/hive/.local/bin/hive" <<X
 #!/bin/sh
@@ -43,11 +44,11 @@ echo "The Hive is installed. Open this address: http://localhost:${port}/login#S
   else if (req.url === '/thread') { res.setHeader('content-type', 'text/html'); res.end('<h1 id="thread">A thread</h1>'); }
   else { res.statusCode = 404; res.end('no'); }
 });
-let port, impostor = '';
+let port, impostor = '', needRestart = false;
 const asked = [], seen = [];   // the proof questions, and the page loads, the stand-in server got
 
 async function start() {
-  const env = { ...process.env, HOME: home, HIVE_APP_TEST: '1', HIVE_APP_WATCH_MS: '700', HIVE_SITE: `http://127.0.0.1:${port}`, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share') };
+  const env = { ...process.env, HOME: home, HIVE_APP_TEST: '1', HIVE_APP_WATCH_MS: '700', ...(needRestart ? { HIVE_STUB_RESTART: '1' } : {}), HIVE_SITE: `http://127.0.0.1:${port}`, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share') };
   delete env.HIVE_DIR;
   const app = await _electron.launch(process.env.HIVE_APP_BIN ? { executablePath: process.env.HIVE_APP_BIN, args: ['--no-sandbox'], env } : { executablePath: require('electron'), args: [root, '--no-sandbox'], env });
   const page = await app.firstWindow();
@@ -135,6 +136,22 @@ const title = page => page.locator('#title').textContent();
   impostor = '';
   await page.getByRole('button', { name: 'Try again' }).click();
   await page.waitForSelector('#app', { timeout: 20000 });
+  await app.close();
+
+  // A PC without WSL: the Windows installer turns it on and says to restart. The screen must say so, in plain words, and offer only Close.
+  // (Stands in for it by the same words from the installer; the real words are in core/dist/get.ps1.)
+  fs.rmSync(path.join(home, 'hive'), { recursive: true, force: true }); needRestart = true;
+  ({ app, page } = await start());
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
+  await page.getByRole('button', { name: 'Install' }).click();
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs');
+  await page.getByRole('button', { name: 'Accept and install' }).click();
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Restart Windows', null, { timeout: 20000 });
+  const body = await page.locator('body').innerText();
+  assert.ok(body.includes('WSL 2') && body.includes('has to restart') && body.includes('open Hive again and it carries on'), 'the restart words: ' + body);
+  assert.strictEqual(await page.getByRole('button').count(), 1); assert.ok(await page.getByRole('button', { name: 'Close' }).count(), 'only a Close button');
+  await page.screenshot({ path: path.join(shots, '6-restart.png') });
+  console.log('ok no-wsl screen');
   await app.close();
 
   server.close(); fs.rmSync(home, { recursive: true, force: true });
