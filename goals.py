@@ -301,7 +301,7 @@ def last_context(worker, log=None, tail=3_000_000):
         if e.get("event") == "start" and e.get("name") == worker: return context_of(e.get("out"))
     return 0
 
-def capped(thread, worker, now=None, cap=None, ctx=None):
+def capped(thread, worker, now=None, cap=None, ctx=None, prev=None):
     """L134 A/B: the context `worker` would carry into a resumed round if the cap sends this round to a fresh agent instead, else 0.
     Only threads with crc32 odd are capped; the even half resumes as before, so the arms run side by side (read by keeper_cost.py, L134b)."""
     if not thread or not worker or worker == "new": return 0
@@ -313,15 +313,18 @@ def capped(thread, worker, now=None, cap=None, ctx=None):
         if not (dt.datetime.fromisoformat(cap["since"]) <= now < dt.datetime.fromisoformat(cap["until"])): return 0
     except (KeyError, TypeError, ValueError): return 0
     if zlib.crc32(thread.encode()) % 2 != 1: return 0
+    if cap.get("after_delivered"):   # L134d (ad467, 2026-11-19): rc-1119 sends a round fresh only when the worker's last graded round here was delivered; unknown or any other grade resumes
+        r = last_graded(worker, thread) if prev is None else prev
+        if (r.get("grade") if isinstance(r, dict) else r) != "delivered": return 0
     n = last_context(worker) if ctx is None else ctx
     return n if n and n >= int(cap.get("max_context", 50_000)) else 0
 
-def resume_arm(thread, worker=None, now=None, cap=None, ctx=None):
+def resume_arm(thread, worker=None, now=None, cap=None, ctx=None, prev=None):
     """Keeper briefs wake the thread's last worker, who keeps what it learned there (the starter gives an heir to one that is done or over
     resume_max_context). The 11-06..11-09 A/B (hive-meta/continuity.md "A/B result") found resume 52% delivered vs fresh 32%, no kill, so it is the default.
     L133 (hive-meta load.md) priced that A/B: per delivered round a fresh agent cost 0.60 of a resumed one starting at 50 k or more (95% 0.34..1.16),
     so the L134 A/B (`capped`, ~/.hive/resume_cap.json) sends odd-hashed threads to @new when the worker carries max_context or more."""
-    return not capped(thread, worker, now, cap, ctx)
+    return not capped(thread, worker, now, cap, ctx, prev)
 
 def post_model_args(text, model):
     """A brief's model is for a fresh agent only: on a woken worker the starter would hold it from then on, undoing a grader step-up or
