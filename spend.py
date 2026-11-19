@@ -5,7 +5,7 @@ import datetime as dt, json
 def spend_on(log_path, day=None):
     """Dollars spent on `day` (YYYY-MM-DD, default today UTC)."""
     day = day or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
-    last, tot = {}, 0.0
+    prior, tot = {}, 0.0
     try: f = open(log_path, errors="replace")
     except OSError: return 0.0
     with f:
@@ -16,7 +16,11 @@ def spend_on(log_path, day=None):
             c = e.get("cost")
             if e.get("event") != "end" or not isinstance(c, (int, float)) or isinstance(c, bool): continue
             k = e.get("session") or e.get("name")
-            rise = max(0.0, c - last.get(k, 0.0)); last[k] = max(c, last.get(k, 0.0))
+            v = prior.setdefault(k, [])
+            # A resumed session's cost is cumulative. Below the last end, the run resumed an older save or started a fresh count:
+            # it costs its rise over the highest earlier end not above it (steer/roots.run_costs, abf1b's review 11-19, warden ok).
+            base = 0.0 if not v else v[-1] if c >= v[-1] else max([0.0] + [e for e in v if e <= c])
+            rise = c - base; v.append(c)
             if str(e.get("at", ""))[:10] == day: tot += rise
     return round(tot, 4)
 
