@@ -91,6 +91,7 @@ def thread_posts(thread):
 def enabled(thread):
     """The goals.md of the project this thread belongs to, if it has `Continue: on` under `## Ladder`: (project, path, text), or None."""
     if not thread or thread in SYSTEM_THREADS: return None
+    th, hit = str(thread).lower(), None
     for g in sorted(PROJECTS.glob("*/goals.md")):
         if g.parent.name.startswith("_"): continue
         try: txt = g.read_text(errors="replace")
@@ -99,10 +100,13 @@ def enabled(thread):
         if not m: continue
         rest = txt[m.end():]
         end = re.search(r"^#{1,2}\s", rest, re.M)
-        if not re.search(r"^Continue:\s*on\b", rest[:end.start()] if end else rest, re.M | re.I): continue
-        names = {t.lower() for t in G.THREAD.findall(txt)} | {g.parent.name}
-        if str(thread).lower() in names: return g.parent.name, g, txt
-    return None
+        on = re.search(r"^Continue:\s*on\b", rest[:end.start()] if end else rest, re.M | re.I)
+        # the project whose own ladder runs in this thread decides it: llm-playground's rungs name thread `fellows-study`, so its
+        # `Continue: on` chained the study conversation that fellows-prep keeps off (ad388 2026-11-19)
+        own = {x.lower() for x in G.THREAD.findall(m.group(1))} | {g.parent.name.lower()}
+        if th in own: return (g.parent.name, g, txt) if on else None
+        if on and not hit and th in {t.lower() for t in G.THREAD.findall(txt)}: hit = g.parent.name, g, txt
+    return hit
 
 def clean(line): return line.strip().strip("*_ ").strip()
 def is_next(line): return line.lower().startswith("next:") and len(line) - 4 > 12

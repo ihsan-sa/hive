@@ -124,6 +124,34 @@ def archived_done(g):
     try: return sum(l.startswith("- [x]") for l in (g.parent / DONE_FILE).read_text(errors="replace").splitlines())
     except OSError: return 0
 
+CONTINUE = re.compile(r"^Continue:[ \t]*(on|off)\b[^\w\n]*(.*)$", re.M | re.I)
+
+def continue_state(txt):
+    """Whether a goals.md's `## Ladder` carries a `Next:` on (continuation.enabled reads the same line): "on", "off: reason", "off" with no
+    reason, or None when the section has no Continue line or there is no `## Ladder`. hive-meta Moving ladder, ad388 2026-11-19: the 11-06
+    widening put `Continue: on` in every focus ladder, but hive-app's came later without it, so 20 of its Next: lines in two days were dropped
+    as "off" and each delivered step waited ~30 min for a floor start. `hive goals` now names a focus ladder with neither line."""
+    m = LADDER.search(txt)
+    if not m: return None
+    rest = txt[m.end():]; end = re.search(r"^#{1,2}\s", rest, re.M); sec = rest[:end.start()] if end else rest
+    c = CONTINUE.search(sec)
+    if not c: return None
+    if c.group(1).lower() == "on": return "on"
+    why = c.group(2).strip().strip("()").strip()
+    return f"off: {why}" if len(why) >= 8 else "off"
+
+def continue_missing(projects, focus_of):
+    """[(project, thread, focus)] for each project whose `## Ladder` has open rungs and runs in a thread under a focus, with neither
+    `Continue: on` nor `Continue: off (reason)`. focus_of(thread) -> focus id or None."""
+    out = []
+    for g in projects:
+        lad = g.get("ladder")
+        if not lad or not lad.get("left") or str(g.get("continue") or "").startswith(("on", "off:")): continue
+        for th in [x for x in (lad.get("thread"), g["project"]) if x]:
+            fid = focus_of(th)
+            if fid: out.append((g["project"], th, fid)); break
+    return out
+
 def project_goals():
     out = []
     for g in sorted(PROJECTS.glob("*/goals.md")):   # lowercase only: the GOALS.md of cloned repos (ece298a-pll, resume) are their own files, not Hive goals
@@ -136,7 +164,7 @@ def project_goals():
         lad = ladder(txt)
         if lad: lad["done"] += archived_done(g)
         out.append({"project": g.parent.name, "goal": head[:120], "measure": measure, "threads": [t.lower() for t in THREAD.findall(txt) if t.lower() != "thread"][:8],
-                    "edited": dt.datetime.fromtimestamp(g.stat().st_mtime, dt.timezone.utc).isoformat(timespec="seconds"), "ladder": lad, "ladders": ladders(txt), "path": str(g)})
+                    "edited": dt.datetime.fromtimestamp(g.stat().st_mtime, dt.timezone.utc).isoformat(timespec="seconds"), "ladder": lad, "ladders": ladders(txt), "path": str(g), "continue": continue_state(txt)})
     return out
 
 HASH_NAME = re.compile(r"[a-z][0-9a-f]{4,}")   # as in hive: what new/claude/codex/warden hand out; anything else is a named identity
@@ -230,9 +258,15 @@ def goals(t=None):
             # never started it (the voice board and its film sat unstarted after the person's resume, 2026-11-12, post 11121012cbf5)
             with_ladder(row, g, t)
         rows.append(row)
+    try:   # one focus state for every lookup; a broken focus store leaves the list empty rather than failing hive goals
+        sys.path.insert(0, str(CORE)); import focus as _F; _fst = _F.state(); _fof = lambda th: _F.focus_of(_fst, th)
+    except Exception: _fof = lambda th: None
+    nocont = continue_missing(projects, _fof); nopaths = {str(PROJECTS / p / "goals.md") for p, _, _ in nocont}
+    for r in rows:
+        if r.get("goals_path") and str(r["goals_path"]) in nopaths: r["no_continue"] = True
     covered = {r["thread"] for r in rows} | {th for r in rows for th in (r.get("threads") or [])}
     loose = [e for e in open_asks if e.get("thread") not in covered]
-    return {"at": t.isoformat(timespec="seconds"), "rows": rows, "directions": len(directions), "open_asks": len(open_asks), "loose_asks": len(loose),
+    return {"at": t.isoformat(timespec="seconds"), "rows": rows, "directions": len(directions), "open_asks": len(open_asks), "loose_asks": len(loose), "no_continue": [{"project": p, "thread": th, "focus": f} for p, th, f in nocont],
             "loose_threads": sorted({e.get("thread") for e in loose}, key=lambda x: str(x))}
 
 PILE = 8   # card lint flags that make a card's own cleanup a round's first job (card_flags)
@@ -372,12 +406,20 @@ def last_nothing(to, thread):
 
 CARD_KINDS = ("past date", "to-do off the list", "says today", "hidden ask", "long bullet", "long lead")   # the lint findings a ladder agent can clear in a minute
 
+def _focus_id(thread):
+    """The focus a thread is in, by tag first (focus.focus_of). HA-4 2026-11-19: matching only a focus's own thread or id left hive-meta's ladder
+    threads (meta-load, meta-reflect ...) with no focus, so their card flags never reached a brief and card_pile_due never fired."""
+    try:
+        sys.path.insert(0, str(Path(__file__).parent)); import focus
+        return focus.focus_of(focus.state(), thread)
+    except Exception: return None
+
 def card_mine(thread, run=None):
     """(focus id, the card's own clearable lint findings) for a thread; (None, []) when lint cannot run."""
     try:
         out = (run or (lambda: subprocess.run(["hive", "focus", "lint", "--json"], capture_output=True, text=True, timeout=30).stdout))()
         items = json.loads(out)
-        fid = next((f["id"] for f in json.loads((run and "[]") or subprocess.run(["hive", "focus", "list", "--json"], capture_output=True, text=True, timeout=30).stdout) if thread in (f.get("thread"), f.get("id"))), None) if not run else thread
+        fid = thread if run else _focus_id(thread)
     except Exception: return None, []
     return fid, [i for i in items if i.get("focus") == fid and i.get("kind") in CARD_KINDS]
 
@@ -418,7 +460,9 @@ def brief(row):
              " Read the thread for context, then do the rung yourself; do not hand it back.") if prev else (
         f"\n\n**You take this fresh:** `{row['last_worker']}` would have carried {big // 1000}k tokens of context into this round (a context-cap trial, hive-meta L134)."
         " Read the thread's last posts and the files they name for what it learned, then do the rung yourself.") if big else ""
-    return head + rung + fresh + last_nothing(to, row.get("thread")) + card_flags(row.get("thread")) + """
+    nocont = ("\n\n**This ladder has no `Continue:` line** under its `## Ladder`, so the starter drops every `Next:` here and the next step waits for a floor start."
+              " Add `Continue: on` in this run (or `Continue: off (why)` if steps here must not chain).") if row.get("no_continue") else ""
+    return head + rung + fresh + last_nothing(to, row.get("thread")) + card_flags(row.get("thread")) + nocont + """
 
 Rules for the round:
 - Read the last 5 posts of this thread for context, not for a conclusion. Earlier posts here may say nothing is left: that was a check-in, not a finding. "Nothing changed" is not a result, and you are not here to re-check the state.
@@ -470,6 +514,7 @@ def render(g):
     if idle: lines.append(f"\nIdle (nobody running, no agent post in {FOCUS_IDLE_H:g} h for a focus or {IDLE_D:g} days for a project): " + ", ".join(r["name"].split(":")[0] for r in idle) + ". Start someone on each, or say in its thread why it waits. A focus is never left idle because its owner is: start a fresh agent that reads the thread and takes the next step that does not need the person.")
     nomeasure = [r["name"] for r in g["rows"] if r["kind"] == "project" and not r["measure"]]
     if nomeasure: lines.append("Projects whose goals.md names no measure: " + ", ".join(nomeasure))
+    if g.get("no_continue"): lines.append("Focus ladders with no `Continue:` line, so every `Next:` in them is dropped and waits for a floor start: " + ", ".join(f"{x['project']} (thread {x['thread']}, focus {x['focus']})" for x in g["no_continue"]) + ". Add `Continue: on` under its `## Ladder`, or `Continue: off (why)`; `hive goals --continue` lists them all.")
     if g["loose_threads"]: lines.append(f"Open asks outside every focus and project: {g['loose_asks']} in {len(g['loose_threads'])} threads (`hive asks list`, `hive asks check`); these are the person's one-off asks and agents' leftovers, moved by the keeper, not by a goal.")
     return "\n".join(lines)
 
@@ -514,6 +559,7 @@ def main():
     ap.add_argument("--post", metavar="THREAD", help="post that brief to its thread; --model applies only to a fresh agent, so a woken worker keeps its own (a grader step-up, its own hive model)")
     ap.add_argument("--model", help="with --post: the model for a fresh agent")
     ap.add_argument("--force", action="store_true", help="with --post: post even to a parked ladder")
+    ap.add_argument("--continue", dest="cont", action="store_true", help="each focus ladder (a `## Ladder` with open rungs in a focus thread): on, off with its reason, or MISSING")
     ap.add_argument("--rounds", metavar="DAYS", type=float, help="keeper rounds on focuses over the last DAYS: work, wait, silent")
     ap.add_argument("--tick", metavar="POST", help="tick the rung --rung names, appending this result post's id after checking it is on the board")
     ap.add_argument("--rung", metavar="WORDS", help="with --tick: words from the rung's text, enough to pick one open rung")
@@ -534,6 +580,17 @@ def main():
         try: new, line = tick(f.read_text(errors="replace"), a.rung, a.tick)
         except ValueError as e: sys.exit(f"{f}: {e}")
         f.write_text(new); print(f"ticked in {f}:\n{line.strip()}"); return
+    if a.cont:
+        try: sys.path.insert(0, str(CORE)); import focus as _F; _fst = _F.state(); fof = lambda th: _F.focus_of(_fst, th)
+        except Exception as e: sys.exit(f"focus store unreadable: {e}")
+        miss = {p for p, _, _ in continue_missing(project_goals(), fof)}
+        for pg in project_goals():
+            lad = pg.get("ladder")
+            if not lad or not lad.get("left"): continue
+            th = next((x for x in (lad.get("thread"), pg["project"]) if x and fof(x)), None)
+            if not th: continue
+            print(f"{pg['project']:<22} {th:<16} {fof(th):<16} {'MISSING' if pg['project'] in miss else pg['continue']}")
+        sys.exit(1 if miss else 0)
     g = goals()
     if a.rounds is not None:
         ths = [r["thread"] for r in g["rows"] if r["kind"] == "focus" or r.get("ladder")]; res = rounds(jsonl(BOARD), ths, (now() - dt.timedelta(days=a.rounds)).isoformat(timespec="seconds"))
