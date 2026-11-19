@@ -56,6 +56,14 @@ jobs:
         timeout-minutes: 75
         env: { HIVE_APP_REAL: "1" }
         run: node test/real.js "${{ matrix.app }}"
+      # The README's "Remove it" steps, run after the real install: nothing of the Hive may be left.
+      - if: runner.os == 'Linux'
+        run: HIVE_APP_REAL=1 node test/remove.js
+      - if: matrix.os == 'windows-latest' || matrix.os == 'macos-15-intel'
+        continue-on-error: true
+        timeout-minutes: 30
+        env: { HIVE_APP_REAL: "1" }
+        run: node test/remove.js
       # What opening the download looks like on a Mac: the zip unpacked with the browser's download mark, then double-clicked.
       - if: runner.os == 'macOS'
         continue-on-error: true
