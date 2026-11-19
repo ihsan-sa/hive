@@ -9,7 +9,9 @@ AGENT = re.compile(r"^[a-z][0-9a-f]{4,}$")  # as away.py
 SELF_THREADS = {"starter", "keeper", "improve", "watchdog", "progress"}  # as away.py
 LONG_WORDS = 30
 FENCE, SPAN = re.compile(r"```.*?```", re.S), re.compile(r"`[^`\n]*`")
+URL = re.compile(r"^(?:https?://|www\.|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:ca|com|org|net|io|dev|ai|app|cc|co|uk|de)/)", re.I)
 PATH = re.compile(r"(?<!\S)[\w.~-]*/[\w.~/-]*(?=[\s,;:!?)]|$)")
+REPORT_BACK = re.compile(r"\bthen (?:tell me|say so|say which|let me know|reply|post)\b", re.I)  # one step plus a report back is one ask, not a chain (2026-11-19: 2 of 8 flagged lines)
 CHAIN = re.compile(r"\bthen\b|\bafter that\b|\bonce you\b|(?:^|\s)1[.)]\s.*(?:^|\s)2[.)]\s", re.I | re.S)
 OURS = re.compile(r"\b(?<![-\w])(?:reload|refresh(?![- ]tokens?)|test (?:it|this|that|the|on|whether|if)|try it|confirm (?:that )?it works)\b|\bsay (?:if|whether) it looks right\b"
                   r"|\breview (?:the |this |that |our |a |an )?(?:open )?(?:pr|pull request)\b"
@@ -64,6 +66,7 @@ def lines(text):
 
 def is_path(tok):
     """A word with a slash, less the ones that are only alternatives: yes/no, and/or, A/B, Windows/Mac."""
+    if URL.match(tok): return False   # a link to open isn't a command (2026-11-19: hivelab.ca/<project>/ was 2 of 8 flagged lines)
     parts = tok.strip("/").split("/")
     return tok.startswith(("/", "~", ".")) or not (all(len(p) <= 3 for p in parts) or all(p[:1].isupper() and p.isalpha() for p in parts))
 
@@ -76,7 +79,7 @@ def flags(line):
     if len(line.split()) > LONG_WORDS: out.append("long")
     if len(re.findall(r"[.!?]\s+[A-Z]", bare)) >= 2 or ";" in bare: out.append("many")
     if SPAN.search(line) or re.search(r"(?<!\S)--[a-z]", bare) or any(is_path(m[0]) for m in PATH.finditer(bare)): out.append("command")
-    if CHAIN.search(bare): out.append("chain")
+    if CHAIN.search(REPORT_BACK.sub(" ", bare)): out.append("chain")
     if OURS.search(bare.lower()): out.append("ours")
     if OFFER.match(bare): out.append("offer")
     return out
