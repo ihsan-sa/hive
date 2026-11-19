@@ -976,7 +976,7 @@ def cmd_stalled(a):
     for p in posts(): threads.setdefault(p.get("thread") or p.get("id"), []).append(p)
     try: st = json.loads((STATE / "starter.json").read_text())
     except (OSError, ValueError): st = {}
-    queued = set(st.get("pending", {})) | set(st.get("resume", {}))
+    queued = set(st.get("pending", {})) | set(st.get("resume", {})) | set(st.get("held", {}))   # held: its posts wait for a paused or stopped work tier (`hive tier`), not for anyone to unstick it
     live = set()
     for f in RUN.glob("*.json"):
         try: r = json.loads(f.read_text()); os.kill(r["pid"], 0); live.add(r["name"])
