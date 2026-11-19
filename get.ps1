@@ -253,7 +253,8 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
   } catch { Note "Couldn't set the Hive to start when you sign in: $_. It runs while a hive window is open." }
 
   # 6b. A Hive icon in the Start menu and on the Desktop: it wakes the Hive if stopped, waits, then opens the app.
-  try {
+  # The desktop app (HIVE_FROM_APP=1) has its own icons with the same name, so it skips these.
+  if ($env:HIVE_FROM_APP -ne '1') { try {
     $ico = Join-Path $bin 'Hive.ico'
     try { & wsl.exe -d $distro -u hive --cd ~ -- bash -lc 'cp ~/modules/dash/web/icons/hive.ico "$(wslpath "$0")"' $ico 2>$null | Out-Null } catch { }
     $launch = Join-Path $bin 'hive-open.ps1'
@@ -277,7 +278,7 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
       $s.Description = 'Open the Hive'
       $s.Save()
     }
-  } catch { Note "Couldn't add the Hive icon: $_. Run hive open in a window instead." }
+  } catch { Note "Couldn't add the Hive icon: $_. Run hive open in a window instead." } }
 
   # 7. Open the app.
   $address = (& wsl.exe -d $distro -u hive --cd ~ -- bash -lc 'hive web 2>/dev/null' | Select-Object -First 1)

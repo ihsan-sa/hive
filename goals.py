@@ -235,6 +235,17 @@ def goals(t=None):
     return {"at": t.isoformat(timespec="seconds"), "rows": rows, "directions": len(directions), "open_asks": len(open_asks), "loose_asks": len(loose),
             "loose_threads": sorted({e.get("thread") for e in loose}, key=lambda x: str(x))}
 
+PILE = 8   # card lint flags that make a card's own cleanup a round's first job (card_flags)
+PILE_EVERY_H = 6
+
+def card_pile_due(row, t):
+    """HA-4 (2026-11-19): hive-meta and rsi-loop held 35 passed-date flags because every open rung was dated, so no keeper round was ever dispatched
+    to read the brief that lists them. A gated ladder whose card carries PILE or more flags gets a round every PILE_EVERY_H hours, not one a day."""
+    try: last = dt.datetime.fromisoformat(row.get("asked_at") or "")
+    except ValueError: last = None
+    if last and (t - (last if last.tzinfo else last.replace(tzinfo=dt.timezone.utc))).total_seconds() < PILE_EVERY_H * 3600: return False
+    return len(card_mine(row.get("thread"))[1]) >= PILE
+
 def ask_due(row, t):
     """True when a ladder whose open rungs all wait on a date is owed its daily ask: the first of them opens ASK_AHEAD_H or more hours from now and no ask was posted in its thread in the last ASK_EVERY_H hours."""
     try: gate = dt.datetime.fromisoformat(row["gated_until"]).replace(tzinfo=dt.timezone.utc)
@@ -256,7 +267,7 @@ def with_ladder(row, g, t=None):
             row["gated_until"] = min(r["after"] for r in open_)  # UTC "YYYY-MM-DD[THH:MM]"; the floor starts nobody before it (ae5ec 11-16: a Waiting: cap of 2 h let a keeper in every 2 h on a ladder gated 11 h)
             # a date is when a reading can be taken, not a reason for the goal to stand still until then: once a day such a ladder gets one round that is asked what else
             # would move its measure (ae49e, 2026-11-18: 17 of 28 ladders with an open rung had only dated ones, and nothing in the hive asked any of them for more)
-            if not lad["parked"] and ask_due(row, t or now()): row["ask_more"] = True
+            if not lad["parked"] and (ask_due(row, t or now()) or card_pile_due(row, t or now())): row["ask_more"] = True
             else: row["idle"] = False
     return row
 
@@ -358,16 +369,20 @@ def last_nothing(to, thread):
 
 CARD_KINDS = ("past date", "to-do off the list", "says today", "hidden ask", "long bullet", "long lead")   # the lint findings a ladder agent can clear in a minute
 
-def card_flags(thread, run=None):
-    """The brief's line on the focus card's own lint (HA-4, 2026-11-19): `hive focus set` prints the flags only to the agent that saves a
-    summary, and `check add` prints none, so 25 of 29 passed dates sat on to-dos that nobody who owned the ladder was ever shown (hive-meta 13,
-    rsi-loop 12 of 52 findings). A keeper round on the focus now carries them. Empty when the card is clean or lint cannot run."""
+def card_mine(thread, run=None):
+    """(focus id, the card's own clearable lint findings) for a thread; (None, []) when lint cannot run."""
     try:
         out = (run or (lambda: subprocess.run(["hive", "focus", "lint", "--json"], capture_output=True, text=True, timeout=30).stdout))()
         items = json.loads(out)
         fid = next((f["id"] for f in json.loads((run and "[]") or subprocess.run(["hive", "focus", "list", "--json"], capture_output=True, text=True, timeout=30).stdout) if thread in (f.get("thread"), f.get("id"))), None) if not run else thread
-    except Exception: return ""
-    mine = [i for i in items if i.get("focus") == fid and i.get("kind") in CARD_KINDS]
+    except Exception: return None, []
+    return fid, [i for i in items if i.get("focus") == fid and i.get("kind") in CARD_KINDS]
+
+def card_flags(thread, run=None):
+    """The brief's line on the focus card's own lint (HA-4, 2026-11-19): `hive focus set` prints the flags only to the agent that saves a
+    summary, and `check add` prints none, so 25 of 29 passed dates sat on to-dos that nobody who owned the ladder was ever shown (hive-meta 13,
+    rsi-loop 12 of 52 findings). A keeper round on the focus now carries them. Empty when the card is clean or lint cannot run."""
+    fid, mine = card_mine(thread, run)
     if not mine: return ""
     n = 12 if len(mine) >= 8 else 6
     lines = "\n".join(f"- {i['kind']}: {i['what']} (in: {(i.get('in') or '')[:60]}) → {i['fix'][:110]}" for i in mine[:n])
