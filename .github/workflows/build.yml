@@ -37,6 +37,12 @@ jobs:
           for i in $(seq 20); do [ -S "$XDG_RUNTIME_DIR/bus" ] && break; sleep 1; done
           export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
           HIVE_APP_REAL=1 xvfb-run -a node test/real.js "$PWD/${{ matrix.app }}"
+      # The .deb as a person installs it: dpkg, then the command in its menu entry. The Hive from the step above is still there.
+      - if: runner.os == 'Linux'
+        run: |
+          export XDG_RUNTIME_DIR=/run/user/$(id -u) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus
+          sudo apt-get install -y ./dist/Hive-linux-amd64.deb
+          xvfb-run -a node test/deb.js
       # The same on Windows (its WSL 2) and on the Intel Mac (its VM; Apple silicon runners can't start one). These machines
       # differ from a person's computer, so a stop here is read, not a red build.
       - if: matrix.os == 'windows-latest' || matrix.os == 'macos-15-intel'

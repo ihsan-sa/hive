@@ -47,7 +47,7 @@ let port, impostor = '';
 const asked = [], seen = [];   // the proof questions, and the page loads, the stand-in server got
 
 async function start() {
-  const env = { ...process.env, HOME: home, HIVE_APP_TEST: '1', HIVE_SITE: `http://127.0.0.1:${port}`, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share') };
+  const env = { ...process.env, HOME: home, HIVE_APP_TEST: '1', HIVE_APP_WATCH_MS: '700', HIVE_SITE: `http://127.0.0.1:${port}`, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share') };
   delete env.HIVE_DIR;
   const app = await _electron.launch(process.env.HIVE_APP_BIN ? { executablePath: process.env.HIVE_APP_BIN, args: ['--no-sandbox'], env } : { executablePath: require('electron'), args: [root, '--no-sandbox'], env });
   const page = await app.firstWindow();
@@ -125,6 +125,17 @@ const title = page => page.locator('#title').textContent();
     await page.waitForSelector('#app', { timeout: 20000 });
     await app.close();
   }
+
+  // The Hive restarts under an open window and another program takes its port: the window leaves for the setup screen.
+  ({ app, page } = await start());
+  await page.waitForSelector('#app', { timeout: 20000 });
+  impostor = 'wrong';
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === "The Hive didn't start", null, { timeout: 15000 });
+  assert.ok((await page.locator('#log').textContent()).includes('stopped showing'));
+  impostor = '';
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await page.waitForSelector('#app', { timeout: 20000 });
+  await app.close();
 
   server.close(); fs.rmSync(home, { recursive: true, force: true });
   console.log('ok e2e');

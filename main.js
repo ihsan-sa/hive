@@ -93,8 +93,23 @@ async function open() {
   // The address is the key. It goes only to a server that shows it already has it; anything else on that port gets nothing.
   if (!await proves(url)) return showSetup('nostart', "What answers on the Hive's address didn't show that it is the Hive, so the app didn't sign in to it. If the Hive on this computer is an older one, Repair brings it up to date. If not, another program may be using the Hive's port.");
   hiveUrl = url;
+  watch();
   try { await win.loadURL(url); fails = 0; }
   catch (e) { hiveUrl = null; return showSetup('nostart', sorry); }
+}
+
+// While the Hive is showing, ask again now and then: if another program has taken its port (the Hive restarted under the window),
+// the window leaves it for the setup screen instead of sending the sign-in cookie on to it.
+let watcher = null;
+function watch() {
+  clearInterval(watcher);
+  watcher = setInterval(async () => {
+    if (!win || !hiveUrl || isSetup(win.webContents)) return;
+    const u = hiveUrl;
+    if (await proves(u) || hiveUrl !== u) return;
+    hiveUrl = null;
+    showSetup('nostart', "What answers on the Hive's address stopped showing that it is the Hive, so the app left it. Try again signs in once the Hive answers.");
+  }, Number(process.env.HIVE_APP_WATCH_MS) || 30000);
 }
 
 async function install(accept) {
