@@ -15,7 +15,8 @@ if (p === 'linux') {
   gone(path.join(home, 'hive')); gone(path.join(home, '.local/share/applications/hive.desktop'));
 } else if (p === 'darwin') {
   if (!fs.existsSync(path.join(home, '.hive'))) { console.error('no ~/.hive: nothing installed to remove'); process.exit(1); }
-  run('script', ['-q', '/dev/null', 'sh', '-c', 'curl -fsSL https://hivelab.ca/uninstall-mac.sh | sh']);
+  // macOS `script` needs a real terminal on its own stdin, which a CI step lacks: make the pty with python.
+  run('python3', ['-c', 'import os,pty,sys,time\npid,fd=pty.fork()\nif pid==0: os.execvp("sh",["sh","-c","curl -fsSL https://hivelab.ca/uninstall-mac.sh | sh"])\ntime.sleep(3); os.write(fd,b"delete\\n")\nwhile True:\n  try: d=os.read(fd,4096)\n  except OSError: break\n  if not d: break\n  sys.stdout.buffer.write(d); sys.stdout.flush()\nsys.exit(os.waitstatus_to_exitcode(os.waitpid(pid,0)[1]))']);
   gone(path.join(home, '.hive')); gone(path.join(home, 'Applications/Hive.app'));
 } else if (p === 'win32') {
   const wsl = () => spawnSync('wsl.exe', ['-l', '-q'], { encoding: 'utf16le' }).stdout || '';
