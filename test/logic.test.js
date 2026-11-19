@@ -26,7 +26,7 @@ t('linux: the Hive gets its own surroundings, as the installer gives it', () => 
 t('windows: the installer runs without another PowerShell\'s module folders', () => assert.deepStrictEqual(lib.installCommand('win32', { windir: 'C:\\Windows' }, false).unset, ['PSModulePath']));
 t('windows: the installer is told the machine\'s own chip, not the one a translated app sees', () => {
   const c = lib.installCommand('win32', { windir: 'C:\\Windows' }, false).args.at(-1);
-  assert.match(c, /^\$a = \(Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment'[^;]*\)\.PROCESSOR_ARCHITECTURE; if \(\$a\) \{ \$env:PROCESSOR_ARCHITECTURE = \$a \}; irm \S+\/install\.ps1 \| iex$/);
+  assert.match(c, /^\$a = \(Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment'[^;]*\)\.PROCESSOR_ARCHITECTURE; if \(\$a\) \{ \$env:PROCESSOR_ARCHITECTURE = \$a \}; try \{ \$s = irm \S+\/install\.ps1 \} catch \{[^}]*Couldn.t reach[^}]*\}; iex \$s$/);
 });
 t('proof: the mark only the key can make, for this port and this question', () => {
   const mark = (key, port, n) => require('crypto').createHmac('sha256', key).update(`proof:${port}:${n}`).digest('hex');
@@ -66,7 +66,7 @@ t('linux: own user, by its launcher', () => {
 });
 t('install commands', () => {
   const w = lib.installCommand('win32', { windir: 'C:\\Windows' }, false);
-  assert.ok(w.file.endsWith('powershell.exe')); assert.ok(w.args.at(-1).includes('/install.ps1 | iex')); assert.strictEqual(w.env.HIVE_ACCEPT, undefined);
+  assert.ok(w.file.endsWith('powershell.exe')); assert.ok(w.args.at(-1).includes('/install.ps1 }')); assert.strictEqual(w.env.HIVE_ACCEPT, undefined);
   assert.strictEqual(lib.installCommand('win32', {}, true).env.HIVE_ACCEPT, '1');
   const m = lib.installCommand('darwin', {}, false); assert.ok(m.args[1].includes('/install-mac.sh')); assert.strictEqual(m.env.HIVE_MAC_TEST, '1');
   const l = lib.installCommand('linux', {}, true); assert.ok(l.args[1].includes('--this-account')); assert.strictEqual(l.env.HIVE_NO_LAUNCHER, '1'); assert.strictEqual(l.env.HIVE_REPORT, '0');
@@ -94,3 +94,37 @@ t('addresses', () => {
   assert.strictEqual(lib.plain('a\r\nb\n 10%\r 50%\r100%\nc'), 'a\r\nb\n100%\nc');
 });
 console.log(`ok ${n} tests`);
+
+// Keys for zoom and reload where there is no menu.
+{
+  const k = (key, o = {}) => lib.shortcut({ type: 'keyDown', key, ...o });
+  assert.strictEqual(k('r', { control: true }), 'reload'); assert.strictEqual(k('F5'), 'reload');
+  assert.strictEqual(k('=', { control: true }), 'zoomIn'); assert.strictEqual(k('-', { control: true }), 'zoomOut'); assert.strictEqual(k('0', { control: true }), 'zoomReset');
+  assert.strictEqual(k('r'), null); assert.strictEqual(k('-', { control: true, alt: true }), null);
+  assert.strictEqual(lib.shortcut({ type: 'keyUp', key: 'r', control: true }), null);
+  console.log('ok shortcuts logic');
+  const scr = [{ x: 0, y: 0, width: 1920, height: 1080 }];
+  assert.deepStrictEqual(lib.windowState({ x: 10, y: 20, width: 900, height: 700 }, scr), { width: 900, height: 700, x: 10, y: 20 });
+  assert.deepStrictEqual(lib.windowState({ x: 5000, y: 20, width: 900, height: 700 }, scr), { width: 900, height: 700 }, 'off every screen: size only');
+  assert.strictEqual(lib.windowState({ width: 10, height: 10 }, scr), null);
+  assert.strictEqual(lib.windowState('x', scr), null);
+  console.log('ok window state logic');
+}
+
+// Mac: short on disk space is said before the install starts.
+{
+  const { spawnSync } = require('child_process');
+  const run = gb => spawnSync('/bin/sh', ['-c', lib.diskCheck() + 'echo passed'], { env: { ...process.env, HIVE_MIN_FREE_GB: String(gb) }, encoding: 'utf8' });
+  const low = run(99999999); assert.strictEqual(low.status, 1); assert.match(low.stdout, /not enough free disk space/); assert.ok(!/passed/.test(low.stdout));
+  const ok = run(0); assert.strictEqual(ok.status, 0); assert.match(ok.stdout, /passed/);
+  assert.match(lib.installCommand('darwin', {}, false).args[1], /^need=\$\{HIVE_MIN_FREE_GB:-15\}/);
+  assert.ok(!/free=/.test(lib.installCommand('linux', {}, false).args[1]));
+  console.log('ok disk space');
+}
+
+// site name matches the one the site's own install/uninstall lines use
+{
+  const { SITE } = require('../lib');
+  if (!process.env.HIVE_SITE) assert.strictEqual(SITE, 'https://hivelab.ca');
+  console.log('ok site name');
+}

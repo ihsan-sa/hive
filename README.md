@@ -27,6 +27,12 @@ Until the app is signed with a paid Apple certificate, the Mac refuses the first
 The older shortcut (right-click, Open) no longer works on macOS 15. For someone at ease in Terminal,
 `xattr -dr com.apple.quarantine /Applications/Hive.app` does the same as steps 1 and 2 (checked in the same run: the app then opens straight to "Set up the Hive").
 
+## Remove it
+Delete the app first (the usual way for the system), then take the Hive itself off with the site's remover. Each remover asks before deleting, and keeps your projects, notes and board (copied to a folder of their own) unless you say to delete them.
+- **Linux** (the app installs the Hive inside your own account): the folder `~/hive`, its background services and the `hive` command. Run `curl -fsSL https://hivelab.ca/uninstall.sh | sh -s -- --this-account`; it never deletes your account. Then `sudo apt remove hive-app` for the .deb (or delete the AppImage). The app's own settings are in `~/.config/Hive` (window size only; nothing from the Hive).
+- **Windows**: the Hive is a WSL system called `Hive` (WSL itself and your other Linux systems stay), a `Hive` entry in the Start menu, on the Desktop and in Startup (it keeps WSL awake), and `%LOCALAPPDATA%\Hive`. Run `irm https://hivelab.ca/uninstall.ps1 | iex` in PowerShell, then uninstall "Hive" in Settings, Apps. Your kept files go to `Hive-kept-DATE` in your home folder.
+- **Mac**: the Hive's own small Linux machine (a Lima VM named `hive.vm`) and `~/.hive`, plus `~/Applications/Hive.app` (the launcher icon). A Lima of your own in `~/.lima` is not touched. Run `curl -fsSL https://hivelab.ca/uninstall-mac.sh | sh`, then drag `/Applications/Hive.app` to the Bin. Your kept files go to `~/hive-kept-DATE`.
+
 ## Files
 - `lib.js`: everything that differs by system, with no Electron in it. `node test/logic.test.js`.
 - `main.js`: the window. Only the setup screen and the local Hive ever load in it; other links go to the browser.

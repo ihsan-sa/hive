@@ -1,9 +1,10 @@
 // The Hive as a desktop app. A thin shell: it finds the Hive on this machine (or installs it with the site's own installer),
 // asks it for its address, and shows the web app in a window. All the product is the web app, so it has one version on every system.
 'use strict';
-const { app, BrowserWindow, ipcMain, shell, session, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, session, Menu, screen, clipboard } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 const lib = require('./lib');
 
 let win = null, hiveUrl = null, child = null, kept = false, fails = 0;
@@ -124,12 +125,30 @@ async function install(accept) {
   send('state', what, { platform: process.platform, note: '' });
 }
 
+// The window's size and place are kept in the app's own data folder (nothing from the Hive), and used at the next launch.
+const stateFile = () => path.join(app.getPath('userData'), 'window-state.json');
+function savedState() {
+  try { return lib.windowState(JSON.parse(fs.readFileSync(stateFile(), 'utf8')), screen.getAllDisplays().map(d => d.workArea)); } catch { return null; }
+}
+function saveState(w) {
+  try {
+    if (!w || w.isDestroyed() || w.isMinimized() || w.isFullScreen()) return;
+    fs.writeFileSync(stateFile(), JSON.stringify({ ...w.getNormalBounds(), maximized: w.isMaximized() }));
+  } catch { }
+}
+
 function create() {
+  const was = savedState();
   win = new BrowserWindow({
-    width: 1280, height: 860, minWidth: 380, minHeight: 500, title: 'Hive', backgroundColor: '#111111', autoHideMenuBar: true,
+    width: 1280, height: 860, ...(was ? { width: was.width, height: was.height, ...('x' in was ? { x: was.x, y: was.y } : {}) } : {}), minWidth: 380, minHeight: 500, title: 'Hive', backgroundColor: require('electron').nativeTheme.shouldUseDarkColors ? '#111111' : '#ffffff', autoHideMenuBar: true,
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, devTools: !app.isPackaged },
   });
+  if (was && was.maximized) win.maximize();
+  let tick = null;
+  const later = () => { clearTimeout(tick); tick = setTimeout(() => saveState(win), 500); };
+  win.on('resize', later); win.on('move', later);
+  win.on('close', () => { clearTimeout(tick); saveState(win); });
   win.on('closed', () => { win = null; });
   // Links that leave the Hive's own app open in the person's browser; the window itself only ever shows the Hive or the setup screen.
   const stays = u => (hiveUrl && lib.sameApp(u, hiveUrl));
@@ -150,6 +169,14 @@ function create() {
     wc.on('did-create-window', w => guard(w.webContents));
   };
   guard(win.webContents);
+  // No menu on Windows and Linux, so the keys a View menu would give: zoom, and reload (only while the Hive shows).
+  if (process.platform !== 'darwin') win.webContents.on('before-input-event', (e, input) => {
+    const a = lib.shortcut(input), wc = win.webContents;
+    if (!a) return;
+    if (a === 'reload') { if (hiveUrl && !isSetup(wc)) { e.preventDefault(); wc.reload(); } return; }
+    e.preventDefault();
+    wc.setZoomLevel(a === 'zoomReset' ? 0 : Math.max(-3, Math.min(5, wc.getZoomLevel() + (a === 'zoomIn' ? 0.5 : -0.5))));
+  });
   // The Hive stopped under the window (an update, a restart): go and find it again rather than show a blank page.
   win.webContents.on('did-fail-load', (_e, code, _d, url, main) => {
     if (!(main && code !== -3 && hiveUrl && lib.isLocal(url))) return;
@@ -173,6 +200,8 @@ function permissions() {
 const fromSetup = e => e.senderFrame && isSetupUrl(e.senderFrame.url) && win && e.sender === win.webContents;
 ipcMain.on('install', (e, accept) => { if (fromSetup(e)) install(accept); });
 ipcMain.on('retry', e => { if (fromSetup(e)) open(); });
+ipcMain.on('copy', (e, text) => { if (fromSetup(e)) clipboard.writeText(lib.redact(text).slice(0, 200000)); });
+ipcMain.on('version', e => { e.returnValue = fromSetup(e) ? app.getVersion() : ''; });
 ipcMain.on('quit', e => { if (fromSetup(e)) app.quit(); });
 
 if (!app.requestSingleInstanceLock()) app.quit();

@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 if (location.protocol === 'file:') contextBridge.exposeInMainWorld('hive', {
   install: accept => ipcRenderer.send('install', !!accept),
   retry: () => ipcRenderer.send('retry'),
+  copy: text => ipcRenderer.send('copy', String(text)),
+  version: ipcRenderer.sendSync('version'),
   quit: () => ipcRenderer.send('quit'),
   on: (name, fn) => ipcRenderer.on(name, (_e, ...a) => fn(...a)),
 });

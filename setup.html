@@ -3,29 +3,35 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src file:">
 <title>Hive</title>
 <style>
-  :root { color-scheme: dark; }
+  :root { color-scheme: dark light;
+    --bg:#111; --fg:#eee; --p:#c8c8c8; --small:#999; --bd:#444; --btn:#1c1c1c; --prebd:#2a2a2a; --prebg:#000; --pre:#cfcfcf; --spin:#555; --focus:#fff; }
   html, body { height: 100%; margin: 0; }
-  body { background: #111; color: #eee; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; align-items: center; justify-content: center; }
+  body { background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; align-items: center; justify-content: center; }
   main { width: min(680px, 92vw); padding: 24px 0; }
   img { width: 72px; height: 72px; border-radius: 16px; display: block; margin-bottom: 20px; }
   h1 { font-size: 26px; margin: 0 0 8px; font-weight: 650; }
-  p { margin: 8px 0; color: #c8c8c8; } p.small { font-size: 14px; color: #999; }
+  p { margin: 8px 0; color: var(--p); } p.small { font-size: 14px; color: var(--small); }
   .row { margin-top: 22px; display: flex; gap: 12px; flex-wrap: wrap; }
-  button { font: inherit; padding: 10px 20px; border-radius: 10px; border: 1px solid #444; background: #1c1c1c; color: #eee; cursor: pointer; }
+  button { font: inherit; padding: 10px 20px; border-radius: 10px; border: 1px solid var(--bd); background: var(--btn); color: var(--fg); cursor: pointer; }
   button.main { background: #f5b800; border-color: #f5b800; color: #111; font-weight: 600; }
-  button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
-  pre { margin: 18px 0 0; padding: 14px; background: #000; border: 1px solid #2a2a2a; border-radius: 10px; max-height: 44vh; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace; color: #cfcfcf; }
+  button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  pre { margin: 18px 0 0; padding: 14px; background: var(--prebg); border: 1px solid var(--prebd); border-radius: 10px; max-height: 44vh; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace; color: var(--pre); }
+  pre:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
   pre:empty { display: none; }
-  .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid #555; border-top-color: #f5b800; border-radius: 50%; animation: s 0.9s linear infinite; vertical-align: -2px; margin-right: 8px; }
+  .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--spin); border-top-color: #f5b800; border-radius: 50%; animation: s 0.9s linear infinite; vertical-align: -2px; margin-right: 8px; }
   @keyframes s { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+  @media (prefers-color-scheme: light) { :root { --bg:#fff; --fg:#1a1a1a; --p:#444; --small:#666; --bd:#bbb; --btn:#f3f3f3; --prebd:#ddd; --prebg:#f7f7f7; --pre:#222; --spin:#bbb; --focus:#000; } }
 </style></head>
 <body><main>
   <img src="build/icon.png" alt="">
+  <div id="say" aria-live="polite" aria-atomic="true">
   <h1 id="title">Hive</h1>
   <div id="text"></div>
+  </div>
   <div class="row" id="buttons"></div>
-  <pre id="log" aria-live="polite"></pre>
+  <p class="small" id="ver"></p>
+  <pre id="log" role="log" tabindex="0" aria-label="What the installer said" aria-live="polite"></pre>
 </main>
 <script>
 const $ = id => document.getElementById(id);
@@ -39,9 +45,9 @@ const screens = {
   installing: () => ({ title: "Installing the Hive", spin: true, text: ["This takes a few minutes. You can leave this window open and do something else."], buttons: [] }),
   accept: () => ({ title: "Before it installs", text: ["Read what it says below. Nothing has been changed so far."], buttons: [["Accept and install", "main", () => { $('log').textContent = ''; hive.install(true); }], ["Don't install", "", () => hive.quit()]], keep: true }),
   restart: () => ({ title: "Restart Windows", text: ["Windows installed the part the Hive needs (WSL 2), and has to restart before it works. Restart, then open Hive again and it carries on."], buttons: [["Close", "main", () => hive.quit()]], keep: true }),
-  failed: () => ({ title: "The install stopped", text: ["What it said is below. Trying again carries on from where it stopped."], buttons: [["Try again", "main", () => { $('log').textContent = ''; hive.install(false); }], ["Close", "", () => hive.quit()]], keep: true }),
+  failed: () => ({ title: "The install stopped", text: ["What it said is below. Trying again carries on from where it stopped."], buttons: [["Try again", "main", () => { $('log').textContent = ''; hive.install(false); }], ["Copy what it said", "", () => { hive.copy($('title').textContent + '\n\n' + $('log').textContent + '\n\nHive app ' + hive.version); }], ["Close", "", () => hive.quit()]], keep: true }),
   starting: () => ({ title: "Opening the Hive", spin: true, text: ["Starting it up. After the computer has just been turned on this can take a minute or two."], buttons: [["Close", "", () => hive.quit()]] }),
-  nostart: p => ({ title: "The Hive didn't start", text: ["It's installed, but it didn't answer."], note: p.note, buttons: [["Try again", "main", () => hive.retry()], ["Repair (run the installer again)", "", () => hive.install(false)], ["Close", "", () => hive.quit()]] }),
+  nostart: p => ({ title: "The Hive didn't start", text: ["It's installed, but it didn't answer."], note: p.note, buttons: [["Try again", "main", () => hive.retry()], ["Repair (run the installer again)", "", () => hive.install(false)], ["Copy what it said", "", () => { hive.copy($('title').textContent + '\n\n' + $('log').textContent + '\n\nHive app ' + hive.version); }], ["Close", "", () => hive.quit()]] }),
 };
 function show(state, p) {
   const s = (screens[state] || screens.welcome)(p || {});
@@ -51,8 +57,9 @@ function show(state, p) {
   if (!s.keep && state !== 'installing') $('log').textContent = s.note || '';
   const first = $('buttons').querySelector('button'); if (first) first.focus();
 }
+$('ver').textContent = 'Hive app ' + hive.version;
 hive.on('state', show);
 hive.on('log', t => { const l = $('log'); l.textContent += t; l.scrollTop = l.scrollHeight; });
 show('starting', {});
 </script>
-</main></body></html>
+</body></html>

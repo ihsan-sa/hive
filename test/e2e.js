@@ -59,6 +59,7 @@ if [ "$HIVE_ACCEPT" != 1 ] && [ "$HIVE_MAC_TEST" != 1 ]; then
 fi
 [ "$HIVE_NO_LAUNCHER" = 1 ] || [ "$HIVE_MAC_TEST" = 1 ] || { echo "launcher not skipped"; exit 4; }
 printf 'Installing Claude Code\\rSetting up the Hive\\n'
+${slowInstall ? 'echo $$ > "$HOME/installer.pid"; sleep 60' : ''}
 [ "$HIVE_STUB_RESTART" != 1 ] || { echo "WSL is installed. Restart Windows, then run the same line again."; exit 0; }
 if [ "$HIVE_MAC_TEST" = 1 ]; then B="$HOME/.hive/bin"; else B="$HOME/hive/.local/bin"; fi
 mkdir -p "$B"
@@ -74,6 +75,7 @@ echo "The Hive is installed. Open this address: http://localhost:${port}/login#S
   } else if (req.url.startsWith('/api/proof?n=')) {
     // The stand-in Hive holds the key, so it can make the mark. With `impostor` set it is some other program on the Hive's port.
     asked.push(req.url);
+    if (impostor === 'down') return req.destroy();
     if (impostor) { res.statusCode = impostor === 'old' ? 404 : 200; return res.end(impostor === 'old' ? 'no' : 'f'.repeat(64)); }
     res.end(require('crypto').createHmac('sha256', 'SECRETKEY').update(`proof:${port}:${req.url.split('n=')[1]}`).digest('hex'));
   } else if (req.url.startsWith('/login')) { seen.push(req.url); res.setHeader('content-type', 'text/html'); res.end('<title>Hive web app</title><h1 id="app">The web app</h1><a id="out" href="https://example.com/">out</a><a id="in" href="/thread">in</a><a id="away" href="/away">away</a>'); }
@@ -81,11 +83,11 @@ echo "The Hive is installed. Open this address: http://localhost:${port}/login#S
   else if (req.url === '/thread') { res.setHeader('content-type', 'text/html'); res.end('<h1 id="thread">A thread</h1>'); }
   else { res.statusCode = 404; res.end('no'); }
 });
-let port, impostor = '', needRestart = false, failInstall = false;
+let port, impostor = '', needRestart = false, failInstall = false, slowInstall = false, siteOverride = '';
 const asked = [], seen = [];   // the proof questions, and the page loads, the stand-in server got
 
 async function start() {
-  const env = { ...process.env, HOME: home, HIVE_APP_TEST: '1', HIVE_APP_WATCH_MS: '700', ...(needRestart ? { HIVE_STUB_RESTART: '1' } : {}), HIVE_SITE: `http://127.0.0.1:${port}`, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share') };
+  const env = { ...process.env, HOME: home, HIVE_APP_TEST: '1', HIVE_APP_WATCH_MS: '700', ...(needRestart ? { HIVE_STUB_RESTART: '1' } : {}), HIVE_SITE: siteOverride || `http://127.0.0.1:${port}`, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share') };
   delete env.HIVE_DIR;
   if (win) {   // the stand-in wsl.exe first on PATH (Windows keeps the name's case: Path)
     const k = Object.keys(env).find(x => x.toLowerCase() === 'path') || 'Path';
@@ -215,6 +217,18 @@ const title = page => page.locator('#title').textContent();
   await page.waitForSelector('#app', { timeout: 20000 });
   await app.close();
 
+  // The Hive stops altogether under an open window (nothing answers): the screen says so and offers Repair, not a blank page.
+  ({ app, page } = await start());
+  await page.waitForSelector('#app', { timeout: 20000 });
+  impostor = 'down';
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === "The Hive didn't start", null, { timeout: 15000 });
+  assert.ok(await page.getByRole('button', { name: /^Repair/ }).count(), 'Repair is offered');
+  impostor = '';
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await page.waitForSelector('#app', { timeout: 20000 });
+  console.log('ok hive stopped');
+  await app.close();
+
   // The installer fails part way (no network, a download that breaks): the screen says it stopped, shows what the installer said,
   // nothing is half-shown as installed, and Try again carries on once the cause is gone.
   wipe(); failInstall = true;
@@ -227,6 +241,23 @@ const title = page => page.locator('#title').textContent();
   });
   assert.ok((await page.locator('#log').textContent()).includes('stub failure'), 'what the installer said stays on the screen');
   assert.ok(await page.getByRole('button', { name: 'Try again' }).count() && await page.getByRole('button', { name: 'Close' }).count());
+  await page.getByRole('button', { name: 'Copy what it said' }).click();
+  await new Promise(r => setTimeout(r, 300));
+  const copied = await app.evaluate(({ clipboard }) => clipboard.readText());
+  assert.ok(copied.includes('The install stopped') && copied.includes('stub failure'), 'the report is on the clipboard: ' + copied);
+  assert.ok(!/SECRETKEY/.test(copied), 'no key in the report');
+  const ver = require('../package.json').version;
+  assert.ok((await page.locator('#ver').textContent()).includes(ver), 'the version is on the screen');
+  assert.ok(copied.includes('Hive app ' + ver), 'the report carries the version');
+  console.log('ok version shown');
+  console.log('ok copy report');
+  // Keyboard and screen reader: the heading and text are announced when the screen changes, and the log can be reached with Tab (to scroll it).
+  const acc = await page.evaluate(() => ({ live: document.querySelector('#say').getAttribute('aria-live'), h1: !!document.querySelector('#say h1'), log: document.querySelector('#log').getAttribute('role'), tab: document.querySelector('#log').tabIndex, name: document.querySelector('#log').getAttribute('aria-label') }));
+  assert.deepStrictEqual(acc, { live: 'polite', h1: true, log: 'log', tab: 0, name: 'What the installer said' });
+  let reached = false;
+  for (let i = 0; i < 6 && !reached; i++) { await page.keyboard.press('Tab'); reached = await page.evaluate(() => document.activeElement.id === 'log'); }
+  assert.ok(reached, 'Tab reaches the log');
+  console.log('ok setup access');
   await page.screenshot({ path: path.join(shots, '7-install-stopped.png') });
   assert.ok(!fs.existsSync(path.join(home, 'hive', '.hive-installed')), 'no Hive left behind');
   failInstall = false;
@@ -235,6 +266,45 @@ const title = page => page.locator('#title').textContent();
   await page.waitForSelector('#app', { timeout: 20000 });
   console.log('ok install-failed screen');
   await app.close();
+
+  // No internet: nothing answers at the site's address. The install stops with the installer's own words and leaves no Hive;
+  // with the site answering again (the app started again, as after a reconnect), Try again / Install gets in.
+  wipe(); siteOverride = 'http://127.0.0.1:9';
+  ({ app, page } = await start());
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
+  await page.getByRole('button', { name: 'Install' }).click();
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'The install stopped', null, { timeout: 30000 });
+  const offlineLog = await page.locator('#log').textContent();
+  assert.ok(offlineLog.includes("Couldn't reach http://127.0.0.1:9"), 'the offline words are on the screen: ' + offlineLog);
+  assert.ok(await page.getByRole('button', { name: 'Try again' }).count(), 'Try again is offered');
+  assert.ok(!fs.existsSync(path.join(home, 'hive', '.hive-installed')), 'no Hive left behind');
+  await app.close();
+  siteOverride = '';
+  ({ app, page } = await start());
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
+  await page.getByRole('button', { name: 'Install' }).click();
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs', null, { timeout: 20000 }).then(() => page.getByRole('button', { name: 'Accept and install' }).click()).catch(() => {});
+  await page.waitForSelector('#app', { timeout: 20000 });
+  console.log('ok offline');
+  await app.close();
+
+  // No menu on Windows and Linux: Ctrl+plus/minus/0 zoom the Hive, and Ctrl+R reloads it.
+  if (process.platform !== 'darwin') {
+    ({ app, page } = await start());
+    await page.waitForSelector('#app', { timeout: 20000 });
+    // (page.keyboard goes round the window's key handling, so keys are sent to the window itself.)
+    const press = (k) => app.evaluate(({ BrowserWindow }, k) => { const wc = BrowserWindow.getAllWindows()[0].webContents; for (const type of ['keyDown', 'keyUp']) wc.sendInputEvent({ type, keyCode: k, modifiers: ['control'] }); }, k);
+    const zoom = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomLevel());
+    await press('=');  assert.ok(await zoom() > 0, 'Ctrl+= zooms in');
+    await press('-'); await press('-'); assert.ok(await zoom() < 0, 'Ctrl+- zooms out');
+    await press('0'); assert.strictEqual(await zoom(), 0, 'Ctrl+0 resets');
+    await page.evaluate(() => { window.__mark = 1; });
+    await press('r');
+    await page.waitForFunction(() => !window.__mark, null, { timeout: 10000 });
+    await page.waitForSelector('#app', { timeout: 20000 });
+    console.log('ok shortcuts');
+    await app.close();
+  }
 
   // One copy at a time: a second start while one runs leaves at once and the first stays (still one window); closing the window quits (Linux, Windows).
   ({ app, page } = await start());
@@ -250,6 +320,51 @@ const title = page => page.locator('#title').textContent();
     await Promise.race([gone, new Promise((_, rej) => setTimeout(() => rej(new Error('closing the window did not quit')), 10000))]);
   } else await app.close();
   console.log('ok single instance');
+
+  // The window's size and place are remembered: set them, close, start again.
+  ({ app, page } = await start());
+  await page.waitForSelector('#app', { timeout: 20000 });
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setBounds({ x: 60, y: 40, width: 900, height: 640 }));
+  await new Promise(r => setTimeout(r, 1000));
+  await app.close();
+  ({ app, page } = await start());
+  await page.waitForSelector('#app', { timeout: 20000 });
+  const b = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getNormalBounds());
+  assert.strictEqual(b.width, 900); assert.strictEqual(b.height, 640);
+  console.log('ok window state');
+  await app.close();
+
+  // Closing the window during an install stops the installer, and the next launch offers Install again (not on Windows: its installer is PowerShell in WSL).
+  if (!win) {
+    wipe(); slowInstall = true;
+    ({ app, page } = await start());
+    await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
+    await page.getByRole('button', { name: 'Install' }).click();
+    if (!mac) {
+      await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs');
+      await page.getByRole('button', { name: 'Accept and install' }).click();
+    }
+    await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Installing the Hive', null, { timeout: 20000 });
+    const pidf = path.join(home, 'installer.pid');
+    for (let i = 0; i < 100 && !fs.existsSync(pidf); i++) await new Promise(r => setTimeout(r, 100));
+    const ipid = Number(fs.readFileSync(pidf, 'utf8'));
+    const alive = p => { try { process.kill(p, 0); return true; } catch { return false; } };
+    assert.ok(alive(ipid), 'the installer is running');
+    if (process.platform !== 'darwin') {
+      const gone = new Promise(r => app.process().once('exit', r));
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach(w => w.close()));
+      await gone;
+    } else await app.close();
+    for (let i = 0; i < 50 && alive(ipid); i++) await new Promise(r => setTimeout(r, 100));
+    assert.ok(!alive(ipid), 'closing the window stopped the installer');
+    assert.ok(!fs.existsSync(path.join(home, 'hive', '.hive-installed')), 'no half-installed Hive left');
+    slowInstall = false;
+    ({ app, page } = await start());
+    await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
+    assert.ok(await page.getByRole('button', { name: 'Install' }).count(), 'Install is offered again');
+    console.log('ok close during install');
+    await app.close();
+  }
 
   // A PC without WSL: the Windows installer turns it on and says to restart. The screen must say so, in plain words, and offer only Close.
   // (Stands in for it by the same words from the installer; the real words are in core/dist/get.ps1.)
@@ -267,6 +382,19 @@ const title = page => page.locator('#title').textContent();
   assert.strictEqual(await page.getByRole('button').count(), 1); assert.ok(await page.getByRole('button', { name: 'Close' }).count(), 'only a Close button');
   await page.screenshot({ path: path.join(shots, '6-restart.png') });
   console.log('ok no-wsl screen');
+  await app.close();
+
+  // ... and after the restart: open the app again (WSL is there now), install carries on and reaches the Hive.
+  needRestart = false;
+  ({ app, page } = await start());
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
+  await page.getByRole('button', { name: 'Install' }).click();
+  if (!mac) {
+    await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs');
+    await page.getByRole('button', { name: 'Accept and install' }).click();
+  }
+  await page.waitForSelector('#app', { timeout: 30000 });
+  console.log('ok after restart');
   await app.close();
 
   if (win) wipe();
