@@ -122,16 +122,24 @@ def ledger():
     # rsi-loop's landed wins count too: they're the measured ones
     for r in jsonl(RSI_LEDGER):
         if r.get("verdict") != "win": continue
-        i = f"rsi-{r.get('arm')}"
+        i, proj = f"rsi-{r.get('arm')}", r.get("project")
+        if proj and i in items and items[i].get("project") != proj:  # arm names repeat across projects (n1 in dupefind and jsonltally)
+            i = f"rsi-{proj}-{r.get('arm')}"
         if i in items: continue
         at = r.get("at", "")
         try: rev = (dt.datetime.fromisoformat(at) + dt.timedelta(days=7)).date().isoformat()
         except ValueError: rev = ""
         kind = r.get("kind", "orientation")
         files = r.get("files") or ["orientation.md"]
-        items[i] = {"id": i, "at": at, "by": "rsi-loop", "what": f"{kind}: {r.get('arm')} won " + ("the replay gate" if r.get("gate") == "replay" else "the benchmark"), "where": ", ".join("core/" + f for f in files),
-                    "measure": "rsi-loop replay delivered score and cost (results/replay-*)" if r.get("gate") == "replay" else "rsi-loop bench passes and cost (results/)", "baseline": r.get("why", ""), "revisit": rev, "status": "landed",
-                    "commit": r.get("landed") or r.get("commit", ""), "thread": "rsi-loop"}
+        where = ", ".join("core/" + f for f in files)
+        measure = "rsi-loop replay delivered score and cost (results/replay-*)" if r.get("gate") == "replay" else "rsi-loop bench passes and cost (results/)"
+        if proj:  # a project code-variant: its gate is the project's spec checks, not the Sonnet orientation bench
+            wins = re.findall(r"wins \[([^\]]*)\]", " ".join((r.get("numbers") or {}).get("lines") or []))
+            where = f"projects/{proj}/"
+            measure = f"`python3 projects/{proj}/gate.py check` live passes all checks, incl. won {wins[0] if wins else '?'}"
+        items[i] = {"id": i, "at": at, "by": "rsi-loop", "what": f"{kind}: {r.get('arm')} won " + ("the replay gate" if r.get("gate") == "replay" else "the benchmark") + (f" ({proj})" if proj else ""),
+                    "where": where, "measure": measure, "baseline": r.get("why", ""), "revisit": rev, "status": "landed",
+                    "commit": r.get("landed") or r.get("commit", ""), "thread": "rsi-loop", **({"project": proj} if proj else {})}
         for r2 in jsonl(LEDGER):  # a judge record for an rsi id
             if r2.get("judge") == i and lands(items[i].get("status"), r2): items[i].update(status=r2["verdict"], judged_at=r2["at"], judged_by=r2.get("by"), judged_why=r2.get("why", ""))
     return items
