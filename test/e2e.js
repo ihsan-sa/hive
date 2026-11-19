@@ -102,7 +102,7 @@ function buildWsl() {
 class P { static int Main(string[] a) {
   if (string.Join(" ", a).Contains("sleep")) { System.Threading.Thread.Sleep(60000); return 0; }
   string c = Path.Combine(Environment.GetEnvironmentVariable("LOCALAPPDATA"), "Hive", "bin", "hive.cmd");
-  var i = new ProcessStartInfo("cmd.exe", "/c \"\"" + c + "\"\"") { UseShellExecute = false };
+  var i = new ProcessStartInfo("cmd.exe", "/c \\"\\"" + c + "\\"\\"") { UseShellExecute = false };
   var p = Process.Start(i); p.WaitForExit(); return p.ExitCode; } }
 `);
   const csc = path.join(process.env.windir || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
