@@ -287,6 +287,7 @@ export default {
   "run its self-test": "hacer su autoprueba",
   "talk to it": "hablar con ella",
   "the board left USB": "la placa se desconectó del USB",
+  "The board left USB and didn't come back.": "La placa se desconectó del USB y no volvió.",
   "the board's console port isn't open": "el puerto de consola de la placa no está abierto",
   "Show every port": "Mostrar todos los puertos",
   "Its profile has no console API, so watch the console below.": "Su perfil no tiene API de consola, así que mira la consola de abajo.",

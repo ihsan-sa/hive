@@ -486,6 +486,27 @@ def tick(txt, words, post):
     lines[i] = l + f" (post {post})"
     return "\n".join(lines), lines[i]
 
+
+def tier_held_of(threads):
+    """{thread: why} for threads whose work tier starts no new run now (paused, off, past its stop point); {} on any error.
+    The keeper briefed the paused voice-board tier's ladder every few hours and then chased the held worker for a reply
+    (ha-voice-sbc, 2026-11-19: 03:04 brief, 10:04 "got no reply", both held by the starter; hive stalled counted it)."""
+    try:
+        sys.path.insert(0, str(CORE)); import tiers, focus
+        d = tiers.load()
+        try: st = focus.state(posts=[])
+        except Exception: st = {"foci": [], "tags": {}}
+        try: bp = focus.board_posts()
+        except Exception: bp = None
+        out = {}
+        for th in threads:
+            try: fid = focus.focus_of(st, th, bp) if bp is not None else focus.focus_of(st, th)
+            except Exception: fid = None
+            why = tiers.held(d, tiers.tier_of(d, th, fid))
+            if why: out[th] = why
+        return out
+    except Exception: return {}
+
 def main():
     ap = argparse.ArgumentParser(prog="hive goals", description=__doc__.split("\n")[0])
     ap.add_argument("--json", action="store_true"); ap.add_argument("--idle", action="store_true", help="only the idle goals")
@@ -520,9 +541,13 @@ def main():
         for th, v in res.items(): print(f"{th}: {v[0]} work, {v[1]} wait, {v[2]} silent")
         print(f"all: {tot[0]} of {n} rounds did work ({100 * tot[0] // n if n else 0}%), {tot[1]} wait, {tot[2]} silent, over {a.rounds:g} days"); return
     if a.ladder_threads:
-        seen = set()   # a thread once: two rows can share one (a focus and a project whose latest thread it is), and two lines were two rounds within seconds
+        seen, out = set(), []   # a thread once: two rows can share one (a focus and a project whose latest thread it is), and two lines were two rounds within seconds
         for r in g["rows"]:
-            if r["idle"] and (r["kind"] == "focus" or r.get("ladder") or r.get("needs_ladder")) and r["thread"] not in seen: seen.add(r["thread"]); print(r["thread"])
+            if r["idle"] and (r["kind"] == "focus" or r.get("ladder") or r.get("needs_ladder")) and r["thread"] not in seen: seen.add(r["thread"]); out.append(r["thread"])
+        held = tier_held_of(out)
+        for th in out:
+            if th in held: print(f"skipped {th}: its work tier is {held[th]} (`hive tier why {th}`)", file=sys.stderr)
+            else: print(th)
         return
     if a.brief or a.post:
         th = a.post or a.brief
@@ -534,6 +559,8 @@ def main():
             sys.exit(f"{th} is parked until {r['parked']['until']}: {r['parked']['why'][:120]}\nNo round posted; --force posts one anyway.")
         if r.get("gated_until") and not r.get("rung") and not r.get("ask_more") and not a.force:   # every open rung gated to a later date and today's ask already made: another round could only repeat it (improve-survey, 2026-11-16: keeper rounds at 04:03 and 07:03 after the floor fix)
             sys.exit(f"{th} has no rung before {r['gated_until']}Z (every open rung carries after:). No round posted; --force posts one anyway.")
+        if not a.force and (why := tier_held_of([th]).get(th)):   # the starter would only hold the brief, and the next keeper chase it
+            sys.exit(f"{th}: its work tier is {why} (`hive tier why {th}`), so the starter would hold the brief. No round posted; --force posts one anyway.")
         cmd = ["hive", "post", "--thread", th] + post_model_args(b, a.model)
         sys.exit(subprocess.run(cmd, input=b, text=True).returncode)
     if a.idle: g["rows"] = [r for r in g["rows"] if r["idle"]]
