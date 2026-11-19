@@ -124,12 +124,13 @@ console.log(`ok ${n} tests`);
   console.log('ok disk space');
 }
 {
+  const P = n => require('path').join('/dl', n);
   const d = '/dl', none = () => false;
-  assert.strictEqual(lib.downloadPath(d, '../../etc/passwd', none), '/dl/passwd');
-  assert.strictEqual(lib.downloadPath(d, 'a\\b\\c.txt', none), '/dl/c.txt');
-  assert.strictEqual(lib.downloadPath(d, '.bashrc', none), '/dl/bashrc');
-  assert.strictEqual(lib.downloadPath(d, '', none), '/dl/download');
-  assert.strictEqual(lib.downloadPath(d, 'x.pdf', p => p === '/dl/x.pdf'), '/dl/x (1).pdf');
+  assert.strictEqual(lib.downloadPath(d, '../../etc/passwd', none), P('passwd'));
+  assert.strictEqual(lib.downloadPath(d, 'a\\b\\c.txt', none), P('c.txt'));
+  assert.strictEqual(lib.downloadPath(d, '.bashrc', none), P('bashrc'));
+  assert.strictEqual(lib.downloadPath(d, '', none), P('download'));
+  assert.strictEqual(lib.downloadPath(d, 'x.pdf', p => p === P('x.pdf')), P('x (1).pdf'));
   console.log('ok download name');
 }
 
