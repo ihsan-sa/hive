@@ -16,6 +16,17 @@ download, and the terminal install and the browser keep working beside it.
 | macOS 13+ | `Hive-mac-arm64` / `Hive-mac-x64` (.dmg from the workflow, .zip from here) | a Linux VM (test build) |
 | Linux | `Hive-linux-amd64.deb`, or the `.AppImage` | `~/hive`, in your own account, sandboxed |
 
+## Opening the Mac download the first time (wording for the download page)
+Seen on macOS 15.8 on Apple silicon, runner run 44390913418 (`test/downloaded.sh`; screenshots in `shots/mac-download-*.png`).
+Until the app is signed with a paid Apple certificate, the Mac refuses the first double-click. The page should say:
+
+1. Double-click Hive. The Mac says **"Hive" Not Opened**: "Apple could not verify "Hive" is free of malware…". Press **Done** (not Move to Trash).
+2. Open **System Settings**, **Privacy & Security**, and scroll down to **Security**. It says *"Hive" was blocked to protect your Mac.* Press **Open Anyway**, then confirm with your password or Touch ID.
+3. Hive opens. The Mac asks this once only.
+
+The older shortcut (right-click, Open) no longer works on macOS 15. For someone at ease in Terminal,
+`xattr -dr com.apple.quarantine /Applications/Hive.app` does the same as steps 1 and 2 (checked in the same run: the app then opens straight to "Set up the Hive").
+
 ## Files
 - `lib.js`: everything that differs by system, with no Electron in it. `node test/logic.test.js`.
 - `main.js`: the window. Only the setup screen and the local Hive ever load in it; other links go to the browser.
@@ -25,4 +36,4 @@ download, and the terminal install and the browser keep working beside it.
 - `.github/workflows/build.yml`: builds on real Windows, Mac and Linux machines. `build-all.sh`: all of them from here.
 
 ## Not done
-See `goals.md`. In short: never run on a real Windows or Mac; not signed, so both warn on first open.
+See `goals.md`. In short: run on GitHub's Windows and Mac machines, never on a person's own; not signed, so both warn on first open.

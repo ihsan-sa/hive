@@ -50,6 +50,22 @@ async function answers(url, ms) {
   }
 }
 
+// True when the server at the address shows it holds the key (see lib.proofAsk), or the address carries none.
+async function proves(url) {
+  const p = lib.proofAsk(url, require('crypto').randomBytes(24).toString('base64url'));
+  if (!p) return true;
+  const got = await new Promise(res => {
+    const q = require('http').get(p.ask, { timeout: 5000 }, r => {
+      let b = ''; r.setEncoding('utf8');
+      r.on('data', d => { b += d; if (b.length > 200) { q.destroy(); res(''); } });
+      r.on('end', () => res(r.statusCode === 200 ? b : '')); r.on('error', () => res(''));
+    });
+    q.on('error', () => res('')); q.on('timeout', () => { q.destroy(); res(''); });
+    setTimeout(() => { q.destroy(); res(''); }, 8000);   // an answer that drips in slowly is no answer
+  });
+  return lib.proofOk(p.want, got);
+}
+
 async function showSetup(state, note) {
   if (!isSetup(win.webContents)) await win.loadFile(setupFile);
   send('state', state, { platform: process.platform, note: note || '' });
@@ -71,8 +87,11 @@ async function open() {
     url = lib.localUrl(r.text); said = lib.redact(lib.plain(r.text)).trim();
   }
   if (!url) return showSetup('nostart', said.slice(-2000));
+  url = lib.pin(url);
   const sorry = "The Hive's app didn't answer. " + (cmd.url ? 'It runs in another account of this machine: start it there (sudo -iu hive hive open --print), then try again.' : '');
   if (!await answers(url, cmd.url ? 4000 : 90000)) return showSetup('nostart', sorry);
+  // The address is the key. It goes only to a server that shows it already has it; anything else on that port gets nothing.
+  if (!await proves(url)) return showSetup('nostart', "What answers on the Hive's address didn't show that it is the Hive, so the app didn't sign in to it. If the Hive on this computer is an older one, Repair brings it up to date. If not, another program may be using the Hive's port.");
   hiveUrl = url;
   try { await win.loadURL(url); fails = 0; }
   catch (e) { hiveUrl = null; return showSetup('nostart', sorry); }

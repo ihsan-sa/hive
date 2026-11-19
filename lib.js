@@ -50,7 +50,10 @@ function installCommand(platform, env, accept) {
   if (accept) add.HIVE_ACCEPT = '1';
   if (platform === 'win32') {
     const ps = path.win32.join(env.windir || env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    return { file: ps, args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `irm ${SITE}/install.ps1 | iex`], env: add,
+    // On an ARM PC this app runs translated, and Windows tells a translated program (and what it starts) that the chip is an Intel one.
+    // The installer picks the Hive's Linux system by that, so it is told the machine's own answer, which Windows keeps here.
+    const chip = "$a = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment' -ErrorAction SilentlyContinue).PROCESSOR_ARCHITECTURE; if ($a) { $env:PROCESSOR_ARCHITECTURE = $a }; ";
+    return { file: ps, args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', chip + `irm ${SITE}/install.ps1 | iex`], env: add,
       // Started from PowerShell 7, the app would hand Windows' own PowerShell the newer one's module folders, and it then can't find its own commands (Get-FileHash).
       unset: ['PSModulePath'] };
   }
@@ -86,8 +89,25 @@ function localUrl(text) {
   }
   return null;
 }
+// "localhost" can mean two addresses, and the Hive listens on one of them (127.0.0.1). The window would try the other (::1) first,
+// where another account's program could sit and pass the proof question on to the real Hive. So the app only ever uses the one the Hive holds.
+function pin(u) {
+  try { const x = new URL(u); if (x.hostname === 'localhost' || x.hostname === '[::1]') x.hostname = '127.0.0.1'; return x.href; } catch { return u; }
+}
 function isLocal(u) {
   try { const x = new URL(u); return x.protocol === 'http:' && (x.hostname === 'localhost' || x.hostname === '127.0.0.1'); } catch { return false; }
+}
+// The address carries the key after its #. Before the window is sent there, whatever answers on that port has to show it
+// already holds the key: it is asked for a mark only the key can make, for a question made up this moment and for this port
+// (so an answer fetched from a Hive on another port doesn't fit). Another program on the port can't make it, and is never sent the key.
+function proofAsk(url, nonce) {
+  const u = new URL(url), key = u.hash.slice(1);
+  if (!key) return null;   // no key in the address: nothing to guard
+  return { ask: `${u.origin}/api/proof?n=${nonce}`, want: require('crypto').createHmac('sha256', key).update(`proof:${u.port}:${nonce}`).digest('hex') };
+}
+function proofOk(want, got) {
+  const a = Buffer.from(String(want)), b = Buffer.from(String(got).trim());
+  return a.length === b.length && require('crypto').timingSafeEqual(a, b);
 }
 // Same app (same host and port) as the Hive's address: such links stay in the window, all others go to the browser.
 function sameApp(u, base) {
@@ -100,4 +120,4 @@ function redact(text) { return String(text).replace(/(https?:\/\/(?:localhost|12
 function plain(text) { return String(text).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[^\n\r]*\r(?!\n)/g, ''); }
 function uid() { try { return require('os').userInfo().uid; } catch { return 1000; } }
 
-module.exports = { SITE, openCommand, installCommand, installResult, localUrl, isLocal, sameApp, redact, plain };
+module.exports = { SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };

@@ -33,12 +33,18 @@ X
 chmod +x "$HOME/hive/.local/bin/hive"; touch "$HOME/hive/.hive-installed"
 echo "The Hive is installed. Open this address: http://localhost:${port}/login#SECRETKEY"
 `);
-  } else if (req.url.startsWith('/login')) { res.setHeader('content-type', 'text/html'); res.end('<title>Hive web app</title><h1 id="app">The web app</h1><a id="out" href="https://example.com/">out</a><a id="in" href="/thread">in</a><a id="away" href="/away">away</a>'); }
+  } else if (req.url.startsWith('/api/proof?n=')) {
+    // The stand-in Hive holds the key, so it can make the mark. With `impostor` set it is some other program on the Hive's port.
+    asked.push(req.url);
+    if (impostor) { res.statusCode = impostor === 'old' ? 404 : 200; return res.end(impostor === 'old' ? 'no' : 'f'.repeat(64)); }
+    res.end(require('crypto').createHmac('sha256', 'SECRETKEY').update(`proof:${port}:${req.url.split('n=')[1]}`).digest('hex'));
+  } else if (req.url.startsWith('/login')) { seen.push(req.url); res.setHeader('content-type', 'text/html'); res.end('<title>Hive web app</title><h1 id="app">The web app</h1><a id="out" href="https://example.com/">out</a><a id="in" href="/thread">in</a><a id="away" href="/away">away</a>'); }
   else if (req.url === '/away') { res.statusCode = 302; res.setHeader('location', 'https://example.com/'); res.end(); }
   else if (req.url === '/thread') { res.setHeader('content-type', 'text/html'); res.end('<h1 id="thread">A thread</h1>'); }
   else { res.statusCode = 404; res.end('no'); }
 });
-let port;
+let port, impostor = '';
+const asked = [], seen = [];   // the proof questions, and the page loads, the stand-in server got
 
 async function start() {
   const env = { ...process.env, HOME: home, HIVE_APP_TEST: '1', HIVE_SITE: `http://127.0.0.1:${port}`, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share') };
@@ -67,6 +73,8 @@ const title = page => page.locator('#title').textContent();
 
   await page.waitForSelector('#app', { timeout: 20000 });
   assert.strictEqual(new URL(page.url()).port, String(port));
+  assert.strictEqual(new URL(page.url()).hostname, '127.0.0.1', 'the window uses the one address the Hive listens on, not "localhost" (which is also ::1)');
+  assert.ok(asked.length && asked.every(u => !u.includes('SECRETKEY')));
   assert.strictEqual(await page.evaluate(() => typeof window.hive), 'undefined', 'the web app gets no bridge to the shell... ');
   await page.screenshot({ path: path.join(shots, '3-app.png') });
 
@@ -76,12 +84,12 @@ const title = page => page.locator('#title').textContent();
   await page.evaluate(() => { document.querySelector('#out').click(); });
   await new Promise(r => setTimeout(r, 1500));
   const at = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.webContents.getURL()));
-  assert.strictEqual(at.length, 1); assert.ok(at[0].startsWith(`http://localhost:${port}/`), 'outside link stayed out of the window: ' + at);
+  assert.strictEqual(at.length, 1); assert.ok(at[0].startsWith(`http://127.0.0.1:${port}/`), 'outside link stayed out of the window: ' + at);
   // Nor may the Hive's own address send the window elsewhere.
   await page.evaluate(() => { document.querySelector('#away').click(); });
   await new Promise(r => setTimeout(r, 1500));
   const at2 = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.webContents.getURL()));
-  assert.ok(at2.length === 1 && at2[0].startsWith(`http://localhost:${port}/`), 'a redirect stayed out of the window: ' + at2);
+  assert.ok(at2.length === 1 && at2[0].startsWith(`http://127.0.0.1:${port}/`), 'a redirect stayed out of the window: ' + at2);
   await app.close();
 
   // Second start: straight in, no setup.
@@ -99,6 +107,24 @@ const title = page => page.locator('#title').textContent();
   await page.getByRole('button', { name: 'Try again' }).click();
   await page.waitForSelector('#app', { timeout: 20000 });
   await app.close();
+
+  // Another program on the Hive's port (one that answers wrongly, one that has no answer): the window is never sent the address with the key.
+  for (const kind of ['wrong', 'old']) {
+    impostor = kind; seen.length = 0; asked.length = 0;
+    ({ app, page } = await start());
+    await page.waitForFunction(() => document.querySelector('#title')?.textContent === "The Hive didn't start");
+    assert.ok((await page.locator('#log').textContent()).includes("didn't show that it is the Hive"));
+    assert.strictEqual(asked.length, 1, 'it was asked once'); assert.ok(!asked[0].includes('SECRETKEY'), 'the question carries no key');
+    assert.strictEqual(seen.length, 0, 'the sign-in page (which would read the key) was never loaded from it: ' + seen);
+    const urls = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.webContents.getURL()));
+    assert.ok(urls.every(u => u.startsWith('file:')), 'the window stayed on the setup screen: ' + urls);
+    if (kind === 'wrong') await page.screenshot({ path: path.join(shots, '5-not-the-hive.png') });
+    // ... and once the real Hive answers there, Try again goes in.
+    impostor = '';
+    await page.getByRole('button', { name: 'Try again' }).click();
+    await page.waitForSelector('#app', { timeout: 20000 });
+    await app.close();
+  }
 
   server.close(); fs.rmSync(home, { recursive: true, force: true });
   console.log('ok e2e');

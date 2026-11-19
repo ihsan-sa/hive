@@ -24,6 +24,28 @@ t('linux: the Hive gets its own surroundings, as the installer gives it', () => 
   assert.match(c.env.XDG_RUNTIME_DIR, /^\/run\/user\/-?\d+$/);
 });
 t('windows: the installer runs without another PowerShell\'s module folders', () => assert.deepStrictEqual(lib.installCommand('win32', { windir: 'C:\\Windows' }, false).unset, ['PSModulePath']));
+t('windows: the installer is told the machine\'s own chip, not the one a translated app sees', () => {
+  const c = lib.installCommand('win32', { windir: 'C:\\Windows' }, false).args.at(-1);
+  assert.match(c, /^\$a = \(Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment'[^;]*\)\.PROCESSOR_ARCHITECTURE; if \(\$a\) \{ \$env:PROCESSOR_ARCHITECTURE = \$a \}; irm \S+\/install\.ps1 \| iex$/);
+});
+t('proof: the mark only the key can make, for this port and this question', () => {
+  const mark = (key, port, n) => require('crypto').createHmac('sha256', key).update(`proof:${port}:${n}`).digest('hex');
+  const p = lib.proofAsk('http://localhost:8077/login#KEY', 'nonce-nonce-nonce');
+  assert.strictEqual(p.ask, 'http://localhost:8077/api/proof?n=nonce-nonce-nonce');
+  assert.ok(!p.ask.includes('KEY'), 'the question never carries the key');
+  assert.ok(lib.proofOk(p.want, mark('KEY', 8077, 'nonce-nonce-nonce') + '\n'));
+  assert.ok(!lib.proofOk(p.want, mark('KEY', 8078, 'nonce-nonce-nonce')), 'a Hive on another port');
+  assert.ok(!lib.proofOk(p.want, mark('KEY', 8077, 'another-question')), 'an old answer');
+  assert.ok(!lib.proofOk(p.want, mark('OTHER', 8077, 'nonce-nonce-nonce')), 'another key');
+  assert.ok(!lib.proofOk(p.want, '') && !lib.proofOk(p.want, 'no'));
+  assert.strictEqual(lib.proofAsk('http://localhost:8077/', 'n'), null);
+});
+t('the app uses only the address the Hive listens on, never the other "localhost"', () => {
+  assert.strictEqual(lib.pin('http://localhost:8077/login#KEY'), 'http://127.0.0.1:8077/login#KEY');
+  assert.strictEqual(lib.pin('http://[::1]:8077/'), 'http://127.0.0.1:8077/');
+  assert.strictEqual(lib.pin('http://127.0.0.1:8077/login#KEY'), 'http://127.0.0.1:8077/login#KEY');
+  assert.ok(lib.sameApp('http://127.0.0.1:8077/thread', lib.pin('http://localhost:8077/login#KEY')));
+});
 t('windows: the Hive system is kept awake', () => {
   const c = lib.openCommand('win32', { LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local', windir: 'C:\\Windows' }, () => true);
   assert.strictEqual(c.keep.file, 'C:\\Windows\\System32\\conhost.exe');
