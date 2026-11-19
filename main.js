@@ -90,7 +90,7 @@ async function open() {
   if (!url) return showSetup('nostart', said.slice(-2000));
   url = lib.pin(url);
   const sorry = "The Hive's app didn't answer. " + (cmd.url ? 'It runs in another account of this machine: start it there (sudo -iu hive hive open --print), then try again.' : '');
-  if (!await answers(url, cmd.url ? 4000 : 90000)) return showSetup('nostart', sorry);
+  if (!await answers(url, cmd.url ? 4000 : Number(process.env.HIVE_APP_ANSWER_MS) || 90000)) return showSetup('nostart', sorry);
   // The address is the key. It goes only to a server that shows it already has it; anything else on that port gets nothing.
   if (!await proves(url)) return showSetup('nostart', "What answers on the Hive's address didn't show that it is the Hive, so the app didn't sign in to it. If the Hive on this computer is an older one, Repair brings it up to date. If not, another program may be using the Hive's port.");
   hiveUrl = url;
@@ -109,14 +109,20 @@ function watch() {
     const u = hiveUrl;
     if (await proves(u) || hiveUrl !== u) return;
     hiveUrl = null;
-    showSetup('nostart', "What answers on the Hive's address stopped showing that it is the Hive, so the app left it. Try again signs in once the Hive answers.");
+    showSetup('nostart', "The Hive stopped answering at its address (or another program took it), so the app left it. Try again signs in once the Hive answers.");
   }, Number(process.env.HIVE_APP_WATCH_MS) || 30000);
 }
 
 async function install(accept) {
   if (child) return;
   await showSetup('installing');
-  const r = await run(lib.installCommand(process.platform, process.env, accept), s => send('log', lib.redact(lib.plain(s))));
+  // Redact whole lines: a key split across two chunks would slip past the pattern.
+  let pend = '';
+  const r = await run(lib.installCommand(process.platform, process.env, accept), s => {
+    pend += s; const i = Math.max(pend.lastIndexOf('\n'), pend.lastIndexOf('\r'));
+    if (i >= 0) { send('log', lib.redact(lib.plain(pend.slice(0, i + 1)))); pend = pend.slice(i + 1); }
+  });
+  if (pend) send('log', lib.redact(lib.plain(pend)));
   child = null;
   let what = lib.installResult(r.code, r.text, process.platform);
   // "Done" with no Hive to show for it (Windows' installer ends the same way when it stops) is a stop: keep what it said on the screen.
@@ -209,6 +215,7 @@ else {
   app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
   app.whenReady().then(() => {
     if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
+    else Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }])); // no View menu: its Reload would skip our guard
     permissions(); create();
     app.on('activate', () => { if (!win) create(); });
   });

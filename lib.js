@@ -73,7 +73,7 @@ function installCommand(platform, env, accept) {
 // HIVE_MIN_FREE_GB changes the number (the tests use it).
 function diskCheck() {
   return 'need=${HIVE_MIN_FREE_GB:-15}; free=$(df -Pk "$HOME" 2>/dev/null | awk \'NR==2{print int($4/1048576)}\'); '
-    + 'if [ -n "$free" ] && [ "$free" -lt "$need" ]; then echo "There is not enough free disk space for the Hive: it needs about $need GB and this Mac has $free GB free."; echo "Free up some space (empty the Bin, remove large files), then press Try again."; exit 1; fi; ';
+    + 'if [ ! -d "$HOME/.hive/lima/hive" ] && [ -n "$free" ] && [ "$free" -lt "$need" ]; then echo "There is not enough free disk space for the Hive: it needs about $need GB and this Mac has $free GB free."; echo "Free up some space (empty the Bin, remove large files), then press Try again."; exit 1; fi; ';
 }
 
 // What the installer's output and exit code mean for the screen.

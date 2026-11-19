@@ -86,8 +86,8 @@ echo "The Hive is installed. Open this address: http://localhost:${port}/login#S
 let port, impostor = '', needRestart = false, failInstall = false, slowInstall = false, siteOverride = '';
 const asked = [], seen = [];   // the proof questions, and the page loads, the stand-in server got
 
-async function start() {
-  const env = { ...process.env, HOME: home, HIVE_APP_TEST: '1', HIVE_APP_WATCH_MS: '700', ...(needRestart ? { HIVE_STUB_RESTART: '1' } : {}), HIVE_SITE: siteOverride || `http://127.0.0.1:${port}`, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share') };
+async function start(extra = {}) {
+  const env = { ...process.env, HOME: home, HIVE_APP_TEST: '1', HIVE_APP_WATCH_MS: '700', ...(needRestart ? { HIVE_STUB_RESTART: '1' } : {}), HIVE_SITE: siteOverride || `http://127.0.0.1:${port}`, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'), ...extra };
   delete env.HIVE_DIR;
   if (win) {   // the stand-in wsl.exe first on PATH (Windows keeps the name's case: Path)
     const k = Object.keys(env).find(x => x.toLowerCase() === 'path') || 'Path';
@@ -211,21 +211,25 @@ const title = page => page.locator('#title').textContent();
   await page.waitForSelector('#app', { timeout: 20000 });
   impostor = 'wrong';
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === "The Hive didn't start", null, { timeout: 15000 });
-  assert.ok((await page.locator('#log').textContent()).includes('stopped showing'));
+  assert.ok((await page.locator('#log').textContent()).includes('stopped answering'));
   impostor = '';
   await page.getByRole('button', { name: 'Try again' }).click();
   await page.waitForSelector('#app', { timeout: 20000 });
   await app.close();
 
-  // The Hive stops altogether under an open window (nothing answers): the screen says so and offers Repair, not a blank page.
-  ({ app, page } = await start());
+  // The Hive stops altogether under an open window (the server really closes, so the page load itself fails: the did-fail-load path).
+  // The watcher is slowed right down so it is the reload that finds out. The screen says so and offers Repair, not a blank page.
+  ({ app, page } = await start({ HIVE_APP_WATCH_MS: '600000', HIVE_APP_ANSWER_MS: '3000' }));
   await page.waitForSelector('#app', { timeout: 20000 });
-  impostor = 'down';
-  await page.waitForFunction(() => document.querySelector('#title')?.textContent === "The Hive didn't start", null, { timeout: 15000 });
+  await new Promise(r => { server.close(r); server.closeAllConnections(); });
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload());   // a reload that fails: the did-fail-load path
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === "The Hive didn't start", null, { timeout: 20000 });
   assert.ok(await page.getByRole('button', { name: /^Repair/ }).count(), 'Repair is offered');
-  impostor = '';
+  assert.ok(new URL(page.url()).protocol === 'file:', 'the window is on the setup screen, not a blank page');
+  await new Promise(r => server.listen(port, '127.0.0.1', r));
   await page.getByRole('button', { name: 'Try again' }).click();
   await page.waitForSelector('#app', { timeout: 20000 });
+  console.log('ok hive down');
   console.log('ok hive stopped');
   await app.close();
 
@@ -241,6 +245,7 @@ const title = page => page.locator('#title').textContent();
   });
   assert.ok((await page.locator('#log').textContent()).includes('stub failure'), 'what the installer said stays on the screen');
   assert.ok(await page.getByRole('button', { name: 'Try again' }).count() && await page.getByRole('button', { name: 'Close' }).count());
+  assert.strictEqual(await page.evaluate(() => document.activeElement.id), 'title', 'focus moved to the new screen heading');
   await page.getByRole('button', { name: 'Copy what it said' }).click();
   await new Promise(r => setTimeout(r, 300));
   const copied = await app.evaluate(({ clipboard }) => clipboard.readText());
@@ -252,8 +257,8 @@ const title = page => page.locator('#title').textContent();
   console.log('ok version shown');
   console.log('ok copy report');
   // Keyboard and screen reader: the heading and text are announced when the screen changes, and the log can be reached with Tab (to scroll it).
-  const acc = await page.evaluate(() => ({ live: document.querySelector('#say').getAttribute('aria-live'), h1: !!document.querySelector('#say h1'), log: document.querySelector('#log').getAttribute('role'), tab: document.querySelector('#log').tabIndex, name: document.querySelector('#log').getAttribute('aria-label') }));
-  assert.deepStrictEqual(acc, { live: 'polite', h1: true, log: 'log', tab: 0, name: 'What the installer said' });
+  const acc = await page.evaluate(() => ({ live: document.querySelector('#say').getAttribute('aria-live'), h1: !!document.querySelector('#say h1'), log: document.querySelector('#log').getAttribute('role'), tab: document.querySelector('#log').tabIndex, name: document.querySelector('#log').getAttribute('aria-label'), logLive: document.querySelector('#log').getAttribute('aria-live') }));
+  assert.deepStrictEqual(acc, { live: 'polite', h1: true, log: 'log', tab: 0, name: 'What the installer said', logLive: null });
   let reached = false;
   for (let i = 0; i < 6 && !reached; i++) { await page.keyboard.press('Tab'); reached = await page.evaluate(() => document.activeElement.id === 'log'); }
   assert.ok(reached, 'Tab reaches the log');
@@ -378,7 +383,7 @@ const title = page => page.locator('#title').textContent();
   }
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Restart Windows', null, { timeout: 20000 });
   const body = await page.locator('body').innerText();
-  assert.ok(body.includes('WSL 2') && body.includes('has to restart') && body.includes('open Hive again and it carries on'), 'the restart words: ' + body);
+  assert.ok(body.includes('WSL 2') && body.includes('has to restart') && body.includes('open Hive again and press Install'), 'the restart words: ' + body);
   assert.strictEqual(await page.getByRole('button').count(), 1); assert.ok(await page.getByRole('button', { name: 'Close' }).count(), 'only a Close button');
   await page.screenshot({ path: path.join(shots, '6-restart.png') });
   console.log('ok no-wsl screen');
