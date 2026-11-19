@@ -14,8 +14,10 @@ const root = path.join(__dirname, '..');
 const home = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'hive-app-e2e-'));
 const shots = path.join(root, 'test', 'shots'); fs.mkdirSync(shots, { recursive: true });
 
-// Windows: the Hive's command lives under this LOCALAPPDATA (a private one, so real.js's later run never meets the stand-in).
-const localApp = path.join(home, 'AppData', 'Local');
+// Windows: the Hive's command lives under this LOCALAPPDATA (the real one; the test wipes it at the end and on a failure, so real.js's later run never meets the stand-in).
+// (Electron won't start with a different one, so this uses the real one: refuse to touch a person's own machine.)
+if (win && !process.env.CI) { console.error('On Windows this test replaces %LOCALAPPDATA%\\Hive: it only runs on a CI runner (CI=1)'); process.exit(2); }
+const localApp = process.env.LOCALAPPDATA;
 const ps1 = () => {
   const bad = (home + '\\broken');
   return `Write-Host "The Hive will run in your own account, as you."
@@ -85,9 +87,9 @@ const asked = [], seen = [];   // the proof questions, and the page loads, the s
 async function start() {
   const env = { ...process.env, HOME: home, HIVE_APP_TEST: '1', HIVE_APP_WATCH_MS: '700', ...(needRestart ? { HIVE_STUB_RESTART: '1' } : {}), HIVE_SITE: `http://127.0.0.1:${port}`, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share') };
   delete env.HIVE_DIR;
-  if (win) {   // the stand-in wsl.exe first on PATH (Windows keeps the name's case: Path), and a private LOCALAPPDATA
+  if (win) {   // the stand-in wsl.exe first on PATH (Windows keeps the name's case: Path)
     const k = Object.keys(env).find(x => x.toLowerCase() === 'path') || 'Path';
-    env[k] = wslDir + ';' + (env[k] || ''); env.LOCALAPPDATA = localApp; env.USERPROFILE = home;
+    env[k] = wslDir + ';' + (env[k] || '');
   }
   const app = await _electron.launch(process.env.HIVE_APP_BIN ? { executablePath: process.env.HIVE_APP_BIN, args: ['--no-sandbox'], env } : { executablePath: require('electron'), args: [root, '--no-sandbox'], env });
   const page = await app.firstWindow();
@@ -110,7 +112,8 @@ class P { static int Main(string[] a) {
   assert.strictEqual(r.status, 0, 'compiling the stand-in wsl.exe: ' + r.stdout + r.stderr);
 }
 // A machine with no Hive on it.
-function wipe() { for (const d of ['hive', '.hive', 'AppData']) fs.rmSync(path.join(home, d), { recursive: true, force: true }); }
+function wipe() { for (const d of ['hive', '.hive']) fs.rmSync(path.join(home, d), { recursive: true, force: true });
+  if (win) fs.rmSync(path.join(localApp, 'Hive'), { recursive: true, force: true }); }
 const title = page => page.locator('#title').textContent();
 
 (async () => {
@@ -266,6 +269,7 @@ const title = page => page.locator('#title').textContent();
   console.log('ok no-wsl screen');
   await app.close();
 
+  if (win) wipe();
   server.close(); fs.rmSync(home, { recursive: true, force: true });
   console.log('ok e2e');
-})().catch(e => { console.error('FAILED', e); process.exit(1); });
+})().catch(e => { console.error('FAILED', e); try { if (win) wipe(); } catch { } process.exit(1); });
