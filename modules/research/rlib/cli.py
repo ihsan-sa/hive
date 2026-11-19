@@ -72,7 +72,7 @@ HUNT_KEYS = ("goal (what the list is for); orgs (list) or discover (list of sear
 
 
 def c_hunt(a):
-    try: spec = json.loads(Path(a.spec).read_text())
+    try: spec = json.loads(Path(a.spec).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as e: _err(f"cannot read spec {a.spec}: {e}")
     if not isinstance(spec, dict): _err("the spec must be a JSON object")
     for k in spec:

@@ -12,6 +12,7 @@
 :root{--bar-h:53px}
 @media (max-width:640px){:root{--bar-h:49px}}
 .top{position:sticky;top:0;z-index:30;background:var(--surface);border-bottom:1px solid var(--line)}
+html{scroll-padding-top:calc(var(--bar-h) + 8px)}   /* every width: a control Tab scrolls back to stays below the sticky bar (drive_app_focus part=4, _hidden_land at 844x390); phone.css narrows it per view */
 .top-in{display:flex;align-items:center;gap:var(--s4);height:52px;padding:0 var(--s3) 0 var(--s4)}
 .brand{display:flex;align-items:center;gap:8px;font-weight:var(--w-bold);font-size:var(--fs-title);letter-spacing:-.01em;color:var(--ink);text-decoration:none;white-space:nowrap}
 /* consumer: tabs are a segmented control */

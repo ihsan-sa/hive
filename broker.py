@@ -526,9 +526,11 @@ def main():
     offset, count_at = (BOARD.stat().st_size if BOARD.exists() else 0), 0.0
     while True:
         try:
+            try: changed = Path(__file__).stat().st_mtime != me
+            except FileNotFoundError: changed = True  # its home was removed (a test's throwaway home): before, this raised every tick and the broker never left; 19 were left over on 11-19, up to 9 days old
+            if changed and not any(s["state"] == "running" for s in all_steps()): return  # updated: the starter starts the new one
             offset = tick_board(offset)
             tick_time()
-            if Path(__file__).stat().st_mtime != me and not any(s["state"] == "running" for s in all_steps()): return  # updated: the starter starts the new one
             if time.monotonic() >= count_at:  # a slow leak shows in broker.log long before it stops runs
                 count_at = time.monotonic() + 3600
                 if isinstance(k := open_files(), int) and k > n // 2: jot("files", f"{k} files open of at most {n}")

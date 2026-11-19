@@ -25,7 +25,7 @@ The same model call also picks reusable facts out of result posts: at most one d
   hive outcomes list [--since 24h] [--grade G] [--name NAME]
   hive outcomes stats [--since 24h] [--json]
 """
-import argparse, datetime as dt, hashlib, importlib.util, json, os, random, re, subprocess, sys
+import argparse, bisect, datetime as dt, hashlib, importlib.util, json, os, random, re, subprocess, sys
 from pathlib import Path
 
 HOME = Path.home()
@@ -36,6 +36,7 @@ SAMPLE = 10                # not used by the hourly run since 2026-11-10 (chains
 ROOT_PCT = 50              # share of chains (a root and every run handed on from it) graded whole: the hash of the root decides, so the hour a run ends in doesn't, and coverage of pulse-rooted work is this constant. Readings before 2026-11-10 17Z sampled runs, not chains: not comparable
 ROOT_MAX = 60              # runs chosen chains may send to the model per hour, a cost guard: whole chains are kept until it is reached, the rest are left ungraded (never bit on 11-07..09)
 PULSE_THREADS = {"keeper", "improve", "watchdog", "tidy", "progress"}   # an agent first started in one of these is a pulse acting through an agent: a run it wakes is a root (as projects/rsi-lab/movers.py)
+CLOSER_MAX = 20            # runs an hour graded outside the chosen chains because they could close a follow-up miss (could_close): with ROOT_PCT at 50, 13 of 38 unclosed misses (11-12..19) had a same-agent, same-thread run in the 6 h that nobody graded (ad388, hive-meta, 2026-11-19)
 OTHER_MAX = 12             # runs on a non-Claude provider graded per hour on top of that: at 13% sampled, 1 of 21 agent-woken Codex runs had a grade, so nobody could say whether Codex delivers
 SETTLE_S = 180             # a run's end must be this old: its last post may still be landing
 TAIL_S = 90                # posts this long after the end still count as the run's
@@ -84,6 +85,9 @@ def asks_mod():
 def runs(log, since="", until=""):
     """Ended runs with their start record, keyed by session+pid, ended after `since` and before `until`."""
     starts = {(r.get("session"), r.get("pid")): r for r in log if r.get("event") == "start"}
+    by_name = {}
+    for r in starts.values(): by_name.setdefault(r.get("name"), []).append(r.get("at", ""))
+    for v in by_name.values(): v.sort()
     out = []
     for r in log:
         if r.get("event") != "end" or r.get("at", "") <= since or (until and r.get("at", "") > until): continue
@@ -92,13 +96,16 @@ def runs(log, since="", until=""):
         # a parked run restarted for new posts keeps the post it was first started on; "woke" lists the ones that actually woke it
         out.append({"key": f"{s.get('session', '')[:8]}-{s.get('pid')}", "name": s.get("name"), "session": s.get("session"), "post": (s.get("woke") or [s.get("post")])[0],
                     "also": (s.get("woke") or [])[1:], **({"heir_of": s["heir_of"]} if s.get("heir_of") else {}),
-                    "thread": s.get("thread"), "from": s.get("from"), "model": s.get("model"), "started": s.get("at"), "ended": r.get("at"), "exit": r.get("exit")})
+                    "thread": s.get("thread"), "from": s.get("from"), "model": s.get("model"), "started": s.get("at"), "ended": r.get("at"), "exit": r.get("exit"),
+                    **({"next": v[i]} if (i := bisect.bisect_right(v := by_name.get(s.get("name"), []), s.get("at", ""))) < len(v) else {})})
     return out
 
 def posts_of(run, posts, by_id):
     """The waking post, the agent's posts during the run (plus TAIL_S), and what others said in the thread after."""
     t0, t1 = run["started"], (dt.datetime.fromisoformat(run["ended"]) + dt.timedelta(seconds=TAIL_S)).isoformat(timespec="seconds")
-    mine = [p for p in posts if p.get("from") == run["name"] and t0 <= p.get("at", "") <= t1]
+    nx = run.get("next") or "~"   # the tail stops where the same agent's next run starts: its posts are that run's (a56bb's model switch, 11-19, read
+    # as "nothing" for the next run's intent line; 631 of 3335 runs in the 7 days to 11-19 had a later run's posts counted as theirs too)
+    mine = [p for p in posts if p.get("from") == run["name"] and t0 <= p.get("at", "") <= t1 and p.get("at", "") < nx]
     after = [p for p in posts if p.get("thread") == run["thread"] and p.get("from") != run["name"] and p.get("at", "") > run["ended"]][:2]
     post = by_id.get(run["post"])
     if post and run.get("also") is not None and (run.get("from"), run.get("thread")) != (post.get("from"), post.get("thread")):
@@ -361,10 +368,13 @@ def cmd_grade(a):
     try: cur = json.loads(CURSOR.read_text())
     except (OSError, ValueError): cur = {}
     other = getattr(a, "other_since", "")  # older callers build the Namespace without it
-    since = other or cur.get("at", iso(now() - dt.timedelta(hours=6))); until = iso(now() - dt.timedelta(seconds=SETTLE_S))
+    back = getattr(a, "closers_since", "")   # backfill: only the ungraded runs since DATE that could close a follow-up miss; the cursor doesn't move
+    since = other or back or cur.get("at", iso(now() - dt.timedelta(hours=6))); until = iso(now() - dt.timedelta(seconds=SETTLE_S))
     log, posts = jsonl(LOG), jsonl(BOARD); by_id = {p.get("id"): p for p in posts}
-    done = {r.get("key") for r in jsonl(LEDGER)}
+    led = jsonl(LEDGER); done = {r.get("key") for r in led}
     todo = [r for r in runs(log, since, until) if r["key"] not in done and (not other or provider(r) != "claude")]
+    if back: todo = could_close(led, todo, posted_in(posts))
+    tag = {"closer": True} if back else {}
     if a.limit: todo = todo[:a.limit]
     graded, model_runs, cost, ticks, drafts, limited = 0, [], 0.0, ticked_rungs(), 0, False
     root, lims = roots(log, by_id), limit_times(log)
@@ -379,30 +389,39 @@ def cmd_grade(a):
         if g:
             why = "only switched model or effort; the run it resumed as carries the ask" if sw else "stopped for the person's edit or retry; the run it resumed as carries the ask" if sup else "hit a usage limit and exited within a minute; resumed at the reset" if g == "not_run" \
                 else "the post asked nothing" if g == "not_asked" else "posted nothing" + (" though named" if g == "silent" else "")
-            if not a.dry: append(LEDGER, {**r, **({"switch": True} if sw else {}), **({"superseded": True} if sup else {}), "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
+            if not a.dry: append(LEDGER, {**r, **({"switch": True} if sw else {}), **({"superseded": True} if sup else {}), **tag, "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
             graded += 1
         else: model_runs.append((r, post, mine, after))
-    chosen = pick(model_runs, a.sample, root=root) if not (a.all or other) else model_runs
-    for i in range(0, len(chosen), 8):
-        batch = chosen[i:i + 8]
-        prompt = PROMPT.replace("{blocks}", "\n\n".join(block(*b) for b in batch))
-        if a.dry: print(prompt[:3000] + ("\n..." if len(prompt) > 3000 else "")); print(f"... {len(batch)} runs, {len(prompt)} chars"); continue
-        try: out, c = asks.ask_model(prompt, a.model)
-        except Exception as e:
-            limited = isinstance(e, getattr(asks, "Limited", ()))
-            print(f"outcomes: model call failed: {e}", file=sys.stderr); break
-        cost += c or 0.0
-        byk = {r["key"]: (r, post, mine) for r, post, mine, _ in batch}
-        for g in parse_grades(out):
-            r, post, mine = byk.get(g.get("run"), (None, None, None))
-            if not r or g.get("grade") not in ("delivered", "partial", "nothing", "not_asked"): continue
-            append(LEDGER, {**r, "at": iso(), "grade": g["grade"], "why": clip(g.get("why"), 200), "posts": len(mine), "by": a.model, "cost": round(cost / len(batch), 4)}); graded += 1
-            try: drafts += bool(write_draft(g, r, mine))
-            except OSError as e: print(f"outcomes: draft not written: {e}", file=sys.stderr)
+    chosen = pick(model_runs, a.sample, root=root) if not (a.all or other or back) else model_runs
+    def grade(chosen, tag):
+        nonlocal cost, graded, drafts, limited
+        for i in range(0, len(chosen), 8):
+            batch = chosen[i:i + 8]
+            prompt = PROMPT.replace("{blocks}", "\n\n".join(block(*b) for b in batch))
+            if a.dry: print(prompt[:3000] + ("\n..." if len(prompt) > 3000 else "")); print(f"... {len(batch)} runs, {len(prompt)} chars"); continue
+            try: out, c = asks.ask_model(prompt, a.model)
+            except Exception as e:
+                limited = isinstance(e, getattr(asks, "Limited", ()))
+                print(f"outcomes: model call failed: {e}", file=sys.stderr); return False
+            cost += c or 0.0
+            byk = {r["key"]: (r, post, mine) for r, post, mine, _ in batch}
+            for g in parse_grades(out):
+                r, post, mine = byk.get(g.get("run"), (None, None, None))
+                if not r or g.get("grade") not in ("delivered", "partial", "nothing", "not_asked"): continue
+                append(LEDGER, {**r, **tag, "at": iso(), "grade": g["grade"], "why": clip(g.get("why"), 200), "posts": len(mine), "by": a.model, "cost": round(cost / len(batch), 4)}); graded += 1
+                try: drafts += bool(write_draft(g, r, mine))
+                except OSError as e: print(f"outcomes: draft not written: {e}", file=sys.stderr)
+        return True
+    closers = []
+    if grade(chosen, tag) and not (a.all or other or back) and not a.dry:
+        # runs the draw left out that could close a follow-up miss, against the ledger as it stands now (a miss graded a minute ago counts)
+        ids = {id(x) for x in chosen}
+        closers = could_close(jsonl(LEDGER), [x for x in model_runs if id(x) not in ids], posted_in(posts))[:CLOSER_MAX]
+        grade(closers, {"closer": True})
     # Claude at its limit is when fallback runs most need grading: hold the cursor, and the next hour picks them up (the ledger's keys stop a run being graded twice)
-    if not a.dry and todo and not limited and not other: CURSOR.write_text(json.dumps({"at": max(r["ended"] for r in todo), "run": iso()}))
-    if not a.dry and graded and not other: step_up(graded)
-    print(f"{graded} runs graded ({len(chosen)} by the model, {len(model_runs) - len(chosen)} left ungraded: chain not chosen or past ROOT_MAX), {drafts} drafts, ${cost:.2f}")
+    if not a.dry and todo and not limited and not other and not back: CURSOR.write_text(json.dumps({"at": max(r["ended"] for r in todo), "run": iso()}))
+    if not a.dry and graded and not other and not back: step_up(graded)
+    print(f"{graded} runs graded ({len(chosen) + len(closers)} by the model, {len(chosen) if back else len(closers)} of them closers, {len(model_runs) - len(chosen) - len(closers)} left ungraded: chain not chosen or past ROOT_MAX), {drafts} drafts, ${cost:.2f}")
 
 def step_up(new, post=None):
     """An agent graded short STEP_UP_AFTER times in a row in one thread while on a cheap model gets its next wake on STEP_UP_TO:
@@ -448,6 +467,7 @@ def intent_only(r):
     return r.get("grade") in ("nothing", "partial", "silent") and bool(INTENT.search(str(r.get("why", ""))))
 
 def stats(rows):
+    rows = [r for r in rows if not r.get("closer")]   # a closer was graded because a miss came before it, not by the chain draw: it would tilt the delivered share
     n = {g: sum(1 for r in rows if r.get("grade") == g) for g in ("delivered", "partial", "nothing", "silent", "quiet", "not_asked", "not_run")}
     den = sum(n[g] for g in GRADED)
     return {"outcomes_graded": len(rows), "outcome_delivered_pct": round(100.0 * n["delivered"] / den, 1) if den else None,
@@ -505,12 +525,28 @@ def followups(rows, t0, t1, hours=FOLLOW_H, t=None, board=None):
     posted = posted_in(board); closed = judged = 0
     for m in rows:
         c = miss_cause(m)
-        if c not in FOLLOW or not (t0 <= (m.get("started") or "") < t1): continue
+        if c not in FOLLOW or m.get("closer") or not (t0 <= (m.get("started") or "") < t1): continue   # a closer that misses again is the same open work, and the draw never chose it: it closes, it isn't a new miss
         e0 = ts(m.get("ended") or m["started"]); lim = e0 + dt.timedelta(hours=hours)
         hit = any(e0 <= ts(r["started"]) <= lim and r is not m and closes(m, r, c, posted) for r in done)
         if hit: closed += 1; judged += 1
         elif t >= lim: judged += 1
     return {"followup_misses": judged, "followup_closed_pct": round(100.0 * closed / judged, 1) if judged else None}
+
+def could_close(rows, cands, posted, hours=FOLLOW_H):
+    """Of the ungraded candidate runs (or (run, ...) tuples), those that would close a handed-on, promised or long-job miss in `rows` if they
+    delivered: started within `hours` of the miss's end and closes() holds. followups() only counts a close by a graded run, and the chain draw
+    grades half of them; these are graded on top so a reminder-woken report (aacdf 11-16, a0069 11-17) closes its miss."""
+    run = lambda x: x[0] if isinstance(x, tuple) else x
+    def ts(x): return dt.datetime.fromisoformat(str(x).replace("Z", "+00:00"))
+    if not cands: return []
+    lo = (min(ts(run(x)["started"]) for x in cands) - dt.timedelta(hours=hours + 24)).isoformat(timespec="seconds")
+    misses = [(m, c) for m in rows if (m.get("started") or "") >= lo and (c := miss_cause(m)) in FOLLOW]
+    out = []
+    for x in cands:
+        r = run(x); s = ts(r["started"])
+        if any(r.get("key") != m.get("key") and ts(m.get("ended") or m["started"]) <= s <= ts(m.get("ended") or m["started"]) + dt.timedelta(hours=hours)
+               and closes(m, r, c, posted) for m, c in misses): out.append(x)
+    return out
 
 def cmd_list(a):
     rows = [r for r in recent(a.since) if (not a.grade or r.get("grade") == a.grade) and (not a.name or r.get("name") == a.name)]
@@ -540,7 +576,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="hive outcomes", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
     p = sp.add_parser("grade"); p.add_argument("--limit", type=int, default=0); p.add_argument("--sample", type=int, default=SAMPLE, help="unused since 2026-11-10: the hourly run grades whole chains (ROOT_PCT)"); p.add_argument("--all", action="store_true", help="every run with posts, not a sample")
-    p.add_argument("--model", default="sonnet"); p.add_argument("--dry", action="store_true"); p.add_argument("--other-since", default="", metavar="DATE", help="backfill: every ungraded run on a non-Claude provider ended after DATE; the hourly cursor doesn't move"); p.set_defaults(f=cmd_grade)
+    p.add_argument("--model", default="sonnet"); p.add_argument("--dry", action="store_true"); p.add_argument("--other-since", default="", metavar="DATE", help="backfill: every ungraded run on a non-Claude provider ended after DATE; the hourly cursor doesn't move")
+    p.add_argument("--closers-since", default="", metavar="DATE", help="backfill: the ungraded runs ended after DATE that could close a follow-up miss (could_close), tagged closer; the cursor doesn't move"); p.set_defaults(f=cmd_grade)
     p = sp.add_parser("list"); p.add_argument("--since", default="24h"); p.add_argument("--grade"); p.add_argument("--name"); p.set_defaults(f=cmd_list)
     p = sp.add_parser("stats"); p.add_argument("--since", default="24h"); p.add_argument("--json", action="store_true"); p.add_argument("--by", choices=["provider"], help="delivery per provider, person-woken and agent-woken apart"); p.set_defaults(f=cmd_stats)
     a = ap.parse_args(argv); a.f(a)

@@ -337,6 +337,8 @@ export default {
   "its thread": "su hilo",
   "An agent": "Un agente",
   "see the console": "mira la consola",
+  "Turn on the switch": "Activa el interruptor",
+  "its drive": "su unidad",
   "Flash again": "Grabar otra vez",
   "another board": "otra placa",
   "a board": "una placa",
