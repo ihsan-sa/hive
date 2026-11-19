@@ -11,7 +11,7 @@ go to the person at every level, and so does every step when no Claude login can
 The person's word is a line in a post from them naming the step and its script's hash. It's no secret: an agent can't post as the person, the hash pins the bytes and the step's state makes it single-use.
 A step runs once. A broker restart marks a running one failed and never runs it again. A script that was refused can't be asked again.
 """
-import fcntl, hashlib, ipaddress, json, os, re, secrets, shutil, signal, socket, subprocess, sys, threading, time, resource
+import errno, fcntl, hashlib, ipaddress, json, os, re, secrets, selectors, shutil, signal, socket, subprocess, sys, threading, time, resource
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -35,6 +35,22 @@ ALWAYS_PERSON = re.compile(r"""\b(stripe|paypal|checkout|invoice|purchase|paymen
     | \b(sendmail|mailx?|smtp|gmail|twitter|tweet|linkedin|facebook|slack\.com|discord\.com)\b
     | \bgit\b[^\n]*\bpush\b | \bgh\s+\w | \b(npm|cargo)\s+publish\b | \btwine\s+upload\b | \bfilter-(branch|repo)\b""", re.I | re.X)
 lock = threading.RLock()
+NOFILE = resource.getrlimit(resource.RLIMIT_NOFILE)  # as started; a step gets these back
+IDLE_S, HALF_S = 3600, 600  # a tunnel that moved nothing for an hour, or for 10 minutes once one side ended, is shut (sweep_tunnels)
+said, said_lock = {}, threading.Lock()
+
+def jot(key, *what):
+    """A line in broker.log, at most one a minute of each kind: a failure that comes back every 0.1 s would fill the disk."""
+    now = time.monotonic()
+    with said_lock:
+        n, at = said.get(key, (0, -60.0))
+        if now - at < 60: said[key] = (n + 1, at); return
+        said[key] = (0, now)
+    print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), *what, *([f"({n} more like it since the last)"] if n else []), flush=True)
+
+def open_files():
+    try: return len(os.listdir("/proc/self/fd")) - 1
+    except OSError: return "?"
 
 def say(text, to=(), thread=None, files=()):
     """A post from the broker, through the same hive post everyone uses. Returns its id when a thread is named: nobody but the broker posts there as the starter."""
@@ -149,7 +165,7 @@ def run_step(s):
         if hashlib.sha256((d / "script").read_bytes()).hexdigest() != s["sha"]: raise OSError("the script isn't the one that was approved")
         env = {"HOME": str(real), "USER": real.name, "LANG": os.environ.get("LANG", "C.UTF-8"), "TMPDIR": str(d),
                "PATH": f"{real}/.local/bin:" + os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")}
-        def limit(): resource.setrlimit(resource.RLIMIT_FSIZE, (2 ** 30, 2 ** 30))
+        def limit(): resource.setrlimit(resource.RLIMIT_FSIZE, (2 ** 30, 2 ** 30)); resource.setrlimit(resource.RLIMIT_NOFILE, NOFILE)
         with open(d / "output", "wb") as out:
             p = subprocess.Popen([shutil.which("bash") or "/bin/sh", str(d / "script")], cwd=real, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True, preexec_fn=limit)
             try: code = p.wait(STEP_S)
@@ -207,6 +223,8 @@ def tick_board(offset):
     """The person's word on a step, read from new board lines. Only their posts count, and not ones through the door, whose model reads what agents write."""
     try:
         with BOARD.open("rb") as f:
+            if (size := os.fstat(f.fileno()).st_size) < offset:  # written again shorter: go on from its end, as the starter does, or no word is read until it outgrows the old end
+                jot("board", f"the board shrank ({offset} to {size} bytes); reading on from its end"); offset = size
             f.seek(offset); chunk = f.read()
     except OSError: return offset
     chunk = chunk[:chunk.rfind(b"\n") + 1]
@@ -349,11 +367,44 @@ def resolve(host, port):
     if not good or len(good) != len(infos): return None
     return good[0]
 
-def pump(a, b):
+tunnels, tunnels_lock = {}, threading.Lock()
+
+def pump(a, b, t):
     try:
-        while (d := a.recv(65536)): b.sendall(d)
+        while (d := a.recv(65536)):
+            t["last"] = time.monotonic(); b.sendall(d)
     except OSError: pass
+    t["ended"], t["last"] = True, time.monotonic()
     try: b.shutdown(socket.SHUT_WR)
+    except OSError: pass
+
+def tunnel(c, out):
+    """Bytes both ways until both sides end, or sweep_tunnels shuts it."""
+    t = {"c": c, "out": out, "last": time.monotonic(), "ended": False}
+    with tunnels_lock: tunnels[c] = t
+    try:
+        th = threading.Thread(target=pump, args=(out, c, t), daemon=True); th.start()
+        pump(c, out, t); th.join()
+    finally:
+        with tunnels_lock: tunnels.pop(c, None)  # before its caller closes them: the sweep only ever shuts a live one
+
+def sweep_tunnels():
+    """A far end that never closes, or that went quiet for good, held its tunnel and two file handles for as long as the broker ran, and they piled up
+    over days (111816060ea8). Shut, not closed: the pumps on them end on it, and serve_egress closes."""
+    now = time.monotonic()
+    with tunnels_lock:
+        for t in tunnels.values():
+            if now - t["last"] > (HALF_S if t["ended"] else IDLE_S):
+                for s in (t["c"], t["out"]):
+                    try: s.shutdown(socket.SHUT_RDWR)
+                    except OSError: pass
+
+def keepalive(s):
+    """A far end that went away without a word (a router that forgot the connection, a laptop asleep) is noticed in minutes, not never."""
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        for opt, v in (("TCP_KEEPIDLE", 120), ("TCP_KEEPINTVL", 30), ("TCP_KEEPCNT", 4)):
+            if hasattr(socket, opt): s.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), v)
     except OSError: pass
 
 def serve_egress(c):
@@ -380,27 +431,86 @@ def serve_egress(c):
         try: info = resolve(host, int(port))
         except (OSError, ValueError): info = None
         if not info: return c.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 53\r\n\r\nThe sandbox doesn't reach this machine or local nets\n\n")
-        out = socket.socket(info[0], socket.SOCK_STREAM); out.settimeout(30); out.connect(info[4]); out.settimeout(None); c.settimeout(None)
+        out = socket.socket(info[0], socket.SOCK_STREAM); out.settimeout(30); out.connect(info[4]); keepalive(out)
         if forward is None: c.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
         else: out.sendall(forward)
-        t = threading.Thread(target=pump, args=(out, c), daemon=True); t.start()
-        pump(c, out); t.join()
-    except (OSError, ValueError, IndexError): pass
+        out.settimeout(None); c.settimeout(None)
+        tunnel(c, out)
+    except (OSError, ValueError, IndexError, RuntimeError): pass
     finally:
         if out: out.close()
         c.close()
 
+SOCKS = (("ctl.sock", serve_ctl), ("egress.sock", serve_egress))
+
 def listen(name):
-    """Sockets for one run. Relative paths: a long home can't hit the 108 characters a socket path may have."""
-    ctl, eg = [socket.socket(socket.AF_UNIX) for _ in "ab"]
-    for s, f in ((ctl, f"{name}/ctl.sock"), (eg, f"{name}/egress.sock")):
-        Path(f).unlink(missing_ok=True); s.bind(f); s.listen(64)
-    def loop(s, fn, *a):
-        while True:
-            c, _ = s.accept()
-            threading.Thread(target=fn, args=(c, *a), daemon=True).start()
-    threading.Thread(target=loop, args=(ctl, serve_ctl, name), daemon=True).start()
-    threading.Thread(target=loop, args=(eg, serve_egress), daemon=True).start()
+    """A run's two sockets, listening. Relative paths: a long home can't hit the 108 characters a socket path may have. All or nothing."""
+    made = []
+    try:
+        for f, _ in SOCKS:
+            s = socket.socket(socket.AF_UNIX); made.append(s)
+            Path(f"{name}/{f}").unlink(missing_ok=True); s.bind(f"{name}/{f}"); s.listen(64); s.setblocking(False)
+        return [(s, os.stat(f"{name}/{f}").st_ino) for s, (f, _) in zip(made, SOCKS)]
+    except BaseException:
+        for s in made: s.close()
+        raise
+
+def serve():
+    """Every run's sockets, on this one thread: it alone touches them. A run's folder stays (a box holds it by inode), and so do its two sockets.
+    Nothing here ends the thread: a failure is noted and tried again, so a name that comes after a bad minute still gets its sockets. Before, each name had
+    two threads of its own, and the first accept() to find no file handle free ended that one for good (111816060ea8)."""
+    sel, names, wait, scan_at, heal_at, sweep_at = selectors.DefaultSelector(), {}, {}, 0.0, 0.0, 0.0
+    def drop(name):
+        for s, _ in names.pop(name, ()):
+            try: sel.unregister(s)
+            except (KeyError, ValueError): pass
+            s.close()
+    while True:
+        try:
+            for key, _ in sel.select(0.1):
+                name, fn = key.data
+                try: c, _ = key.fileobj.accept()
+                except BlockingIOError: continue
+                except OSError as x:
+                    jot("accept", "accept on", name, f"{x} ({open_files()} files open, at most {resource.getrlimit(resource.RLIMIT_NOFILE)[0]})")
+                    if x.errno in (errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM): time.sleep(0.5); break  # it waits in the queue for a free handle
+                    continue
+                c.setblocking(True)
+                try: threading.Thread(target=fn, args=(c, name) if fn is serve_ctl else (c,), daemon=True).start()
+                except RuntimeError as x: c.close(); jot("thread", "no thread for", name, x); time.sleep(0.5)
+            now = time.monotonic()
+            if now >= heal_at:  # a socket file or a whole folder removed, or made again: its name listens again, below
+                heal_at = now + 5
+                for name, socks in list(names.items()):
+                    try: same = all(os.stat(f"{name}/{f}").st_ino == ino for (f, _), (_, ino) in zip(SOCKS, socks))
+                    except FileNotFoundError: same = False
+                    except OSError: continue
+                    if not same: drop(name); jot("heal", "the sockets of", name, "were removed or replaced; it listens again while its folder is there")
+            if now >= sweep_at: sweep_at = now + 30; sweep_tunnels()
+            if now < scan_at: continue
+            scan_at = now + 0.1  # a new run's folder: sandbox.ready() gives the broker 3 s to have its sockets
+            with os.scandir(SOCKETS) as it:
+                for d in it:
+                    if d.name in names or wait.get(d.name, 0) > now or not sandbox.NAME.fullmatch(d.name) or not d.is_dir(follow_symlinks=False): continue
+                    try: socks = listen(d.name)
+                    except OSError as x: wait[d.name] = now + 5; jot("listen", "listen", d.name, f"{x} ({open_files()} files open); trying again in 5 s"); continue
+                    try:
+                        for (s, _), (f, fn) in zip(socks, SOCKS): sel.register(s, selectors.EVENT_READ, (d.name, fn))
+                    except (OSError, ValueError, KeyError):
+                        names[d.name] = socks; drop(d.name); wait[d.name] = now + 5; raise
+                    names[d.name] = socks; wait.pop(d.name, None)
+        except Exception as x:
+            jot("serve", "sockets:", repr(x)); time.sleep(0.5)
+
+def raise_nofile(want=65536):
+    """Two file handles for each name the account has ever run, and two more for each open tunnel: the 1024 a desktop gives a service ran out on a
+    machine with a few hundred names, and then no run could reach the broker (111816060ea8). Up to the hard limit, which is the kernel's to give."""
+    soft, hard = NOFILE
+    n = want if hard == resource.RLIM_INFINITY else min(want, hard)
+    if n > soft:
+        try: resource.setrlimit(resource.RLIMIT_NOFILE, (n, hard)); return n
+        except (ValueError, OSError): pass
+    return soft
 
 def main():
     STATE.mkdir(exist_ok=True); SOCKETS.mkdir(parents=True, exist_ok=True); STEPS.mkdir(mode=0o700, exist_ok=True)
@@ -409,16 +519,21 @@ def main():
     except OSError: return
     os.chdir(SOCKETS)
     me = Path(__file__).stat().st_mtime
+    n = raise_nofile()
+    print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), f"broker {os.getpid()} started: up to {n} files open (was {NOFILE[0]}), {sum(1 for _ in SOCKETS.iterdir())} names", flush=True)
     recover()
-    offset, known = (BOARD.stat().st_size if BOARD.exists() else 0), set()
+    hub = threading.Thread(target=serve, daemon=True); hub.start()
+    offset, count_at = (BOARD.stat().st_size if BOARD.exists() else 0), 0.0
     while True:
-        for d in SOCKETS.iterdir():
-            if d.is_dir() and d.name not in known and sandbox.NAME.fullmatch(d.name):
-                try: listen(d.name); known.add(d.name)
-                except OSError as x: print("listen", d.name, x, flush=True)
-        offset = tick_board(offset)
-        tick_time()
-        if Path(__file__).stat().st_mtime != me and not any(s["state"] == "running" for s in all_steps()): return  # updated: the starter starts the new one
+        try:
+            offset = tick_board(offset)
+            tick_time()
+            if Path(__file__).stat().st_mtime != me and not any(s["state"] == "running" for s in all_steps()): return  # updated: the starter starts the new one
+            if time.monotonic() >= count_at:  # a slow leak shows in broker.log long before it stops runs
+                count_at = time.monotonic() + 3600
+                if isinstance(k := open_files(), int) and k > n // 2: jot("files", f"{k} files open of at most {n}")
+        except Exception as x: jot("tick", "steps:", repr(x))
+        if not hub.is_alive(): print("the sockets' thread ended; leaving, so the starter starts a new broker", flush=True); return
         time.sleep(0.1)
 
 if __name__ == "__main__":
