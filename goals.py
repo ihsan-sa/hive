@@ -356,6 +356,23 @@ def last_nothing(to, thread):
     return (f"\n\n**Your last round here ({(r.get('started') or '')[11:16]} UTC) was graded nothing**" + (f": {why}" if why else ".") +
             " A wait post is not a result. If the rung cannot pass yet, move its `after:` tag to the time it can, in this run, then write a rung that moves the measure today and do it.")
 
+CARD_KINDS = ("past date", "to-do off the list", "says today", "hidden ask", "long bullet", "long lead")   # the lint findings a ladder agent can clear in a minute
+
+def card_flags(thread, run=None):
+    """The brief's line on the focus card's own lint (HA-4, 2026-11-19): `hive focus set` prints the flags only to the agent that saves a
+    summary, and `check add` prints none, so 25 of 29 passed dates sat on to-dos that nobody who owned the ladder was ever shown (hive-meta 13,
+    rsi-loop 12 of 52 findings). A keeper round on the focus now carries them. Empty when the card is clean or lint cannot run."""
+    try:
+        out = (run or (lambda: subprocess.run(["hive", "focus", "lint", "--json"], capture_output=True, text=True, timeout=30).stdout))()
+        items = json.loads(out)
+        fid = next((f["id"] for f in json.loads((run and "[]") or subprocess.run(["hive", "focus", "list", "--json"], capture_output=True, text=True, timeout=30).stdout) if thread in (f.get("thread"), f.get("id"))), None) if not run else thread
+    except Exception: return ""
+    mine = [i for i in items if i.get("focus") == fid and i.get("kind") in CARD_KINDS]
+    if not mine: return ""
+    lines = "\n".join(f"- {i['kind']}: {i['what']} (in: {(i.get('in') or '')[:60]}) → {i['fix'][:110]}" for i in mine[:6])
+    return (f"\n\n**The focus card's own lint flags {len(mine)} line{'s' if len(mine) != 1 else ''} on your focus** (`hive focus lint {fid}`); you own this ladder, so clear them in this run "
+            f"(tick a to-do that happened, re-date one still ahead, say what happened on a passed day), before or after your rung:\n" + lines + (f"\n- and {len(mine) - 6} more" if len(mine) > 6 else ""))
+
 def brief(row):
     """The brief a keeper round posts for one focus. Every clause is here because a thin hand-written brief produced the 'nothing changed' rounds."""
     big = capped(row.get("thread"), row.get("last_worker")) if row.get("last_worker") else 0
@@ -377,7 +394,7 @@ def brief(row):
              " Read the thread for context, then do the rung yourself; do not hand it back.") if prev else (
         f"\n\n**You take this fresh:** `{row['last_worker']}` would have carried {big // 1000}k tokens of context into this round (a context-cap trial, hive-meta L134)."
         " Read the thread's last posts and the files they name for what it learned, then do the rung yourself.") if big else ""
-    return head + rung + fresh + last_nothing(to, row.get("thread")) + """
+    return head + rung + fresh + last_nothing(to, row.get("thread")) + card_flags(row.get("thread")) + """
 
 Rules for the round:
 - Read the last 5 posts of this thread for context, not for a conclusion. Earlier posts here may say nothing is left: that was a check-in, not a finding. "Nothing changed" is not a result, and you are not here to re-check the state.
