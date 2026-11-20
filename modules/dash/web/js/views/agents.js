@@ -187,6 +187,7 @@ export default {
     if (changed || !L.hb) {   // HB: the helpers of the agents shown (Agents, Both); HL: the flat list (Helpers), which the search also matches on type and task
       const names = new Set(L.found.map(a => a.name));
       L.hb = helperRows(false).filter(r => names.has(r.agent)); L.hl = helperRows(true);
+      L.hc = ((S.helpers && S.helpers.rows) || []).filter(r => names.has(r.agent));   // the cost note: every helper of the agents shown, whatever Status picks, since each agent's cost holds all of them
       const hs = hsort(), hg = (HCOLS.find(c => c.k === hs.k) || HCOLS[2]).get;
       L.hl.sort((a, b) => { const x = hg(a), y = hg(b); return (typeof x === "string" ? x.localeCompare(y) : x - y) * hs.d || hT(b.start) - hT(a.start); });
       L.hby = new Map(); for (const r of [...L.hb].sort((a, b) => hT(b.start) - hT(a.start))) { if (!L.hby.has(r.agent)) L.hby.set(r.agent, []); L.hby.get(r.agent).push(r); }
@@ -205,7 +206,7 @@ export default {
             `${found.filter(a => a.status === "running").length} running `, split(["and ", b(String(hRun(HB))), hRun(HB) === 1 ? " helper" : " helpers"])] }
         : { label: narrowed ? "Agents shown" : "Agents", value: int(found.length), note: [`${found.filter(a => a.status === "running").length} running`, HB.length ? [h("br"), split(["not counting ", b(int(HB.length)), HB.length === 1 ? " helper" : " helpers"])] : null] },
         // the same in every Show mode: a helper's cost is already inside its owner's
-        { label: "Total cost", value: all.length && costsPending() ? figPending() : COST_DATA ? money(sum(a => a.usd)) : "–", note: found.length && COST_DATA && !costsPending() ? [`${money(sum(a => a.usd) / found.length)} per agent`, hUsd(HB) ? [h("br"), split([b(money(hUsd(HB))), " of it helpers in the last 7 days"])] : null] : null },
+        { label: "Total cost", value: all.length && costsPending() ? figPending() : COST_DATA ? money(sum(a => a.usd)) : "–", note: found.length && COST_DATA && !costsPending() ? [`${money(sum(a => a.usd) / found.length)} per agent`, hUsd(L.hc) ? [h("br"), split([b(money(hUsd(L.hc))), " of it helpers in the last 7 days"])] : null] : null },
         { label: "Tokens", value: all.length && costsPending() ? figPending() : COST_DATA ? toks(sum(a => a.tok)) : "–", note: !COST_DATA || costsPending() ? null : `${pctOf(sum(a => a.spend.t[2]), sum(a => a.tok))} re-read from cache; ${toks(sum(a => a.spend.t[1]))} written` },
         { label: "Agent time", value: found.length ? dur(sum(a => a.ran)) : "–", note: found.length ? [`added up over ${plural(sum(a => a.runs), "run")}, in ${dur(Date.now() - Math.min(...found.map(a => a.when || Date.now())))}`, hMs >= 6e4 ? [h("br"), split(["helpers worked ", b(dur(hMs)), " alongside, last 7 days"])] : null] : null },
     ]);
@@ -215,9 +216,11 @@ export default {
       header: pageHeader({ subnav: pageNav(), title: "Agents", hint: `Every agent that has run, ${s.k === "spawned" && s.d < 0 ? "newest first" : s.k === "spawned" ? "oldest first" : "sorted by the column you chose"}.`, after: toolbar(
         input({ type: "search", placeholder: matchMedia("(max-width: 640px)").matches ? `Search name, ${S.app.app ? "conversation" : "thread"}, model` : `Search name, ${S.app.app ? "conversation" : "thread"}, model, who started it`, "aria-label": "Search agents", value: L.q, oninput: e => set("q", e.target.value) }),
         seg(STATUS.filter(x => ["all", "running", "ended", "failed"].includes(x[0]) || x[0] === L.status).map(([k, l]) => [k, k === "all" ? "All" : l]), L.status, v => set("status", v), { label: "Status" }),
-        S.helpers && S.helpers.rows.length ? seg(SHOW.map(([k, l]) => [k, l, k === "agents" ? "Only agents: the ones on the board" : k === "helpers" ? "Only helpers: what agents started inside their own runs, last 7 days" : "Agents, each with its helpers under it", k === "helpers" ? int(HL.length) : null]), mode, setShow, { label: "Show" }) : null,
+        // A phone keeps the list where it starts: Show sits in Filters until it is set off Agents (R67's 420 px line), and the count's helper link switches it too
+        S.helpers && S.helpers.rows.length && (!phone || mode !== "agents") ? seg(SHOW.map(([k, l]) => [k, l, k === "agents" ? "Only agents: the ones on the board" : k === "helpers" ? "Only helpers: what agents started inside their own runs, last 7 days" : "Agents, each with its helpers under it", k === "helpers" ? int(HL.length) : null]), mode, setShow, { label: "Show" }) : null,
         fold("fOpen", "Filters" + (nf ? ` (${nf})` : "")),
         !L.fOpen ? null : h("div", { class: "toolbar ag-f ag-fp", "data-key": "filters" },
+            phone && S.helpers && S.helpers.rows.length ? picker("Show", mode, SHOW.map(([k, l]) => [k, "Show: " + (k === "helpers" ? `Helpers (${int(HL.length)})` : l)]), setShow) : null,
             picker("Status", L.status, STATUS, v => set("status", v)),   // the row above shows the common four; the rest (waiting, killed, at a limit) are here
             picker("Model", L.model, [["all", "Any model"], ...options(all, "model")], v => set("model", v)),
             picker("Account", L.account, [["all", "Any account"], ...options(all, "account")], v => set("account", v)),
@@ -231,7 +234,8 @@ export default {
         // The count and its button are one row on a phone: one digit more once the whole log is in wrapped them apart and pushed the list 48 px (R67).
         h("div", { class: "ag-cnt", "data-key": "count" }, mode === "helpers" ? h("span", { class: "meta" }, `${plural(HL.length, "helper")}, started by ${plural(owners(HL), "agent")}`, hUsd(HL) ? " · " + money(hUsd(HL)) : null)
           : mode === "both" && HB.length ? h("span", { class: "meta" }, `${int(found.length + HB.length)} shown: ${plural(found.length, "agent")} and ${plural(HB.length, "helper")}`)
-          : h("span", { class: "meta" }, narrowed ? `${found.length} of ${phone && nHouse ? all.length : plural(all.length, "agent")}` : plural(all.length, "agent"), helperCount(HB.length, { onClick: () => setShow("both"), after: " not shown" })),
+          : h("span", { class: "meta" }, narrowed ? `${found.length} of ${phone && nHouse ? all.length : plural(all.length, "agent")}` : plural(all.length, "agent")),
+        mode === "agents" ? helperCount(HB.length, { onClick: () => setShow("both"), after: phone ? null : " not shown", title: "Not in this list: show them under their agents" }) : null,   // its own span, so the agent count above still reads "N agents" alone
         nHouse > 0 || L.house ? button(L.house ? "Hide housekeeping" : `+${nHouse} housekeeping`, () => { L.house = !L.house; ctx.update(); }, { kind: "quiet", size: "s", title: "Housekeeping runs: status-bar refreshes, keeper and improve rounds, watchdog trips and phone-call starts" }) : null,
           !phone && costNote ? infoButton("About these numbers", costNote, { size: "s" }) : null),
         // On a phone the note and the tiles fold into the controls, so the page opens on the agents; the fold still says the two totals people look for.

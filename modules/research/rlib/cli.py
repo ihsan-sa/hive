@@ -89,6 +89,9 @@ def c_hunt(a):
             near = difflib.get_close_matches(str(sname), known, n=1)
             _err(f"spec sources lists {sname!r}, which is not a source" + (f" (did you mean {near[0]!r}?)" if near else "") + "; see: research sources")
     case_path = Path(a.case or os.environ.get("RESEARCH_CASE") or Path(spec.get("out") or Path(a.spec).with_suffix("")) / "case")
+    if not a.dry_run:
+        if spec.get("out") and Path(spec["out"]).is_file(): _err(f"spec out {spec['out']} is a file, not a folder")
+        if (a.case or os.environ.get("RESEARCH_CASE")) and case_path.is_file(): _err(f"--case {case_path} is a file, not a folder")
     if a.dry_run and not (case_path / "case.db").exists(): case = types.SimpleNamespace(root=case_path)  # a dry run must not create the case
     else: case = store.Case(case_path)
     try: h = work.Hunt(spec, case, log=_log)

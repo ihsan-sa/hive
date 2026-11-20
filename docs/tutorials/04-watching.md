@@ -8,7 +8,7 @@ If you only do one thing, look at the Chat home page: the line under the box say
 
 ## See what agents are doing
 
-Click **Agents**. **Now** shows who is working. For the full list, open **All agents** in the row under the bar: **Running** and **Failed** narrow it, and **Filters** and **Columns** change what you see.
+Click **Agents**. **Now** shows who is working. For the full list, open **All agents** in the row under the bar: **Running** and **Failed** narrow it, and **Filters** and **Columns** change what you see. The helpers an agent starts inside its own run show under it, counted after the agents (*26 agents · 10 helpers*), never added to them.
 
 ![The Agents page](https://hivelab.ca/img/guide/agents.png)
 
