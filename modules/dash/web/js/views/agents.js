@@ -227,7 +227,7 @@ export default {
             picker("Started by", L.by, BY, v => set("by", v)),
             picker(S.app.app ? "Started" : "Spawned", L.since, SINCE, v => set("since", v))),
         fold("cOpen", "Columns"),
-        !L.cOpen ? null : h("div", { class: "toolbar ag-f ag-fp", "data-key": "columns" }, COLS.map(c => h("label", { class: "meta" }, h("input", { type: "checkbox", checked: on.has(c.k) ? "" : null, disabled: c.k === "name" ? "" : null,
+        !L.cOpen ? null : h("div", { class: "toolbar ag-f ag-fp", "data-key": "columns" }, COLS.map(c => h("label", { class: "meta" }, h("input", { type: "checkbox", checked: on.has(c.k), disabled: c.k === "name" ? "" : null,
             onchange: e => { const n = new Set(on); e.target.checked ? n.add(c.k) : n.delete(c.k); setPref("agents.cols", [...n]); L.sig = ""; ctx.update(); } }), " " + c.label))),
         narrowed && found.length < all.length - nHouse ? button("Clear", () => { Object.assign(L, { q: "", status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE }); ctx.update(); }, { kind: "quiet", size: "s" }) : null,
         stack ? picker("Sort", s.k, cols.map(c => [c.k, "Sort: " + c.label]), k => { const d = COLS.find(x => x.k === k).num || k === "spawned" ? -1 : 1; setPref("agents.sort", { k, d }); L.limit = PAGE; ctx.update(); }) : null,   // the column headers sort on a desktop; a phone has no header row

@@ -7,11 +7,11 @@ const SVGNS = "http://www.w3.org/2000/svg";
 function set(e, props) {
   for (const k in props) {
     const v = props[k];
+    if (k === "checked") { if (v != null) { e._c = !!v; e.checked = !!v; if (v) e.setAttribute("checked", ""); } continue; }   // false too: morph puts a box back to off (2026-11-20)
     if (v == null || v === false) continue;
     if (k.startsWith("on") && typeof v === "function") (e._on ||= {})[k.slice(2).toLowerCase()] = v;
     else if (k === "class") e.setAttribute("class", Array.isArray(v) ? v.filter(Boolean).join(" ") : v);
     else if (k === "value") { e._v = String(v); e.value = String(v); }
-    else if (k === "checked") { e._c = !!v; e.checked = !!v; if (v) e.setAttribute("checked", ""); }
     else e.setAttribute(k, v === true ? "" : lang && typeof v === "string" && LANG_ATTRS.has(k) ? lang(v) : v);
   }
 }
@@ -75,7 +75,9 @@ export function morph(a, b) {
   for (const { name, value } of b.attributes) if (a.getAttribute(name) !== value) a.setAttribute(name, value);
   a._on = b._on;
   if (b._v !== undefined && document.activeElement !== a && a.value !== b._v) a.value = b._v;
-  if (b._c !== undefined && document.activeElement !== a) a.checked = b._c;
+  // A box shows the app's state even with focus (a click leaves it focused), so one turned off another way, or refused, shows off;
+  // only while its own handler still works (_busy, set in delegate) does it keep the person's tick (fw-bench goals, 2026-11-20).
+  if (b._c !== undefined) { a._c = b._c; if (!a._busy) a.checked = b._c; }
   if (own) { if (sigChanged) { if (b.getAttribute("data-own") === "morph") morphKids(a, b); else a.replaceChildren(...b.childNodes); } return a; }
   morphKids(a, b);
   return a;
@@ -136,6 +138,12 @@ export function delegate(root = document) {
         if (type === "click" && n.tagName === "BUTTON" && r && typeof r.then === "function") {
           n._going = true;
           const done = () => { n._going = false; clearTimeout(cap); }, cap = setTimeout(done, 20000);   // a handler that never settles can't lock its button for good
+          r.then(done, done);
+        } else if ((type === "change" || type === "click") && n.tagName === "INPUT" && (n.type === "checkbox" || n.type === "radio") && r && typeof r.then === "function") {
+          // its handler is still working (asking the server): the box keeps the person's tick until it ends, then shows the app's state,
+          // so a refusal unticks it; capped, so a handler that never settles can't hold it for good
+          n._busy = (n._busy || 0) + 1; let once = false;
+          const done = () => { if (once) return; once = true; clearTimeout(cap); n._busy--; if (!n._busy && n._c !== undefined) n.checked = n._c; }, cap = setTimeout(done, 20000);
           r.then(done, done);
         }
         if (ev.cancelBubble) break;

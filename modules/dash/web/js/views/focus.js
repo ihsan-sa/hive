@@ -52,7 +52,7 @@ function threadRow(r) {
 // A box the person can tick (the person, 110812372f5e): it marks the item done for the agents (the focus check done command), an untick reopens it.
 function tick(c, ctx) {
   const was = c.done, wok = c.ok; c.done = was ? null : Date.now() / 1e3; c.ok = null; ctx.update();
-  post("/api/focus", { check: c.id, done: !was }).then(() => loadFoci(true), () => { c.done = was; c.ok = wok; }).then(() => ctx.update());
+  return post("/api/focus", { check: c.id, done: !was }).then(() => loadFoci(true), () => { c.done = was; c.ok = wok; }).then(() => ctx.update());
 }
 const box = (c, ctx) => ctx && can("post") ? h("input", { type: "checkbox", class: "fp-box", checked: !!c.done, "aria-label": (c.done ? "Reopen: " : "Mark done: ") + c.text, onchange: () => tick(c, ctx) })
   : h("span", { class: "fp-box", "aria-hidden": "true" }, c.done ? "✓" : "");

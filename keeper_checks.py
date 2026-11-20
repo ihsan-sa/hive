@@ -10,6 +10,11 @@ Prints, since the last keeper result post (or 3 h back):
   noticed: the person's posts that read as finding a problem first (progress.NOTICED), each with id and thread
   runs: runs graded silent or nothing, each with name, thread and why
   lint: the `hive summary lint` count line
+  progress: the steer line and the numbers `hive progress` marks worse (the brief's "name the worst numbers")
+  due: `hive improve list --due` (the overdue revisits to judge)
+  tidy: `tidy.py report --hours 24`'s first line and each miss under it
+The last three were added 11-20 (ae65e): Sonnet keeper rounds on 11-18..20 still wrote "Not done: no progress read",
+"no title/file-miss fix" and were graded partial for it; each was one more hand-run command.
 """
 import datetime as dt, json, re, subprocess, sys, time
 from pathlib import Path
@@ -50,6 +55,28 @@ def report(posts, outcomes, watchdog, since, now, lint_line=""):
     if lint_line: out.append(lint_line)
     return out
 
+def progress_lines(text):
+    """From `hive progress` output: the steer targets and the rows marked worse, as two short lines."""
+    steer = next((l for l in text.splitlines() if l.startswith("Steer by these")), "")
+    steer = steer.split(":", 1)[1].split(". Paused")[0].strip() if ":" in steer else ""
+    worse = []
+    for l in text.splitlines():
+        c = [x.strip() for x in l.strip().strip("|").split("|")]
+        if len(c) == 4 and c[3] == "worse": worse.append(f"{c[0]} {c[1]}->{c[2]}")
+    return [f"progress: off target: {steer or 'none listed'}",
+            f"  worse than the day before ({len(worse)}): " + (", ".join(worse) if worse else "none")]
+
+def tidy_lines(text, n=6):
+    """`tidy.py report` text: its count line, then each miss line (the indented ones), at most n."""
+    ls = [l for l in text.splitlines() if l.strip()]
+    if not ls: return ["tidy: no output"]
+    miss = [l.strip() for l in ls[1:] if l.startswith("  ")]
+    return [f"tidy: {ls[0].strip()} (fix each miss's cause or add a rung)"] + [f"  {m}" for m in miss[-n:]]
+
+def run(cmd, timeout=90):
+    try: return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    except Exception as e: return f"couldn't run: {clip(e, 80)}"
+
 def main(argv):
     now = time.time()
     posts = list(rows(HOME / "board.jsonl"))
@@ -60,6 +87,12 @@ def main(argv):
         lint = subprocess.run(["hive", "summary", "lint"], capture_output=True, text=True, timeout=60).stdout.strip().splitlines()
         lint_line = "lint: " + (lint[-1].removeprefix("lint: ") if lint else "no output") + " (`hive summary lint` lists each)"
     except Exception as e: lint_line = f"lint: couldn't run: {clip(e, 80)}"
-    print("\n".join(report(posts, rows(HOME / "outcomes.jsonl"), watchdog, since, now, lint_line)))
+    out = report(posts, rows(HOME / "outcomes.jsonl"), watchdog, since, now, lint_line)
+    out += progress_lines(run(["hive", "progress"]))
+    due = [l for l in run(["hive", "improve", "list", "--due"]).splitlines() if l.strip()]
+    out.append("due: " + (due[0] if len(due) == 1 else f"{len(due)} lines from `hive improve list --due`: judge each you didn't log") )
+    out += [f"  {clip(l, 150)}" for l in due[1:9]] if len(due) > 1 else []
+    out += tidy_lines(run(["python3", "-I", str(HOME / "core" / "tidy.py"), "report", "--hours", "24"]))
+    print("\n".join(out))
 
 if __name__ == "__main__": main(sys.argv[1:])
