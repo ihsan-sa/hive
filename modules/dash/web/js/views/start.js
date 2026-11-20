@@ -83,7 +83,7 @@ function walkthrough(ctx, s) {
     im.mcp.length ? p("Your MCP servers: tick the ones agents here may use. Unticked ones stay with your own Claude Code.") : null,
     ...im.mcp.map(n => h("label", { class: "frow" }, h("input", { type: "checkbox", "data-key": "import-mcp-" + n, checked: (im.mcp_copied || []).includes(n),
       title: (im.mcp_secrets || {})[n] ? "Copies these values in clear into the Hive's own file: " + im.mcp_secrets[n].join(", ") : null, onchange: (e, node) => { const on = new Set(im.mcp_copied || []); node.checked ? on.add(n) : on.delete(n);
-        act("import", "Saving your MCP choice", async () => { pg.import = (await post("/api/import", { mcp: [...on] })); }, up, "Saved your MCP choice"); } }), " " + n, (im.mcp_secrets || {})[n] ? h("small", { class: "muted", "data-key": "import-mcp-secret-" + n }, " carries " + im.mcp_secrets[n].join(", ") + ": ticking copies the values, in clear, into the Hive's own file") : null)));
+        return act("import", "Saving your MCP choice", async () => { pg.import = (await post("/api/import", { mcp: [...on] })); }, up, "Saved your MCP choice"); } }), " " + n, (im.mcp_secrets || {})[n] ? h("small", { class: "muted", "data-key": "import-mcp-secret-" + n }, " carries " + im.mcp_secrets[n].join(", ") + ": ticking copies the values, in clear, into the Hive's own file") : null)));
   const claudeIn = s.signed_in, codex = pg.accounts && pg.accounts.codex, codexIn = codex && (codex.signed_in || (codex.logins || []).some(l => l.signed_in));
   return page(
     card("account", null, rootNote(),
