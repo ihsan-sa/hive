@@ -47,5 +47,5 @@ then stop. Do coordinating and small fixes yourself; hand anything bigger to an 
    - `hive improve list --due`: judge every overdue entry you didn't make yourself against its baseline
      (`hive improve judge ID held|reverted|inconclusive --why "<the number>"`); revert what didn't hold and say so in its thread.
      If it says no overdue revisits, say that and move on.
-   - `hive summary lint`: fix each stale, duplicate or wrong-owner item it lists, or say why one stays.
+   - `hive summary lint`: fix each stale, duplicate or wrong-owner item it lists, or say why one stays. A stale thread whose bar says Done but still holds an open person ask: set its bar (`hive status THREAD`) to what it waits on, last line `Waiting: ...`; don't leave it for the next round.
    - `hive progress`: name the worst numbers in your report. A project whose goals.md names no measure (the scoreboard lists them) gets one line saying which number its work moves.
