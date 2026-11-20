@@ -108,6 +108,20 @@ def enabled(thread):
         if on and not hit and th in {t.lower() for t in G.THREAD.findall(txt)}: hit = g.parent.name, g, txt
     return hit
 
+def set_off(thread):
+    """Whether the project whose own ladder runs in this thread says `Continue: off` on purpose. The judge leaves such a thread alone: its shadow
+    read (ad388 2026-11-20) found it ruling continue and wait in fellows-study, the study conversation fellows-prep keeps off at the person's pace."""
+    if not thread or thread in SYSTEM_THREADS: return False
+    th = str(thread).lower()
+    for g in sorted(PROJECTS.glob("*/goals.md")):
+        if g.parent.name.startswith("_"): continue
+        try: txt = g.read_text(errors="replace")
+        except OSError: continue
+        m = G.LADDER.search(txt)
+        if m and th in {x.lower() for x in G.THREAD.findall(m.group(1))} | {g.parent.name.lower()}:
+            return str(G.continue_state(txt) or "").startswith("off")
+    return False
+
 def clean(line): return line.strip().strip("*_ ").strip()
 def is_next(line): return line.lower().startswith("next:") and len(line) - 4 > 12
 def post_line(p):
@@ -451,7 +465,7 @@ def ask_judge(r, c, st, alive, held=False, skip=False):
     Not for a warden or free agent (skip), a thread its tier holds (held), a system thread, or a step on_run_end dropped because a stop or another agent has it."""
     name, thread = str(r.get("name") or "").lower(), r.get("thread")
     if skip or held or not name or not thread or thread in SYSTEM_THREADS or not judge_trial(): return None
-    if set(_why) & JUDGE_SKIP: return None
+    if set(_why) & JUDGE_SKIP or set_off(thread): return None
     pending = {n: sorted({q.get("thread") or q.get("id") for q in ps if not q.get("continue")}) for n, ps in (st.get("pending") or {}).items()}
     snap = {"run": {k: r.get(k) for k in ("name", "session", "at", "post", "thread", "from", "model")}, "alive": {n: x.get("thread") for n, x in (alive or {}).items()},
             "pending": {n: ts for n, ts in pending.items() if ts}, "reasons": list(_why)}

@@ -17,6 +17,7 @@ WINDOW, READS, CHAIN, SLACK = 600, 8, 180, 12   # seconds a read can follow a se
 SCOPE = ("kb/", "core/", "projects/", "modules/")
 READERS = re.compile(r"\b(cat|head|tail|sed)\b|\bh2\s+read\b|\bcd\b")
 WRITES = re.compile(r"(?<![0-9&])>")
+OTHER_WAY, OTHER_CALLS = re.compile(r"(?:^|[|;&(\s])(?:rg|grep|egrep|fgrep|ag|gh)\s|\bh2\s+search\b"), 3   # a lookup another way: grep, gh, board search
 
 
 def woke_thread():
@@ -161,6 +162,10 @@ def observe(who, p):
         for path, _ in e["shown"]:
             if path not in e["touched"] and touched_by(path, blob):
                 e["touched"].append(path); log({"touch": path, "find": e["id"], "calls": e["calls"], "tool": tool, "session": sid})
+        if e["kind"] == "find" and 1 <= e["calls"] <= OTHER_CALLS and not e["touched"] and not e.get("other") and ok:   # an unread find, then within 3 calls a grep/gh/hive search, or a read of a path it didn't show
+            cmd = inp.get("command") if tool == "Bash" and isinstance(inp.get("command"), str) else ""
+            if "kb find" not in cmd and "kb open" not in cmd and (OTHER_WAY.search(cmd) or any(not shows(e, rp, lo, hi) for rp, lo, hi in reads)):
+                e["other"] = True; log({"other": tool, "find": e["id"], "calls": e["calls"], "session": sid})
     for path, lo, hi in reads:
         m = [e for e in reversed(st["live"]) if e["calls"] >= 1 and now - e["t"] <= WINDOW and shows(e, path, lo, hi)]
         r = rel(path)
@@ -371,9 +376,12 @@ def numbers(t0, t1, rs=None):
             w = qwords(r.get("q"))   # a next search on another subject (no word in common) is a topic switch, not a retry: 35 of 48 on 2026-11-18
             if any(0 < sec(x["at"]) - sec(r["at"]) <= 600 and w & qwords(x.get("q")) for x in L[i + 1:i + 4]): again.add(r["id"])
     dead = sum(1 for r in logged if r["id"] not in followed and r["id"] in again)
+    others = {r.get("find") for r in rs if "other" in r}
+    oth = sum(1 for r in logged if r["id"] in others and r["id"] not in followed)   # unread, then looked up another way within 3 calls
     nb = [r for r in logged if any(not p.startswith("board:") for p, _ in r["shown"])]   # finds that showed a note or file; board snippets answer in place (find-follow-by-source.md)
     nbr = sum(1 for r in nb if r["id"] in followed)
     return {"finds": len(finds), "finds_logged": len(logged), "finds_bulk": sum(1 for r in finds if r.get("id") in burst), "finds_read": fr, "find_read_pct": pct(fr, len(logged)), "finds_dead": dead, "find_dead_pct": pct(dead, len(logged)),
+            "finds_unread": len(logged) - fr, "finds_other_way": oth, "find_other_way_pct": pct(oth, len(logged) - fr),
             "finds_nb": len(nb), "finds_nb_read": nbr, "find_nb_read_pct": pct(nbr, len(nb)),
             "finds_read_8": sum(1 for r in logged if r["id"] in near), "find_read_8_pct": pct(sum(1 for r in logged if r["id"] in near), len(logged)),
             "recalls": len(recalls), "recalls_opened": sum(1 for r in recalls if r["id"] in followed), "recall_opened_pct": pct(sum(1 for r in recalls if r["id"] in followed), len(recalls)),
@@ -426,6 +434,7 @@ def report():
     for name, secs in (("24 h", 86400), ("7 d", 7 * 86400)):
         x = numbers(iso(now - secs), end, rs)
         out += [f"{name}: {x['finds']} finds; of {x['finds_logged']} logged with results, {x['finds_read']} ({p(x['find_read_pct'])}) with an observed read of a shown result in 10 min, {x['finds_read_8']} ({p(x['find_read_8_pct'])}) in 8 tool calls",
+                f"  {x['finds_other_way']} of {x['finds_unread']} unread finds ({p(x['find_other_way_pct'])}) followed within {OTHER_CALLS} calls by a grep, gh, hive search or a read outside the shown paths (hand-read 2026-11-19: 6 of 13, 46%)",
                 f"  without board-only finds: {x['finds_nb_read']} of {x['finds_nb']} ({p(x['find_nb_read_pct'])}) read",
                 f"  {x['recalls']} recall injections, {x['recalls_opened']} ({p(x['recall_opened_pct'])}) with a pointer read or opened; {x['pointers_opened']} of {x['pointers']} pointers ({p(x['pointer_opened_pct'])})",
                 f"  {x['neighbour_pointers']} live-neighbour pointers, {x['neighbour_pointers_read']} ({p(x['neighbour_read_pct'])}) with the thread read",
