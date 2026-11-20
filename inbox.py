@@ -142,8 +142,10 @@ def waker(rec, name):
 
 def unanswered(name, rec):
     """Why this stop should wait, if a post from the person, another Hive or a named agent started the run and the agent hasn't
-    posted since. Once per run. 10 of 2026-11-04's graded runs ended with the answer in plain text only (hive outcomes: silent)."""
-    src = waker(rec, name)
+    posted since. Once per run. 10 of 2026-11-04's graded runs ended with the answer in plain text only (hive outcomes: silent).
+    A run a reminder woke (`hive remind`, from "remind") is held too: someone set it because the task owes a result, and when it
+    ended silent the starter relayed its last text after the Stop, unchecked and past the summary reminder (pickup_causes)."""
+    src = waker(rec, name) or ("remind" if str(rec.get("from") or "").lower() == "remind" else None)
     if os.environ.get("HIVE_DOOR") or not src or not rec.get("at"): return None
     mark = STATE / "nudged" / name
     try:
@@ -156,7 +158,7 @@ def unanswered(name, rec):
     if posted_since(name, rec["at"], thread): return None
     mark.parent.mkdir(parents=True, exist_ok=True); mark.write_text(rec["at"])
     who = ("the person sees" if src == "person" else "the other Hive sees" if src == "hives" else "whoever waits on the task sees"
-           if src == name else f"{src}, who named you, sees")
+           if src in (name, "remind") else f"{src}, who named you, sees")
     where = f"thread {rec.get('thread') or 'the thread you were started in'}"
     if thread and posted_since(name, rec["at"]):
         return (f"You posted in another thread, but nothing in {where}, where the ask was made: {who} no answer there (they read "
@@ -572,6 +574,11 @@ def focus_nudge(name, rec):
     if summary:
         try: f.parent.mkdir(parents=True, exist_ok=True); f.write_text(f"{rec['at']} {time.time()}")
         except OSError: return None
+        # the mark is overwritten by the next run, and gate rows exist only for woken runs: this row is how pickup_causes
+        # tells a scheduled run that was asked from one that never was (3 of 2026-11-19's summary misses read "unknown")
+        try:
+            with (STATE / "focus-asked.jsonl").open("a") as lg: lg.write(json.dumps({"at": time.time(), "name": name, "run": rec["at"], "thread": thread}) + "\n")
+        except OSError: pass
     return msg
 
 def stops(since_h=24.0):
