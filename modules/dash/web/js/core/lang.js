@@ -16,7 +16,8 @@ import ES10 from "./lang-es-10.js";   // part 3: Usage, a message, Claude Design
 import ES11 from "./lang-es-11.js";   // part 4: Now, an agent, Mesh, the deck, the shell, Progress and the store's lines (rung "Spanish in the rest of lang-left.js, part 4")
 import ES12 from "./lang-es-12.js";   // part 5: feedback, Agents, header cards, the deck, sign-in, rootwarden's word, kb history, tiers, Flow, quick answers and a focus (rung "Spanish in the rest of lang-left.js, part 5")
 import ES13 from "./lang-es-13.js";   // part 6: the tail, 1 to 10 strings from each of about 60 files (rung "Spanish in the rest of lang-left.js, part 6")
-import ES14 from "./lang-es-14.js";   // Settings > Connectors and connectors.json's rows (rung E55)
+import ES14 from "./lang-es-14.js";
+import ES15 from "./lang-es-15.js";   // helpers (ui/helpers.js, Now, Agents, the Map) and the board's flash and port lines, 2026-11-20   // Settings > Connectors and connectors.json's rows (rung E55)
 import ESKB from "./lang-es-kbwipe.js";   // Settings > Wipe the knowledge base (thread kb-wipe)
 import FR1 from "./lang-fr.js";   // French (rung E58): the main screens, the same four files as Spanish
 import FR2 from "./lang-fr-2.js";
@@ -27,7 +28,7 @@ import LEFT from "./lang-left.js";   // the app's words with no Spanish yet, gen
 
 export const LANGS = [["en", "English"], ["es", "Español"], ["fr", "Français"]];
 // Spanish comes in two files (the main screens, then the rest); the first wins on a shared key, and its patterns are tried first.
-const ES = { ...ESKB, ...ES14, ...ES13, ...ES12, ...ES11, ...ES10, ...ES9, ...ES8, ...ES7, ...ES6, ...ES5, ...ES4, ...ES3, ...ES2, ...ES1, __patterns: [...ES1.__patterns, ...ES2.__patterns, ...ES3.__patterns, ...ES4.__patterns, ...ES5.__patterns, ...ES6.__patterns, ...ES7.__patterns, ...ES8.__patterns, ...ES9.__patterns, ...ES10.__patterns, ...ES11.__patterns, ...ES12.__patterns, ...ES13.__patterns, ...ES14.__patterns, ...ESKB.__patterns] };
+const ES = { ...ESKB, ...ES15, ...ES14, ...ES13, ...ES12, ...ES11, ...ES10, ...ES9, ...ES8, ...ES7, ...ES6, ...ES5, ...ES4, ...ES3, ...ES2, ...ES1, __patterns: [...ES1.__patterns, ...ES2.__patterns, ...ES3.__patterns, ...ES4.__patterns, ...ES5.__patterns, ...ES6.__patterns, ...ES7.__patterns, ...ES8.__patterns, ...ES9.__patterns, ...ES10.__patterns, ...ES11.__patterns, ...ES12.__patterns, ...ES13.__patterns, ...ES14.__patterns, ...ES15.__patterns, ...ESKB.__patterns] };
 // French covers the main screens (E58); a word it lacks shows in English. Same merge rule: the first file wins on a shared key.
 const FR = { ...FR5, ...FR4, ...FR3, ...FR2, ...FR1, __patterns: [...FR1.__patterns, ...FR2.__patterns, ...FR3.__patterns, ...FR4.__patterns, ...FR5.__patterns] };
 const TABLES = { es: ES, fr: FR };

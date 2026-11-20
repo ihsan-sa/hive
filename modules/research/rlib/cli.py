@@ -172,7 +172,10 @@ def c_hunt(a):
 
 
 def c_analyze(a):
-    _out(work.analyze_csv(a.csv) if a.csv else work.analyze_pages(_case(a).pages()))
+    if a.csv:
+        try: _out(work.analyze_csv(a.csv))
+        except OSError as e: _err(f"cannot read CSV {a.csv}: {e.strerror or e}")
+    else: _out(work.analyze_pages(_case(a).pages()))
 
 
 def _series(a):

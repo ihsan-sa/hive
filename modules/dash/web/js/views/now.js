@@ -139,7 +139,7 @@ function helpers(run) {
   const fig = x => h("b", null, plural(x, "helper"));
   const whom = k === 1 && up <= 1 ? "for it" : k >= up && k > 1 ? "for all of them" : `for ${nWord(k).toLowerCase()} of them`;
   const end = orphans.length === 1 ? ownerEnded(orphans[0].owner) : null;
-  const gone = o ? (orphans.length === 1 ? `${o === 1 ? "is" : "are"} finishing for ${orphans[0].owner}, which has ended${end ? " (" + ago(end) + ")" : ""}` : `${o === 1 ? "is" : "are"} finishing for agents that have ended`) : null;
+  const gone = o ? (orphans.length === 1 ? `${o === 1 ? "is" : "are"} finishing for ${agentLabel(orphans[0].owner)}, which has ended${end ? " (" + ago(end) + ")" : ""}` : `${o === 1 ? "is" : "are"} finishing for agents that have ended`) : null;
   const d = !n && !o && !up ? dayRuns(now()) : null, dh = d && d.hd ? d.hd.done + d.hd.stopped : 0;
   const sub = !n && !o ? (dh ? `${plural(d.done, "agent")} and ${plural(dh, "helper")} finished in the last 24 hours.` : null) : n ? [fig(n), ` ${n === 1 ? "is" : "are"} working ${whom}`, o ? [", and ", h("b", null, String(o)), " " + gone] : null, "."] : [fig(o), " " + gone + "."];
   const loose = liveLoose(), l = loose.reduce((a, g) => a + g.rows.length, 0);   // agentic processes no board agent started: their own clause, never in the helper figure
