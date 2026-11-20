@@ -114,7 +114,7 @@ function codeBody(text, line) {
     h("pre", { class: "kb-gutter", "aria-hidden": "true" }, Array.from({ length: Math.max(n, 1) }, (_, i) => i + 1).join("\n")),
     h("pre", { class: "kb-src" }, text));
 }
-const mdBody = (text, from) => linkPaths(markdown(text), from);
+const mdBody = (text, from) => linkPaths(markdown(text, null, null, { anchors: true }), from);
 function docBody(d, line) {
   const asCode = line || K.source || d.kind === "text" || d.type === "text";
   const sig = `${d.path}|${d.t}|${asCode ? "code" + line : "md"}`;

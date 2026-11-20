@@ -132,6 +132,7 @@ def contentless(post):
 
 def switch_post(p, name):
     """The agent's own post that carries a new model or effort and names it: `hive model X`, or a restart at another effort. It resumes on that post at once."""
+    if not p: return False   # a run with no waking post (continued from a chain) has no notice
     to = p.get("to") if isinstance(p.get("to"), list) else str(p.get("to") or "").replace(",", " ").split()
     return bool(p and (p.get("model") or p.get("effort"))) and p.get("from") == name and any(str(x).lstrip("@") == name for x in to)
 
@@ -164,11 +165,31 @@ NOTICE_MAX = 300   # a job-done notice is short: "heavy: `cmd` finished rc 0 aft
 def job_notice(p, name):
     """The agent's own short post addressed only to itself, with no model or effort: a job it started telling it the job is done (`heavy --notify`,
     a CI or sim watcher). Graded on its own, the run it wakes asked nothing (2 of the 7 long-job misses never closed in R40's window, 11-14 to 11-15)."""
+    if not p: return False   # a continued run with no waking post has no notice
     to = p.get("to") if isinstance(p.get("to"), list) else str(p.get("to") or "").replace(",", " ").split()
     return bool(p and to) and p.get("from") == name and not (p.get("model") or p.get("effort")) and all(str(x).lstrip("@") == name for x in to) \
         and len(re.sub(r"@\w+", "", str(p.get("text") or "")).strip()) <= NOTICE_MAX
 
 def carried(post, name): return switch_post(post, name) or job_notice(post, name)
+
+CONT_LOG = HOME / ".hive" / "continue" / "log.jsonl"
+
+def launches(path=None):
+    """(agent, waking post id) -> the `Next:` line the starter carried it on (continuation.py's launch events)."""
+    out = {}
+    for e in jsonl(path or CONT_LOG):
+        if e.get("event") == "launch" and e.get("ran") and e.get("line"):
+            for pid in (e.get("posts") or [e.get("post")]): out[(e["ran"], str(pid))] = e["line"]
+    return out
+
+def continued(run, post, by_id, lines):
+    """A run the starter carried on from its own `Next:` line: the waking post with that line put first as the ask. Graded on the bare post,
+    the model read the agent's own result report as asking nothing: 94 of 339 such runs were not_asked from 11-13 to 11-20, whether they did
+    the step (ae214 on 11151647ee34, 13 runs) or found it date-gated and did nothing (afcc3, 2026-11-20). None if it wasn't a continuation."""
+    line = lines.get((run["name"], str(run["post"])))
+    if not line: return None
+    base = post or by_id.get(str(run["post"]).removeprefix("run-end ")) or {}
+    return {**base, "from": base.get("from") or run["name"], "text": f"(the starter carried this agent on from the Next: line of its own last post; that line is this run's ask: {clip(line, 600)})\n\nits post: {clip(base.get('text'), 900)}"}
 
 def origin(run, post, log, by_id, hops=5):
     """For a run woken by its own switch post: the post that woke the run which made the switch, with the switch line under it. The grade is then against
@@ -286,7 +307,7 @@ Grades:
   nothing    it posted, but no delivery and no handover: status only, questions back, or the wrong thing
   not_asked  the post asked this agent nothing concrete (a thread update, an acknowledgement, a hand-off to someone else)
 
-Judge only against what the post asked, not whether the work was good. A post that says "stop" or "thanks" and a short reply is not_asked; so is a chase ("???", "hello?", "status?", "done yet?", "did you do it", a note that a wait is due) answered with where things stand, and a post asking for work the person had put on hold, answered by pointing to that hold. A memguard post that killed the agent's job asks it to rerun the job or say why it needs no rerun: a reply with a concrete reason none is needed (the result is already in hand, the job was superseded or finished its purpose, a smaller check replaces it, done) is delivered; "it retries by itself" is delivered only if the run shows the retry is set up. Reply with JSON only:
+Judge only against what the post asked, not whether the work was good. A post that says "stop" or "thanks" and a short reply is not_asked; so is a chase ("???", "hello?", "status?", "done yet?", "did you do it", a note that a wait is due) answered with where things stand, and a post asking for work the person had put on hold, answered by pointing to that hold. A run the starter carried on from the agent's own Next: line is graded against that line: the step done and checked is delivered; finding it can't run yet (not due, waiting) and doing nothing else is nothing, since the run was spent for no step. A memguard post that killed the agent's job asks it to rerun the job or say why it needs no rerun: a reply with a concrete reason none is needed (the result is already in hand, the job was superseded or finished its purpose, a smaller check replaces it, done) is delivered; "it retries by itself" is delivered only if the run shows the retry is set up. Reply with JSON only:
 {"grades":[{"run":"<RUN key>","grade":"delivered|partial|nothing|not_asked","why":"<at most 20 words>"}]}
 
 One more job, on delivered and partial runs only. If a post by the agent holds a fact another agent could use months from now in other work, add to that run's grade:
@@ -377,10 +398,11 @@ def cmd_grade(a):
     tag = {"closer": True} if back else {}
     if a.limit: todo = todo[:a.limit]
     graded, model_runs, cost, ticks, drafts, limited = 0, [], 0.0, ticked_rungs(), 0, False
-    root, lims = roots(log, by_id), limit_times(log)
+    root, lims, nexts = roots(log, by_id), limit_times(log), launches()
     for r in todo:
         post, mine, after = posts_of(r, posts, by_id)
         ask = origin(r, post, log, by_id) if post and carried(post, r["name"]) else post   # resumed after a switch or woken by its own job notice: graded on the ask carried over
+        if (cont := continued(r, ask, by_id, nexts)): ask = cont; r = {**r, "continued": True}
         r = {**r, **({"root": root[r["key"]]} if root.get(r["key"], r["key"]) != r["key"] else {}), **({"completion_wake": True} if completion_wake(r, by_id, mine, ticks) else {}), **({"self_wake": True} if post and self_wake(r, post) else {}), **({"round": True} if ask and ROUND.search(str((post if ask is not post and job_notice(post, r["name"]) else ask).get("text", ""))[:80]) else {})}   # marks for the spot-check and the step-up; the grade doesn't look at them
         sw = switch_only(r, mine, log); sup = not sw and superseded(r, log, by_id)
         if parked(r, log): r = {**r, "parked": True}
