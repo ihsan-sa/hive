@@ -386,14 +386,15 @@ def stats(since=None, rows=None, board=None):
         follow[a] = {"continues": len(took), "followed_6h": len(got), "median_min": round(C.pct(got, .5), 1) if got else None}
     out["after_continue"] = follow
     # the lift is read over live days only (a judge entry not in shadow); over shadow days the two arms are treated alike, so their gap is the noise (A/A)
-    live = {e["day"] for e in es if e.get("shadow") is False}
-    for r in out["days"]: r["live"] = r["day"] in live
+    # a day with both kinds (the flip day) is left out of both: one live entry made all of 11-19 "live" and moved its shadow ticks into the lift (ad388 2026-11-20)
+    live = {e["day"] for e in es if e.get("shadow") is False}; shad = {e["day"] for e in es if e.get("shadow") is not False}
+    for r in out["days"]: r["live"] = None if r["day"] in live and r["day"] in shad else r["day"] in live
     def per(rows):
         n = {a: sum(r[a]["units"] for r in rows) for a in ("judge", "control")}
         t = {a: round(sum(r[a]["ticks"] for r in rows) / n[a], 4) if n[a] else None for a in n}
         return t, (round(t["judge"] - t["control"], 4) if None not in t.values() else None)
     out["ticks_per_unit_day"], out["lift"] = per([r for r in out["days"] if r["live"]])
-    out["shadow_ticks_per_unit_day"], out["shadow_gap"] = per([r for r in out["days"] if not r["live"]])
+    out["shadow_ticks_per_unit_day"], out["shadow_gap"] = per([r for r in out["days"] if r["live"] is False])
     return out
 
 def cmd_stats(a):
@@ -406,11 +407,11 @@ def cmd_stats(a):
     for r in s["days"]:
         for arm_ in ("judge", "control"):
             x = r[arm_]
-            print(f"{r['day']} {arm_:<7} units {x['units']:>2}  ends judged {x['ends']:>3}  {' '.join(f'{k} {v}' for k, v in sorted(x['verdicts'].items())) or '-':<40} acted {x['acted']}  wakes {x['wakes']}  rungs ticked {x['ticks']}"
+            print(f"{r['day']} {'live' if r.get('live') else 'flip' if r.get('live') is None else 'shad'} {arm_:<7} units {x['units']:>2}  ends judged {x['ends']:>3}  {' '.join(f'{k} {v}' for k, v in sorted(x['verdicts'].items())) or '-':<40} acted {x['acted']}  wakes {x['wakes']}  rungs ticked {x['ticks']}"
                   + (f"  grades {x['grades']}" if x["grades"] else "") + (f"  judge-missed {x['missed']}" if x["missed"] else "") + (f"  skips {x['skips']}" if x["skips"] else ""))
     for arm_, f in s["after_continue"].items():
         print(f"after a continue, {arm_}: {f['continues']} verdicts, {f['followed_6h']} followed by a substantive agent post within 6 h" + (f", median {f['median_min']} min" if f["median_min"] is not None else ""))
-    print(f"rungs ticked per unit-day: judged {s['ticks_per_unit_day']['judge']}, control {s['ticks_per_unit_day']['control']}, lift {s['lift']} (live days); shadow days: judged {s['shadow_ticks_per_unit_day']['judge']}, control {s['shadow_ticks_per_unit_day']['control']}, gap {s['shadow_gap']} (noise)")
+    print(f"rungs ticked per unit-day: judged {s['ticks_per_unit_day']['judge']}, control {s['ticks_per_unit_day']['control']}, lift {s['lift']} (live days; a flip day with both kinds counts in neither); shadow days: judged {s['shadow_ticks_per_unit_day']['judge']}, control {s['shadow_ticks_per_unit_day']['control']}, gap {s['shadow_gap']} (noise)")
 
 def cmd_log(a):
     for e in entries()[-a.n:]:
