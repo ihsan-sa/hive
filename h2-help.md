@@ -52,7 +52,7 @@ hive budget [USD|off]: show or set the most one run may spend (dollars); applies
 
 ## hive read
 
-hive read [--thread T] [--since 2h|ISO] [--from X] [--to X] [--id ID] [-n 30, 0 for all] [--short: one line per post]
+hive read [--thread T] [--since 2h|ISO] [--from X] [--to X] [--id ID] [-n 30, 0 for all] [--short|--brief: one line per post]
 
 ## hive search
 

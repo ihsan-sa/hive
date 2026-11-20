@@ -13,6 +13,7 @@
 .sa-count::before{content:"\00b7";margin:0 6px 0 4px;color:var(--ink-3)}
 .sa-count b{font-weight:var(--w-med);color:var(--ink-2);font-variant-numeric:tabular-nums}
 .sa-count a,.sa-count button{color:inherit;font:inherit;background:none;border:0;padding:0;text-decoration:underline;text-decoration-color:var(--line-2);text-underline-offset:3px;cursor:pointer}
+.sa-count a,.sa-count button{display:inline-block;line-height:24px}   /* 24 px to tap (WCAG 2.5.8) */
 .sa-count a:hover,.sa-count button:hover{color:var(--ink);text-decoration-color:currentColor}
 
 /* The quiet sentence under a page headline: "14 helpers are working for them." */
@@ -55,7 +56,7 @@
 .sa-what{display:flex;align-items:center;gap:var(--s2);min-width:0;padding-left:22px}
 .sa-kid[data-depth="2"]>.sa-what{padding-left:42px}
 .sa-type{flex:none;color:var(--ink-3);font-weight:var(--w-med)}
-.sa-desc{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
+.sa-desc{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2);line-height:24px}   /* a link: 24 px tall to tap (WCAG 2.5.8, drive_app_a11y_pages at 390) */
 .sa-meta{color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sa-time{color:var(--ink-3);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .sa-kid .sa-dot{display:none}

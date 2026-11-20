@@ -4,7 +4,9 @@ from . import engines, fetcher, net, people, predict, store, work
 from .extract import parse_date, domain_of, registrable
 
 
-def _case(a): return store.Case(a.case)
+def _case(a):
+    if a.case and Path(a.case).is_file(): _err(f"--case {a.case} is a file, not a folder")
+    return store.Case(a.case)
 def _out(x): print(json.dumps(x, indent=1, ensure_ascii=False))
 def _err(m): print(f"research: {m}", file=sys.stderr); sys.exit(2)
 def _log(m): print(m, file=sys.stderr, flush=True)
