@@ -7,7 +7,8 @@ import { canFeedback, openFeedback, FEEDBACK_KEY } from "./feedback.js";
 import { h, s, tr } from "../core/dom.js";
 import { S, can, needsAccount, poll } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
-import { accountUse, activeUse, fresh7, inUse, runOut, runway, totalUse, limitStop } from "../core/model.js";
+import { accountUse, activeUse, fresh7, inUse, runOut, runway, totalUse, limitStop, liveHelpers } from "../core/model.js";
+import { helperCount } from "./helpers.js";
 import { ago, clock, dur, lostText, now, plural, stamp } from "../core/format.js";
 import { href } from "../core/router.js";
 import { layout, moreGroups, rowItems } from "../core/nav.js";
@@ -24,7 +25,7 @@ export function statusBits() {
   return [
     S.failed ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, statusDot("stuck"), lostText(S.fresh)) : null,
     // before the first answer the count is not known: no chip, rather than "0 running"
-    !S.live ? null : h("span", { title: "agents running now", "data-tone": n ? "good" : null }, statusDot("working", { live: n > 0 }), h("b", null, String(n)), " running"),
+    !S.live ? null : h("span", { title: "agents running now", "data-tone": n ? "good" : null }, statusDot("working", { live: n > 0 }), h("b", null, String(n)), " running", helperCount(liveHelpers().length)),   // helpers after the agents, never added to them (designs/subagents-ui)
     us.length ? loginMarks()
       : all.length && hold ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, "no account has room") : null,
     hold && hold.until ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, "starts held until " + clock(hold.until)) : null,
@@ -94,7 +95,8 @@ function appBits() {
     callBtn(),
     stop ? goPill(stop.why === "off" ? "settings" : "usage", stop.why === "off" ? "Settings" : "Usage", { "data-tone": "bad", title: stop.why === "off" ? "The Hive isn't running" : stop.own ? "Every account is past its usage line: agents wait, your own messages still start one" : "Every account is past its usage line" }, statusDot("limited"), stop.why === "off" ? "Not running" : "Stopped")
       : S.failed && !S.fresh ? goPill("now", "Agents: what each is doing", { title: "Can't reach the Hive, so this can't say what agents are doing: open Agents" }, statusDot("quiet"), "Not connected")
-      : goPill("now", "Agents: what each is doing", { title: "agents running now: open Agents", "data-tone": n ? "good" : null }, statusDot("working", { live: n > 0 }), n ? h("span", null, h("b", null, String(n)), n === 1 ? " agent working" : " agents working") : "No agents working"),
+      : (hn => goPill("now", "Agents: what each is doing", { title: "agents running now" + (hn ? ", and the helpers they started inside their runs" : "") + ": open Agents", "data-tone": n ? "good" : null }, statusDot("working", { live: n > 0 }),
+        h("span", null, n ? [h("b", null, String(n)), n === 1 ? " agent" : " agents", h("span", { class: "sa-wk" }, " working")] : "No agents working", helperCount(hn))))(liveHelpers().length),
     // What's left on the accounts the hive can run on now (the person, 2026-11-04), weighted by plan; and the 5-hour window when one is open.
     act ? goPill("usage", "Usage", { title: `Left on the accounts in use now (${names}): ${left}% of this week` + (act.five ? `, ${left5}% of the 5-hour window` : "") + (out != null ? `. At ${ro.how === "week" ? "this week's average" : "the last 6 hours'"} pace it runs out in about ${dur(out)}, ${clock(now() + out)}` : ro && ro.lasts ? ". At this pace it lasts until the week resets" : "") + (tot ? `. All accounts together: ${Math.max(0, 100 - Math.round(tot.pct))}% left` : "") + ". Open Usage",
         "data-tone": left <= 10 || (left5 != null && left5 <= 10) ? "bad" : null },

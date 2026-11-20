@@ -1,20 +1,21 @@
 // Agents: every agent that has ever run, one row each, in the order they were spawned. Search, filter and sort happen here in the
 // browser, from what the store already holds; the name opens the agent's panel with all its numbers. Cost and tokens: agentSpend.
 import { h } from "../core/dom.js";
-import { S, OUTSIDE, getPref, loadAgentCosts, setPref } from "../core/store.js";
+import { S, OUTSIDE, getPref, loadAgentCosts, loadHelpers, setPref } from "../core/store.js";
 import { HOUSE_THREADS, agentOn, agentSpend, agentStatus, costsPending, isRunning, labelCodes, loginName, modelName, sEnd, threadTitle } from "../core/model.js";
 import { ago, dur, money, plural, short, stamp, toks, int } from "../core/format.js";
 import { metrics } from "../templates.js";
 import { button, empty, waiting, input, pageHeader, seg, stats, toolbar, pageNav, infoButton, figPending } from "../ui/kit.js";
 import { heldRoom } from "../core/room.js";
 import { agentAvatar, agentRef, threadRef } from "../ui/refs.js";
+import { costText, helperCount, helperKey, helperState, helperTag, hModel, hx, openHelper, took, tookText } from "../ui/helpers.js";
 
 const STATUS = [["all", "Any status"], ["running", "Running"], ["queued", "Waiting to start"], ["ended", "Ended"], ["killed", "Killed"], ["limited", "Stopped at a limit"], ["failed", "Failed"]];
 const BY = [["all", "Started by anyone"], ["person", "Started by a person"], ["agent", "Started by an agent"], ["system", "Started by the Hive"]];
 const SINCE = [["all", "Any time"], ["1", "Last 24 hours"], ["7", "Last 7 days"], ["30", "Last 30 days"]];
 const pageFor = () => (matchMedia("(max-width: 640px)").matches ? 18 : 200), DAY = 864e5;   // R48: a phone opens on a short list; a phone row is about 110 px
 let PAGE = pageFor();   // R73: crossing 640 px changes it (the listener below)
-const L = { q: "", house: false, status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE, sig: "", dataKey: "", all: [], shown: [] };
+const L = { hOpen: new Set(), q: "", house: false, status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE, sig: "", dataKey: "", all: [], shown: [] };
 const pctOf = (a, b) => b ? Math.round(100 * a / b) + "%" : "0%";
 const app = () => !!S.app.app;
 const APP_COLS = ["name", "status", "spawned", "thread", "on", "model", "lastSeen", "usd"];   // the app look starts with these; the developer look has every column but Account and Runs (R-1110c-b: Last active and Cost fit at 1440)
@@ -87,6 +88,39 @@ const COLS = [
   { k: "children", label: "Started", num: 1, title: "Agents it started", get: a => a.spawned, render: a => a.spawned },
 ];
 
+// ---- Helpers (subagents): the Show control picks Agents (the default), Helpers (one flat list) or Both (each helper under its owner).
+// A helper never counts as an agent: the counts say "N agents" and the helpers ride after them. Design: designs/subagents-ui NOTES.md.
+const SHOW = [["agents", "Agents"], ["helpers", "Helpers"], ["both", "Both"]];
+const showMode = () => { const v = getPref("agents.show", "agents"); return SHOW.some(x => x[0] === v) ? v : "agents"; };
+const hT = v => (v ? Date.parse(v) : 0);
+const hEnded = r => r.state !== "running";
+/** The helpers the page's search, status and time filters keep (the last 7 days is all the server reads). Search also matches the helper's type and task. */
+function helperRows(search = true) {
+  const rows = (S.helpers && S.helpers.rows) || [], words = !search ? [] : L.q.toLowerCase().split(/\s+/).filter(Boolean), from = L.since === "all" ? 0 : Date.now() - +L.since * DAY;
+  return rows.filter(r => (L.status === "all" || (L.status === "running" ? r.state === "running" : L.status === "ended" ? hEnded(r) : false)) && hT(r.start) >= from
+    && (!words.length || (x => words.every(w => x.includes(w)))([r.agent, r.type, r.desc, hModel(r), r.harness, r.state, r.agent_thread ? threadTitle(r.agent_thread) : ""].join(" ").toLowerCase())));
+}
+const hWho = r => h("span", { class: "sa-who", title: r.type || null }, hx(r), helperTag(r), h("span", { class: "sa-type" }, r.type || "helper"));   // the word "helper" before the type: a narrow column cuts the type, never the mark
+const hTask = r => h("a", { href: "#", class: "sa-desc", title: r.desc || null, onclick: e => { e.preventDefault(); openHelper(r); } }, r.desc || "(no task given)");
+const hCost = r => h("span", { title: r.usd == null && r.harness === "codex" ? "Codex doesn't report what a helper cost" : "At API list prices; counted inside its owner's cost" }, costText(r));
+const hStart = r => (r.start ? h("span", { title: r.start }, stamp(hT(r.start)).replace(/^\w+, /, "")) : "–");
+/** The flat list's own columns (Show: Helpers). */
+const HCOLS = [
+  { k: "who", label: "Helper", cls: "ag-n", get: r => r.type || "", render: hWho },
+  { k: "state", label: "Status", cls: "ag-st", get: r => r.state || "", render: helperState },
+  { k: "start", label: "Started", get: r => hT(r.start), render: hStart },
+  { k: "agent", label: "For", get: r => r.agent || "", render: r => h("span", { class: "sa-of" }, agentRef(r.agent, { dot: false })) },   // the header says "For"
+  { k: "desc", label: "Task", cls: "clip ag-on", get: r => r.desc || "", render: hTask },
+  { k: "model", label: "Model", cls: "ag-m", get: r => hModel(r), render: r => hModel(r) },
+  { k: "took", label: "Took", num: 1, get: r => took(r) || 0, render: tookText },
+  { k: "usd", label: "Cost", num: 1, get: r => r.usd ?? -1, render: hCost },
+];
+const HW = { who: "minmax(210px,1.2fr)", state: "80px", start: "130px", agent: "140px", desc: "minmax(180px,2fr)", model: "100px" };
+const hsort = () => getPref("agents.hsort", { k: "start", d: -1 });
+/** A helper as a row of the agents' own columns (Show: Both), under its owner: the cells that mean something for a helper, the rest blank. */
+const H_IN = { name: hWho, status: helperState, spawned: hStart, thread: r => h("span", { class: "sa-of" }, "for ", agentRef(r.agent, { dot: false })), on: hTask, model: r => hModel(r),
+  ran: tookText, lastSeen: r => (r.state === "running" ? "now" : r.end ? ago(hT(r.end)) : "–"), usd: hCost, calls: r => (r.calls != null ? int(r.calls) : "–"), tools: r => (r.tools != null ? int(r.tools) : "–") };
+
 // A column's track in the grid rows' --cols: the words get the spare room, the rest their usual width
 const W = { name: "minmax(120px,1fr)", status: "90px", spawned: "130px", thread: "minmax(140px,1.2fr)", on: "minmax(150px,2fr)", from: "110px", model: "110px", account: "110px", lastSeen: "100px" };
 // Do the chosen columns fit #main? Then the page scrolls and the table needs no box (and no second scrollbar) of its own. Each column's least width, 12px gaps, 16px row padding; 48px is the page's own side padding.
@@ -112,19 +146,53 @@ for (const q of ["(max-width: 640px)", STACK_BELOW]) matchMedia(q).addEventListe
 
 // The room under the list that the Show more row takes, once the older log has made the list longer than a page (R67).
 const moreRoom = () => { const w = document.querySelector(".ag-w"), m = w && w.nextElementSibling; return m && m.matches(".lr-more") ? m.getBoundingClientRect().bottom - w.getBoundingClientRect().bottom : 0; };
+/** Show: Both. An owner's helpers under its row, newest first: five, then "Show N more helpers · $x" (one owner can have hundreds). */
+function kidRows(owner, cols, stack, ctx) {
+  const rs = L.hby.get(owner); if (!rs) return [];
+  const open = L.hOpen.has(owner) || rs.length <= 6, shown = open ? rs : rs.slice(0, 5), rest = rs.slice(5), usd = rest.reduce((a, r) => a + (r.usd || 0), 0);
+  return [...shown.map(r => h("div", { class: "tr sa-tr", role: "row", "data-key": "h:" + helperKey(r), "data-depth": (r.depth || 1) > 1 ? "2" : null },
+      cols.map(c => h("span", { role: "cell", class: [c.num ? "r num" : null, c.cls || null].filter(Boolean).join(" ") || null, "data-label": stack && !PHONE_BARE.has(c.k) && H_IN[c.k] ? c.label : null }, H_IN[c.k] ? H_IN[c.k](r) : null)))),
+    rs.length > 6 ? h("div", { class: "tr sa-tr sa-tr-more", role: "row", "data-key": "hm:" + owner }, h("span", { role: "cell" },
+      button(open ? "Show fewer helpers" : `Show ${rest.length} more helpers` + (usd ? ` · ${money(usd)}` : ""), () => { open ? L.hOpen.delete(owner) : L.hOpen.add(owner); ctx.update(); }, { kind: "quiet", size: "s" }))) : null].filter(Boolean);
+}
+/** Show: Helpers. One flat, sortable list of helpers, with its own columns. */
+function helperTable(rows, stack, sig, changed, ctx) {
+  if (!rows.length) return [empty(L.q || L.status !== "all" || L.since !== "all" ? "No helpers match." : "No helpers in the last 7 days.")];
+  const hs = hsort(), w = c => HW[c.k] || (c.num ? "72px" : "110px"), m = document.getElementById("main");
+  const fits = !stack && !!m && m.clientWidth - 48 >= HCOLS.reduce((n, c) => n + parseInt(w(c).match(/\d+/)[0], 10) + 12, 4);
+  const by = k => () => { const d = hs.k === k ? -hs.d : HCOLS.find(x => x.k === k).num || k === "start" ? -1 : 1; setPref("agents.hsort", { k, d }); L.limit = PAGE; ctx.update(); };
+  return [h("div", { class: "tblw ag-w" + (fits ? " ag-page" : stack ? " ag-stack" : "") }, h("div", { class: "tbl ag", role: "table", "aria-label": "Helpers", style: "--cols:" + HCOLS.map(w).join(" ") },
+      h("div", { class: "tr th", role: "row" }, HCOLS.map(c => h("span", { role: "columnheader", class: c.num ? "r" : null, "aria-sort": hs.k === c.k ? (hs.d > 0 ? "ascending" : "descending") : null, "data-key": c.k },
+        h("button", { type: "button", class: "ag-s", onclick: by(c.k) }, c.label, hs.k === c.k ? h("span", { "aria-hidden": "true" }, hs.d > 0 ? "▲" : "▼") : null)))),
+      h("div", { class: "tb", role: "rowgroup", "data-own": "morph", "data-sig": sig }, changed ? rows.slice(0, L.limit).map(r => h("div", { class: "tr sa-tr", "data-flat": "", role: "row", "data-key": "h:" + helperKey(r) },
+        HCOLS.map(c => h("span", { role: "cell", class: [c.num ? "r num" : null, c.cls || null].filter(Boolean).join(" ") || null, "data-label": stack && !["who", "state", "desc"].includes(c.k) ? c.label : null }, c.render(r))))) : null))),
+    rows.length > L.limit ? h("div", { class: "lr-more" }, button(`Show ${Math.min(rows.length - L.limit, PAGE * 5)} more`, () => { L.limit += PAGE * 5; ctx.update(); }, { kind: "quiet", size: "s" })) : null];
+}
+
 export default {
   id: "agents", label: "Agents", about: "every agent, in spawn order: search, filter, sort", tab: true,
   leave() { L.sig = ""; },   // the table is built afresh on the way back, so its rows must be too
-  poll: { every: 30000, run() { loadAgentCosts(); } },
+  poll: { every: 30000, run() { loadAgentCosts(); loadHelpers(false); } },
   render(ctx) {
     const whole = settled => heldRoom("agents-page", "#main > *", { settled });   // the whole page, for the wait before anything is known
     if (!S.live) return h("div", { class: "page", style: whole(false) ? `min-height:${whole(false)}px` : null }, pageNav(), waiting(S.failed, "Reading…", "the agents"));
     whole(!!S.history);
     L.update = ctx.update;
     const all = gather(), s = sort(), set = (k, v) => { L[k] = v; L.limit = PAGE; ctx.update(); };
-    const sig = [matchMedia("(max-width: 640px)").matches, matchMedia(STACK_BELOW).matches, [...colsOn()].join(), L.dataKey.split("|")[0], S.agentCosts && S.agentCosts.at, costsPending(), L.q, L.status, L.by, L.since, L.model, L.account, L.limit, L.house, s.k, s.d].join("|"), changed = sig !== L.sig; L.sig = sig;
+    const sig = [matchMedia("(max-width: 640px)").matches, matchMedia(STACK_BELOW).matches, [...colsOn()].join(), L.dataKey.split("|")[0], S.agentCosts && S.agentCosts.at, costsPending(), L.q, L.status, L.by, L.since, L.model, L.account, L.limit, L.house, s.k, s.d, showMode(), S.helpers && S.helpers.at, hsort().k, hsort().d, [...L.hOpen].join()].join("|"), changed = sig !== L.sig; L.sig = sig;
     if (changed || !L.found) { L.found = select(L.house); L.nHouse = L.house ? 0 : select(true).length - L.found.length; }   // nHouse: the housekeeping runs the fold hides now
     const nHouse = L.nHouse;
+    if (!S.helpers && !L.hAsked) { L.hAsked = true; loadHelpers(false); }   // the poll's first round is 30 s away
+    const mode = (S.helpers && S.helpers.rows.length) ? showMode() : "agents", setShow = v => { setPref("agents.show", v); L.limit = PAGE; L.sig = ""; ctx.update(); };
+    if (changed || !L.hb) {   // HB: the helpers of the agents shown (Agents, Both); HL: the flat list (Helpers), which the search also matches on type and task
+      const names = new Set(L.found.map(a => a.name));
+      L.hb = helperRows(false).filter(r => names.has(r.agent)); L.hl = helperRows(true);
+      const hs = hsort(), hg = (HCOLS.find(c => c.k === hs.k) || HCOLS[2]).get;
+      L.hl.sort((a, b) => { const x = hg(a), y = hg(b); return (typeof x === "string" ? x.localeCompare(y) : x - y) * hs.d || hT(b.start) - hT(a.start); });
+      L.hby = new Map(); for (const r of [...L.hb].sort((a, b) => hT(b.start) - hT(a.start))) { if (!L.hby.has(r.agent)) L.hby.set(r.agent, []); L.hby.get(r.agent).push(r); }
+    }
+    const HB = L.hb, HL = L.hl, hRun = rs => rs.filter(r => r.state === "running").length, hUsd = rs => rs.reduce((a, r) => a + (r.usd || 0), 0), owners = rs => new Set(rs.map(r => r.agent)).size;
+    const split = x => h("span", { class: "sa-split" }, x), b = x => h("b", null, x), hMs = HB.reduce((a, r) => a + (took(r) || 0), 0);
     const held = { settled: !!S.history, usual: !L.q && L.limit === PAGE && !L.house }, room = heldRoom("agents", ".ag-w", held), moreR = heldRoom("agents-more", moreRoom, held);   // the list grows as the older log arrives
     const found = L.found, narrowed = found.length < all.length, sum = f => found.reduce((a, x) => a + f(x), 0);
     const by = k => () => { const c = sort(), d = c.k === k ? -c.d : COLS.find(x => x.k === k).num || k === "spawned" ? -1 : 1; setPref("agents.sort", { k, d }); L.limit = PAGE; ctx.update(); };
@@ -132,10 +200,14 @@ export default {
     const costs = S.agentCosts; COST_DATA = all.some(a => a.usd > 0 || a.tok > 0);   // no cost data is "–", not a real zero (handoff 33)
     const costNote = costs && costs.at ? `Cost and tokens from the transcripts, read ${ago(costs.at * 1e3)}${costs.refreshing ? ", reading again" : ""}. API list prices; nobody is billed this. Tokens add up every model call's input, output and cache, so context read again on each call counts each time.` : costsPending() ? "Reading the transcripts for cost and tokens." : costs && costs.refreshing ? "Reading the transcripts for exact costs; until then these come from the session logs." : "Cost and tokens from the session logs.";
     const totals = stats([
-        { label: narrowed ? "Agents shown" : "Agents", value: int(found.length), note: `${found.filter(a => a.status === "running").length} running` },
-        { label: "Total cost", value: all.length && costsPending() ? figPending() : COST_DATA ? money(sum(a => a.usd)) : "–", note: found.length && COST_DATA && !costsPending() ? `${money(sum(a => a.usd) / found.length)} per agent` : null },
+        mode === "helpers" ? { label: "Helpers shown", value: int(HL.length), note: `${hRun(HL)} running, started by ${plural(owners(HL), "agent")} in the last 7 days` }
+        : mode === "both" && HB.length ? { label: "Shown", value: int(found.length + HB.length), note: [plural(found.length, "agent"), " ", split(["and ", b(int(HB.length)), HB.length === 1 ? " helper" : " helpers"]), h("br"),
+            `${found.filter(a => a.status === "running").length} running `, split(["and ", b(String(hRun(HB))), hRun(HB) === 1 ? " helper" : " helpers"])] }
+        : { label: narrowed ? "Agents shown" : "Agents", value: int(found.length), note: [`${found.filter(a => a.status === "running").length} running`, HB.length ? [h("br"), split(["not counting ", b(int(HB.length)), HB.length === 1 ? " helper" : " helpers"])] : null] },
+        // the same in every Show mode: a helper's cost is already inside its owner's
+        { label: "Total cost", value: all.length && costsPending() ? figPending() : COST_DATA ? money(sum(a => a.usd)) : "–", note: found.length && COST_DATA && !costsPending() ? [`${money(sum(a => a.usd) / found.length)} per agent`, hUsd(HB) ? [h("br"), split([b(money(hUsd(HB))), " of it helpers in the last 7 days"])] : null] : null },
         { label: "Tokens", value: all.length && costsPending() ? figPending() : COST_DATA ? toks(sum(a => a.tok)) : "–", note: !COST_DATA || costsPending() ? null : `${pctOf(sum(a => a.spend.t[2]), sum(a => a.tok))} re-read from cache; ${toks(sum(a => a.spend.t[1]))} written` },
-        { label: "Agent time", value: found.length ? dur(sum(a => a.ran)) : "–", note: found.length ? `added up over ${plural(sum(a => a.runs), "run")}, in ${dur(Date.now() - Math.min(...found.map(a => a.when || Date.now())))}` : null },
+        { label: "Agent time", value: found.length ? dur(sum(a => a.ran)) : "–", note: found.length ? [`added up over ${plural(sum(a => a.runs), "run")}, in ${dur(Date.now() - Math.min(...found.map(a => a.when || Date.now())))}`, hMs >= 6e4 ? [h("br"), split(["helpers worked ", b(dur(hMs)), " alongside, last 7 days"])] : null] : null },
     ]);
     // Filters and Columns open into a full-width row under the controls. The row is the fold's sibling, not its body: a body would widen the fold and throw its button to a new line.
     const fold = (k, label) => h("details", { class: "now-more ag-f", open: L[k] || null, ontoggle: (e, n) => { if (e.target === n && !!L[k] !== n.open) { L[k] = n.open; ctx.update(); } } }, h("summary", null, label));
@@ -143,6 +215,7 @@ export default {
       header: pageHeader({ subnav: pageNav(), title: "Agents", hint: `Every agent that has run, ${s.k === "spawned" && s.d < 0 ? "newest first" : s.k === "spawned" ? "oldest first" : "sorted by the column you chose"}.`, after: toolbar(
         input({ type: "search", placeholder: matchMedia("(max-width: 640px)").matches ? `Search name, ${S.app.app ? "conversation" : "thread"}, model` : `Search name, ${S.app.app ? "conversation" : "thread"}, model, who started it`, "aria-label": "Search agents", value: L.q, oninput: e => set("q", e.target.value) }),
         seg(STATUS.filter(x => ["all", "running", "ended", "failed"].includes(x[0]) || x[0] === L.status).map(([k, l]) => [k, k === "all" ? "All" : l]), L.status, v => set("status", v), { label: "Status" }),
+        S.helpers && S.helpers.rows.length ? seg(SHOW.map(([k, l]) => [k, l, k === "agents" ? "Only agents: the ones on the board" : k === "helpers" ? "Only helpers: what agents started inside their own runs, last 7 days" : "Agents, each with its helpers under it", k === "helpers" ? int(HL.length) : null]), mode, setShow, { label: "Show" }) : null,
         fold("fOpen", "Filters" + (nf ? ` (${nf})` : "")),
         !L.fOpen ? null : h("div", { class: "toolbar ag-f ag-fp", "data-key": "filters" },
             picker("Status", L.status, STATUS, v => set("status", v)),   // the row above shows the common four; the rest (waiting, killed, at a limit) are here
@@ -156,20 +229,23 @@ export default {
         narrowed && found.length < all.length - nHouse ? button("Clear", () => { Object.assign(L, { q: "", status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE }); ctx.update(); }, { kind: "quiet", size: "s" }) : null,
         stack ? picker("Sort", s.k, cols.map(c => [c.k, "Sort: " + c.label]), k => { const d = COLS.find(x => x.k === k).num || k === "spawned" ? -1 : 1; setPref("agents.sort", { k, d }); L.limit = PAGE; ctx.update(); }) : null,   // the column headers sort on a desktop; a phone has no header row
         // The count and its button are one row on a phone: one digit more once the whole log is in wrapped them apart and pushed the list 48 px (R67).
-        h("div", { class: "ag-cnt", "data-key": "count" }, h("span", { class: "meta" }, narrowed ? `${found.length} of ${phone && nHouse ? all.length : plural(all.length, "agent")}` : plural(all.length, "agent")),
+        h("div", { class: "ag-cnt", "data-key": "count" }, mode === "helpers" ? h("span", { class: "meta" }, `${plural(HL.length, "helper")}, started by ${plural(owners(HL), "agent")}`, hUsd(HL) ? " · " + money(hUsd(HL)) : null)
+          : mode === "both" && HB.length ? h("span", { class: "meta" }, `${int(found.length + HB.length)} shown: ${plural(found.length, "agent")} and ${plural(HB.length, "helper")}`)
+          : h("span", { class: "meta" }, narrowed ? `${found.length} of ${phone && nHouse ? all.length : plural(all.length, "agent")}` : plural(all.length, "agent"), helperCount(HB.length, { onClick: () => setShow("both"), after: " not shown" })),
         nHouse > 0 || L.house ? button(L.house ? "Hide housekeeping" : `+${nHouse} housekeeping`, () => { L.house = !L.house; ctx.update(); }, { kind: "quiet", size: "s", title: "Housekeeping runs: status-bar refreshes, keeper and improve rounds, watchdog trips and phone-call starts" }) : null,
           !phone && costNote ? infoButton("About these numbers", costNote, { size: "s" }) : null),
         // On a phone the note and the tiles fold into the controls, so the page opens on the agents; the fold still says the two totals people look for.
         phone ? h("details", { class: "now-more ag-f ag-sum", open: L.sOpen || null, ontoggle: (e, n) => { if (e.target === n) L.sOpen = n.open; } },
           h("summary", null, `Totals: ${found.filter(a => a.status === "running").length} running${COST_DATA ? ", " + money(sum(a => a.usd)) : ""}`), totals, h("p", { class: "ph-meta" }, costNote)) : null) }),
-      sections: [
+      sections: mode === "helpers" ? [phone ? null : totals, ...helperTable(HL, stack, sig, changed, ctx)] : [
         phone ? null : totals,
         // grid rows, not <table> (HANDOFF "Shared DOM changes" 6, R7 step 6): one --cols for every row, so the columns line up
         found.length ? h("div", { class: "tblw ag-w" + (fits ? " ag-page" : stack ? " ag-stack" : ""), style: room ? `min-height:${room + (found.length > L.limit ? 0 : moreR)}px` : null }, h("div", { class: "tbl ag", role: "table", "aria-label": "Agents", style: "--cols:" + cols.map(c => colW(c, stack)).join(" ") },
           h("div", { class: "tr th", role: "row" }, cols.map(c => h("span", { role: "columnheader", class: c.num ? "r" : null, title: c.title || null, "aria-sort": s.k === c.k ? (s.d > 0 ? "ascending" : "descending") : null, "data-key": c.k },
             h("button", { type: "button", class: "ag-s", onclick: by(c.k) }, c.label, s.k === c.k ? h("span", { "aria-hidden": "true" }, s.d > 0 ? "▲" : "▼") : null)))),
-          h("div", { class: "tb", role: "rowgroup", "data-own": "morph", "data-sig": sig }, changed ? found.slice(0, L.limit).map(a => h("div", { class: "tr", role: "row", "data-key": a.name },
-            cols.map(c => h("span", { role: "cell", class: [c.num ? "r num" : null, c.cls || null].filter(Boolean).join(" ") || null, "data-label": stack && !PHONE_BARE.has(c.k) ? c.label : null }, stack && c.k === "name" ? phoneName(a) : c.render(a))))) : null)))
+          h("div", { class: "tb", role: "rowgroup", "data-own": "morph", "data-sig": sig }, changed ? found.slice(0, L.limit).flatMap(a => [h("div", { class: "tr", role: "row", "data-key": a.name },
+            cols.map(c => h("span", { role: "cell", class: [c.num ? "r num" : null, c.cls || null].filter(Boolean).join(" ") || null, "data-label": stack && !PHONE_BARE.has(c.k) ? c.label : null }, stack && c.k === "name" ? phoneName(a) : c.render(a)))),
+            ...(mode === "both" ? kidRows(a.name, cols, stack, ctx) : [])]) : null)))
           : empty(all.length ? "No agents match." : "No agents have run yet. When one starts, it shows here."),
         found.length > L.limit ? h("div", { class: "lr-more" },
           button(found.length - L.limit > PAGE * 5 ? `Show ${PAGE * 5} more (${found.length - L.limit} left)` : `Show ${found.length - L.limit} more`, () => { L.limit += PAGE * 5; ctx.update(); }, { kind: "quiet", size: "s" })) : null,

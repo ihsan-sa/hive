@@ -2007,6 +2007,56 @@ class AgentCosts:
             return {"at": self.at, "refreshing": self.busy, "by": self.by}
 
 
+class Subagents:
+    """The helpers (subagents) the Hive's agents started inside Claude Code or Codex, last `days` days, from core/subagents.py in this
+    process with its memo, so a helper file is read again only when it changed. Like AgentCosts it never makes a request wait:
+    a read older than `every` seconds starts a fresh one in a thread and the last result goes out with "refreshing" set.
+    No core/subagents.py: rows stay empty. Asked for by the person, thread 111919537629."""
+    TOOL = HOME / "core" / "subagents.py"
+
+    def __init__(self, every=45, days=7):
+        self.every, self.days, self.at, self.rows, self.busy, self.memo, self.lock, self.mod = every, days, None, [], False, {}, threading.Lock(), None
+
+    def refresh(self):
+        rows = None
+        try:
+            if self.mod is None:
+                spec = importlib.util.spec_from_file_location("h2_subagents", self.TOOL); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); self.mod = m
+            keep = {"harness", "id", "parent", "type", "desc", "model", "mode", "depth", "start", "end", "state", "calls", "tools", "out_tokens", "usd", "file", "agent", "agent_thread"}
+            rows = [{k: v for k, v in r.items() if k in keep} for r in self.mod.collect(time.time() - self.days * 86400, self.memo) if r.get("agent")]
+            for r in rows:
+                if r.get("file"): r["file"] = redact(r["file"].replace(str(HOME) + "/", "", 1))
+                r["desc"] = redact(str(r.get("desc") or "")[:200])
+        except Exception as e:
+            print(f"subagents: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        with self.lock:
+            self.busy = False
+            if rows is not None: self.at, self.rows = time.time(), rows
+
+    def view(self):
+        with self.lock:
+            if not self.busy and time.time() - (self.at or 0) > self.every and self.TOOL.exists():
+                self.busy = True
+                threading.Thread(target=self.refresh, daemon=True).start()
+            return {"at": self.at, "refreshing": self.busy, "days": self.days, "rows": self.rows}
+
+
+def subagents_day(rows, now=None):
+    """The last 24 hours of helpers in numbers, for the Today card beside the running ones: how many finished (done) or were cut off
+    when their owner ended (stopped), what they cost at list prices (already inside their agents' costs), and their working time."""
+    now = now or time.time(); since = now - 86400; out = {"done": 0, "stopped": 0, "usd": 0.0, "ms": 0}
+    def ts(v):
+        try: return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+        except (TypeError, ValueError): return None
+    for r in rows:
+        a, b = ts(r.get("start")), (now if r.get("state") == "running" else ts(r.get("end")))
+        if a is not None and b is not None and b > since: out["ms"] += int(1000 * max(0, min(b, now) - max(a, since)))
+        if r.get("state") in ("done", "stopped") and b is not None and since <= b <= now:
+            out[r["state"]] += 1; out["usd"] += r.get("usd") or 0
+    out["usd"] = round(out["usd"], 2)
+    return out
+
+
 def agent_feed(name, limit=70):
     """What an agent has been doing: tool calls and what it said, from the end of its newest session log."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", name or ""): return []
@@ -2883,7 +2933,7 @@ INSTALLED = HOME / ".hive-installed"
 FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcountry", "cf-visitor", "cdn-loop", "x-forwarded-for",
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
 GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read", "/api/ran": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/work-tiers": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
-           "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
+           "/api/projects": "read", "/api/agent-costs": "read", "/api/subagents": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/export": "config", "/api/modules": "modules", "/api/connectors": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/kb/wipe": "files", "/api/kb/copies": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
@@ -6139,6 +6189,7 @@ def serve(port):
     # Both run hundreds of git calls or the ladder's checks: seconds inside this busy process, so a page gets the last answer while a new one is read.
     web_c = Cached(web_stamp, 10)
     agent_costs = AgentCosts()
+    subagents_c = Subagents()
     steps = Steps()  # the Ledger page's tool calls and words; the first look starts reading the session logs
 
     class H(BaseHTTPRequestHandler):
@@ -6553,6 +6604,10 @@ def serve(port):
                 except (ValueError, OSError, subprocess.SubprocessError) as e: self.deny(502, str(e))
             elif u.path == "/api/agent-costs":
                 self.send(json.dumps(agent_costs.view()).encode(), J)
+            elif u.path == "/api/subagents":   # ?running=1: only the running ones, for the counts every page shows (the whole week is ~0.5 MB)
+                v = subagents_c.view()
+                if (q.get("running") or [""])[0] == "1": v = {**v, "rows": [r for r in v["rows"] if r.get("state") == "running"], "day": subagents_day(v["rows"])}
+                self.send(json.dumps(v).encode(), J)
             elif u.path == "/api/share-preview":
                 try: self.send(json.dumps(share_preview((q.get("thread") or [""])[0])).encode(), J)
                 except KeyError: self.send_error(404)
