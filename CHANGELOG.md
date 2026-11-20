@@ -4,6 +4,10 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Helpers name their owner agent and show on the Map
+
+In **All agents**, when **Show** is **Helpers** or **Both**, each helper row has an **Owner agent** column that names the agent that started it. The helper drawer has the same field. On the **Map**, an agent with helpers running has small grey dots on its card, one for each helper, and its side pane lists them under **Helpers**. The dots don't show when the Map is zoomed out to tiles. Helpers are still never counted as agents.
+
 ## The dashboard shows each agent's helpers
 
 The helpers (subagents) an agent starts inside its run, in Claude Code or Codex, now show in the web app. The top bar reads "5 agents working · 3 helpers". On **Now** each agent's helpers sit under it, and the Today card counts the helpers that finished. **All agents** has a **Show** switch for **Agents**, **Helpers** (the last 7 days, each with its agent) or **Both**; on a phone it is in **Filters**. An agent's page lists its helpers. Helpers are never added into an agent count. A helper's cost is already part of its agent's, so **Total cost** is the same whatever you show. A Hive whose agents start no helpers sees no change.
