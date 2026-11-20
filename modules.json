@@ -49,5 +49,10 @@
   "repo": "https://github.com/Hive-RSI-Lab/hive-lit.git",
   "about": "Search, fetch, read and check ML and AI-safety papers from the command line.",
   "needs": "pdftotext (poppler-utils) to read PDFs"
+ },
+ "inquiry": {
+  "repo": "https://github.com/Hive-RSI-Lab/hive-inquiry.git",
+  "about": "Collect, read and check the documents of an investigation: a sourced fact store, an evidence gate on claims about people, and strict rules that keep victims unnamed.",
+  "needs": "pdftotext and pdftoppm (poppler-utils), curl"
  }
 }

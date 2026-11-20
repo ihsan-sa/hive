@@ -4,6 +4,10 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## New module: inquiry
+
+**inquiry** is a set of tools for an investigation of a large release of PDF documents. It gathers the documents, searches them with page citations, and keeps a store of sourced facts. Each fact has a quote that the tool checks against its page, says how it was read, and carries a reading confidence. A person's standing (accused, named in a civil filing, charged or convicted) needs a fact with a confidence of 0.75 or more, and a face match stays a lead until a document backs it. Victims are known by number, under the record's own label. A victim gets a name only from a fact that has the name as whole words and shows that the person speaks publicly under it. Pages flagged as possibly showing a victim are never rendered, and no command tries to undo a redaction. Add it with `hive module add inquiry`. It needs `curl`, and `pdftotext` and `pdftoppm` from the poppler-utils package.
+
 ## Every running Claude and Codex process shows, with who started it
 
 The helper lists now also show the Claude and Codex processes running outside an agent's own run. That covers a one-off `claude -p` or `codex exec` from an agent's shell, a script's model call, a session open in a terminal, and the copy kept warm for the next new agent. One that an agent started sits under that agent with its helpers. One that no agent started is listed on **Now** under **Also running, not started by an agent**, and in **All agents**, with what started it in place of an owner agent. Its drawer gives its folder and process number. None of them count as agents. `python3 ~/core/subagents.py --running` lists the same in a terminal.
