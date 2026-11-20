@@ -175,6 +175,7 @@ def c_analyze(a):
     if a.csv:
         try: _out(work.analyze_csv(a.csv))
         except OSError as e: _err(f"cannot read CSV {a.csv}: {e.strerror or e}")
+        except (UnicodeDecodeError, csv.Error): _err(f"{a.csv} is not a UTF-8 text CSV file")
     else: _out(work.analyze_pages(_case(a).pages()))
 
 

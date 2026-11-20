@@ -103,7 +103,7 @@ const SELF = {
     [/^(\S+) also here · (\d+) posts?$/, (_, a, n) => `${a} también aquí · ${n} ${pl(n, "mensaje", "mensajes")}`],
     [/^(\S+) also posted in (\S+)$/, "$1 también escribió en $2"],
     [/^Thread (\S+), (.+)$/, (_, t, r) => `Hilo ${t}, ${r.split(", ").map(part).join(", ")}`],
-    [/^(\S+), (.+), (main (?:thread|conversation) \S+)$/, (_, a, s, m) => `${a}, ${tr(s)}, ${part(m)}`],
+    [/^(\S+), (.+), (main (?:thread|conversation) \S+)(?:, (\d+ helpers?))?$/, (_, a, s, m, hp) => `${a}, ${tr(s)}, ${part(m)}${hp ? ", " + part(hp) : ""}`],
     // a name and its state: a timeline bar ("a1b2: job running"), a usage row ("acct-5: paused: no new runs"), an upkeep row ("watchdog: hasn't run")
     [/^([a-z][\w.@-]{1,30}): (.{1,80})$/, (all, n, s) => { const v = tr(s); return v === s ? all : `${n}: ${v}`; }],
   ],
