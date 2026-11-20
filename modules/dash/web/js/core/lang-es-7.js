@@ -23,6 +23,7 @@ const WHAT = { data: "los datos", timeline: "la cronología", map: "el mapa" };
 const part = p => {
   let m;
   if ((m = p.match(/^(\d+) posts?$/))) return `${m[1]} ${pl(m[1], "mensaje", "mensajes")}`;
+  if ((m = p.match(/^(\d+) helpers?$/))) return `${m[1]} ${pl(m[1], "ayudante", "ayudantes")}`;
   if ((m = p.match(/^(\d+) stuck$/))) return `${m[1]} ${pl(m[1], "atascado", "atascados")}`;
   if ((m = p.match(/^main (thread|conversation) (.+)$/))) return `${m[1] === "thread" ? "hilo" : "conversación"} principal ${m[2]}`;
   return tr(p);

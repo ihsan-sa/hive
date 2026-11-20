@@ -808,7 +808,7 @@ def running(st=None, by_hand=False):
             if c: c.wait(timeout=10)
             if not move: reap_hist[r["name"]] = ((reap_hist.get(r["name"], (0, 0))[0] + 1) if g > grace or time.time() - reap_hist.get(r["name"], (0, 0))[1] < 10800 else 1, time.time())
             if st is not None and (bg or move):  # it may have been waiting on something: resume it so it can look
-                st.setdefault("resume", {})[r["name"]] = {**r, "session": session_in(r.get("out")) or r["session"], "reset": 0, "reaped": bg or ["(none listed)"], "move": move}
+                st.setdefault("resume", {})[r["name"]] = {**r, "session": session_in(r.get("out")) or r["session"], "reset": 0, "reaped": bg or ["(none listed)"], "move": move, "quiet": g}
             work.pop(r["name"], None)
         elif st is not None and (ps := waiting_posts(st, r)):
             step = open_command(r) if any(p.get("supersede") for p in ps) else None   # stopped mid-command: the command runs on, and the resumed run is told
@@ -1863,7 +1863,22 @@ def claude_launch(c, name, sid, model, prov, login, kind, posts, prompt, system,
     else: env.pop("_BOX_KEEP", None)
     return cmd, env, login, effort, arm
 
-def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False, lost=False, woken=None, all_since=None, slept=None, heir_of=None, why=None):
+def reaped_text(c, name, reaped, thread, extra=(), moved=False, quiet=None):
+    """What a run ended by the reaper is told when it resumes. It names the quiet time actually used (doubled on a repeat, grace_for)
+    and the tool for an idle wait: one agent re-parked on a GitHub CI poll was reaped 3 times in 10 h (11-19..20, 3 of the day's 4 reaps),
+    told only that an idle wait "is ended again"."""
+    mins = int((quiet or c.get('done_grace_s', 900)) // 60)
+    return (("The starter moved you to another login, because yours ran out while you were waiting. "
+             if moved else f"The starter ended your run: it had printed its result, then nothing for {mins} min, "
+             "and nothing you started was using CPU or waiting in the heavy queue. ")
+            + f"These background shells of yours were killed: {json.dumps(reaped)}. Jobs you started with nohup/setsid survive. "
+            "If you were waiting on something, check it now and carry on. A background wait on a job that uses CPU is fine; "
+            "an idle wait (CI checks, a poll loop, another agent, a time) is ended again, each time later. For one, end your turn with "
+            f"`hive remind at +30m \"check WHAT\" --to {name}` instead: the reminder wakes you with your memory. "
+            f"Check `hive read --thread {thread}` for anything new first. If you were done, just stop."
+            + (f" Posts for you that came in meanwhile: {', '.join(extra)} (`hive read` them)." if extra else ""))
+
+def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False, lost=False, woken=None, all_since=None, slept=None, heir_of=None, why=None, quiet=None):
     kind = "warden" if is_warden(name) else "agent"
     w = warm_take(c, name, posts, login, kind, resume, heir_of)  # the claude process booted ahead for this name (projects/everyday/WARM_AGENT.md), or None: a cold start
     if not w and (sb0 := box()): sb0.prepare(name); sb0.ensure_broker()  # first, so the broker (which looks every 0.1 s) has the run's sockets by the launch below (E11c: ready() waited 0.3 s)
@@ -1934,14 +1949,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
                   f"Check `hive read --thread {first.get('thread', first['id'])}` for anything new first. If you were done, just stop."
                   + (f" Posts for you that came in meanwhile: {', '.join(extra)} (`hive read` them)." if extra else ""))
     elif resume and reaped:
-        prompt = (("The starter moved you to another login, because yours ran out while you were waiting. "
-                   if moved else "The starter ended your run: it had printed its result, then nothing for "
-                  f"{c.get('done_grace_s', 900) // 60} min, and nothing you started was using CPU or waiting in the heavy queue. ") + "These background shells "
-                  f"of yours were killed: {json.dumps(reaped)}. Jobs you started with nohup/setsid survive. If you were "
-                  "waiting on something, check it now and carry on (a background wait on a job that uses CPU is fine; "
-                  f"an idle wait is ended again). Check `hive read --thread {first.get('thread', first['id'])}` "
-                  "for anything new first. If you were done, just stop."
-                  + (f" Posts for you that came in meanwhile: {', '.join(extra)} (`hive read` them)." if extra else ""))
+        prompt = reaped_text(c, name, reaped, first.get('thread', first['id']), extra, moved, quiet)
     elif resume:
         prompt = (RESUME_WHY.get(why, "Your run stopped on a usage limit and the limit has now reset.") + " Continue where you left off "
                   f"(check `hive read --thread {first.get('thread', first['id'])}` for anything new first)."
@@ -2775,7 +2783,7 @@ def main():
             # a queued post that asked for a model holds here too: a parked agent woken for it comes back on that model
             model = r.get("model") if pv else next((p["model"] for p in waiting if p.get("model") in MODELS), r.get("model"))
             start(c, n, [{"id": r["post"], "thread": r.get("thread"), "from": r.get("from"), "model": model}], to,
-                  resume=r["session"], reaped=r.get("reaped"), extra=[p["id"] for p in waiting], moved=r.get("move", False), lost=r.get("lost", False),
+                  resume=r["session"], reaped=r.get("reaped"), extra=[p["id"] for p in waiting], moved=r.get("move", False), lost=r.get("lost", False), quiet=r.get("quiet"),
                   woken={"shells": r["shells"], "posts": waiting, "step": r.get("step")} if "shells" in r else None, all_since=r.get("all_since") or r.get("at"), why=r.get("why"))
             alive[n] = {"name": n, "thread": r.get("thread")}  # a dict, so keeper() sees a resumed keeper (two rounds at once, 2026-11-02)
         release_held(c, st)

@@ -3,7 +3,7 @@
 // Design: designs/subagents-ui (NOTES.md), asked for by the person in thread 111919537629. CSS: css/helpers.css (.sa-).
 import { h, s } from "../core/dom.js";
 import { S } from "../core/store.js";
-import { agentCost, modelName, sEnd } from "../core/model.js";
+import { agentCost, agentLabel, modelName, sEnd } from "../core/model.js";
 import { ago, dur, int, money, now, plural, stamp } from "../core/format.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { button } from "./kit.js";
@@ -26,7 +26,7 @@ const STATE = { running: "running", done: "done", stopped: "stopped" };
 export const hx = r => { const [k, say] = HX[r.harness] || ["?", r.harness || "unknown"]; return h("span", { class: "sa-hx", "data-h": r.harness === "codex" ? "codex" : null, title: say }, k); };
 export const helperTag = r => h("span", { class: "sa-tag" }, (r.depth || 1) > 1 ? "helper's helper" : r.agent || r.kind !== "process" ? "helper" : "process");   // a process no agent owns isn't anyone's helper
 /** Who started it: its owner agent, else what ran it ("tmux session h2build", "starter"). */
-export const ownerOf = r => (r.agent ? agentRef(r.agent, { dot: false }) : h("span", { class: "sa-by", title: "Not started by an agent on the board" }, r.by || "–"));
+export const ownerOf = r => (r.agent ? agentRef(r.agent, { dot: false }) : h("span", { class: "sa-by", title: "Not started by an agent on the board" }, agentLabel(r.by) || "–"));
 export const helperState = r => h("span", { class: "sa-st", "data-s": STATE[r.state] || "done", title: r.state === "stopped" ? "Its owner's session ended before it reported" : null }, STATE[r.state] || r.state || "–");
 
 /** "· 14 helpers", to ride after an agent count. onClick makes the figure a button. Null at 0, so nothing changes when no helper runs. */
@@ -74,7 +74,7 @@ export function looseGroup(groups, { dev, update } = {}) {
   const n = groups.reduce((a, g) => a + g.rows.length, 0);
   return h("section", { class: "sa-orph", "data-key": "sa-loose" }, h("h2", { class: "sa-orph-h" }, "Also running, not started by an agent ",
     h("span", null, `${plural(n, "process", "processes")} · Claude Code or Codex run by a session or program outside the board`)),
-    groups.map(g => [h("p", { class: "sa-owner", "data-key": "by-" + g.by }, h("span", { class: "sa-by" }, g.by)), h("div", { class: "sa-orph-l" }, helperKids(g.by, g.rows, { dev, update }))]));
+    groups.map(g => [h("p", { class: "sa-owner", "data-key": "by-" + g.by }, h("span", { class: "sa-by" }, agentLabel(g.by))), h("div", { class: "sa-orph-l" }, helperKids(g.by, g.rows, { dev, update }))]));
 }
 /** When an agent's last session ended (ms), or null if it never did or isn't known. */
 export const ownerEnded = n => { const x = S.lastSess && S.lastSess[n]; return x && x.end ? sEnd(x) : null; };
@@ -121,11 +121,11 @@ export function openHelper(r) {
       h("div", { class: "sa-cant" }, s("svg", { viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", "stroke-width": 1.5, "aria-hidden": "true" }, s("circle", { cx: 8, cy: 8, r: 6.5 }), s("path", { d: "M8 7v4M8 4.8v.2" })),
         own ? [h("p", { style: "margin:0" }, r.kind === "process" ? `You can't message this process. ${r.agent} started it and reads what it prints. To change what it does, write to ${r.agent}.` : `You can't message a helper. It works for ${r.agent}, inside ${r.agent}'s own run, and reports only to it. To change what it does, write to ${r.agent}.`),
           h("div", { class: "btn-row" }, button("Open " + r.agent, () => dlg.close(), { size: "s", href: agentHref(r.agent) }), r.agent_thread ? button("Open conversation", () => dlg.close(), { size: "s", kind: "quiet", href: threadHref(r.agent_thread) }) : null)]
-        : h("p", { style: "margin:0" }, `No agent on the board started this, so there is nobody to write to about it. ${r.by || "Something outside the board"} runs it.`)),
+        : h("p", { style: "margin:0" }, `No agent on the board started this, so there is nobody to write to about it. ${agentLabel(r.by) || "Something outside the board"} runs it.`)),
       h("div", null, h("h3", { class: "sa-h3" }, "Where it came from"), dl([
-        own ? ["Owner agent", agentRef(r.agent)] : ["Started by", r.by || "–"],
+        own ? ["Owner agent", agentRef(r.agent)] : ["Started by", agentLabel(r.by) || "–"],
         (r.depth || 1) > 1 ? ["Started by", own ? (r.kind === "process" ? "another program " + r.agent + " runs" : "another helper of " + r.agent) : "another agentic process"] : null,
-        own && r.kind === "process" && r.by ? ["Run through", r.by] : null,
+        own && r.kind === "process" && r.by ? ["Run through", agentLabel(r.by)] : null,
         r.cwd ? ["Folder", h("code", null, r.cwd)] : null,
         r.pid ? ["Process", "pid " + r.pid] : null,
         r.agent_thread ? [S.app.app ? "Conversation" : "Thread", threadRef(r.agent_thread)] : null])),
