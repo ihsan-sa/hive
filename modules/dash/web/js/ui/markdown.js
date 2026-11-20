@@ -30,6 +30,11 @@ const INLINE = new RegExp([
   "(?<![\\w/.~-])([A-Za-z0-9_][\\w.-]*\\.[A-Za-z0-9]{1,8})(?![\\w/-]|\\.\\w)",  // 16 a bare file name: a link if this conversation knows it
   "(?<![\\w/.~#-])([0-9a-f]{12})(?![\\w/-])",                                  // 17 a bare post or thread id: a link if the board has it
 ].join("|"), "g");
+// Knowledge only (opts.anchors): [text](#heading-slug) also makes a link, to a heading of the same file. Chat keeps INLINE as it was.
+const INLINE_A = new RegExp(INLINE.source.replace("\\((https?:\\/\\/[^\\s)]+)", "\\(((?:https?:\\/\\/|#)[^\\s)]+)"), "g");
+let rx = INLINE, anchors = false, slugs = null;
+const slugOf = s => s.toLowerCase().replace(/[`*_~]|\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[^\p{L}\p{N}\s_-]/gu, "").trim().replace(/\s/g, "-");
+const here = (slug, ...kids) => h("a", { href: "#" + slug, onclick: (e, a) => { e.preventDefault(); const t = [...(a.closest(".md") || document).querySelectorAll("[data-anchor]")].find(x => x.dataset.anchor === slug); if (t) t.scrollIntoView({ block: "start", behavior: "smooth" }); } }, ...kids);
 // A post's file, written as ~/files/<post id>/<name>: a link that opens it in the preview panel (preview.js handles the click).
 const FILE = /^(?:~|\/home\/[\w.-]+)?\/files\/([0-9a-f]{12})\/([A-Za-z0-9_][A-Za-z0-9_.-]*)$/;
 const fileRef = (id, name, ...kids) => h("a", { class: "ref", "data-kind": "file", "data-pv-key": id + "/" + name, href: `/files/${id}/${encodeURIComponent(name)}`, title: "Preview " + name }, ...kids);
@@ -80,11 +85,12 @@ function text(s, ms) {
 
 function run(s, ms) {
   const out = []; let at = 0;
-  for (const m of s.matchAll(INLINE)) {
+  for (const m of s.matchAll(rx)) {
     if (m.index < at) continue;
     let end = m.index + m[0].length, node;
     if (m[1] != null) node = m[1];
     else if (m[3] != null) { let c = raw(m[3], ms); c = /^ .*[^ ].* $|^ [^ ] $/.test(c) ? c.slice(1, -1) : c; const said = codeName(c), f = !said && FILE.exec(c), k = !said && !f && KBREF.exec(c); node = said ? said : f ? fileRef(f[1], f[2], h("code", null, c)) : k ? kbRef(k[1], h("code", null, c)) : namedRef(c, h("code", null, c)) || h("code", null, c); }
+    else if (m[5] != null && anchors && m[5][0] === "#") node = here(m[5].slice(1), run(m[4], ms));
     else if (m[5] != null) { const was = inLink; inLink = true; node = link(raw(m[5], ms), run(m[4], ms)); inLink = was; }
     else if (m[6] != null || m[7] != null) node = h("strong", null, run(m[6] ?? m[7], ms));
     else if (m[8] != null || m[9] != null) node = h("em", null, run(m[8] ?? m[9], ms));
@@ -221,7 +227,7 @@ function blocks(ls) {
         h("tbody", null, rows.map(r => h("tr", null, head.map((_, k) => h("td", null, inline(r[k] || "")))))))));
       continue;
     }
-    if ((m = l.match(HEAD))) { out.push(h("h" + Math.min(m[1].length + 1, 6), { class: "md-h" + m[1].length }, inline(m[2]))); i++; continue; }   // one level down: the page or file around it owns the h1 (WCAG 1.3.1); md-hN keeps the look of the level written
+    if ((m = l.match(HEAD))) { const hd = h("h" + Math.min(m[1].length + 1, 6), { class: "md-h" + m[1].length }, inline(m[2])); if (slugs) { const b = slugOf(m[2]), n = slugs.get(b) || 0; slugs.set(b, n + 1); hd.dataset.anchor = n ? b + "-" + n : b; } out.push(hd); i++; continue; }   // one level down: the page or file around it owns the h1 (WCAG 1.3.1); md-hN keeps the look of the level written
     if (HR.test(l)) { out.push(h("hr")); i++; continue; }
     if (QUOTE.test(l)) { const q = []; for (; i < ls.length && QUOTE.test(ls[i]); i++) q.push(ls[i].replace(QUOTE, "")); out.push(h("blockquote", null, blocks(q))); continue; }
     if ((m = l.match(ITEM))) {
@@ -253,8 +259,9 @@ function blocks(ls) {
 }
 
 /** markdown(text, files): a div.md of DOM nodes. files: what a bare file name in it links to (filesNamed). */
-export function markdown(text, files, post) {
+export function markdown(text, files, post, opts) {
   known = files || null; says = !!post;
+  anchors = !!(opts && opts.anchors); rx = anchors ? INLINE_A : INLINE; slugs = anchors ? new Map() : null;
   const t = String(text ?? "").replace(/\r\n?/g, "\n");
   let ls = t.split("\n");
   notes = t.includes("[^") ? new Map() : null;
@@ -264,7 +271,7 @@ export function markdown(text, files, post) {
   const allSrc = got && got.every(([, n]) => n.src);
   const end = got ? h("div", { class: "rc-fns" + (allSrc ? " rc-srcs" : "") }, allSrc ? h("div", { class: "rc-srcs-h" }, "Sources") : null,
     h("ol", null, got.map(([id, n]) => h("li", { "data-fn": id }, n.src ? sourceCard(n) : blocks(n.body))))) : null;
-  notes = known = null; says = false;
+  notes = known = slugs = null; says = anchors = false; rx = INLINE;
   return h("div", { class: "md", "data-rich": "" }, body, end);
 }
 
