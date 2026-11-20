@@ -564,10 +564,11 @@ def analyze_pages(pages, today=None):
 def analyze_csv(path):
     """A column-by-column profile: what's missing, what repeats, what's numeric."""
     with open(path, newline="", encoding="utf-8-sig") as f:
-        rows = list(csv.DictReader(f))
+        rows = list(csv.DictReader(f, restkey="_extra_cells"))
     if not rows: return {"rows": 0}
     prof = {}
     for c in rows[0]:
+        if c == "_extra_cells": continue
         vals = [(r.get(c) or "").strip() for r in rows]
         filled = [v for v in vals if v]
         e = {"filled": len(filled), "unique": len(set(filled))}

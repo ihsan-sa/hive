@@ -1040,6 +1040,8 @@ def main(argv=None):
     p = sp.add_parser("order"); p.add_argument("ids", nargs="*"); p.add_argument("--reset", action="store_true")
     p = sp.add_parser("moved", help="threads moved between foci lately, newest first"); p.add_argument("--since", default="2d", help="how far back: 30m, 12h, 3d (up to a week)")
     sp.add_parser("json")
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if not argv: argv = ["list"]   # bare `hive focus` lists them, as orientation's "(`hive focus`)" reads; 46 agent calls a day hit "arguments are required: cmd" (af3f2, 2026-11-20)
     a = ap.parse_args(argv)
     st = state()
     if a.cmd == "list":
