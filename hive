@@ -153,6 +153,22 @@ def receipt(to, ignored, ext, me):
     if ignored: bits.append(f"ignored {', '.join(ignored)}: no such agent (--to starts one under a code like a1b2c)")
     if bits: print("hive post: " + "; ".join(bits), file=sys.stderr)
 
+def held_tier_note(to, ext, me, thread):
+    """A warning when this post names an agent in a thread whose work tier is held: the starter keeps the run waiting until
+    the tier runs, and only a bare note in the thread says so. a01a4 tagged a builder's thread under the paused pcb-flow focus
+    (2026-11-20 00:45): the builder never ran, and the watchdog's asks_orphaned found it 3 h later. Said at the post, the
+    poster can move the thread to a running focus at once. Paused or off only: a stop point is usage, which runs don't see.
+    None on any error or when nobody is named."""
+    if not thread or not [n for n in to if n not in ext and n != me and n not in ("all", "here")]: return None
+    try:
+        import goals
+        why = goals.tier_held_of([thread]).get(thread)
+    except Exception: return None
+    if not why or why == "past its stop point": return None   # usage-based: agents are not told usage, and it lifts by itself
+    return (f"hive post: thread {thread} is in a work tier that starts no new run now ({why}), so the agent this post starts or wakes "
+            f"waits until that tier runs. If the work belongs elsewhere, tag the thread to a running focus (`hive tier why {thread}` "
+            f"shows its tier); tier settings are the person's.")
+
 def effort_hint(to, a):
     """The line an agent sees when it starts a fresh Claude agent with no --effort, or None. The rule is in `hive help agents`, which few
     runs open, so it is said at the step it applies to (7 days to 2026-11-15: 4 of 187 such starts chose an effort,
@@ -454,6 +470,7 @@ def cmd_post(a):
         print(f"Filed? Put what should outlast this thread in the kb, linked back: kb file \"TITLE\" --from {pid} <<'X' ... X", flush=True)
     if not a.as_: remind_asks(pid, p["thread"])
     receipt(list(dict.fromkeys(to)), ignored, ext, me)
+    if not a.as_ and (w := held_tier_note(to, ext, me, p["thread"])): print(w, file=sys.stderr, flush=True)
     if (w := effort_hint(to, a)): print(w, file=sys.stderr)
 
 def cmd_model(a):
