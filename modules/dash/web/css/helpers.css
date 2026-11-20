@@ -110,6 +110,7 @@ tr.sa-tr[data-flat]>td:first-child::before,tr.sa-tr[data-flat]>td:first-child::a
 .ag-stack .ag .tb>.tr>[data-label]:has(>.sa-of){display:flex;align-items:center}   /* the ref clips its overflow, so its baseline is its bottom edge: centre it beside the label */
 /* the top pill on a phone: "26 agents · 10 helpers", so the helper figure isn't cut */
 @media (max-width:640px){span:has(>.sa-count)>.sa-wk{display:none}}
+.sa-of .ref,.sa-of .ref-n{display:inline}   /* an inline-flex ref is one atomic box, and a clipped cell swallows it whole into the "…": inline, the name itself ends in … */
 .sa-of a{color:var(--ink-2);text-decoration:none;font-weight:var(--w-med)}
 .sa-of a:hover{color:var(--ink);text-decoration:underline}
 
@@ -193,6 +194,14 @@ dialog.sa-drawer::backdrop{background:var(--scrim)}
   .sa-li>.sa-l-cost{grid-column:2;grid-row:2;text-align:right;font-size:var(--fs-meta);color:var(--ink-3)}
   .sa-li>.sa-l-line{display:block;font-size:var(--fs-meta);color:var(--ink-3)}
 }
+/* The Map's side pane is phone-narrow at any width: its helper list takes the phone's two-line rows */
+.map-side .sa-li{grid-template-columns:minmax(0,1fr) auto;row-gap:2px;padding:var(--s2) 0}
+.map-side .sa-li[data-head]{display:none}
+.map-side .sa-li>*{grid-column:1}
+.map-side .sa-li>.sa-l-st{grid-column:2;grid-row:1}
+.map-side .sa-li>.sa-l-type,.map-side .sa-li>.sa-l-model,.map-side .sa-li>.sa-l-mode,.map-side .sa-li>.sa-l-took,.map-side .sa-li>.sa-l-calls{display:none}
+.map-side .sa-li>.sa-l-cost{grid-column:2;grid-row:2;text-align:right;font-size:var(--fs-meta);color:var(--ink-3)}
+.map-side .sa-li>.sa-l-line{display:block;font-size:var(--fs-meta);color:var(--ink-3)}
 @media (max-width:640px){
   dialog.sa-drawer{inset:40px 0 0 0;width:100%;height:auto;max-height:none;border-left:0;border-radius:var(--r-l) var(--r-l) 0 0}
   .sa-drawer-in{padding:var(--s4)}
@@ -216,3 +225,4 @@ dialog.sa-drawer::backdrop{background:var(--scrim)}
 /* Agents table: the Show seg's count link, and the phone card's helper line under its agent */
 .sa-hidden{color:var(--ink-3)}
 .sa-li .num.sa-l-cost{text-align:right}
+.sa-by{color:var(--ink-3);font-style:normal}   /* what started a process no board agent owns: plain text, not a link (nothing to open) */

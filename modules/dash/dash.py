@@ -2022,14 +2022,17 @@ class Subagents:
         try:
             if self.mod is None:
                 spec = importlib.util.spec_from_file_location("h2_subagents", self.TOOL); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); self.mod = m
-            keep = {"harness", "id", "parent", "type", "desc", "model", "mode", "depth", "start", "end", "state", "calls", "tools", "out_tokens", "usd", "file", "agent", "agent_thread", "moved"}
+            keep = {"harness", "id", "parent", "type", "desc", "model", "mode", "depth", "start", "end", "state", "calls", "tools", "out_tokens", "usd", "file", "agent", "agent_thread", "moved",
+                    "kind", "pid", "by", "cwd"}   # kind process / workflow: a claude or codex process outside an agent's run, or a Workflow script; by: what started it when no agent did
             got = self.mod.collect(time.time() - self.days * 86400, self.memo)
             seen = {r.get("file") for r in got}
             for f in [f for f in self.memo if f not in seen]: del self.memo[f]   # a helper file gone or out of the window
-            rows = [{k: v for k, v in r.items() if k in keep} for r in got if r.get("agent")]
+            rows = [{k: v for k, v in r.items() if k in keep} for r in got if r.get("agent") or r.get("by")]
             for r in rows:
                 if r.get("file"): r["file"] = redact(r["file"].replace(str(HOME) + "/", "", 1))
-                r["desc"] = redact(str(r.get("desc") or ""))[:200]   # redact first: a cut can leave half a secret the patterns no longer match
+                r["desc"] = redact(str(r.get("desc") or ""))[:200]
+                for k in ("by", "cwd"):
+                    if r.get(k): r[k] = redact(str(r[k]))[:120]   # redact first: a cut can leave half a secret the patterns no longer match
         except Exception as e:
             print(f"subagents: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         with self.lock:

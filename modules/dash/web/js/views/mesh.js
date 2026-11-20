@@ -3,8 +3,9 @@
 // faint "ghost" beside any other thread it posted in. The layout is fixed by the data (mesh-layout.js), never random. Hand-off
 // lines appear only for the selection. The window picks who appears; replay shows the graph as it was at the cut.
 import { h, tr } from "../core/dom.js";
-import { S, OUTSIDE, SYS, subscribe, getPref, setPref } from "../core/store.js";
-import { agentLabel, agentStatus, isAgent, isRunning, isWarden, modelName, sEnd, threadTitle, tierOf, fileInfo, spendSince } from "../core/model.js";
+import { S, OUTSIDE, SYS, subscribe, getPref, setPref, loadHelpers } from "../core/store.js";
+import { agentLabel, agentStatus, isAgent, isRunning, isWarden, modelName, sEnd, threadTitle, tierOf, fileInfo, spendSince, helpersOf } from "../core/model.js";
+import { helperList, showHelpers } from "../ui/helpers.js";
 import { ago, clock, dur, firstSentence, money, now, short, toks, plural, DAY, HOUR, MIN } from "../core/format.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
@@ -106,6 +107,18 @@ function build() {
 }
 
 
+/** An agent's helpers in the window (Running only: the running ones), newest first. Helpers are what an agent starts inside its own run: drawn as small
+ *  dots under its mark, never as nodes of their own, and never in a count of agents (designs/subagents-ui/NOTES.md). */
+const hpT = v => (v ? Date.parse(v) : 0);
+function helpersIn(a, D) {
+  if (!showHelpers()) return [];
+  return helpersOf(a).filter(r => (M.active ? (D.replay ? hpT(r.start) <= D.t1 && (!r.end || hpT(r.end) >= D.t1) : r.state === "running")
+    : hpT(r.start) <= D.t1 && (r.state === "running" || hpT(r.end) >= D.t0)));
+}
+const hpDots = hp => { const run = hp.filter(r => r.state === "running").length;
+  return h("i", { class: "map-hp", "aria-hidden": "true", title: `${plural(hp.length, "helper")}${run ? `, ${run} running` : ""}` },
+    ...hp.slice(0, 5).map(r => h("i", { "data-run": r.state === "running" ? "" : null })), hp.length > 5 ? h("b", null, "+") : null); };
+
 // ---- selection ----
 const selected = () => M.sel;
 function select(kind, id) {
@@ -143,7 +156,7 @@ function graphInput(D) {
     for (const t of l.tracks) if (t.kind === "run") {
       const L = S.running.get(t.a), th = { ...(per.get(t.a) || {}) }; th[l.th] = th[l.th] || 0;
       agents.push({ id: t.a, status: status(t.st) === status("none") && t.st !== "none" ? "ended" : t.st, running: t.live ? 1 : 0, main: l.th, threads: th, posts: total.get(t.a) || 0,
-        cost: D.C.byAg.get(t.a) || 0, model: t.model, now: !D.replay && t.live && L && L.doing ? L.doing : "", last: L && L.last ? L.last * 1e3 : 0, from: t.from, warden: isWarden(t.a), track: t });
+        cost: D.C.byAg.get(t.a) || 0, helpers: helpersIn(t.a, D), model: t.model, now: !D.replay && t.live && L && L.doing ? L.doing : "", last: L && L.last ? L.last * 1e3 : 0, from: t.from, warden: isWarden(t.a), track: t });
     }
   }
   return { threads, agents, now: D.t1 };
@@ -354,11 +367,11 @@ function syncGraph(D) {
     const a = n.agent, sel = M.sel && M.sel.kind === "agent" && M.sel.id === a.id;
     const kids = n.ghost
       ? [glyph(n), h("span", { class: "map-l1" }, h("span", { class: "map-gl" }, compact ? a.id : `${a.id} also here · ${plural(n.posts, "post")}`))]
-      : [glyph(n, sel), h("span", { class: "map-l1" }, h("b", { class: "map-aid", title: a.id }, agentLabel(a.id)), h("span", { class: "map-am" }, compact ? (a.cost >= 0.005 ? " " + money(a.cost) : "") : agentMeta(a) ? " " + agentMeta(a) : "")),
+      : [glyph(n, sel), a.helpers.length && !L.tile ? hpDots(a.helpers) : null, h("span", { class: "map-l1" }, h("b", { class: "map-aid", title: a.id }, agentLabel(a.id)), h("span", { class: "map-am" }, compact ? (a.cost >= 0.005 ? " " + money(a.cost) : "") : agentMeta(a) ? " " + agentMeta(a) : "")),
          lines >= 2 ? h("span", { class: "map-l2" }, nowLine(a)) : null];
     put(seen, "n:" + n.id, "button", "map-ag", x, y,
       { "data-kind": "agent", "data-id": a.id, "data-node": n.id, "data-body": n.ghost ? null : n.id, "data-ghost": n.ghost || null, "data-ended": !a.running || null, "data-sel": sel || null, "data-lit": lit("n:" + n.id),
-        style: `width:${wd}px;--lx:${n.labelX - x}px`, "aria-label": n.ghost ? `${a.id} also posted in ${n.thread}` : `${a.id}, ${status(a.status).label}, main thread ${a.main}`, "aria-pressed": sel ? "true" : "false" }, kids);
+        style: `width:${wd}px;--lx:${n.labelX - x}px`, "aria-label": n.ghost ? `${a.id} also posted in ${n.thread}` : `${a.id}, ${status(a.status).label}, main thread ${a.main}${a.helpers.length ? ", " + plural(a.helpers.length, "helper") : ""}`, "aria-pressed": sel ? "true" : "false" }, kids);
   }
   // older threads, compact view only
   if (L.olderCount) {
@@ -400,11 +413,12 @@ function syncCap(D) {
 function legend(L) {
   const outs = {}; for (const cl of L.clusters) for (const [k, n] of Object.entries(cl.thread.outside)) outs[k] = (outs[k] || 0) + n;
   const g = st => h("i", { class: "map-g", "data-st": st, style: "--r:6px" });
-  const sig = JSON.stringify(outs) + L.nodes.some(n => n.agent && n.agent.warden) + L.mode;
+  const sig = JSON.stringify(outs) + L.nodes.some(n => n.agent && n.agent.warden) + L.nodes.some(n => n.agent && !n.ghost && n.agent.helpers.length) + L.mode;
   if (legendEl.dataset.sig === sig) return; legendEl.dataset.sig = sig;
   legendEl.replaceChildren(...[...[["working", "working"], ["queue", "in queue"], ["quiet", "quiet"], ["stuck", "stuck"], ["failed", "failed"], ["ended", "ended"]].map(([s, l]) => h("span", null, g(s), l)),
     L.nodes.some(n => n.agent && n.agent.warden) ? h("span", null, h("i", { class: "map-g", "data-st": "working", "data-w": "", style: "--r:6px" }), "warden") : null,
     h("span", null, g("ghost"), "also posts here"),
+    L.nodes.some(n => n.agent && !n.ghost && n.agent.helpers.length) ? h("span", { title: "What an agent starts inside its own run; filled while running" }, h("i", { class: "map-hp" }, h("i", { "data-run": "" }), h("i")), "helpers") : null,
     ...Object.entries(outs).sort((x, y) => y[1] - x[1]).map(([k, n]) => h("span", null, h("span", { class: "map-chip" }, k + " ", h("b", null, String(n)))), ) , Object.keys(outs).length ? h("span", null, "outside posts") : null].filter(Boolean));
   legendEl.title = tr(L.mode === "lineage" ? "Arrow: who started whom. Bar: share of the cost." : "Thicker: more posts. Bar: share of the cost.");
 }
@@ -436,6 +450,7 @@ function showCard(id) {
     a.now ? h("div", { class: "map-hc-now" }, short(a.now, 220)) : null,
     h("div", { class: "map-hc-f" }, `${S.app.app ? "Main conversation" : "Main thread"} ${a.main} · ${plural(a.posts, "post")}${a.cost >= 0.005 ? " · " + money(a.cost) : ""}`),
     a.from ? h("div", { class: "map-hc-f" }, "Started by " + a.from) : null,
+    a.helpers.length ? h("div", { class: "map-hc-f" }, `${plural(a.helpers.length, "helper")}${(k => (k ? `, ${k} running` : ""))(a.helpers.filter(r => r.state === "running").length)}: ` + [...new Set(a.helpers.map(r => r.type || "helper"))].slice(0, 3).join(", ")) : null,
     h("small", null, "Click to select, double-click to open"));
   hcEl.hidden = false;
   const W = GS.w, H = GS.L.height, cw = Math.min(280, W - 16), x = Math.max(8, Math.min(n.labelX + 4, W - cw - 8));
@@ -614,6 +629,7 @@ function agentPane(a, D) {
       fig("Posts", String(myPosts.length), plural(new Set(myPosts.map(p => p.th)).size, "thread")),
       fig("Work", plural(n.tools, "tool call"), n.tk ? toks(n.tk) + " tokens" : null)),
     ths.size ? sec("Threads it worked on", [...ths].sort((x, y) => y[1] - x[1]).slice(0, 6).map(([th, w]) => h("div", { class: "map-bar", "data-key": th }, thLink(th), h("em", null, h("i", { style: `width:${(w / tw * 100).toFixed(1)}%` })), h("span", null, Math.round(w / tw * 100) + "%"))), true) : null,
+    (hp => (hp.length ? sec(`Helpers · ${hp.length}`, helperList(a, hp, { update: () => M.update() })) : null))(helpersIn(a, D)),
     tl.length ? sec("Talks with", tl.map(([b, x]) => row(b, statusDot(agentStatus(b).key), h("div", { class: "map-rt" }, h("div", null, idLink(b)), h("small", null, [...x.rel].join(", "))), x.n ? h("span", { class: "r" }, plural(x.n, "mention")) : null)), true) : null,
     h("div", { class: "map-acts" }, isAgent(a) ? button("Open agent page", () => openPanel("agent", a), { size: "s", kind: "primary" }) : null, live && !D.replay ? killButton(a) : null),
   ];
@@ -722,6 +738,7 @@ export default {
     M.update = ctx.update;
     // before the live feed has answered, "nobody is running" would be a guess: say it's loading, and build nothing yet
     if (!S.live) return h("div", { class: "map", "data-key": "mesh", "aria-label": "Map: loading" }, navBox(), waiting(S.failed, "Reading…", "the map"));
+    if (now() - (M.hAt || 0) > 30e3) { M.hAt = now(); loadHelpers(false); }   // helpers of the last 7 days (dots under their owners); the server reads them at most every 45 s
     if (!M.D || (M.cut == null && M.seenVer !== S.ver && now() - M.lastBuild >= 2000) || (M.cut == null && now() - M.lastBuild > 30000)) { M.seenVer = S.ver; build(); }
     else if (M.cut == null && M.seenVer !== S.ver) { clearTimeout(M.timer); M.timer = setTimeout(() => M.update(), 2000 - (now() - M.lastBuild)); }
     const D = M.D;

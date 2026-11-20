@@ -1,7 +1,7 @@
 // Now: what each agent is doing. Template: overview.
 import { h } from "../core/dom.js";
 import { S, SYS } from "../core/store.js";
-import { threadTitle, agentLabel, labelCodes, agentOn, agentSay, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse, limitStop, liveHelpersBy } from "../core/model.js";
+import { threadTitle, agentLabel, labelCodes, agentOn, agentSay, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse, limitStop, liveHelpersBy, liveLoose } from "../core/model.js";
 import { needsKnown, needsN } from "../core/needs.js";
 import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, DAY, MIN, fix } from "../core/format.js";
 import { TIERS, status } from "../core/status.js";
@@ -16,7 +16,7 @@ import { railSay } from "../core/foci.js";
 import { chart } from "../ui/chart.js";
 import { signInWords } from "../ui/shell.js";
 import { armInterrupt } from "../ui/composer.js";
-import { helperKids, helperChip, orphanGroup, ownerEnded, showHelpers, showSwitch } from "../ui/helpers.js";
+import { helperKids, helperChip, looseGroup, orphanGroup, ownerEnded, showHelpers, showSwitch } from "../ui/helpers.js";
 
 const V = {};
 
@@ -89,7 +89,7 @@ function devTables(run, states, t, ctx, hp) {
     { label: "Waited", num: true, render: a => h("span", { class: (a.jobs || {}).waited > 3600 ? "nt-long" : "meta" }, dur(((a.jobs || {}).waited || 0) * 1e3)) }] });
   return cols(
     section({ title: "Working", note: `${working.length}: agents running right now, longest first`, info: "Agents that are in the middle of a turn." }, working.length ? [w, working.length > 7 && !MORE.work ? h("div", { class: "lr-more" }, button(`Show ${working.length - 7} more`, () => { MORE.work = true; ctx.update(); }, { kind: "quiet", size: "s" })) : null] : empty("None."),
-      hp.show ? orphanGroup(hp.orphans, { dev: true, update: ctx.update }) : null),
+      hp.show ? orphanGroup(hp.orphans, { dev: true, update: ctx.update }) : null, hp.show ? looseGroup(hp.loose, { dev: true, update: ctx.update }) : null),
     section({ title: "In the job queue", note: `${queued.length}: heavy jobs waiting their turn` }, queued.length ? [bar, legend, q, queued.length > 3 && !MORE.queue ? h("div", { class: "lr-more" }, button(`Show all ${queued.length}`, () => { MORE.queue = true; ctx.update(); }, { kind: "quiet", size: "s" })) : null] : empty("None.")));
 }
 
@@ -142,7 +142,9 @@ function helpers(run) {
   const gone = o ? (orphans.length === 1 ? `${o === 1 ? "is" : "are"} finishing for ${orphans[0].owner}, which has ended${end ? " (" + ago(end) + ")" : ""}` : `${o === 1 ? "is" : "are"} finishing for agents that have ended`) : null;
   const d = !n && !o && !up ? dayRuns(now()) : null, dh = d && d.hd ? d.hd.done + d.hd.stopped : 0;
   const sub = !n && !o ? (dh ? `${plural(d.done, "agent")} and ${plural(dh, "helper")} finished in the last 24 hours.` : null) : n ? [fig(n), ` ${n === 1 ? "is" : "are"} working ${whom}`, o ? [", and ", h("b", null, String(o)), " " + gone] : null, "."] : [fig(o), " " + gone + "."];
-  return { by, orphans, n, o, sub, idle: !!dh, show: showHelpers() };   // idle: nothing runs, but helpers ran today (the title says "Nothing is running.")
+  const loose = liveLoose(), l = loose.reduce((a, g) => a + g.rows.length, 0);   // agentic processes no board agent started: their own clause, never in the helper figure
+  const also = l ? [h("b", null, plural(l, "process", "processes")), ` not started by an agent ${l === 1 ? "is" : "are"} also running.`] : null;
+  return { by, orphans, loose, n, o, l, sub: sub && also ? [sub, " ", also] : sub || also, idle: !!dh, show: showHelpers() };   // idle: nothing runs, but helpers ran today (the title says "Nothing is running.")
 }
 
 /** Today, for the consumer look: sessions finished, hours of agent work, and what's left of the week (links to Usage). */
@@ -190,8 +192,8 @@ export default {
       const title = up.length ? `${nWord(up.length)} ${up.length === 1 ? "agent is" : "agents are"} working on ${one}.` : hp.idle ? "Nothing is running." : "No agents are working right now.";
       const lead = sign ? sign : stopped ? `New agents wait for the usage limit${limitStop().own ? " (your own messages still start one)" : ""}${limitStop().until ? " until " + clock(limitStop().until) : ""}.`
         : stuckN ? `${nWord(stuckN)} ${stuckN === 1 ? "agent has" : "agents have"} stopped moving.` : null;
-      const header = pageHeader({ state, title, lead, subnav: pageNav(), sub: hp.sub, actions: hp.n || hp.o ? showSwitch(ctx.update) : null });
-      const main = [run.length ? section({}, agentRows(run, states, t, waits, hp, ctx.update)) : null, hp.show ? orphanGroup(hp.orphans, { update: ctx.update }) : null];   // the header already says nobody is working: no "None." box under it
+      const header = pageHeader({ state, title, lead, subnav: pageNav(), sub: hp.sub, actions: hp.n || hp.o || hp.l ? showSwitch(ctx.update) : null });
+      const main = [run.length ? section({}, agentRows(run, states, t, waits, hp, ctx.update)) : null, hp.show ? orphanGroup(hp.orphans, { update: ctx.update }) : null, hp.show ? looseGroup(hp.loose, { update: ctx.update }) : null];   // the header already says nobody is working: no "None." box under it
       const hrs = tierHours(t - DAY, t), tot = Object.values(hrs).reduce((a, b) => a + b, 0) || 1;
       const more = h("details", { class: "now-more", open: V.more || null, ontoggle: (e, n) => { if (e.target === n) V.more = n.open; } }, h("summary", null, "Hive activity, last 24 hours"),
         h("p", { class: "meta" }, [`${plural(lastHour, "post")} in the last hour`, queuedPosts.length ? `${queuedPosts.length} waiting to start` : null, S.usage ? `${money(spendSince(t - DAY))} of work in 24h, at list prices` : null].filter(Boolean).join(" · ")),
@@ -207,7 +209,7 @@ export default {
       queuedPosts.length ? `${queuedPosts.length} waiting to start` : null,
       limitStop() && limitStop().until ? `starts held for the usage limit until ${clock(limitStop().until)}` : null];
     const hp = helpers(run);
-    const header = pageHeader({ subnav: pageNav(), sub: hp.sub, actions: hp.n || hp.o ? showSwitch(ctx.update) : null,
+    const header = pageHeader({ subnav: pageNav(), sub: hp.sub, actions: hp.n || hp.o || hp.l ? showSwitch(ctx.update) : null,
       title: run.length ? `${plural(run.length, "agent")} on ${plural(threads, S.app.app ? "conversation" : "thread")}` : S.app.app ? "No agents are working right now" : "Nobody is running right now",
       after: run.length ? h("div", { class: "nd-head" }, h("span", { class: "meta" }, [
         `${active} active`, count("working") - active > 0 || !S.app.app ? `${count("working") - active} on a job` : null,
