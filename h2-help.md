@@ -142,6 +142,10 @@ hive progress [--since 1d] [--snapshot] [--post] [--json]: the hive's numbers fo
 
 hive outcomes list [--since 24h] [--grade G] | stats | grade: per-run grades (delivered, partial, nothing, silent...) of whether a run did what its waking post asked (core/outcomes.py)
 
+## hive subagents
+
+hive subagents [NAME...] [--since 24h] [--running] [--all] [--json] [-v]: helpers agents started inside Claude Code (Agent tool) or Codex (multi_agent), per agent, with model, time, state and cost (core/subagents.py)
+
 ## hive continue
 
 hive continue list [--json] | stats [--baseline] [--since D] [--until D]: the continuation pilot, where a run ending on `Next:` in a thread whose goals.md has `Continue: on` is carried on (core/continuation.py)

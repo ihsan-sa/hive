@@ -76,7 +76,7 @@ def due(since, t=None, posts=None):
         ths = {x for x in ths if not fc.asked_only(x)}
         rt, p = fc.newest_result(ths, posts)
         s = f.get("summary"); sat = float(s.get("at") or 0) if s else 0
-        if p and rt >= since and t - rt >= GRACE_S and rt - sat > SUMMARY_SLACK_S:  # a summary written just before the result post (the Stop nudge order) is current
+        if p and p.get("via") != "relay" and rt >= since and t - rt >= GRACE_S and rt - sat > SUMMARY_SLACK_S:  # a starter relay of a run that ended without posting comes after its Stop: no check could have asked (a77d0, ac623 on 11-19)  # a summary written just before the result post (the Stop nudge order) is current
             n = str(p.get("from", "")).lower()
             out.append({"kind": "summary", "focus": f["id"], "thread": p.get("thread"), "post": p.get("id"), "what": f"summary of {f['name']} is older than {n}'s result {p.get('id')}",
                         "agents": [{"name": n, "asked": None, **runlog(n)}]})

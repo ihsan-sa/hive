@@ -1,7 +1,7 @@
 // Now: what each agent is doing. Template: overview.
 import { h } from "../core/dom.js";
 import { S, SYS } from "../core/store.js";
-import { threadTitle, agentLabel, labelCodes, agentOn, agentSay, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse, limitStop } from "../core/model.js";
+import { threadTitle, agentLabel, labelCodes, agentOn, agentSay, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse, limitStop, liveHelpersBy } from "../core/model.js";
 import { needsKnown, needsN } from "../core/needs.js";
 import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, DAY, MIN, fix } from "../core/format.js";
 import { TIERS, status } from "../core/status.js";
@@ -16,6 +16,7 @@ import { railSay } from "../core/foci.js";
 import { chart } from "../ui/chart.js";
 import { signInWords } from "../ui/shell.js";
 import { armInterrupt } from "../ui/composer.js";
+import { helperKids, helperChip, orphanGroup, ownerEnded, showHelpers, showSwitch } from "../ui/helpers.js";
 
 const V = {};
 
@@ -28,11 +29,11 @@ const nowSay = a => agentSay(a.name, a.thread);
 
 // Running agents as rows, not cards: one line to scan, the same columns all the way down, however many there are.
 // An agent whose conversation waits on the person says so, and sorts first.
-function agentRows(run, states, t, waits) {
-  return table({ caption: "Running agents", cls: "nowtbl", rows: run, key: a => a.name,
+function agentRows(run, states, t, waits, hp, update) {   // hp: helpers() below; their rows sit under their agent's, in the agent's columns
+  return table({ caption: "Running agents", cls: "nowtbl", rows: run, key: a => a.name, sub: a => (hp.show ? helperKids(a.name, hp.by.get(a.name), { update }) : null),
     rowAttrs: a => { const st = states.get(a.name); return { "data-tone": status(st.key).tone, "data-attn": st.key === "stuck" ? "" : null }; },
     columns: [
-      { label: "Agent", lead: true, cls: "nt-a", width: "minmax(8rem,16rem)", render: a => agentRef(a.name) },
+      { label: "Agent", lead: true, cls: "nt-a", width: "minmax(8rem,16rem)", render: a => [agentRef(a.name), hp.show ? null : helperChip((hp.by.get(a.name) || []).length)] },
       { label: "Conversation", cls: "nt-th", width: "minmax(6rem,15rem)", render: a => threadRef(a.thread) },
       { label: "State", cls: "nt-st", width: "minmax(5rem,6.5rem)", render: a => { const st = states.get(a.name), head = st.text.split(", ")[0]; return h("span", { title: [head !== st.text ? st.text : null, status(st.key).hint].filter(Boolean).join("\n") || null }, waits.has(a.thread) ? tag("info", "waits on you") : tag(TONE[st.key], head)); } },   // the narrow column says the first part ("2 jobs running"); the rest is in the hover, where seven wrapped lines were (R-1111a-e)
       { label: "Model", cls: "nt-md meta", render: a => (cardRows(a.name)[0] || {}).short || "–" },
@@ -65,15 +66,16 @@ function needsYou(run, states, waiting, L) {
 
 /** Developer Now, the two tables: running (newest first) and waiting for the job queue (longest first). */
 const MORE = { work: false, queue: false };
-function devTables(run, states, t, ctx) {
+function devTables(run, states, t, ctx, hp) {
   const own = a => { const on = agentOn(a.name); return on && on.said ? on : null; };
   const doing = a => { const task = S.byId[a.post], say = nowSay(a); return say ? railSay(say.text, 200) : task ? "Asked by " + firstSentence(displayText(task)) : "–"; };
   const title = a => { const task = S.byId[a.post], me = own(a); return [me ? `On: ${me.text} (said ${ago(me.at)})` : null, a.doing ? "Last step: " + a.doing : null, task ? "Asked by " + (a.from || "") + ": " + firstSentence(displayText(task)) : null].filter(Boolean).join("\n") || null; };
   const wl = (a, b) => ((b.jobs || {}).waited || 0) - ((a.jobs || {}).waited || 0);
   const working = run.filter(a => states.get(a.name).key !== "queue").sort((a, b) => (a.since || 0) - (b.since || 0) || String(a.name).localeCompare(String(b.name)));
   const queued = run.filter(a => states.get(a.name).key === "queue").sort((a, b) => wl(a, b) || String(a.name).localeCompare(String(b.name)));
-  const w = table({ caption: "Working", cls: "nowtbl", rows: MORE.work ? working : working.slice(0, 7), key: a => a.name, columns: [
-    { label: "Agent", lead: true, cls: "nt-a", render: a => agentRef(a.name) }, { label: "Thread", cls: "nt-th", render: a => threadRef(a.thread) },
+  const w = table({ caption: "Working", cls: "nowtbl", rows: MORE.work ? working : working.slice(0, 7), key: a => a.name,
+    sub: a => (hp.show ? helperKids(a.name, hp.by.get(a.name), { dev: true, update: ctx.update }) : null), columns: [
+    { label: "Agent", lead: true, cls: "nt-a", render: a => [agentRef(a.name), hp.show ? null : helperChip((hp.by.get(a.name) || []).length)] }, { label: "Thread", cls: "nt-th", render: a => threadRef(a.thread) },
     { label: "Doing now", cls: "nt-do clip", render: a => h("div", { class: "nt-now", title: title(a) }, doing(a)) },
     { label: "Up", num: true, cls: "meta", render: a => dur(t - a.since * 1e3) },
     { label: h("span", { class: "vh" }, "Actions"), cls: "nt-x", render: a => [a.alive && a.thread ? button("Interrupt", () => armInterrupt(a.thread, a.name), { size: "s", kind: "quiet", icon: "pause", title: "Open its conversation ready to interrupt it" }) : null, a.alive ? killButton(a.name) : null] }] });
@@ -86,7 +88,8 @@ function devTables(run, states, t, ctx) {
     { label: "Jobs", cls: "meta", render: a => String((a.jobs || {}).queued || 0) },
     { label: "Waited", num: true, render: a => h("span", { class: (a.jobs || {}).waited > 3600 ? "nt-long" : "meta" }, dur(((a.jobs || {}).waited || 0) * 1e3)) }] });
   return cols(
-    section({ title: "Working", note: `${working.length}: agents running right now, longest first`, info: "Agents that are in the middle of a turn." }, working.length ? [w, working.length > 7 && !MORE.work ? h("div", { class: "lr-more" }, button(`Show ${working.length - 7} more`, () => { MORE.work = true; ctx.update(); }, { kind: "quiet", size: "s" })) : null] : empty("None.")),
+    section({ title: "Working", note: `${working.length}: agents running right now, longest first`, info: "Agents that are in the middle of a turn." }, working.length ? [w, working.length > 7 && !MORE.work ? h("div", { class: "lr-more" }, button(`Show ${working.length - 7} more`, () => { MORE.work = true; ctx.update(); }, { kind: "quiet", size: "s" })) : null] : empty("None."),
+      hp.show ? orphanGroup(hp.orphans, { dev: true, update: ctx.update }) : null),
     section({ title: "In the job queue", note: `${queued.length}: heavy jobs waiting their turn` }, queued.length ? [bar, legend, q, queued.length > 3 && !MORE.queue ? h("div", { class: "lr-more" }, button(`Show all ${queued.length}`, () => { MORE.queue = true; ctx.update(); }, { kind: "quiet", size: "s" })) : null] : empty("None.")));
 }
 
@@ -127,16 +130,36 @@ const APP_TIER = { tier1: "Top priority", tier2: "Next", held: "Kept going", oth
 const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
 const nWord = n => WORDS[n] || String(n);
 
+/** The running helpers as Now draws them: by owner, the owners Now has a row for, the rest (owner ended), and the sentence under the title.
+ *  A helper never adds to the agent count: "5 agents" stays the board's agents, and the helpers get their own figure (the person, 11192003afac). */
+function helpers(run) {
+  const by = liveHelpersBy(), names = new Set(run.map(a => a.name)), up = run.filter(a => a.alive).length;
+  const nested = [...by].filter(([n]) => names.has(n)), orphans = [...by].filter(([n]) => !names.has(n)).map(([owner, rows]) => ({ owner, rows }));
+  const n = nested.reduce((a, [, r]) => a + r.length, 0), o = orphans.reduce((a, g) => a + g.rows.length, 0), k = nested.length;
+  const fig = x => h("b", null, plural(x, "helper"));
+  const whom = k === 1 && up <= 1 ? "for it" : k >= up && k > 1 ? "for all of them" : `for ${nWord(k).toLowerCase()} of them`;
+  const end = orphans.length === 1 ? ownerEnded(orphans[0].owner) : null;
+  const gone = o ? (orphans.length === 1 ? `${o === 1 ? "is" : "are"} finishing for ${orphans[0].owner}, which has ended${end ? " (" + ago(end) + ")" : ""}` : `${o === 1 ? "is" : "are"} finishing for agents that have ended`) : null;
+  const d = !n && !o && !up ? dayRuns(now()) : null, dh = d && d.hd ? d.hd.done + d.hd.stopped : 0;
+  const sub = !n && !o ? (dh ? `${plural(d.done, "agent")} and ${plural(dh, "helper")} finished in the last 24 hours.` : null) : n ? [fig(n), ` ${n === 1 ? "is" : "are"} working ${whom}`, o ? [", and ", h("b", null, String(o)), " " + gone] : null, "."] : [fig(o), " " + gone + "."];
+  return { by, orphans, n, o, sub, idle: !!dh, show: showHelpers() };   // idle: nothing runs, but helpers ran today (the title says "Nothing is running.")
+}
+
 /** Today, for the consumer look: sessions finished, hours of agent work, and what's left of the week (links to Usage). */
-function todayCard(t) {
+function dayRuns(t) {   // the last 24 hours of agents' runs: time worked and runs that ended cleanly; hd: the same for helpers (dash.py subagents_day)
   let ms = 0, done = 0;
   for (const s of S.sessions) { const a = Math.max(s.start, t - DAY), b = Math.min(sEnd(s), t); if (b > a) ms += b - a; if (s.end && s.end >= t - DAY && s.end <= t && s.exit === 0) done++; }
+  return { ms, done, hd: (S.helpersLive && S.helpersLive.day) || null };
+}
+function todayCard(t) {
+  const { ms: ams, done: adone, hd } = dayRuns(t), hn = hd ? hd.done : 0, hms = hd ? hd.ms : 0, ms = ams + hms, done = adone + hn;   // the label is neutral, so the total leads and the helpers' share follows (designs/subagents-ui NOTES rule 2)
+  const split = x => h("span", { class: "sa-split" }, x);
   const act = S.usage ? activeUse(S.usage, t) : null;
   const read = act && act.parts.length, left = read ? Math.max(0, 100 - Math.round(act.pct)) + "%" : "–";   // an account with no reading yet is not 100% left
   return section({ title: "Today", note: "last 24 hours" }, h("div", { class: "card now-today" }, stats([
-    { label: "Finished", value: String(done), note: plural(done, "run") + " ended cleanly" },
-    { label: "Hours of work", value: fix((ms / HOUR), 1) + "h", note: "agent time, all agents" },
-    { label: "Week left", value: read ? h("a", { href: href("usage") }, left) : left, note: read ? "of your weekly use" : "not read yet" },
+    { label: "Finished", value: String(done), note: hn ? [plural(adone, "agent"), " ", split(["and ", h("b", null, String(hn)), hn === 1 ? " helper" : " helpers"]), " ended cleanly"] : plural(done, "run") + " ended cleanly" },
+    { label: "Hours of work", value: fix((ms / HOUR), 1) + "h", note: hms ? ["agent time, all agents", h("br"), split([h("b", null, fix(hms / HOUR, 1) + "h"), " of it helpers"])] : "agent time, all agents" },
+    { label: "Week left", value: read ? h("a", { href: href("usage") }, left) : left, note: read ? (hd && (hn || hms) ? "of your weekly use, helpers included" : "of your weekly use") : "not read yet" },
   ])));
 }
 
@@ -161,13 +184,14 @@ export default {
       // A kicker only when it names something real (the Nov 8 handoff §6, R54): a count of what waits on the person, the same count as Chat's badge.
       const need = needsKnown() ? needsN() : 0;
       const state = stopped || sign ? { tone: "bad", text: "Stopped" } : need ? { tone: "info", text: `${need} ${need === 1 ? "waits" : "wait"} on you` } : stuckN ? { tone: "info", text: `${stuckN} stuck` } : null;
+      const hp = helpers(run);
       const up = run.filter(a => a.alive), upThreads = new Set(up.map(a => a.thread)).size;   // a gone process isn't working: the same count as the top bar's
       const one = upThreads === 1 ? threadTitle(up[0].thread) : `${nWord(upThreads).toLowerCase()} conversations`;
-      const title = up.length ? `${nWord(up.length)} ${up.length === 1 ? "agent is" : "agents are"} working on ${one}.` : "No agents are working right now.";
+      const title = up.length ? `${nWord(up.length)} ${up.length === 1 ? "agent is" : "agents are"} working on ${one}.` : hp.idle ? "Nothing is running." : "No agents are working right now.";
       const lead = sign ? sign : stopped ? `New agents wait for the usage limit${limitStop().own ? " (your own messages still start one)" : ""}${limitStop().until ? " until " + clock(limitStop().until) : ""}.`
         : stuckN ? `${nWord(stuckN)} ${stuckN === 1 ? "agent has" : "agents have"} stopped moving.` : null;
-      const header = pageHeader({ state, title, lead, subnav: pageNav() });
-      const main = run.length ? section({}, agentRows(run, states, t, waits)) : null;   // the header already says nobody is working: no "None." box under it
+      const header = pageHeader({ state, title, lead, subnav: pageNav(), sub: hp.sub, actions: hp.n || hp.o ? showSwitch(ctx.update) : null });
+      const main = [run.length ? section({}, agentRows(run, states, t, waits, hp, ctx.update)) : null, hp.show ? orphanGroup(hp.orphans, { update: ctx.update }) : null];   // the header already says nobody is working: no "None." box under it
       const hrs = tierHours(t - DAY, t), tot = Object.values(hrs).reduce((a, b) => a + b, 0) || 1;
       const more = h("details", { class: "now-more", open: V.more || null, ontoggle: (e, n) => { if (e.target === n) V.more = n.open; } }, h("summary", null, "Hive activity, last 24 hours"),
         h("p", { class: "meta" }, [`${plural(lastHour, "post")} in the last hour`, queuedPosts.length ? `${queuedPosts.length} waiting to start` : null, S.usage ? `${money(spendSince(t - DAY))} of work in 24h, at list prices` : null].filter(Boolean).join(" · ")),
@@ -175,14 +199,15 @@ export default {
         cols(...activityCharts(t)),   // "Agents at work" would draw the same line as "running at once": one chart, not two
         hasTiers() ? section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
           share(TIERS.map(x => ({ key: x.key, label: S.app.app ? APP_TIER[x.key] || x.label : x.label, tone: x.tone, value: hrs[x.key], text: `${fix((hrs[x.key] / HOUR), 1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` })))) : null);
-      return overview({ header, main: [main], after: [todayCard(t), more] });
+      return overview({ header, main: main.filter(Boolean), after: [todayCard(t), more] });
     }
 
     const metaBits = [
       L.jobs && (!S.app.app || L.jobs.running || L.jobs.queued) ? `Machine: ${L.jobs.running} jobs running, ${L.jobs.queued} queued` : null,
       queuedPosts.length ? `${queuedPosts.length} waiting to start` : null,
       limitStop() && limitStop().until ? `starts held for the usage limit until ${clock(limitStop().until)}` : null];
-    const header = pageHeader({ subnav: pageNav(),
+    const hp = helpers(run);
+    const header = pageHeader({ subnav: pageNav(), sub: hp.sub, actions: hp.n || hp.o ? showSwitch(ctx.update) : null,
       title: run.length ? `${plural(run.length, "agent")} on ${plural(threads, S.app.app ? "conversation" : "thread")}` : S.app.app ? "No agents are working right now" : "Nobody is running right now",
       after: run.length ? h("div", { class: "nd-head" }, h("span", { class: "meta" }, [
         `${active} active`, count("working") - active > 0 || !S.app.app ? `${count("working") - active} on a job` : null,
@@ -198,6 +223,6 @@ export default {
     const tiers = section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
       share(TIERS.map(x => ({ key: x.key, label: S.app.app ? APP_TIER[x.key] || x.label : x.label, tone: x.tone, value: hrs[x.key], text: `${fix((hrs[x.key] / HOUR), 1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` }))));
 
-    return overview({ header, main: [needsYou(run, states, queuedPosts, L), run.length ? devTables(run, states, t, ctx) : null].filter(Boolean), after: [hive, charts, hasTiers() ? tiers : null] });
+    return overview({ header, main: [needsYou(run, states, queuedPosts, L), run.length || hp.o ? devTables(run, states, t, ctx, hp) : null].filter(Boolean), after: [hive, charts, hasTiers() ? tiers : null] });
   },
 };

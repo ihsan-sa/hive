@@ -10,7 +10,7 @@ export const SYS = new Set(["starter", "dash", "anon", "all", "400", "mention", 
 const lastApp = () => { try { return localStorage.getItem("appRoute"); } catch (e) { return null; } };
 export const S = {
   app: { route: "open", can: null, app: lastApp() !== "0", pending: lastApp() === null, setup: null },
-  live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {}, shown: [], threadStatus: {}, waitsIn: {}, agentStatus: {},
+  live: null, usage: null, projects: null, agentCosts: null, helpers: null, helpersLive: null, threadNames: {}, threadMeta: {}, shown: [], threadStatus: {}, waitsIn: {}, agentStatus: {},
   posts: [], byId: {}, threads: new Map(), off: 0, boardStart: null,
   sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0, logStart: null, history: false,
   agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(), limitedUntil: {}, limitedScope: {}, diedNow: new Set(),
@@ -251,6 +251,17 @@ export async function loadAgentCosts() {
     return v;
   } catch (e) { return S.agentCosts; }
 }
+/** The helpers (subagents) agents started inside Claude Code or Codex. running: just the running ones, for the counts on every page;
+ *  else the last 7 days, for Agents and an agent's page. The server reads them at most every 45 s; the board never sees them. */
+export async function loadHelpers(running) {
+  try {
+    const v = await jget("/api/subagents" + (running ? "?running=1" : "")), key = running ? "helpersLive" : "helpers", was = S[key];
+    if (!v || !Array.isArray(v.rows)) return was;
+    S[key] = v;
+    if (!was || v.at !== was.at || v.rows.length !== was.rows.length) { S.ver++; emit({ helpers: true }); }
+    return v;
+  } catch (e) { return S[running ? "helpersLive" : "helpers"]; }
+}
 export async function loadApp() {
   try { const v = await jget("/api/app"); const was = JSON.stringify(S.app); Object.assign(S.app, v); delete S.app.pending; try { localStorage.setItem("appRoute", S.app.app ? "1" : "0"); } catch (e) {} if (JSON.stringify(S.app) !== was) emit({ app: true }); } catch (e) {}
 }
@@ -285,7 +296,7 @@ export async function loadProjects() {
 }
 export function start() {
   const every = (ms, f) => setInterval(() => { if (!document.hidden) f(); }, ms);
-  every(1500, poll); every(3000, pollUsage); every(15000, loadApp); every(60000, loadThreadNames); every(15000, loadThreadMeta); every(5000, loadShown); every(20000, loadThreadStatus); every(20000, loadAgentStatus);
+  every(1500, poll); every(3000, pollUsage); every(15000, loadApp); every(60000, loadThreadNames); every(15000, loadThreadMeta); every(5000, loadShown); every(20000, loadThreadStatus); every(20000, loadAgentStatus); every(20000, () => loadHelpers(true));
   document.addEventListener("visibilitychange", () => { if (!document.hidden) { poll(); pollUsage(); } });
-  return Promise.all([loadApp(), pollUsage(), poll(), loadThreadNames(), loadThreadMeta(), loadShown(), loadThreadStatus(), loadAgentStatus()]);
+  return Promise.all([loadApp(), pollUsage(), poll(), loadThreadNames(), loadThreadMeta(), loadShown(), loadThreadStatus(), loadAgentStatus(), loadHelpers(true)]);
 }

@@ -275,6 +275,21 @@ export function agentCost(n) {
   return seen || A ? agentSpend(n, st).usd : null;
 }
 
+/** The helpers (subagents) agents started inside their own Claude Code or Codex run: the board never sees them and nobody can talk to
+ *  one. liveHelpers(): the running ones, for the counts on every page (S.helpersLive). helpersOf(n): one agent's, newest first, over
+ *  the last 7 days once loaded (S.helpers), else the running ones. */
+export function liveHelpers() { return ((S.helpersLive && S.helpersLive.rows) || []).filter(r => r.state === "running"); }
+export function helpersOf(n) {
+  const rows = (S.helpers && S.helpers.rows) || (S.helpersLive && S.helpersLive.rows) || [];
+  return rows.filter(r => r.agent === n).sort((a, b) => (b.start || "").localeCompare(a.start || ""));
+}
+/** Running helpers grouped by owner: Map name -> rows, oldest first (the order they started in). */
+export function liveHelpersBy() {
+  const m = new Map();
+  for (const r of liveHelpers().sort((a, b) => (a.start || "").localeCompare(b.start || ""))) { if (!m.has(r.agent)) m.set(r.agent, []); m.get(r.agent).push(r); }
+  return m;
+}
+
 /** "Sonnet 5.5 · $1.91": an agent's model and cost so far in one short line, for lists of many agents. Cached until the sessions or usage change. */
 let briefFor = [], briefs = new Map();
 export function agentBrief(n) {

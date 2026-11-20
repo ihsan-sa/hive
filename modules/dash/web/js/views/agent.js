@@ -2,8 +2,9 @@
 // its recent steps, its threads, what it changed, who it talks to, its sessions and posts.
 // agentPage(name) is the whole page; the side panel (ui/panel.js) draws the same thing in a narrower container.
 import { h } from "../core/dom.js";
-import { S, OUTSIDE, SYS, jget, loadAgentCosts, post, poll, can } from "../core/store.js";
-import { agentCard, agentSpend, agentState, costsPending, agentStatus, agentLabel, isAgent, isRunning, isWarden, modelName, WARDEN_HINT, sEnd, displayText, agentOn, agentSay } from "../core/model.js";
+import { S, OUTSIDE, SYS, jget, loadAgentCosts, loadHelpers, post, poll, can } from "../core/store.js";
+import { agentCard, agentSpend, agentState, costsPending, agentStatus, agentLabel, isAgent, isRunning, isWarden, modelName, WARDEN_HINT, sEnd, displayText, agentOn, agentSay, helpersOf } from "../core/model.js";
+import { helperList, took } from "../ui/helpers.js";
 import { DAY, HOUR, MIN, ago, dur, firstSentence, mdPlain, money, now, pct, plural, short, stamp, toks, int } from "../core/format.js";
 import { threadHref } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
@@ -79,6 +80,7 @@ export async function pollAgent(n, onChange) {
   if (isRunning(n) || F.failed) loadFeed(n, onChange);
   if ((isRunning(n) && now() - W.at > 20e3) || W.failed) loadWork(n, onChange);
   if ((isRunning(n) && now() - IN.at > 10e3) || IN.failed) loadInput(n, onChange);
+  if (now() - (F.hAt || 0) > 30e3) { F.hAt = now(); loadHelpers(false); }   // its helpers (last 7 days): the server reads them at most every 45 s
   if (costsPending() && now() - (F.costAt || 0) > 15e3) { F.costAt = now(); loadAgentCosts(); }   // opened while the first read was still going: pick up the figures when they land
   if (await pollDelivered()) onChange();
 }
@@ -304,6 +306,7 @@ export function agentPage(n, host = "page") {
   const tk = spend.t, read = tk[0] + tk[2] + tk[3], byModel = Object.entries(spend.m || {}).filter(x => x[1] > 0).sort((a, b) => b[1] - a[1]);
   const line = [D.chain.length ? `Started by ${D.chain.join(" → ")}` : null, D.first ? `first seen ${stamp(D.first.start)}` : null];
   const w = W.name === n ? W.data : null;
+  const hp = helpersOf(n), hMs = hp.reduce((a, r) => a + (took(r) || 0), 0), hRun = hp.filter(r => r.state === "running").length;   // its helpers, last 7 days: none, and the page is as it was
   const last = mine[mine.length - 1], on = agentOn(n), me = on && on.said ? on : null;   // what it says it is on (`hive me`), its own words and date
   // the header says what Now's "Doing now" says: its own summary, not the command it is running (the person, 11081941703e); the step is in the block below
   const say = agentSay(n, L ? L.thread : (S.lastSess[n] || {}).thread), task = L && S.byId[L.post];
@@ -319,11 +322,12 @@ export function agentPage(n, host = "page") {
     }),
     sections: [
       section({ title: "In numbers", note: "this agent's turns, time and cost" }, stats([
-        { label: "Cost", value: !S.usage || costsPending() ? figPending() : spend.usd > 0 ? money(spend.usd) : "–", note: costsPending() || !(tk[0] + tk[1] + tk[2] + tk[3]) ? null : `${toks(tk[0] + tk[1] + tk[2] + tk[3])} tokens, ${pct(tk[2], read)} of reads from cache` + (spend.sub ? `; ${money(spend.sub)} in subagents` : ""), title: `At API list prices, from the ${spend.src}.` + (byModel.length > 1 ? " " + byModel.map(([k, v]) => `${modelName(k)} ${money(v)}`).join(", ") + "." : "") + (L ? " A turn under way may not be counted yet." : "") },
-        { label: "Time running", value: ss.length ? dur(D.active) : "none", note: plural(ss.length, "session") + (spend.calls != null ? `, ${int(spend.calls)} model calls` : "") },
+        { label: "Cost", value: !S.usage || costsPending() ? figPending() : spend.usd > 0 ? money(spend.usd) : "–", note: costsPending() || !(tk[0] + tk[1] + tk[2] + tk[3]) ? null : `${toks(tk[0] + tk[1] + tk[2] + tk[3])} tokens, ${pct(tk[2], read)} of reads from cache` + (spend.sub ? `; ${money(spend.sub)} of it helpers` : ""), title: `At API list prices, from the ${spend.src}.` + (byModel.length > 1 ? " " + byModel.map(([k, v]) => `${modelName(k)} ${money(v)}`).join(", ") + "." : "") + (L ? " A turn under way may not be counted yet." : "") },
+        { label: "Time running", value: ss.length ? dur(D.active) : "none", note: plural(ss.length, "session") + (spend.calls != null ? `, ${int(spend.calls)} model calls` : "") + (hMs ? `; helpers worked ${dur(hMs)} alongside, last 7 days` : "") },
         { label: "Posts", value: mine.length, note: `named in ${plural(toMe.length, "post")}; ${plural(threads.length, "thread")}` },
         { label: "Changed", value: w ? plural(w.nfiles, "file") : figPending("6ch"), note: w ? [plural(w.ncommits, "commit"), w.prs.length ? plural(w.prs.length, "PR") : null, started.length ? `started ${plural(D.startedNames.length, "agent")}` : null].filter(Boolean).join(", ") : null },
       ])),
+      hp.length ? section({ title: "Helpers", note: `${plural(hp.length, "helper")} it started in the last 7 days${hRun ? `, ${hRun} running` : ""}; their cost is inside its own` }, helperList(n, hp, { update: () => again && again() })) : null,
       D.life.chart ? section({ title: "Over its life", note: D.life.note }, D.life.chart) : null,
       cols(
         section({ title: "Recent steps", note: "tool calls and what it said, newest first" },

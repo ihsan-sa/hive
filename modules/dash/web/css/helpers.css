@@ -1,0 +1,217 @@
+/* helpers.css: helpers (subagents) in the dashboard, from the design in thread 111919537629 (js/ui/helpers.js draws them).
+   Every class here starts .sa-. Needs tokens.css, and .st/.sw/.seg/.btn/.switch from components.css.
+   Rules this file keeps:
+   - A helper is never amber. Amber stays "yours to act on"; nobody can act on a helper.
+   - A helper row is always lighter than an agent row: smaller type, ink-2/ink-3, no bold name, a tree line or indent.
+   - A helper always carries a word ("helper", or its type under a "Helpers" heading) and a harness mark, never colour alone.
+   - Narrow layouts key off #main's width (a container query, as the tables do); the drawer, which lives outside #main, keys off the viewport. */
+
+/* ---------- 1. Counts: the helper figure that rides after an agent figure ---------- */
+/* <b>5</b> agents working<span class="sa-count"><b>14</b> helpers</span> */
+.sa-count{color:var(--ink-3);font-weight:400;white-space:nowrap}
+.sa-count::before{content:"\00b7";margin:0 6px 0 4px;color:var(--ink-3)}
+.sa-count b{font-weight:var(--w-med);color:var(--ink-2);font-variant-numeric:tabular-nums}
+.sa-count a,.sa-count button{color:inherit;font:inherit;background:none;border:0;padding:0;text-decoration:underline;text-decoration-color:var(--line-2);text-underline-offset:3px;cursor:pointer}
+.sa-count a:hover,.sa-count button:hover{color:var(--ink);text-decoration-color:currentColor}
+
+/* The quiet sentence under a page headline: "14 helpers are working for them." */
+.sa-sub{margin-top:var(--s1);font-size:var(--fs-read);color:var(--ink-3);text-wrap:pretty}
+.sa-sub b{font-weight:var(--w-med);color:var(--ink-2)}
+
+/* Inside a stat tile's small line: "$87.73 of it helpers" */
+.sa-split{color:var(--ink-3)}
+.sa-split b{font-weight:var(--w-med);color:var(--ink-2);font-variant-numeric:tabular-nums}
+
+/* ---------- 2. Marks: the word "helper", the harness, the state ---------- */
+.sa-tag{display:inline-flex;align-items:center;height:18px;padding:0 6px;border:1px solid var(--line-2);border-radius:var(--r-s);font-size:var(--fs-micro);font-weight:var(--w-med);line-height:1;color:var(--ink-3);white-space:nowrap;flex:none}
+
+/* Harness: cc = Claude Code, cx = Codex. Codex gets a dashed edge, so the two differ by shape, not only letters. */
+.sa-hx{display:inline-grid;place-items:center;width:20px;height:16px;flex:none;border:1px solid var(--line-2);border-radius:4px;background:var(--surface);font:600 9px/1 var(--mono);letter-spacing:.02em;color:var(--ink-3);text-transform:lowercase}
+.sa-hx[data-h=codex]{border-style:dashed;background:var(--sunken)}
+
+/* Helper state: smaller than an agent's .st, same shape language plus one new shape.
+   running = filled dot (green), done = dash, stopped = hollow square. Always followed by its word. */
+.sa-st{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3);white-space:nowrap}
+.sa-st::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:var(--quiet)}
+.sa-st[data-s=running]{color:var(--good-ink)}
+.sa-st[data-s=running]::before{background:var(--good)}
+.sa-st[data-s=done]::before{width:8px;height:2px;border-radius:1px;background:var(--ink-3)}
+.sa-st[data-s=stopped]{color:var(--ink-2)}
+.sa-st[data-s=stopped]::before{width:7px;height:7px;border-radius:1px;background:none;border:1.5px solid var(--ink-3);box-sizing:border-box}
+
+/* "Codex doesn't report cost": a dash with its reason on hover and for screen readers */
+.sa-nocost{color:var(--ink-3)}
+
+/* ---------- 3. Now: helpers nested under the agent that owns them ---------- */
+/* The parent list sets --now-cols (the agent row's grid); helper rows reuse it so their columns line up. */
+.sa-kids{position:relative;list-style:none;margin:var(--s1) 0 0;padding:0;display:grid}
+.sa-kids::before{content:"";position:absolute;left:6px;top:-4px;bottom:15px;width:1px;background:var(--line-2)}
+.sa-kid{position:relative;display:grid;grid-template-columns:var(--now-cols,minmax(0,1fr) 96px 80px 110px 72px 32px);column-gap:var(--s4);align-items:center;min-height:30px;font-size:var(--fs-small);color:var(--ink-2)}
+.sa-kid::before{content:"";position:absolute;left:6px;top:50%;width:10px;height:1px;background:var(--line-2)}
+.sa-kid[data-depth="2"]::before{left:26px}
+.sa-kid[data-depth="2"]::after{content:"";position:absolute;left:26px;top:0;height:50%;width:1px;background:var(--line-2)}
+.sa-kid>.sa-what{grid-column:span var(--what-span,2)}
+.sa-what{display:flex;align-items:center;gap:var(--s2);min-width:0;padding-left:22px}
+.sa-kid[data-depth="2"]>.sa-what{padding-left:42px}
+.sa-type{flex:none;color:var(--ink-3);font-weight:var(--w-med)}
+.sa-desc{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
+.sa-meta{color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sa-time{color:var(--ink-3);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.sa-kid .sa-dot{display:none}
+
+/* "6 more helpers": the collapse after three */
+.sa-more{position:relative;display:flex;align-items:center;gap:6px;min-height:30px;padding:0 0 0 22px;border:0;background:none;font:inherit;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3);cursor:pointer;text-align:left;width:max-content}
+.sa-more::before{content:"";position:absolute;left:6px;top:50%;width:10px;height:1px;background:var(--line-2)}
+.sa-more:hover{color:var(--ink)}
+.sa-more:focus-visible{outline:none;box-shadow:var(--ring);border-radius:var(--r-s)}
+.sa-more svg{width:12px;height:12px}
+
+/* Helpers whose agent has ended: their own quiet group under the running agents */
+.sa-orph{margin-top:var(--s5)}
+.sa-orph-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s1) var(--s2);padding-bottom:var(--s2);border-bottom:1px solid var(--line);font-size:var(--fs-small);font-weight:var(--w-med);color:var(--ink-2)}
+.sa-orph-h span{font-weight:400;color:var(--ink-3)}
+.sa-owner{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1) var(--s2);min-height:36px;padding-top:var(--s2);font-size:var(--fs-small);color:var(--ink-2)}
+.sa-owner a{color:var(--ink-2);font-weight:var(--w-med);text-decoration:none}
+.sa-owner a:hover{color:var(--ink);text-decoration:underline}
+.sa-owner .sa-meta{font-size:var(--fs-meta)}
+
+/* The "Show helpers" switch beside the Now headline, remembered per device */
+.sa-show{display:inline-flex;align-items:center;gap:var(--s2);font-size:var(--fs-small);color:var(--ink-2);cursor:pointer;white-space:nowrap}
+/* When it is off, an agent row keeps one quiet chip instead: "3 helpers" */
+.sa-chip{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:var(--r-pill);background:var(--sunken);font-size:var(--fs-micro);font-weight:var(--w-med);color:var(--ink-3);white-space:nowrap}
+
+/* ---------- 4. All agents: helper rows in the table ---------- */
+tr.sa-tr>td{height:34px;font-size:var(--fs-meta);font-weight:400;color:var(--ink-2);background:var(--tint)}
+tr.sa-tr>td:first-child{position:relative;padding-left:26px}
+tr.sa-tr>td:first-child::before{content:"";position:absolute;left:10px;top:0;height:50%;width:1px;background:var(--line-2)}
+tr.sa-tr>td:first-child::after{content:"";position:absolute;left:10px;top:50%;width:10px;height:1px;background:var(--line-2)}
+tr.sa-tr[data-depth="2"]>td:first-child{padding-left:44px}
+tr.sa-tr[data-depth="2"]>td:first-child::before,tr.sa-tr[data-depth="2"]>td:first-child::after{left:28px}
+tr.sa-tr[data-flat]>td:first-child{padding-left:var(--s2)}
+tr.sa-tr[data-flat]>td:first-child::before,tr.sa-tr[data-flat]>td:first-child::after{display:none}
+/* the live page's table is grid rows (.ag .tb>.tr), not <tr>: the same marks there. Show: Both tints a helper and draws its tree line; Show: Helpers (data-flat) is all helpers, so no tint */
+.ag .tb>.tr.sa-tr{font-size:var(--fs-meta);font-weight:400;color:var(--ink-2);align-items:center;min-height:34px}
+.ag .tb>.tr.sa-tr:not([data-flat]),.ag .tb>.tr.sa-tr:not([data-flat])>:first-child{background:var(--tint);box-shadow:-8px 0 0 var(--tint)}
+.ag .tb>.tr.sa-tr:not([data-flat])>:first-child{padding-left:22px}
+.ag .tb>.tr.sa-tr:not([data-flat])>:first-child::before{content:"";position:absolute;left:8px;top:-6px;bottom:50%;width:1px;background:var(--line-2)}
+.ag .tb>.tr.sa-tr:not([data-flat])>:first-child::after{content:"";position:absolute;left:8px;top:50%;width:9px;height:1px;background:var(--line-2)}
+.ag .tb>.tr.sa-tr[data-depth="2"]>:first-child{padding-left:38px}
+.ag .tb>.tr.sa-tr[data-depth="2"]>:first-child::before,.ag .tb>.tr.sa-tr[data-depth="2"]>:first-child::after{left:24px}
+.ag .sa-who{display:flex;max-width:100%}.ag .sa-who>:not(.sa-type){flex:none}.ag .sa-who .sa-type{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ag .tb>.tr.sa-tr-more>:first-child{grid-column:1/-1}
+.ag-stack .ag .tb>.tr.sa-tr:not([data-flat]){padding-left:14px;box-shadow:inset 2px 0 0 var(--line-2)}
+.ag-stack .ag .tb>.tr.sa-tr:not([data-flat])>:first-child{padding-left:0;box-shadow:none}
+.ag-stack .ag .tb>.tr.sa-tr>:first-child::before,.ag-stack .ag .tb>.tr.sa-tr>:first-child::after{display:none}
+.sa-who{display:flex;align-items:center;gap:6px;min-width:0}
+.sa-who .sa-type{color:var(--ink-2)}
+.sa-of{color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:inline-block;max-width:100%;vertical-align:bottom}
+.ag-stack .sa-of{display:inline;white-space:normal}
+.ag-stack .ag .tb>.tr>[data-label]:has(>.sa-of){display:flex;align-items:center}   /* the ref clips its overflow, so its baseline is its bottom edge: centre it beside the label */
+/* the top pill on a phone: "26 agents · 10 helpers", so the helper figure isn't cut */
+@media (max-width:640px){span:has(>.sa-count)>.sa-wk{display:none}}
+.sa-of a{color:var(--ink-2);text-decoration:none;font-weight:var(--w-med)}
+.sa-of a:hover{color:var(--ink);text-decoration:underline}
+
+/* Phone: helper cards hang under their agent's card */
+.sa-card{position:relative;display:grid;gap:2px;margin-left:var(--s4);padding:var(--s2) 0 var(--s2) var(--s4);border-left:1px solid var(--line-2);font-size:var(--fs-meta);color:var(--ink-3)}
+.sa-card[data-depth="2"]{margin-left:calc(var(--s4) * 2)}
+.sa-card-t{display:flex;align-items:center;gap:6px;min-width:0;font-size:var(--fs-small);color:var(--ink-2)}
+.sa-card-t .sa-desc{flex:1}
+
+/* ---------- 5. An agent's page: Helpers section, cost split, life lane ---------- */
+.sa-sec-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s1) var(--s3);margin-bottom:var(--s3)}
+.sa-sec-h h2{font-size:var(--fs-body);font-weight:var(--w-bold);margin:0}
+.sa-sec-h p{font-size:var(--fs-meta);color:var(--ink-3);margin:0}
+
+.sa-list{display:grid;border-top:1px solid var(--line);font-size:var(--fs-small)}
+.sa-li{display:grid;grid-template-columns:84px 150px minmax(0,1fr) 84px 104px 64px 48px 60px;column-gap:var(--s4);align-items:center;min-height:36px;border-bottom:1px solid var(--line);color:var(--ink-2)}
+.sa-li[data-head]{min-height:32px;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
+.sa-li>.num{text-align:right;font-variant-numeric:tabular-nums}
+.sa-li .sa-task{display:flex;align-items:center;gap:var(--s2);min-width:0}
+.sa-li .sa-who{min-width:0}.sa-li .sa-who .sa-type{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sa-li[data-depth="2"] .sa-task{padding-left:var(--s5);position:relative}
+.sa-li[data-depth="2"] .sa-task::before{content:"";position:absolute;left:6px;top:-2px;width:8px;height:10px;border-left:1px solid var(--line-2);border-bottom:1px solid var(--line-2)}
+.sa-li a{color:inherit;text-decoration:none}
+.sa-li a:hover{color:var(--ink);text-decoration:underline}
+.sa-li:not([data-head]):hover{background:var(--tint)}
+.sa-li .sa-lab{display:none}
+
+/* Life chart: the helper part of a cost bar is the same blue, lighter */
+.sa-costbar{display:flex;flex-direction:column;justify-content:flex-end}
+.sa-costbar>i{display:block;background:var(--data);border-radius:0 0 3px 3px}
+.sa-costbar>i:first-child{border-radius:3px 3px 0 0}
+.sa-costbar>i.sa-hpart{background:var(--data-bg);box-shadow:inset 0 0 0 1px color-mix(in oklch,var(--data) 45%,transparent)}
+.sa-key-h{display:inline-block;width:8px;height:8px;background:var(--data-bg);box-shadow:inset 0 0 0 1px color-mix(in oklch,var(--data) 45%,transparent);margin-right:6px}
+/* The helpers lane: one thin bar per helper, placed by its start and end (inline left/width in %) */
+.sa-lane{position:relative;height:30px;margin-top:var(--s1)}
+.sa-lane-l{position:absolute;left:0;top:-1px;font-size:var(--fs-micro);color:var(--ink-3)}
+.sa-lb{position:absolute;height:4px;border-radius:2px;background:var(--ink-3);opacity:.55;min-width:3px}
+.sa-lb[data-s=running]{background:var(--good);opacity:1}
+.sa-lb[data-s=stopped]{background:none;opacity:1;box-shadow:inset 0 0 0 1px var(--ink-3)}
+
+/* ---------- 6. One helper: drawer (wide) or sheet (phone) ---------- */
+dialog.sa-drawer{position:fixed;inset:0 0 0 auto;margin:0;padding:0;width:min(460px,100%);height:100dvh;max-height:100dvh;max-width:100%;overflow:auto;background:var(--bg);color:var(--ink);border:0;border-left:1px solid var(--line-2);box-shadow:var(--e3)}
+dialog.sa-drawer::backdrop{background:var(--scrim)}
+.sa-drawer-b{position:sticky;top:0;display:flex;align-items:center;gap:var(--s2);padding:var(--s2) var(--s3) var(--s2) var(--s5);background:color-mix(in oklch,var(--bg) 92%,transparent);border-bottom:1px solid var(--line);font-size:var(--fs-meta);color:var(--ink-3)}
+.sa-drawer-b .btn{margin-left:auto}
+.sa-drawer-in{display:grid;gap:var(--s5);padding:var(--s5)}
+.sa-drawer h2{margin:0;font-size:var(--fs-lead);font-weight:var(--w-bold);letter-spacing:var(--track-tight);line-height:var(--lh-tight)}
+.sa-line{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1) var(--s2);font-size:var(--fs-small);color:var(--ink-2)}
+.sa-cant{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--s2) var(--s3);padding:var(--s3) var(--s4);border:1px solid var(--line);border-radius:var(--r-m);background:var(--sunken);font-size:var(--fs-small);color:var(--ink-2)}
+.sa-cant svg{width:16px;height:16px;margin-top:2px;color:var(--ink-3)}
+.sa-cant .btn-row{grid-column:2}
+.sa-dl{display:grid;grid-template-columns:112px minmax(0,1fr);gap:10px var(--s4);margin:0;font-size:var(--fs-small)}
+.sa-dl dt{color:var(--ink-3)}
+.sa-dl dd{margin:0;color:var(--ink);min-width:0;overflow-wrap:anywhere}
+.sa-dl dd small{display:block;font-size:var(--fs-meta);color:var(--ink-3)}
+.sa-dl a{color:var(--ink);font-weight:var(--w-med)}
+.sa-path{display:block;padding:var(--s2) 10px;border-radius:var(--r-s);background:var(--sunken);font:12px/1.45 var(--mono);color:var(--ink-2);overflow-wrap:anywhere}
+.sa-h3{margin:0 0 var(--s2);font-size:var(--fs-small);font-weight:var(--w-bold);color:var(--ink)}
+
+/* ---------- Narrow: phone 390 ---------- */
+@container (max-width:640px){
+  .sa-kids::before{left:4px}
+  .sa-kid{grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto auto;row-gap:2px;padding:6px 0}
+  .sa-kid::before{left:4px;top:16px}
+  .sa-kid[data-depth="2"]::before{left:20px}
+  .sa-kid[data-depth="2"]::after{left:20px;height:16px}
+  .sa-kid>.sa-what{grid-column:1 / -1;padding-left:18px}
+  .sa-kid[data-depth="2"]>.sa-what{padding-left:34px}
+  .sa-kid>.sa-k-st,.sa-kid>.sa-k-model,.sa-kid>.sa-k-mode{display:none}
+  .sa-kid>.sa-k-line{display:block;grid-column:1;padding-left:18px;font-size:var(--fs-meta);color:var(--ink-3)}
+  .sa-kid[data-depth="2"]>.sa-k-line{padding-left:34px}
+  .sa-kid>.sa-time{grid-column:2;grid-row:2;font-size:var(--fs-meta)}
+  .sa-kid>.sa-k-end{display:none}
+  .sa-more{padding-left:18px}
+  .sa-more::before{left:4px}
+  .sa-li{grid-template-columns:minmax(0,1fr) auto;row-gap:2px;padding:var(--s2) 0}
+  .sa-li[data-head]{display:none}
+  .sa-li>*{grid-column:1}
+  .sa-li>.sa-l-st{grid-column:2;grid-row:1}
+  .sa-li>.sa-l-type,.sa-li>.sa-l-model,.sa-li>.sa-l-mode,.sa-li>.sa-l-took,.sa-li>.sa-l-calls{display:none}
+  .sa-li>.sa-l-cost{grid-column:2;grid-row:2;text-align:right;font-size:var(--fs-meta);color:var(--ink-3)}
+  .sa-li>.sa-l-line{display:block;font-size:var(--fs-meta);color:var(--ink-3)}
+}
+@media (max-width:640px){
+  dialog.sa-drawer{inset:40px 0 0 0;width:100%;height:auto;max-height:none;border-left:0;border-radius:var(--r-l) var(--r-l) 0 0}
+  .sa-drawer-in{padding:var(--s4)}
+  .sa-dl{grid-template-columns:96px minmax(0,1fr)}
+}
+.sa-k-line,.sa-l-line{display:none}
+/* Helper rows inside a .tbl.tg table (table.js sub): one full-width row whose list and items are subgrids of the table, so a helper's cells sit under its agent's columns */
+.tbl.tg>.tb>.tr:has(+.tsub){border-bottom-color:transparent}
+.tbl.tg>.tb>.tr.tsub{padding:0 8px 6px;margin-top:-4px}
+.tbl.tg>.tb>.tr.tsub>.tsub-c{grid-column:1/-1;display:grid;grid-template-columns:subgrid;white-space:normal}
+.tsub-c>.sa-kids{grid-column:1/-1;grid-template-columns:subgrid;margin:0}
+.tsub-c>.sa-kids>li{grid-column:1/-1}
+.tsub-c>.sa-kids>.sa-kid{grid-template-columns:subgrid;column-gap:normal}
+.tsub-c .sa-kid>.sa-what{grid-column:span 2}
+@container (max-width:640px){
+  .tbl.tg>.tb>.tr.tsub{padding:0 0 var(--s2);margin-top:-8px}
+  .tbl.tg>.tb>.tr.tsub>.tsub-c,.tsub-c>.sa-kids{display:block}
+  .tsub-c>.sa-kids>.sa-kid{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s2)}
+  .tsub-c .sa-kid>.sa-what{grid-column:1/-1}
+}
+/* Agents table: the Show seg's count link, and the phone card's helper line under its agent */
+.sa-hidden{color:var(--ink-3)}
+.sa-li .num.sa-l-cost{text-align:right}
