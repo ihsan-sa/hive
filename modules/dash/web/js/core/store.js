@@ -61,10 +61,10 @@ export async function jget(u) {
   if (!r.ok) { if (own && passing(r.status)) ownFail(); const e = Error(said(r.status)); e.status = r.status; throw e; }
   return r.json();
 }
-/** POST with the header the server requires; throws an Error with a plain reason. */
-export async function post(path, body) {
+/** POST with the header the server requires; throws an Error with a plain reason. o.signal: an AbortSignal for a caller with a time limit (board.js bridgePost). */
+export async function post(path, body, o) {
   if (path === "/api/post") body = await signPost(body);
-  const r = await ask(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Hive-Dash": "1" }, body: JSON.stringify(body) });
+  const r = await ask(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Hive-Dash": "1" }, body: JSON.stringify(body), signal: (o && o.signal) || undefined });
   if (r.redirected) throw Error("sign in again and reload the page");
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
