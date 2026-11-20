@@ -564,7 +564,9 @@ def analyze_pages(pages, today=None):
 def analyze_csv(path):
     """A column-by-column profile: what's missing, what repeats, what's numeric."""
     with open(path, newline="", encoding="utf-8-sig") as f:
-        rows = list(csv.DictReader(f, restkey="_extra_cells"))
+        rd = csv.DictReader(f, restkey="_extra_cells")
+        rows = list(rd)
+        names = rd.fieldnames or []
     if not rows: return {"rows": 0}
     prof = {}
     for c in rows[0]:
@@ -582,4 +584,7 @@ def analyze_csv(path):
             e["top"] = collections.Counter(filled).most_common(3)
         prof[c] = e
     dup = len(rows) - len({json.dumps(r, sort_keys=True) for r in rows})
-    return {"rows": len(rows), "duplicate_rows": dup, "columns": prof}
+    out = {"rows": len(rows), "duplicate_rows": dup, "columns": prof}
+    dh = sorted({n for n in names if names.count(n) > 1})
+    if dh: out["duplicate_headers"] = dh  # only the last column of each name is profiled
+    return out
