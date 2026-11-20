@@ -2022,11 +2022,14 @@ class Subagents:
         try:
             if self.mod is None:
                 spec = importlib.util.spec_from_file_location("h2_subagents", self.TOOL); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); self.mod = m
-            keep = {"harness", "id", "parent", "type", "desc", "model", "mode", "depth", "start", "end", "state", "calls", "tools", "out_tokens", "usd", "file", "agent", "agent_thread"}
-            rows = [{k: v for k, v in r.items() if k in keep} for r in self.mod.collect(time.time() - self.days * 86400, self.memo) if r.get("agent")]
+            keep = {"harness", "id", "parent", "type", "desc", "model", "mode", "depth", "start", "end", "state", "calls", "tools", "out_tokens", "usd", "file", "agent", "agent_thread", "moved"}
+            got = self.mod.collect(time.time() - self.days * 86400, self.memo)
+            seen = {r.get("file") for r in got}
+            for f in [f for f in self.memo if f not in seen]: del self.memo[f]   # a helper file gone or out of the window
+            rows = [{k: v for k, v in r.items() if k in keep} for r in got if r.get("agent")]
             for r in rows:
                 if r.get("file"): r["file"] = redact(r["file"].replace(str(HOME) + "/", "", 1))
-                r["desc"] = redact(str(r.get("desc") or "")[:200])
+                r["desc"] = redact(str(r.get("desc") or ""))[:200]   # redact first: a cut can leave half a secret the patterns no longer match
         except Exception as e:
             print(f"subagents: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         with self.lock:
@@ -2038,7 +2041,12 @@ class Subagents:
             if not self.busy and time.time() - (self.at or 0) > self.every and self.TOOL.exists():
                 self.busy = True
                 threading.Thread(target=self.refresh, daemon=True).start()
-            return {"at": self.at, "refreshing": self.busy, "days": self.days, "rows": self.rows}
+            rows, now = self.rows, time.time()
+            if self.at and now - self.at > self.every and any(r.get("state") == "running" for r in rows):
+                # an old read while the fresh one runs (after an idle spell): a helper quiet longer than any running one can be is not running
+                most = getattr(self.mod, "LIVE_OWNED", 900)
+                rows = [{**r, "state": "stopped"} if r.get("state") == "running" and now - (r.get("moved") or 0) > most else r for r in rows]
+            return {"at": self.at, "refreshing": self.busy, "days": self.days, "rows": rows}
 
 
 def subagents_day(rows, now=None):
@@ -2412,8 +2420,19 @@ class Steps:
             try:
                 with open(q, "rb") as fh:
                     fh.seek(off)
-                    for ln in fh:
-                        if not ln.endswith(b"\n"): break
+                    while True:
+                        ln = fh.readline(1 << 20)   # capped read: a user line with a pasted image runs to hundreds of MB, and the old whole-line read spiked the service past its 2G cap (OOM flapping 2026-11-19)
+                        if not ln: break
+                        if not ln.endswith(b"\n"):
+                            if len(ln) < (1 << 20): break   # a line still being written
+                            skip = 0
+                            while True:   # an over-long line: skip the rest of it in chunks, keep none
+                                part = fh.readline(1 << 20)
+                                skip += len(part)
+                                if not part or part.endswith(b"\n"): break
+                            if not part.endswith(b"\n"): break
+                            off += len(ln) + skip
+                            continue
                         off += len(ln)
                         if not ln.startswith(b'{"type":"assistant"'): continue
                         try: e = json.loads(ln)

@@ -408,6 +408,7 @@ def cmd_grade(a):
             for g in parse_grades(out):
                 r, post, mine = byk.get(g.get("run"), (None, None, None))
                 if not r or g.get("grade") not in ("delivered", "partial", "nothing", "not_asked"): continue
+                del byk[r["key"]]   # a reply that grades a run twice (seen 2026-11-11..19, 12 rows) writes it once: the first grade stands
                 append(LEDGER, {**r, **tag, "at": iso(), "grade": g["grade"], "why": clip(g.get("why"), 200), "posts": len(mine), "by": a.model, "cost": round(cost / len(batch), 4)}); graded += 1
                 try: drafts += bool(write_draft(g, r, mine))
                 except OSError as e: print(f"outcomes: draft not written: {e}", file=sys.stderr)
@@ -457,8 +458,9 @@ def parse_grades(out):
         return [{"run": r, "grade": g, "why": w} for r, g, w in GRADE_RE.findall(out or "")]
 
 def recent(since):
-    t0 = iso(now() - span(since))
-    return [r for r in jsonl(LEDGER) if r.get("at", "") >= t0]
+    t0 = iso(now() - span(since)); seen = set()
+    # one row per run key, the first: the ledger holds 12 doubled rows from before grade() wrote each key once (R52, 2026-11-19)
+    return [r for r in jsonl(LEDGER) if r.get("at", "") >= t0 and not (r.get("key") and (r.get("key") in seen or seen.add(r.get("key"))))]
 
 INTENT = re.compile(r"intent[- ]only|only an intent|intent to|only (posted|said|says|stated|announced|promised)\b.*\b(taking|will|would|intent|plan|start)", re.I)
 
@@ -483,6 +485,7 @@ MISS_CAUSES = [
     ("rung-not-passed", r"not ticked|stays blocked|not passable|not passed|not yet reached|blocked on|check (still )?(red|failed)|split off|couldn't finish"),
     # R40e: pending / in progress / not finished / queued count only beside a job word ("session 2 still pending" is leftover work, not a job)
     ("long-job", r"render|build (unfinished|not finished|configured)|still running|rerun|in local bar|not merged|nothing merged"
+                 r"|free boards?|waiting on leases|\bABBA\b|exit -9|\bprinting\b|replication .{0,10}running|result (due|pending)"   # R54: a board or printer job; 5 of 7 closed within 6 h
                  r"|^(?=.*\b(jobs?|(?<!this )(?<!of )(?<!the )runs?|CI|builds?|harden|\w*sims?|bars?|bench|film|requeued)\b).*\b(pending|in progress|not (yet )?finished|queued)\b"),
 ]
 FOLLOW = ("handed-on", "promised", "long-job")

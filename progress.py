@@ -651,17 +651,31 @@ def _cost_file(cm, f, ent):
     if not ent or ent.get("ino") != st.st_ino or st.st_size < ent.get("off", 0):
         ent = {"ino": st.st_ino, "off": 0, "msgs": {}}
     if st.st_size == ent["off"]: return ent
+    # Stream it: a cold read of one 400 MB transcript as one string needed ~2.5 GB and OOM-killed the dash (2026-11-19).
+    # Lines over 1 MB (pasted images) cannot be an assistant usage line worth parsing: skip them without keeping them.
+    end = 0
     with open(f, "rb") as fh:
-        fh.seek(ent["off"]); data = fh.read()
-    end = data.rfind(b"\n") + 1  # a half-written last line waits for the next run
-    for line in data[:end].decode("utf-8", "replace").splitlines():
-        if '"assistant"' not in line or '"usage"' not in line: continue
-        try: d = json.loads(line)
-        except ValueError: continue
-        if d.get("type") != "assistant": continue
-        m = d.get("message") or {}
-        if not m.get("usage"): continue
-        ent["msgs"][m.get("id") or d.get("uuid")] = [d.get("timestamp") or "", round(cm.price(m.get("model"), m["usage"]), 6)]
+        fh.seek(ent["off"])
+        while True:
+            raw = fh.readline(1 << 20)
+            if not raw: break
+            if not raw.endswith(b"\n"):
+                if len(raw) < (1 << 20): break  # a half-written last line waits for the next run
+                n = len(raw); more = b""
+                while True:
+                    more = fh.readline(1 << 20); n += len(more)
+                    if not more or more.endswith(b"\n"): break
+                if not more.endswith(b"\n"): break
+                end += n; continue
+            end += len(raw)
+            if b'"assistant"' not in raw or b'"usage"' not in raw: continue
+            line = raw.decode("utf-8", "replace")
+            try: d = json.loads(line)
+            except ValueError: continue
+            if d.get("type") != "assistant": continue
+            m = d.get("message") or {}
+            if not m.get("usage"): continue
+            ent["msgs"][m.get("id") or d.get("uuid")] = [d.get("timestamp") or "", round(cm.price(m.get("model"), m["usage"]), 6)]
     ent["off"] += end
     return ent
 

@@ -153,6 +153,8 @@ The Agents tab opens on **Now**: who is working, what they were asked and what t
 
 Conversations that have gone quiet are a hint, not a verdict: many of them are just finished.
 
+**Helpers.** An agent can start helpers inside its own run to search, read or check things in parallel. They aren't agents of the Hive: they have no conversation and you can't message one. Wherever both are counted, agents come first and helpers follow after a dot, as in *26 agents working · 10 helpers* on the bar; a count of agents never has helpers in it. On **Now** each agent's helpers sit under it (turn them off with **Show helpers**). On **All agents**, **Show** picks **Agents**, **Helpers** (the last 7 days, each with the agent it worked for) or **Both** (each agent with its helpers under it); on a phone, **Show** is in **Filters**. An agent's own page lists its helpers too. A helper's cost is already part of its agent's cost, so the **Total cost** stays the same whatever you show.
+
 The **On** column, and the first line of an agent's own page, is what the agent itself says it is broadly on now (it sets it with `hive me "..."` when its focus shifts; the line is dated). Use it to find the agent already on the thing you want, and write to it with **DM** instead of starting a new one, or to notice when an agent has drifted from what you asked.
 
 Click an agent's name to open its page. **What it changed** lists the files it edited, newest first (found from its tool calls, so edits made from the shell show only where they can be found). Click a file to see what changed since the last commit, line by line; click it again to close it. Keys and passwords in a diff are hidden, and a file the agent never touched can't be opened this way.

@@ -28,10 +28,10 @@ export const helperTag = r => h("span", { class: "sa-tag" }, (r.depth || 1) > 1 
 export const helperState = r => h("span", { class: "sa-st", "data-s": STATE[r.state] || "done", title: r.state === "stopped" ? "Its owner's session ended before it reported" : null }, STATE[r.state] || r.state || "–");
 
 /** "· 14 helpers", to ride after an agent count. onClick makes the figure a button. Null at 0, so nothing changes when no helper runs. */
-export function helperCount(n, { onClick, after } = {}) {
+export function helperCount(n, { onClick, after, title } = {}) {
   if (!n) return null;
   const fig = [h("b", null, int(n)), n === 1 ? " helper" : " helpers"];
-  return h("span", { class: "sa-count" }, onClick ? h("button", { type: "button", onclick: onClick }, fig) : fig, after || null);
+  return h("span", { class: "sa-count" }, onClick ? h("button", { type: "button", onclick: onClick, title: title || null }, fig) : fig, after || null);
 }
 
 // ---- Now: helper rows under the agent that owns them (or under "Still finishing for an agent that has ended") ----

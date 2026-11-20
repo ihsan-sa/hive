@@ -9,6 +9,7 @@
 /* ---------- 1. Counts: the helper figure that rides after an agent figure ---------- */
 /* <b>5</b> agents working<span class="sa-count"><b>14</b> helpers</span> */
 .sa-count{color:var(--ink-3);font-weight:400;white-space:nowrap}
+.ag-cnt>.sa-count{font-size:var(--fs-meta);margin-left:-8px}   /* beside the agent count, which the toolbar gap would push away from it */
 .sa-count::before{content:"\00b7";margin:0 6px 0 4px;color:var(--ink-3)}
 .sa-count b{font-weight:var(--w-med);color:var(--ink-2);font-variant-numeric:tabular-nums}
 .sa-count a,.sa-count button{color:inherit;font:inherit;background:none;border:0;padding:0;text-decoration:underline;text-decoration-color:var(--line-2);text-underline-offset:3px;cursor:pointer}
