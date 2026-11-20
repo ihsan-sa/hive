@@ -221,9 +221,11 @@ const shownOf = p => { if (C.q.trim() || !L.th || showAll(L.th)) return null; co
 function lineRow(p, sh, ctx) {
   // "14:10 ac5f5: ac5f5 taking round 17" read the agent's name twice once codes became names (design round 1111b): drop the author's own code when the post starts with it
   const line = labelCodes(String(sh.line || "").replace(/^(\d\d:\d\d (@?[\w-]+): )@?\2\b[:,]?\s*/, "$1"));
+  // The server writes the line's time from the board's UTC stamp; show it in the viewer's own clock, as every other time here is (the person, 112012278aed).
+  const t = p.t || Date.parse(p.at), lt = t ? line.replace(/^\d\d:\d\d /, clock(t) + " ") : line;
   const open = () => { OPENED.add(p.id); L.rebuild = true; L.keep = true; L.ctx && L.ctx.update(); };
   return h("div", { class: "cm-oneline", "data-key": p.id, "data-show": KIND_NAME[postKind(p)] || "" },
-    h("button", { type: "button", class: "cm-one-b", "aria-label": tr("Open the whole message") + ": " + tr(line), title: "Open the whole message", onclick: open }, h("span", { class: "cm-one-t" }, line)),
+    h("button", { type: "button", class: "cm-one-b", "aria-label": tr("Open the whole message") + ": " + tr(lt), title: "Open the whole message", onclick: open }, h("span", { class: "cm-one-t" }, lt)),
     (sh.also || []).map(a => h("p", { class: "cm-one-also meta" }, labelCodes(a))));
 }
 function evRow(e) {
