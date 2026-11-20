@@ -180,6 +180,13 @@ html:has(.map:not([data-tile]) .map-rp){scroll-padding-bottom:calc(var(--nav-h,0
 
 /* the glyph: shape and colour from the status (status.js) */
 .map-g{--r:6px;display:inline-block;flex:none;width:calc(var(--r)*2);height:calc(var(--r)*2);margin:calc(var(--r)*-1) 0 0 calc(var(--r)*-1);border-radius:50%;background:var(--good);box-sizing:border-box;vertical-align:middle}
+/* helpers (subagents) an agent started: small neutral dots under its mark, filled while running (designs/subagents-ui/NOTES.md: neutral, never amber) */
+.map-hp{position:absolute;left:10px;top:20px;transform:translateX(-50%);display:flex;align-items:center;gap:2px;pointer-events:none;line-height:0}
+.map-hp>i{width:5px;height:5px;border-radius:50%;box-sizing:border-box;border:1px solid var(--ink-2);background:var(--surface)}
+.map-hp>i[data-run]{background:var(--ink-2)}
+.map-hp>b{font-size:10px;line-height:5px;font-weight:var(--w-med);color:var(--ink-2)}
+.map-legend .map-hp{position:relative;left:0;top:0;transform:none;display:inline-flex}
+.map-cv[data-lod=min] .map-hp{display:none}
 .map-legend .map-g,.map-hc .map-g,.map-legend .map-g[data-st],.map-hc .map-g[data-st]{position:relative;margin:0}   /* [data-st] beats the stuck/failed/ended offsets, which sit those shapes 4px high here */
 .map-g[data-st=queue]{border-radius:50%;border:2px solid var(--warn);background:linear-gradient(90deg,var(--warn) 50%,var(--surface) 50%)}
 .map-g:is([data-st=quiet],[data-st=limited],[data-st=queued],[data-st=ghost],[data-st=more]){background:var(--surface);border:2px solid var(--quiet)}

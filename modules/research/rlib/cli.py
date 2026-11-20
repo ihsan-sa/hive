@@ -1,4 +1,4 @@
-import argparse, difflib, csv, http.client, json, os, re, sys, types
+import sqlite3, argparse, difflib, csv, http.client, json, os, re, sys, types
 from pathlib import Path
 from . import engines, fetcher, net, people, predict, store, work
 from .extract import parse_date, domain_of, registrable
@@ -277,5 +277,7 @@ def main(argv=None):
         _err(str(e))
     except (OSError, http.client.HTTPException, re.error) as e:
         _err(f"{type(e).__name__}: {e}")
+    except sqlite3.DatabaseError as e:
+        _err(f"the case database is damaged or not a database ({e}); use another --case, or move its case.db aside")
     except KeyError as e:
         _err(f"missing key {e} in the spec or file")

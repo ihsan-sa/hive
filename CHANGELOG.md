@@ -4,6 +4,10 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Every running Claude and Codex process shows, with who started it
+
+The helper lists now also show the Claude and Codex processes running outside an agent's own run. That covers a one-off `claude -p` or `codex exec` from an agent's shell, a script's model call, a session open in a terminal, and the copy kept warm for the next new agent. One that an agent started sits under that agent with its helpers. One that no agent started is listed on **Now** under **Also running, not started by an agent**, and in **All agents**, with what started it in place of an owner agent. Its drawer gives its folder and process number. None of them count as agents. `python3 ~/core/subagents.py --running` lists the same in a terminal.
+
 ## Helpers name their owner agent and show on the Map
 
 In **All agents**, when **Show** is **Helpers** or **Both**, each helper row has an **Owner agent** column that names the agent that started it. The helper drawer has the same field. On the **Map**, an agent with helpers running has small grey dots on its card, one for each helper, and its side pane lists them under **Helpers**. The dots don't show when the Map is zoomed out to tiles. Helpers are still never counted as agents.

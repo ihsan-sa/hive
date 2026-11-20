@@ -286,8 +286,15 @@ export function helpersOf(n) {
 /** Running helpers grouped by owner: Map name -> rows, oldest first (the order they started in). */
 export function liveHelpersBy() {
   const m = new Map();
-  for (const r of liveHelpers().sort((a, b) => (a.start || "").localeCompare(b.start || ""))) { if (!m.has(r.agent)) m.set(r.agent, []); m.get(r.agent).push(r); }
+  for (const r of liveHelpers().sort((a, b) => (a.start || "").localeCompare(b.start || ""))) { if (!r.agent) continue; if (!m.has(r.agent)) m.set(r.agent, []); m.get(r.agent).push(r); }
   return m;
+}
+/** Running agentic processes no board agent owns (a tmux session, the starter's warm agent, a script under a service): grouped by
+ *  what started them (r.by), oldest first. The person asked to see every live agentic process (thread 111919537629). */
+export function liveLoose() {
+  const m = new Map();
+  for (const r of liveHelpers().filter(r => !r.agent).sort((a, b) => (a.start || "").localeCompare(b.start || ""))) { const k = r.by || "unknown"; if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
+  return [...m].map(([by, rows]) => ({ by, rows }));
 }
 
 /** "Sonnet 5.5 · $1.91": an agent's model and cost so far in one short line, for lists of many agents. Cached until the sessions or usage change. */

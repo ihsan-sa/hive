@@ -8,7 +8,7 @@ import { metrics } from "../templates.js";
 import { button, empty, waiting, input, pageHeader, seg, stats, toolbar, pageNav, infoButton, figPending } from "../ui/kit.js";
 import { heldRoom } from "../core/room.js";
 import { agentAvatar, agentRef, threadRef } from "../ui/refs.js";
-import { costText, helperCount, helperKey, helperState, helperTag, hModel, hx, openHelper, took, tookText } from "../ui/helpers.js";
+import { costText, helperCount, helperKey, helperState, helperTag, hModel, hx, openHelper, ownerOf, took, tookText } from "../ui/helpers.js";
 
 const STATUS = [["all", "Any status"], ["running", "Running"], ["queued", "Waiting to start"], ["ended", "Ended"], ["killed", "Killed"], ["limited", "Stopped at a limit"], ["failed", "Failed"]];
 const BY = [["all", "Started by anyone"], ["person", "Started by a person"], ["agent", "Started by an agent"], ["system", "Started by the Hive"]];
@@ -97,8 +97,8 @@ const hEnded = r => r.state !== "running";
 /** The helpers the page's search, status and time filters keep (the last 7 days is all the server reads). Search also matches the helper's type and task. */
 function helperRows(search = true) {
   const rows = (S.helpers && S.helpers.rows) || [], words = !search ? [] : L.q.toLowerCase().split(/\s+/).filter(Boolean), from = L.since === "all" ? 0 : Date.now() - +L.since * DAY;
-  return rows.filter(r => (L.status === "all" || (L.status === "running" ? r.state === "running" : L.status === "ended" ? hEnded(r) : false)) && hT(r.start) >= from
-    && (!words.length || (x => words.every(w => x.includes(w)))([r.agent, r.type, r.desc, hModel(r), r.harness, r.state, r.agent_thread ? threadTitle(r.agent_thread) : ""].join(" ").toLowerCase())));
+  return rows.filter(r => (L.status === "all" || (L.status === "running" ? r.state === "running" : L.status === "ended" ? hEnded(r) : false)) && (r.state === "running" || hT(r.start) >= from)
+    && (!words.length || (x => words.every(w => x.includes(w)))([r.agent, r.by, r.type, r.desc, hModel(r), r.harness, r.state, r.agent_thread ? threadTitle(r.agent_thread) : ""].join(" ").toLowerCase())));
 }
 const hWho = r => h("span", { class: "sa-who", title: r.type || null }, hx(r), helperTag(r), h("span", { class: "sa-type" }, r.type || "helper"));   // the word "helper" before the type: a narrow column cuts the type, never the mark
 const hTask = r => h("a", { href: "#", class: "sa-desc", title: r.desc || null, onclick: e => { e.preventDefault(); openHelper(r); } }, r.desc || "(no task given)");
@@ -109,7 +109,7 @@ const HCOLS = [
   { k: "who", label: "Helper", cls: "ag-n", get: r => r.type || "", render: hWho },
   { k: "state", label: "Status", cls: "ag-st", get: r => r.state || "", render: helperState },
   { k: "start", label: "Started", get: r => hT(r.start), render: hStart },
-  { k: "agent", label: "For", get: r => r.agent || "", render: r => h("span", { class: "sa-of" }, agentRef(r.agent, { dot: false })) },   // the header says "For"
+  { k: "agent", label: "Owner agent", get: r => r.agent || r.by || "", render: r => h("span", { class: "sa-of" }, ownerOf(r)) },   // a process no agent started shows what did ("tmux session h2build")   // the agent that started it (the person asked for "owner agent" by name)
   { k: "desc", label: "Task", cls: "clip ag-on", get: r => r.desc || "", render: hTask },
   { k: "model", label: "Model", cls: "ag-m", get: r => hModel(r), render: r => hModel(r) },
   { k: "took", label: "Took", num: 1, get: r => took(r) || 0, render: tookText },
@@ -118,7 +118,7 @@ const HCOLS = [
 const HW = { who: "minmax(210px,1.2fr)", state: "80px", start: "130px", agent: "140px", desc: "minmax(180px,2fr)", model: "100px" };
 const hsort = () => getPref("agents.hsort", { k: "start", d: -1 });
 /** A helper as a row of the agents' own columns (Show: Both), under its owner: the cells that mean something for a helper, the rest blank. */
-const H_IN = { name: hWho, status: helperState, spawned: hStart, thread: r => h("span", { class: "sa-of" }, "for ", agentRef(r.agent, { dot: false })), on: hTask, model: r => hModel(r),
+const H_IN = { name: hWho, status: helperState, spawned: hStart, thread: (r, stack) => h("span", { class: "sa-of" }, stack ? null : r.agent ? "owner " : "by ", ownerOf(r)),   // a phone row labels the cell "Owner agent" itself on: hTask, model: r => hModel(r),
   ran: tookText, lastSeen: r => (r.state === "running" ? "now" : r.end ? ago(hT(r.end)) : "–"), usd: hCost, calls: r => (r.calls != null ? int(r.calls) : "–"), tools: r => (r.tools != null ? int(r.tools) : "–") };
 
 // A column's track in the grid rows' --cols: the words get the spare room, the rest their usual width
@@ -151,7 +151,7 @@ function kidRows(owner, cols, stack, ctx) {
   const rs = L.hby.get(owner); if (!rs) return [];
   const open = L.hOpen.has(owner) || rs.length <= 6, shown = open ? rs : rs.slice(0, 5), rest = rs.slice(5), usd = rest.reduce((a, r) => a + (r.usd || 0), 0);
   return [...shown.map(r => h("div", { class: "tr sa-tr", role: "row", "data-key": "h:" + helperKey(r), "data-depth": (r.depth || 1) > 1 ? "2" : null },
-      cols.map(c => h("span", { role: "cell", class: [c.num ? "r num" : null, c.cls || null].filter(Boolean).join(" ") || null, "data-label": stack && !PHONE_BARE.has(c.k) && H_IN[c.k] ? c.label : null }, H_IN[c.k] ? H_IN[c.k](r) : null)))),
+      cols.map(c => h("span", { role: "cell", class: [c.num ? "r num" : null, c.cls || null].filter(Boolean).join(" ") || null, "data-label": stack && !PHONE_BARE.has(c.k) && H_IN[c.k] ? (c.k === "thread" ? "Owner agent" : c.label) : null }, H_IN[c.k] ? H_IN[c.k](r, stack) : null)))),
     rs.length > 6 ? h("div", { class: "tr sa-tr sa-tr-more", role: "row", "data-key": "hm:" + owner }, h("span", { role: "cell" },
       button(open ? "Show fewer helpers" : `Show ${rest.length} more helpers` + (usd ? ` · ${money(usd)}` : ""), () => { open ? L.hOpen.delete(owner) : L.hOpen.add(owner); ctx.update(); }, { kind: "quiet", size: "s" }))) : null].filter(Boolean);
 }
@@ -192,7 +192,7 @@ export default {
       L.hl.sort((a, b) => { const x = hg(a), y = hg(b); return (typeof x === "string" ? x.localeCompare(y) : x - y) * hs.d || hT(b.start) - hT(a.start); });
       L.hby = new Map(); for (const r of [...L.hb].sort((a, b) => hT(b.start) - hT(a.start))) { if (!L.hby.has(r.agent)) L.hby.set(r.agent, []); L.hby.get(r.agent).push(r); }
     }
-    const HB = L.hb, HL = L.hl, hRun = rs => rs.filter(r => r.state === "running").length, hUsd = rs => rs.reduce((a, r) => a + (r.usd || 0), 0), owners = rs => new Set(rs.map(r => r.agent)).size;
+    const HB = L.hb, HL = L.hl, hRun = rs => rs.filter(r => r.state === "running").length, hUsd = rs => rs.reduce((a, r) => a + (r.usd || 0), 0), owners = rs => new Set(rs.map(r => r.agent).filter(Boolean)).size;
     const split = x => h("span", { class: "sa-split" }, x), b = x => h("b", null, x), hMs = HB.reduce((a, r) => a + (took(r) || 0), 0);
     const held = { settled: !!S.history, usual: !L.q && L.limit === PAGE && !L.house }, room = heldRoom("agents", ".ag-w", held), moreR = heldRoom("agents-more", moreRoom, held);   // the list grows as the older log arrives
     const found = L.found, narrowed = found.length < all.length, sum = f => found.reduce((a, x) => a + f(x), 0);
@@ -201,7 +201,7 @@ export default {
     const costs = S.agentCosts; COST_DATA = all.some(a => a.usd > 0 || a.tok > 0);   // no cost data is "–", not a real zero (handoff 33)
     const costNote = costs && costs.at ? `Cost and tokens from the transcripts, read ${ago(costs.at * 1e3)}${costs.refreshing ? ", reading again" : ""}. API list prices; nobody is billed this. Tokens add up every model call's input, output and cache, so context read again on each call counts each time.` : costsPending() ? "Reading the transcripts for cost and tokens." : costs && costs.refreshing ? "Reading the transcripts for exact costs; until then these come from the session logs." : "Cost and tokens from the session logs.";
     const totals = stats([
-        mode === "helpers" ? { label: "Helpers shown", value: int(HL.length), note: `${hRun(HL)} running, started by ${plural(owners(HL), "agent")} in the last 7 days` }
+        mode === "helpers" ? { label: "Helpers shown", value: int(HL.length), note: `${hRun(HL)} running, started by ${plural(owners(HL), "agent")} in the last 7 days${(x => (x ? `; ${x} of them by something outside the board` : ""))(HL.filter(r => !r.agent).length)}` }
         : mode === "both" && HB.length ? { label: "Shown", value: int(found.length + HB.length), note: [plural(found.length, "agent"), " ", split(["and ", b(int(HB.length)), HB.length === 1 ? " helper" : " helpers"]), h("br"),
             `${found.filter(a => a.status === "running").length} running `, split(["and ", b(String(hRun(HB))), hRun(HB) === 1 ? " helper" : " helpers"])] }
         : { label: narrowed ? "Agents shown" : "Agents", value: int(found.length), note: [`${found.filter(a => a.status === "running").length} running`, HB.length ? [h("br"), split(["not counting ", b(int(HB.length)), HB.length === 1 ? " helper" : " helpers"])] : null] },
