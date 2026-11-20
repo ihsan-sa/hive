@@ -57,6 +57,7 @@
 .sa-kid[data-depth="2"]>.sa-what{padding-left:42px}
 .sa-type{flex:none;color:var(--ink-3);font-weight:var(--w-med)}
 .sa-desc{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2);line-height:24px}   /* a link: 24 px tall to tap (WCAG 2.5.8, drive_app_a11y_pages at 390) */
+.clip>a.sa-desc{display:block}   /* in a list cell the link is inline, so its box is the 15 px font, not the line: a block is the line's 24 px and keeps its own ellipsis */
 .sa-meta{color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sa-time{color:var(--ink-3);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .sa-kid .sa-dot{display:none}
