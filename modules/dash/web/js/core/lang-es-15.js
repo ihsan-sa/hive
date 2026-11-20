@@ -80,7 +80,11 @@ export default {
   "the board refused its remote line": "la placa rechazó su línea remota",
   "the board's answer to its remote line": "la respuesta de la placa a su línea remota",
   "the Hive gave no answer in": "el Hive no respondió en",
+  "a signed-in tab": "una pestaña con sesión iniciada",
   __patterns: [
+    // the board's bridge held by a page that went quiet (views/board.js, 2026-11-20)
+    [/^A page \((.+)\) that hasn't been heard from for (\d+) s still holds the bridge, most likely one that closed\. The run starts once that hold lapses, within (\d+) s\.$/, (_, w, q, l) => `Una página (${w === "a signed-in tab" ? "una pestaña con sesión iniciada" : w}) de la que no se sabe nada desde hace ${q} s aún tiene el puente; lo más probable es que se cerrara. La ejecución empieza cuando esa reserva caduque, en ${l} s como mucho.`],
+    [/^--- the bridge is held by a page \((.+)\) that hasn't been heard from for (\d+) s, most likely one that closed: the run starts once that hold lapses, within (\d+) s$/, (_, w, q, l) => `--- el puente lo tiene una página (${w === "a signed-in tab" ? "una pestaña con sesión iniciada" : w}) de la que no se sabe nada desde hace ${q} s, lo más probable es que se cerrara: la ejecución empieza cuando esa reserva caduque, en ${l} s como mucho`],
     [/^(\d+) helpers?$/, (_, n) => help(n)],
     [/^(\d+) helpers? working for it$/, (_, n) => `${help(n)} trabajando para él`],
     [/^(\d+) more helpers?( · .+)?$/, (_, n, rest) => `${n} ${pl(n, "ayudante más", "ayudantes más")}${rest || ""}`],

@@ -1609,7 +1609,9 @@ def recall_note(name, posts):
     return "\n\n" + r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else ""
 
 def thread_alone(tid, tail=262144, most=4000):
-    """The text of post tid if it is still the only post in its thread (read from the board's tail), else None."""
+    """The text of post tid if it is still the only post in its thread (read from the board's tail), else None.
+    Its attachments follow as `file:` lines, as `hive read` shows them: a person's "Meeting with her in 2 minutes" came with her
+    profile PDF, the prompt dropped it, and the run asked who she was (a12a5, 2026-11-20)."""
     try:
         with open(BOARD, "rb") as f:
             f.seek(max(0, f.seek(0, 2) - tail)); lines = f.read().decode("utf-8", "replace").splitlines()
@@ -1619,7 +1621,10 @@ def thread_alone(tid, tail=262144, most=4000):
         if tid not in l: continue
         try: p = json.loads(l)
         except ValueError: continue
-        if p.get("id") == tid: text = str(p.get("text", ""))
+        if p.get("id") == tid:
+            files = [f for f in p.get("files") or [] if isinstance(f, dict) and f.get("path")]
+            text = "\n".join([str(p.get("text", "")).rstrip()] + [f"file: {f['path']} ({f.get('size', 0)} bytes)" for f in files]).strip()
+            if files: text += "\n\n(The file lines are attachments sent with the post: open them before you answer, they are usually what it is about.)"
         elif p.get("thread") == tid: return None
     return text if text and len(text) < most else None
 
