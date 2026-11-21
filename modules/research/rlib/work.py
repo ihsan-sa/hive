@@ -342,7 +342,7 @@ class Hunt:
         if res.get("left"): return "the page says they left"
         if res["status"] == "secondary" and not self.allow_secondary: return "only on another site"
         if far and not self.allow_page_signal: return "the signal isn't near this person"
-        if self.function_words and not self.function_fit(row.get("title", ""), row.get("signal", "") + " " + (row.get("check_quote") or "")): return "no function word in the title or the person's own quote"
+        if self.function_words and not self.function_fit(row.get("title", ""), row.get("signal", "") + " " + (row.get("check_quote") or "") + (" " + urllib.parse.urlparse(row["source_url"]).path.replace("-", " ").replace("/", " ") if getattr(self, "dir_entry", False) else "")): return "no function word in the title or the person's own quote"
         at = people.employer_after(text, row["name"], org) or people.employer_before(text, row["name"], org) or people.employer_listed(text, row["name"], org)
         if at: return f"the page puts them at {at}"
         # A college's own summit page lists its guests too.
@@ -430,6 +430,7 @@ class Hunt:
             if not close and hit_terms and per.get("how") == "directory" and any(people.term_regex(t).search(fold(page.get("title") or "")) for t in hit_terms): close = True  # a contact block on a page titled for the signal: the listed head is the program's contact
             if hit_terms and not sig and not res["official"]: close = False  # only a menu says it, as on a namesake's site
             row = dict(name=per["name"], title=per["title"], organisation=org, official_site="yes" if res["official"] else "no", signal=sig, signal_near_person="yes" if close else "no", source_url=page.get("final_url") or page["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status=res["status"], check_quote=res["quote"], angle=angle, note=res["note"])
+            self.dir_entry = per.get("how") == "directory"
             why = self.held_back(res, row, org, bool(hit_terms and not close), text)
             if not why and (res["status"] == "secondary" or self.old_page(res["page_date"])): why = self.left_elsewhere(per["name"], org)
             if why or len(self.leads) >= self.target or self.org_count(org) >= self.per_org:
