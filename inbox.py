@@ -683,6 +683,22 @@ def nested(rec, payload):
     try: return f'"session_id":"{sid}"'.encode() not in Path(rec["out"]).read_bytes()
     except (OSError, KeyError, TypeError): return False
 
+def helper_hook(name, rec, payload, seen):
+    """A tool call of an Agent-tool helper inside the run (the payload carries agent_id) fires these hooks too. It must not take the
+    run's posts: they were marked handed over though the agent never saw them, and the helper can't answer (ae214, 2026-11-20: the
+    person's 20:19 post went to a foreground reviewer at 20:25; the reply came at 20:28, 8.5 min). The posts stay for the run's next
+    own tool call. When one is from the person, the helper is told once to hand back soon, so the run can answer."""
+    lines, _ = read_new(name, rec)  # no done(): the cursor stays where the run left it
+    ps = [p for p in new_posts(name, rec, seen, lines) if str(p.get("from", "")).lower() == "person"]
+    if not ps: return None
+    mark = STATE / "helper-told" / re.sub(r"[^\w-]", "", f"{name}-{payload.get('agent_id')}")
+    told = set(mark.read_text().split()) if mark.exists() else set()
+    if not (new := [p["id"] for p in ps if p["id"] not in told]): return None
+    try: mark.parent.mkdir(parents=True, exist_ok=True); mark.write_text("\n".join(sorted(told | set(new))) + "\n")
+    except OSError: pass
+    return ("The person has just posted to the agent that started you; it can't read it until you hand back. Finish the step you "
+            "are on and return what you have now, saying what is left, rather than finishing the whole job. Don't answer the post yourself.")
+
 def main():
     name = os.environ.get("HIVE_NAME", "").lower()
     if not name: return
@@ -702,6 +718,15 @@ def main():
     d = STATE / "delivered"; d.mkdir(parents=True, exist_ok=True)
     f = d / name
     seen = set(f.read_text().split()) if f.exists() else set()
+    if payload.get("agent_id") and not os.environ.get("HIVE_DOOR"):
+        note = helper_hook(name, rec, payload, seen)
+        if event == "PostToolUse":  # the helper may be the one editing a served dash file
+            try:
+                import livecheck
+                note = "\n\n".join(x for x in (livecheck.check(payload), note) if x)
+            except Exception: pass
+        if note: print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": note}}))
+        return
     lines, done = read_new(name, rec)
     ps = new_posts(name, rec, seen, lines)
     if ps:

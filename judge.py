@@ -172,10 +172,28 @@ def rung_lines(row, path_text=None):
         out.append((tag != "ready", f"- [{tag}] {trim(r['text'], 420)}"))
     return [l for _, l in sorted(out, key=lambda x: x[0])]
 
-def reminders(name, thread, t):
+def host_epoch(s):
+    """A reminder's due time (host time, "YYYY-MM-DDTHH:MM") as epoch seconds, or None."""
+    try: d = dt.datetime.fromisoformat(str(s))
+    except ValueError: return None
+    return (d if d.tzinfo else d.astimezone()).timestamp()
+
+def utc(ts): return dt.datetime.fromtimestamp(ts, dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+def pending_reminders(name, thread, t):
+    """[(due epoch, text)] of the reminders still to fire that wake this agent in this conversation."""
     try: rs = json.loads(REMIND.read_text())
     except (OSError, ValueError): return []
-    return [f"{r.get('due')} (host time): {trim(r.get('text'), 200)}" for r in rs if isinstance(r, dict) and r.get("to") == name and r.get("thread") == thread]
+    out = [(host_epoch(r.get("due")), r.get("text")) for r in rs if isinstance(r, dict) and r.get("to") == name and r.get("thread") == thread]
+    return sorted((d, x) for d, x in out if d and d > t)
+
+def reminders(name, thread, t):
+    # shown in UTC: on 11-20 a reminder for "09:00" host time was read as 80 min off when it was 15 h (ad15d meta-load)
+    return [f"{utc(d)}: {trim(x, 200)}" for d, x in pending_reminders(name, thread, t)]
+
+def host_now(ts):
+    d = dt.datetime.fromtimestamp(ts).astimezone(); off = d.strftime("%z")
+    return f"{d.strftime('%H:%M')} host time, UTC{off[:3]}:{off[3:]}"
 
 def open_asks(thread):
     try:
@@ -201,7 +219,7 @@ def build_case(r, rows, posts, statuses, unit=None, is_own=False, title=None, en
     bar = [s for s in statuses if s.get("thread") == thread and isinstance(s.get("at"), (int, float)) and s["at"] <= end][-1:]
     others = [p for p in posts if (C.epoch(p.get("at")) or 0) >= since and p not in own and p is not wake][-4:]
     title = title_of(thread, posts) if title is None else title
-    return {"now": dt.datetime.fromtimestamp(end, dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), "name": name, "thread": thread, "title": title, "unit": unit, "own": is_own,
+    return {"now": utc(end) + f" ({host_now(end)})", "name": name, "thread": thread, "title": title, "unit": unit, "own": is_own,
             "started": str(r.get("at", ""))[:16], "minutes": round((end - since) / 60), "model": r.get("model"), "goal": goal,
             "wake": {"from": wake.get("from"), "at": str(wake.get("at", ""))[:16], "text": trim(wake.get("text"), 2400)} if wake else {"from": r.get("from"), "text": ""},
             "own_posts": [{"id": p.get("id"), "at": str(p.get("at", ""))[:16], "text": trim(p.get("text"), 3200 if p is own[-1] else 900)} for p in own[-3:]], "n_own": len(own),
@@ -212,11 +230,11 @@ def build_case(r, rows, posts, statuses, unit=None, is_own=False, title=None, en
 RULES = """You are the stop judge of a hive of AI agents that work on long-running goals. An agent's run has just ended: the agent chose to stop. Decide, from the evidence below, whether the work it was on is finished. The agent does not get the last word on its own stop, so treat its closing line ("Done:", "Waiting:") as a claim to check, not as the answer.
 
 Answer with one JSON object and nothing else:
-{"verdict": "done" | "blocked" | "wait" | "continue", "minutes": <whole minutes, only for wait>, "step": "<only for continue and wait>", "why": "<one or two sentences naming the evidence you used>"}
+{"verdict": "done" | "blocked" | "wait" | "continue", "until": "<only for wait: YYYY-MM-DD HH:MM UTC of what is awaited>", "minutes": <whole minutes, only for wait>, "step": "<only for continue and wait>", "why": "<one or two sentences naming the evidence you used>"}
 
 - done: what the run was woken for is delivered, and there is no further step this agent should take now in this conversation.
 - blocked: work is left, but every part of it needs something no agent can supply: the person's decision, sign-in, payment or hands, or a hold someone placed.
-- wait: work is left for this agent that depends on something that arrives by itself (a job that is running, a board or a lease that frees at a stated time, a reading on a date), nothing else can be done meanwhile, and nothing shown will wake this agent when it arrives. "step" names what is awaited and what the agent does then. "minutes" runs from "Time now" to the time the evidence names for it, plus ten; with no time named, 60. It is 360 at most: if what is awaited is further off than that, answer done.
+- wait: work is left for this agent that depends on something that arrives by itself (a job that is running, a board or a lease that frees at a stated time, a reading on a date), nothing else can be done meanwhile, and nothing shown will wake this agent when it arrives. "step" names what is awaited and what the agent does then. "until" is the time the evidence names for it, in UTC (a time a post gives in host time, or a date alone such as "not before 2026-11-21", which means 00:00 UTC that day, is converted); "minutes" runs from "Time now" to it, plus ten; with no time named, leave "until" out and give 60. Waits are short: if what is awaited is more than 6 hours off, answer done (a date gate further off than that is the keeper's, not a wake to hold for).
 - continue: work is left that this agent can do now with nobody's help. "step" is that one step, concrete enough to act on, in the words of the rung or of the run's own post.
 
 Rules, in order of weight:
@@ -257,9 +275,13 @@ def parse(text):
     step, why = " ".join(str(d.get("step") or "").split()), " ".join(str(d.get("why") or "").split())[:400]
     try: minutes = int(d.get("minutes") or 0)
     except (TypeError, ValueError): minutes = 0
+    until = None
+    if v == "wait" and d.get("until"):
+        try: until = dt.datetime.fromisoformat(re.sub(r"\s*(UTC|Z)$", "", str(d["until"]).strip(), flags=re.I).replace(" ", "T")).replace(tzinfo=dt.timezone.utc).timestamp()
+        except ValueError: until = None
     if v in ("wait", "continue") and len(step) < 12: return None
     if v == "wait" and minutes <= 0: return None
-    return {"verdict": v, "minutes": minutes if v == "wait" else 0, "step": step[:600] if v in ("wait", "continue") else "", "why": why}
+    return {"verdict": v, "minutes": minutes if v == "wait" else 0, **({"until": until} if until else {}), "step": step[:600] if v in ("wait", "continue") else "", "why": why}
 
 def ask(case, model, timeout=240):
     t0 = time.time()
@@ -312,7 +334,11 @@ def run(snap, model=None, asker=ask):
     except Exception as e: return skip("error", why=f"{type(e).__name__}: {e}"[:300], model=m)
     if not v: return skip("unparsed", model=m, text=str(text)[-300:])
     e = {**base, **v, "model": m, "cost": cost, "secs": secs, "acted": False}
+    if v["verdict"] == "wait" and v.get("until"):   # the minutes come from the named time, not the model's sums (11-20: a gate 16 h off and a reminder 15 h off were both woken in under 2 h)
+        e["model_minutes"] = v["minutes"]; v["minutes"] = e["minutes"] = max(10, round((v["until"] - t) / 60) + 10); e["until"] = utc(v["until"])
+    wake_at = t + v["minutes"] * 60
     if v["verdict"] == "wait" and v["minutes"] > MAX_WAIT_MIN: e["long_wait"] = True
+    elif v["verdict"] == "wait" and any(d <= wake_at for d, _ in pending_reminders(name, thread, t)): e["reminder_set"] = True   # rule 5: a reminder wakes it first
     elif v["verdict"] in ("wait", "continue") and a == "judge" and not shadow:
         write_intent(r, case, v, t); e["acted"] = True
     log(**e)

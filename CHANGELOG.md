@@ -6,6 +6,7 @@ A release can ship several times a day. A Hive installs each one as soon as it's
 
 ## Smaller fixes, 2026-11-21
 
+- A message sent to an agent while one of its helpers is working now reaches the agent itself.
 - Reminders now honor `--to NAME` immediately after the time; previously those words could become message text and the reminder went to the person.
 - The hourly grader no longer drafts notes that merely restate a code fix or contain dates and other day-bound numbers.
 - hivelab.ca has an `llms.txt` guide to the site for AI tools.
