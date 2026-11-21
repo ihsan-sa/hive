@@ -2181,7 +2181,7 @@ def floor(c, st, alive, login):
     """Keep the ladders moving with no gaps on the timeline, one start a minute at most, so work overlaps instead of arriving in bursts (the person, 2026-11-07, direction k1303; before it, post 1106181196b0).
     First tier, the focuses and floor_threads: a thread nobody is on gets its next agent floor_focus_gap_s after its last agent post or floor start, however many runs are going elsewhere, up to floor_focus_max running (floor_gap below backs off an unmoved ladder).
     Second tier, the other ladders: only while under agents_floor runs, floor_gap_s apart. Longest quiet first within a tier.
-    Skips a thread with someone on it, a post queued, a `Parked until` line, a `Waiting:` that names a running agent or a time (continuation.waits), or the person's stop. 0 turns a tier off."""
+    Skips a thread with someone on it, a post queued, a `Parked until` line, a `Waiting:` that names a running agent or a time (continuation.waits), the person's stop, or their worded pause (goals.person_held_of). 0 turns a tier off."""
     want, focus_gap = c.get("agents_floor", 0), c.get("floor_focus_gap_s", 0)
     if not (want or focus_gap) or not login or not cont or floor_off(c, time.time()): return
     t = time.time()
@@ -2205,8 +2205,10 @@ def floor(c, st, alive, login):
     rows = [r for r in cont.G.goals()["rows"] if (r["kind"] == "focus" or r.get("ladder")) and not r["running"] and not r.get("parked") and not gated_now(r, t) and r["thread"] not in busy and (not only or r["thread"] in only) and due(r)]
     if not rows: return
     held = cont.waits({r["thread"] for r in rows}, set(alive) | {n for n, ps in st["pending"].items() if ps}, t, c.get("floor_wait_max_s", 7200))
+    try: paused = cont.G.person_held_of({r["thread"] for r in rows})   # the person's worded pause ("ok pause the FW dev"): is_stop takes only a bare stop, so the floor briefed fw-bench 40 min after it (11151647ee34, 2026-11-20 23:20)
+    except Exception: paused = {}
     for r in sorted(rows, key=lambda r: (not first(r), -(r["quiet_s"] if r["quiet_s"] is not None else float("inf")))):
-        if held.get(r["thread"], 0) > t or cont.stopped_thread(r["thread"]) or tier_held(c, r["thread"]): continue
+        if held.get(r["thread"], 0) > t or cont.stopped_thread(r["thread"]) or tier_held(c, r["thread"]) or r["thread"] in paused: continue
         started[r["thread"]] = t
         sig, seen = [r.get("rungs_done"), r.get("rungs_left"), r.get("rung")], st.setdefault("floor_seen", {}).get(r["thread"]) or {}
         st["floor_seen"][r["thread"]] = {"sig": sig, "n": seen.get("n", 0) + 1 if seen.get("sig") == sig else 1}
