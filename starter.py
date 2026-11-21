@@ -2049,7 +2049,7 @@ def keeper(c, st, alive, login):
     if any(isinstance(r, dict) and r.get("thread") == "keeper" for r in alive.values()): return
     if any(p.get("thread") == "keeper" for ps in st["pending"].values() for p in ps): return
     # a limit-stopped round resumes instead; but one parked on a fallback (Codex at its limit) must not block rounds while a Claude login has room (keeper stalled 2.6 h, 2026-11-07)
-    if any(r.get("thread") == "keeper" and not r.get("fallback") for r in st.get("resume", {}).values()): return
+    if any(r.get("thread") == "keeper" and not r.get("fallback") and not r.get("provider") for r in st.get("resume", {}).values()): return  # a round parked on a provider hold (Codex at 100%, a867a 2026-11-21: keeper silent 7.6 h) carries "provider", not "fallback"
     t = time.time()
     if alive or st["pending"]: st["busy_at"] = t
     idle = t - st.get("busy_at", t) >= c.get("keeper_idle_s", 1800)

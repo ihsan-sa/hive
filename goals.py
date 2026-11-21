@@ -534,7 +534,6 @@ def tick(txt, words, post):
 
 
 PERSON_HOLD = re.compile(r"\b(pause[ds]?|pausing|stop|stopped|halt|hold off|on hold|don'?t (run|start|touch))\b", re.I)
-PAUSE_MAX_D = 7
 PERSON_GO = re.compile(r"\b(un-?pause[ds]?|resume[ds]?|carry on|go ahead|start again|continue)\b", re.I)
 
 def person_held_of(threads, board=None):
@@ -564,7 +563,11 @@ def person_held_of(threads, board=None):
         text = re.sub(r"^\((?:from [^,()]+, )?web app[^()]*\)", "", text.strip()).strip()
         try: age_d = (now() - dt.datetime.fromisoformat(str(p.get("at")).replace("Z", "+00:00"))).total_seconds() / 86400
         except (TypeError, ValueError): age_d = 0
-        if age_d > (1.5 if re.search(r"\buntil\b", text, re.I) else PAUSE_MAX_D): continue   # "pause until 1pm today" lapses by itself; any pause after a week, when its ladder should say Parked
+        # Only the established same-day clock form has a known short deadline.
+        # "Until I say", conditions, and undated pauses never expire by age.
+        same_day_clock = re.search(
+            r"\buntil\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\s+today\b", text, re.I)
+        if same_day_clock and age_d > 1.5: continue
         if PERSON_HOLD.search(text) and not PERSON_GO.search(text):
             out[th] = f"the person's newest post here, {p.get('id')}, reads as a pause: \"{' '.join(text.split())[:80]}\""
     return out

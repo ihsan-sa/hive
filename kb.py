@@ -749,6 +749,7 @@ RECALL_WORDS, RECALL_STALE, RECALL_ONCE, RECALL_CTX = 40, 600, 6 * 3600, 0.5
 RECALL_KNN, RECALL_KCTX, RECALL_FILES = 8, 0.3, 40  # neighbours that vote, weight of a thread word in matching messages, files weighed
 RECALL_QUIET = {"status-timer"}  # senders whose briefs are a list of thread names to refresh: their words match whatever those threads are about, so nothing recall shows them bears on the job (0 of 9 opened, 11-13..15, continuity.md R42)
 RECALL_BAR = 1.6  # score an agent's post must reach to be shown (word match + past readers, 2 is top on both); 30% opened above it against 2-6% below, 7 days to 2026-11-10
+PERSON_BAR = 0.8  # a person's post needs this much: 0 of 21 pointers under it were opened, 18 of 83 from 0.8 to 1.2 (59 recalls with logged scores, 11-18..21; rsi-lab kb2)
 FILLER = set("""ive idk like just really thing things stuff something anything everything want wants wanted need needs needed make makes made making
 get gets got getting going goes went know think thought see seen look looks looking way ways lot lots bit kind kinda sort maybe also still even much many please thanks
 thank hey hello yes yeah okay sure now today tomorrow yesterday soon later already always never ever one two three four five first second third new old good better best
@@ -891,9 +892,9 @@ def recall_posts(ids, before=3, cap=1500):
 def recall_gate(hits, bad, person, midrun, n, quiet=False):
     """What of a ranked recall gets shown: say nothing unless it is probably right. A wrong pointer costs attention on every message, so a list
     of known duds stays silent rather than falling back on them, a run already at work does not get pointers (3% opened against 10% at a fresh start),
-    and an agent's post needs RECALL_BAR. A post from the person is the exception: 31% opened at any score. Measured in projects/rsi-lab/kb_rules.py."""
+    and an agent's post needs RECALL_BAR, a person's post PERSON_BAR. Measured in projects/rsi-lab/kb_rules.py."""
     if midrun or quiet: return []
-    return [h for h in hits if fmt_path(h["path"]) not in bad and (person or h["s"] >= RECALL_BAR)][:n]
+    return [h for h in hits if fmt_path(h["path"]) not in bad and h["s"] >= (PERSON_BAR if person else RECALL_BAR)][:n]
 
 def recall_wall(c, hits, first):
     """The hits without posts from a group (a focus with the person's instructions or files) that the asking chat isn't in, so a chat

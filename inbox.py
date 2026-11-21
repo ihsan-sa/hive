@@ -699,6 +699,28 @@ def helper_hook(name, rec, payload, seen):
     return ("The person has just posted to the agent that started you; it can't read it until you hand back. Finish the step you "
             "are on and return what you have now, saying what is left, rather than finishing the whole job. Don't answer the post yourself.")
 
+POLL = re.compile(r"\b(until|while)\b[^\n]*\bsleep\b|--wait\b")
+
+def wait_note(name, rec, payload, ps):
+    """The posts sat behind a foreground poll loop (`until ...; sleep`, `while ...sleep`, `--wait`): the hook can hand posts over only
+    when a tool call ends, and such loops held person posts 5-9 min (813 s of the ten slowest replies of Nov 19-21). Once a run,
+    when a post waited 2 min or more, point at `hive wait --until`, which returns as soon as a post arrives (a1b7b, 2026-11-21)."""
+    if payload.get("tool_name") != "Bash": return ""
+    ti = payload.get("tool_input") or {}
+    if ti.get("run_in_background") or not POLL.search(str(ti.get("command", ""))): return ""
+    def age(p):
+        try:
+            t = dt.datetime.fromisoformat(str(p.get("at", "")))
+            return time.time() - (t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)).timestamp()
+        except ValueError: return 0
+    if max((age(p) for p in ps), default=0) < 120: return ""
+    f = STATE / "wait-noted" / f"{name}-{re.sub(r'[^0-9A-Za-z]', '', str(rec.get('at', '')))}"
+    if f.exists(): return ""
+    try: f.parent.mkdir(parents=True, exist_ok=True); f.touch()
+    except OSError: pass
+    return ("\n\nThese waited behind your foreground wait loop: posts reach you only when a tool call ends. Wait with "
+            "`hive wait --until 'CMD' --timeout 590` instead: it returns as soon as CMD succeeds or a post for you arrives (exit 2).")
+
 def main():
     name = os.environ.get("HIVE_NAME", "").lower()
     if not name: return
@@ -770,6 +792,9 @@ def main():
         if first and not note: msg += "\n\n" + first   # the person note already asks for a post
         if check: msg += "\n\n" + check
         if sk: msg += "\n\n" + sk
+        if event == "PostToolUse":
+            try: msg += wait_note(name, rec, payload, ps)
+            except Exception: pass  # a note never holds up a post
         print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": msg}}))
 
 if __name__ == "__main__":
