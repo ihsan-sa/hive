@@ -56,6 +56,7 @@ ORDERS = set("add answer apply ask build change check commit continue do find fi
 RESULT_LAST = re.compile(r"(done:|landed|committed)", re.I)
 DRAFTS, DRAFT_LOG = HOME / "kb" / "_drafts", STATE / "drafts.jsonl"   # kbuse.py reads the log: the measure is the share of these read in 14 days
 DRAFT_LINES = (3, 10)      # a draft's body, in lines
+DAY_BOUND = re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b|\b20\d\d-\d\d-\d\d\b|\b(?:today|tonight|yesterday|this morning)\b|\b(?:fixed|landed|merged|committed) (?:in|as|at)\b", re.I)   # a commit id, a date, a day word, "fixed in"
 OWN_WORDS = 0.7            # share of a draft's words that must be in its source post: it quotes, it doesn't summarise
 GRADE_RE = re.compile(r'"run"\s*:\s*"([^"]+)"\s*,\s*"grade"\s*:\s*"(\w+)"\s*,\s*"why"\s*:\s*"((?:[^"\\]|\\.)*)"')
 POST_CLIP, RESULT_CLIP = 900, 2500   # chars of a post shown to the model; the last one is usually the result and holds the fact
@@ -312,7 +313,7 @@ Judge only against what the post asked, not whether the work was good. A post th
 
 One more job, on delivered and partial runs only. If a post by the agent holds a fact another agent could use months from now in other work, add to that run's grade:
 "note":{"post":"<the post id>","title":"<what the note answers, at most 12 words>","lines":["3 to 10 lines, copied from that post in its own words, each understandable without the thread"]}
-Worth a note: how something was made to work, a number with how it was measured, a gotcha with its cause. Not a note: status, thanks, a plan, what was changed in this one job with nothing to learn from it, a number that goes stale within days, one person's private or one-off matter such as a purchase. Most runs have no note: leave the field out.
+Worth a note: how something was made to work, a number with how it was measured, a gotcha with its cause. Not a note: status, thanks, a plan, what was changed in this one job with nothing to learn from it, a number that goes stale within days, a fix to code or config that the repo and its git log already record (what was changed, a commit id, a test count), one person's private or one-off matter such as a purchase. Most runs have no note: leave the field out.
 
 {blocks}"""
 
@@ -374,6 +375,7 @@ def write_draft(g, run, mine):
     if not said or sum(w in have for w in said) < OWN_WORDS * len(said): return None
     spec = importlib.util.spec_from_file_location("kb", CORE / "kb.py"); kb = importlib.util.module_from_spec(spec); spec.loader.exec_module(kb)
     if kb.SECRET.search(title + " " + text): return None   # the rule `kb file` holds notes to
+    if DAY_BOUND.search(title + " " + text): return None   # P6 11-21: 0 of 12 old drafts were read; commit ids, dates and "fixed in" restate git or go stale
     thread, day = str(src.get("thread") or run.get("thread") or "none"), iso()[:10]
     path = DRAFTS / f"{re.sub(r'[^A-Za-z0-9_.-]+', '-', thread)[:80]}-{day}.md"
     if any(r.get("path") == str(path) for r in jsonl(DRAFT_LOG)): return None   # counted from the log too: a draft the dream already moved still used the day

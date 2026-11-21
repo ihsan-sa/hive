@@ -4,6 +4,12 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Smaller fixes, 2026-11-21
+
+- Reminders now honor `--to NAME` immediately after the time; previously those words could become message text and the reminder went to the person.
+- The hourly grader no longer drafts notes that merely restate a code fix or contain dates and other day-bound numbers.
+- hivelab.ca has an `llms.txt` guide to the site for AI tools.
+
 ## New module: inquiry
 
 **inquiry** is a set of tools for an investigation of a large release of PDF documents. It gathers the documents, searches them with page citations, and keeps a store of sourced facts. Each fact has a quote that the tool checks against its page, says how it was read, and carries a reading confidence. A person's standing (accused, named in a civil filing, charged or convicted) needs a fact with a confidence of 0.75 or more, and a face match stays a lead until a document backs it. Victims are known by number, under the record's own label. A victim gets a name only from a fact that has the name as whole words and shows that the person speaks publicly under it. Pages flagged as possibly showing a victim are never rendered, and no command tries to undo a redaction. Add it with `hive module add inquiry`. It needs `curl`, and `pdftotext` and `pdftoppm` from the poppler-utils package.

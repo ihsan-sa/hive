@@ -72,7 +72,8 @@ def show(p):
           + (f" (passed on by {p.get('relay_by')}" + (f", who says: {p['relay_why']}" if p.get("relay_why") else "") + ")" if p.get("relay_of") else "") + "\n  "
           + str(p.get("text", "")).replace("\n", "\n  "))
     for f in p.get("files") or []: print(f"  file: {f.get('path')} ({f.get('size', 0)} bytes)")
-    if p.get("from") == "person" and p.get("sig") and signed(): print("  " + _signed.line(_signed.check(p, _nonces), p))
+    if p.get("from") == "person" and signed() and _signed.shell_posted(p): print("  ✓ posted from the root-run word shell (root's log has this id and text)")
+    elif p.get("from") == "person" and p.get("sig") and signed(): print("  " + _signed.line(_signed.check(p, _nonces), p))
 
 def attachable(raw):
     """A readable file under the size cap, and not from a dot directory or dotfile in ~: those hold logins and tokens,
@@ -507,6 +508,7 @@ def cmd_verify(a):
     p = next((p for p in posts() if p.get("id") == a.id), None)
     if not p: print(f"hive verify: no post {a.id}", file=sys.stderr); sys.exit(2)
     if not signed(): print("hive verify: core/signed.py is missing", file=sys.stderr); sys.exit(2)
+    if _signed.shell_posted(p): print(f"{a.id} from person: ✓ posted from the root-run word shell (root's log has this id and text)"); sys.exit(0)
     r = _signed.check(p, _nonces)
     print(f"{a.id} from {p.get('from')}: " + (_signed.line(r, p) or "unsigned: a claim, nothing shows who wrote it"))
     if r.get("words") is not None: print("signed words: " + r["words"])

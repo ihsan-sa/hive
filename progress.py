@@ -625,6 +625,17 @@ def watchdog_in(t0, t1):
     a, b = dt.datetime.fromisoformat(t0).timestamp(), dt.datetime.fromisoformat(t1).timestamp()
     return sum(1 for k, v in st.get("fired", {}).items() if a <= v <= b)
 
+def watchdog_repeat_in(t0, t1, days=3):
+    """Trips in the window whose kind (the key before ':') also fired in the `days` before it: a kind coming back, not a new break.
+    watchdog_trips counts every trip, so a day of three different breaks each fixed within the hour reads the same as one noisy check
+    firing three times (improve-survey 11-15..11-20: six readings of 3 to 11, every kind but handoff_dropped new each day)."""
+    try: st = json.loads((STATE / "watchdog.json").read_text())
+    except (OSError, ValueError): return None
+    a, b = dt.datetime.fromisoformat(t0).timestamp(), dt.datetime.fromisoformat(t1).timestamp()
+    fired = st.get("fired", {})
+    before = {k.split(":")[0] for k, v in fired.items() if a - days * 86400 <= v < a}
+    return sum(1 for k, v in fired.items() if a <= v <= b and k.split(":")[0] in before)
+
 def stalled_now():
     try:
         out = subprocess.run([sys.executable, str(Hive), "stalled"], capture_output=True, text=True, timeout=60).stdout
@@ -819,7 +830,7 @@ def window(t0, t1, log, posts, items):
     rsi = [r for r in jsonl(RSI_LEDGER) if t0 <= r.get("at", "") <= t1]
     w = {"from": t0, "to": t1, "runs": runs, "runs_failed": failed, "runs_reaped": reaped, "runs_reaped_signalled": reaped_signalled(log, posts, t0, t1), "runs_reaped_repeat": reaped_repeat(log, t0, t1), "runs_limited": limited, "runs_woken": events_in(log, t0, t1, "woken"),
          "fail_pct": round(100.0 * failed / runs, 1) if runs else 0.0,
-         "posts": nposts, "person_posts": nperson, "person_noticed_first": noticed, "watchdog_trips": watchdog_in(t0, t1),
+         "posts": nposts, "person_posts": nperson, "person_noticed_first": noticed, "watchdog_trips": watchdog_in(t0, t1), "watchdog_repeat": watchdog_repeat_in(t0, t1),
          "person_reply_p50_s": pct(rs, 0.5), "person_reply_p90_s": pct(rs, 0.9), "person_replies": len(rs),
          "keeper_rounds": events_in(log, t0, t1, "keeper"), "improve_rounds": events_in(log, t0, t1, "improve"),
          "improvements_landed": len(landed), "improvements_judged": len(judged), "improvements_sized": sum(1 for e in landed if e.get("check") and e.get("gain") is not None and not e.get("unsized")), "reviews_independent": sum(1 for e in landed if indep_review(e)), **for_you_numbers(posts, t0, t1),
@@ -850,9 +861,9 @@ def kb_numbers(t0, t1):
     # kb_finds counts every search, tests and bursts too (2026-11-15: 407, of which 342 were one tester's replay); kb_finds_counted is what kb_find_read_pct divides by (63).
     return {"kb_finds": x["finds"], "kb_finds_counted": x["finds_logged"], "kb_find_read_pct": x["find_read_pct"], "kb_dead_find_pct": x["find_dead_pct"], "kb_recall_injections": x["recalls"], "kb_recall_opened_pct": x["recall_opened_pct"], "kb_misses_explicit": x["misses"], "kb_miss_candidates": x["candidates"]}
 
-LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "runs_reaped_repeat", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d", "artifacts_stale", "outcomes_silent", "outcomes_nothing", "outcomes_intent_only", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "person_asks", "summary_flagged", "needs_gap"}
+LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "runs_reaped_repeat", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "watchdog_repeat", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d", "artifacts_stale", "outcomes_silent", "outcomes_nothing", "outcomes_intent_only", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "person_asks", "summary_flagged", "needs_gap"}
 NEUTRAL = {"decided_lines", "reversals_per_100", "kb_finds", "kb_finds_counted", "kb_find_read_pct", "kb_dead_find_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "model_steps_up", "model_steps_down", "runs", "runs_woken", "person_replies", "keeper_rounds", "improve_rounds", "core_commits", "rsi_rounds", "reverted", "spend_usd", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "outcomes_graded", "followup_misses"}  # activity and cost: context, not a score (the person: don't ration work for pace)
-HEADLINE = ["kb_finds", "kb_finds_counted", "kb_find_read_pct", "kb_dead_find_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "runs", "model_steps_up", "model_steps_down", "fail_pct", "runs_reaped", "runs_reaped_signalled", "runs_reaped_repeat", "runs_woken", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_landed", "improvements_judged", "improvements_sized", "reviews_independent", "held", "reverted",
+HEADLINE = ["kb_finds", "kb_finds_counted", "kb_find_read_pct", "kb_dead_find_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "runs", "model_steps_up", "model_steps_down", "fail_pct", "runs_reaped", "runs_reaped_signalled", "runs_reaped_repeat", "runs_woken", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "watchdog_repeat", "stalled_threads", "improvements_landed", "improvements_judged", "improvements_sized", "reviews_independent", "held", "reverted",
             "improvements_overdue", "reviews_independent", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "decided_lines", "reversals_per_100", "person_asks", "summary_flagged", "needs_gap", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "asks_orphaned", "leftovers_orphaned", "asks_stale", "outcomes_intent_only", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "followup_closed_pct", "followup_misses", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "artifacts_stale", "spend_usd"]
 
 def scoreboard(since):

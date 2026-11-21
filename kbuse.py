@@ -212,7 +212,7 @@ def records():
         except ValueError: pass
     return out
 
-DUD_SHOWN, DUD_PCT, DUD_DAYS, DUD_TTL = 15, 5, 3, 3600   # a note shown this often with a read this rarely is a dud for recall
+DUD_SHOWN, DUD_PCT, DUD_DAYS, DUD_TTL = 4, 5, 3, 3600   # a note shown this often with a read this rarely is a dud for recall
 
 def duds(now=None, rs=None):
     """Paths recall keeps showing that nobody opens: shown at least DUD_SHOWN times in the last DUD_DAYS days, opened in under DUD_PCT% of them.
@@ -317,6 +317,7 @@ def runs_observable(t0, t1):
     return pct(a, b)
 
 BULK, BULK_S = 15, 600   # this many logged searches by one agent inside ten minutes is a replay or a probe of the search, not use (2026-11-11: of 144 agents, 141 never passed 10; the other three ran 19, 29 and 206)
+BATCH, BATCH_S = 5, 10   # this many inside ten seconds is one command looping over a list of queries (a check that notes are findable), not a search an agent reads: 2026-11-18..21 two such checks were 17 of 22 unread long note finds (projects/hive-meta/continuity.md R22h)
 def bulk(rs):
     """ids of the searches made in a burst no agent at work makes. A replay that forgot HIVE_KB_TEST=1 otherwise counts as hundreds of searches nobody read:
     one keeper run's 247 took find_read_pct from 42 to 14 for a day (2026-11-10)."""
@@ -328,6 +329,10 @@ def bulk(rs):
         for i in range(len(xs)):
             while xs[i][0] - xs[j][0] > BULK_S: j += 1
             if i - j + 1 >= BULK: out.update(x[1] for x in xs[j:i + 1])
+        j = 0
+        for i in range(len(xs)):
+            while xs[i][0] - xs[j][0] > BATCH_S: j += 1
+            if i - j + 1 >= BATCH: out.update(x[1] for x in xs[j:i + 1])
     return out
 
 def repeats(rs):

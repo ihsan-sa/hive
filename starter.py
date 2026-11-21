@@ -1628,6 +1628,41 @@ def thread_alone(tid, tail=262144, most=4000):
         elif p.get("thread") == tid: return None
     return text if text and len(text) < most else None
 
+REPLY_BACK_S = 1800
+
+def reply_back(name, posts, tail=262144):
+    """The agent whose post woke `name` when that post answers one `name` sent it by name in the same thread in the last 30 min,
+    else None. Two agents answering each other by name start each other again: 7 days to 2026-11-21, a second hop of such a
+    back-and-forth was graded not asked or nothing in 41% of graded wakes against 19% for a first mention (a7e3c and aca25
+    traded thanks and status for 6 hops on 11-20). Word rules on the post can't tell which (kb wasted-wakes note), so the woken
+    agent, who reads it, is told it may stop without a post."""
+    me = name.lower()
+    p = next((q for q in posts if re.fullmatch(r"[a-z][0-9a-f]{4}", str(q.get("from", "")).lower()) and str(q.get("from", "")).lower() != me), None)
+    if not p or not p.get("at"): return None
+    them, thread = str(p["from"]).lower(), p.get("thread", p.get("id"))
+    try:
+        at = dt.datetime.fromisoformat(p["at"])
+        with open(BOARD, "rb") as f:
+            f.seek(max(0, f.seek(0, 2) - tail)); lines = f.read().decode("utf-8", "replace").splitlines()
+    except (OSError, ValueError): return None
+    for l in lines:
+        if f'"{me}"' not in l and f'"{name}"' not in l: continue
+        try: q = json.loads(l)
+        except ValueError: continue
+        if q.get("id") == p.get("id"): break
+        if str(q.get("from", "")).lower() != me or q.get("thread", q.get("id")) != thread: continue
+        if "@" + them not in [str(t).lower() for t in q.get("to") or []]: continue
+        try:
+            if 0 <= (at - dt.datetime.fromisoformat(q["at"])).total_seconds() <= REPLY_BACK_S: return them
+        except (KeyError, ValueError): continue
+    return None
+
+def reply_back_note(name, posts):
+    them = reply_back(name, posts)
+    return (f" That post answers one you sent @{them}. If it asks nothing of you (thanks, a confirmation, a status you didn't ask for), "
+            f"end your turn with no post. A reply naming @{them} starts it again for nothing: on 11-20 two agents traded thanks and status notes for six rounds. "
+            f"If you do reply and {them} has nothing to do, write its name in backticks.") if them else ""
+
 def start_model(c, posts):
     """The model a start runs on: a provider wins (main loop picked it), then a model a post asked for, then the default."""
     return (next((p["model"] for p in posts if provider_of(c, p.get("model"))), None)
@@ -1928,7 +1963,8 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
                   # R46 (2026-11-15): 4 of 8 non-keeper "nothing" runs of 11-12 to 11-15 were sleepers woken with an ask that worked their own rung,
                   # posted a wait, or answered a different question (a732a, a81d2, a87dc), or said done without checking (a38af).
                   "Do what that post asks first, in its thread, before your own rung or wait: answer its question, or do its work, "
-                  "or say plainly why you can't. Check before you say something is done.")
+                  "or say plainly why you can't. Check before you say something is done."
+                  + reply_back_note(name, posts))
     elif resume and woken and any(p.get("supersede") for p in woken["posts"]):
         sup = [p for p in woken["posts"] if p.get("supersede")]; other = [p for p in woken["posts"] if not p.get("supersede")]
         new = "; ".join(f"{p['id']} in thread {p.get('thread', p['id'])}" for p in sup)

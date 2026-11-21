@@ -20,7 +20,7 @@ import { openAside } from "./aside.js";
 import { sixSeven } from "../core/sixseven.js";
 import { startCall, phoneReady, inCall } from "./phone.js";
 import { run as eggRun } from "../core/easter.js";
-import { wordBoxButton, wordBoxPanel } from "./rootword.js";
+import { wordBoxButton, wordBoxPanel, inShell, tellShell } from "./rootword.js";
 import { delivery } from "./message.js";   // circular, used only at render time
 
 // menu: which of the bar's menus is open (to | add | aa | model), or false. mode: thread → "interrupt" while armed.
@@ -1019,6 +1019,8 @@ const waitsHere = (th, who) => { const st = threadState(th); return st.key === "
 export function composer({ thread, update, place = "thread", autofocus, top }) {
   CP.update = update;
   const th = thread || null;
+  tellShell(th);
+  if (inShell()) return h("div", { class: "cp", "data-key": "cp:shell", "data-place": place, hidden: true });   // framed by the word shell: the box there is the only one
   if (CP.th !== th) { CP.th = th; CP.ac = null; CP.menu = false; CP.hist = null; }
   const d = draft(th), r = recipient(th), k = "cp:" + (th || "(new)"), empty = !d.text.trim() && !d.files.length;
   if (CP.focus || autofocus === true) { CP.focus = false; queueMicrotask(() => { const t = field(th); if (t && document.activeElement !== t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }); }
