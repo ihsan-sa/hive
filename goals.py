@@ -533,6 +533,42 @@ def tick(txt, words, post):
     return "\n".join(lines), lines[i]
 
 
+PERSON_HOLD = re.compile(r"\b(pause[ds]?|pausing|stop|stopped|halt|hold off|on hold|don'?t (run|start|touch))\b", re.I)
+PAUSE_MAX_D = 7
+PERSON_GO = re.compile(r"\b(un-?pause[ds]?|resume[ds]?|carry on|go ahead|start again|continue)\b", re.I)
+
+def person_held_of(threads, board=None):
+    """{thread: why} for threads whose newest post from the person reads as a pause or stop ("Pause work please pause it"), or that the
+    starter holds as stopped. The starter's stop rule takes only a bare "stop", so the keeper twice dispatched rounds into a paused project thread
+    after the person's "pause it" there (11170143212c, 2026-11-21 01:43 and 03:01). A later post of theirs that says resume clears it."""
+    want, newest = set(threads), {}
+    try:
+        with open(board or BOARD, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if '"person"' not in line: continue
+                try: p = json.loads(line)
+                except ValueError: continue
+                if p.get("from") != "person": continue
+                th = p.get("thread") or p.get("id")
+                if th in want: newest[th] = p
+    except OSError: pass
+    out = {}
+    try:
+        sys.path.insert(0, str(CORE)); import continuation as _C
+        for th in want:
+            if _C.stop_file(th).exists(): out[th] = "stopped by the person (the starter's stop mark)"
+    except Exception: pass
+    for th, p in newest.items():
+        if th in out: continue
+        text = re.sub(r"^(?:@[\w-]+\s+)*(?:reply to message [0-9a-f]+:\s*)?", "", str(p.get("text", "")))
+        text = re.sub(r"^\((?:from [^,()]+, )?web app[^()]*\)", "", text.strip()).strip()
+        try: age_d = (now() - dt.datetime.fromisoformat(str(p.get("at")).replace("Z", "+00:00"))).total_seconds() / 86400
+        except (TypeError, ValueError): age_d = 0
+        if age_d > (1.5 if re.search(r"\buntil\b", text, re.I) else PAUSE_MAX_D): continue   # "pause until 1pm today" lapses by itself; any pause after a week, when its ladder should say Parked
+        if PERSON_HOLD.search(text) and not PERSON_GO.search(text):
+            out[th] = f"the person's newest post here, {p.get('id')}, reads as a pause: \"{' '.join(text.split())[:80]}\""
+    return out
+
 def tier_held_of(threads):
     """{thread: why} for threads whose work tier starts no new run now (paused, off, past its stop point); {} on any error.
     The keeper briefed the paused voice-board tier's ladder every few hours and then chased the held worker for a reply
@@ -602,9 +638,10 @@ def main():
         seen, out = set(), []   # a thread once: two rows can share one (a focus and a project whose latest thread it is), and two lines were two rounds within seconds
         for r in g["rows"]:
             if r["idle"] and (r["kind"] == "focus" or r.get("ladder") or r.get("needs_ladder")) and r["thread"] not in seen: seen.add(r["thread"]); out.append(r["thread"])
-        held = tier_held_of(out)
+        held, ph = tier_held_of(out), person_held_of(out)
         for th in out:
             if th in held: print(f"skipped {th}: its work tier is {held[th]} (`hive tier why {th}`)", file=sys.stderr)
+            elif th in ph: print(f"skipped {th}: {ph[th]}", file=sys.stderr)
             else: print(th)
         return
     if a.brief or a.post:
@@ -619,6 +656,8 @@ def main():
             sys.exit(f"{th} has no rung before {r['gated_until']}Z (every open rung carries after:). No round posted; --force posts one anyway.")
         if not a.force and (why := tier_held_of([th]).get(th)):   # the starter would only hold the brief, and the next keeper chase it
             sys.exit(f"{th}: its work tier is {why} (`hive tier why {th}`), so the starter would hold the brief. No round posted; --force posts one anyway.")
+        if not a.force and (why := person_held_of([th]).get(th)):
+            sys.exit(f"{th}: {why}. No round posted; --force posts one anyway (only once the person has said to go on).")
         cmd = ["hive", "post", "--thread", th] + post_model_args(b, a.model)
         sys.exit(subprocess.run(cmd, input=b, text=True).returncode)
     if a.idle: g["rows"] = [r for r in g["rows"] if r["idle"]]
