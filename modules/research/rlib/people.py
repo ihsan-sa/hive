@@ -125,7 +125,7 @@ def named_not_person(text, name):
 
 
 RANK = {"president", "vice", "chancellor", "senior", "associate", "assistant", "deputy", "executive", "interim", "acting"}
-ABBREV = [(r"\bavp\b", "associate vice president"), (r"\bsvp\b", "senior vice president"), (r"\bevp\b", "executive vice president"), (r"\bvp\b", "vice president"), (r"\bexec\b\.?", "executive"), (r"\bassoc\b\.?", "associate"), (r"\basst\b\.?", "assistant"), (r"\bdir\b\.?", "director"), (r"\bprof\b\.?", "professor")]
+ABBREV = [(r"\bsr\b\.?(?=\s+(?:director|manager|vice|associate|advisor|dean|lecturer|analyst|specialist|coordinator|officer)\b)", "senior"), (r"\bavp\b", "associate vice president"), (r"\bsvp\b", "senior vice president"), (r"\bevp\b", "executive vice president"), (r"\bvp\b", "vice president"), (r"\bexec\b\.?", "executive"), (r"\bassoc\b\.?", "associate"), (r"\basst\b\.?", "assistant"), (r"\bdir\b\.?", "director"), (r"\bprof\b\.?", "professor")]
 
 
 def long_form(low):
@@ -315,7 +315,7 @@ def title_slot(text, name, title, org=""):
             words = _title_words(part)
             if not words: continue
             # Stopwords and punctuation may vary, but the role's words stay in order.
-            pat = r"[\s,&]*(?:(?:of|for|the|and|at|in)\s+)*".join(re.escape(w) for w in words)
+            pat = r"[\s,&–—-]*(?:(?:of|for|the|and|at|in)\s+)*".join(re.escape(w) for w in words)
             m = re.match(pat + r"(?![\w'-])", candidate)
             if not m:
                 # A second explicit post in a compound title belongs to the same name.
@@ -325,6 +325,8 @@ def title_slot(text, name, title, org=""):
             tail = candidate[m.end():].strip()
             if not tail or tail == ".": return True
             if re.fullmatch(r"since (?:19|20)\d\d\.?", tail): return True
+            # A directory card's tags run on with no space after the comma: "Dean / Business & Workforce Development,Administration".
+            if re.fullmatch(r",[a-z][a-z &-]{2,40}", tail): return True
             if tail.startswith(("|", "—", "–")) and "@" in tail: return True
             if _VERB_AFTER.match(tail): return True
             # An appointment sentence names the unit the post sits in: "... appointed Dean within the College of X."
@@ -410,6 +412,10 @@ def title_slot(text, name, title, org=""):
                     if not end or ("@" not in end.group() and (len(re.sub(r"\D", "", end.group())) < 10 or re.fullmatch(r"\s*(?:19|20)\d\d\s*[-–]\s*(?:19|20)?\d\d\s*", end.group()))): break
                     post = post[:end.start()].rstrip(" |,;")
                 if below and role(post): return " ".join((sent + " " + below).split())[:300]
+                # A card splits the post over two lines: "Dean" then "Business & Workforce Development,Administration".
+                two = lines[i + 2] if i + 2 < len(lines) else ""
+                if below and two and not contact_line(below) and not contact_line(two) and not _alone_name(two) and len(below.split()) <= 8 and role(below + " " + two):
+                    return " ".join((sent + " " + below + " " + two).split())[:300]
                 if (not below or contact_line(below)) and i and role(lines[i - 1]) and not (i > 1 and _alone_name(lines[i - 2])):
                     return " ".join((lines[i - 1] + " " + sent).split())[:300]
     return ""

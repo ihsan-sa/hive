@@ -71,7 +71,9 @@ export function morph(a, b) {
   if (a.nodeType === 3) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return a; }
   if (a.nodeType !== 1) return a;
   const own = b.hasAttribute("data-own"), sigChanged = own && a.getAttribute("data-sig") !== b.getAttribute("data-sig");
-  for (const { name } of [...a.attributes]) if (!b.hasAttribute(name) && name !== "data-ok" && name !== "data-fail" && name !== "data-shut") a.removeAttribute(name);   // a copy button's moment of feedback and an Escape-closed agent list (refs.js), set by hand: a poll's re-render mustn't wipe them
+  // data-keep="style data-w": attributes the element's own code sets by hand (the composer's Markdown layer copies the box's font and width), kept through a re-render.
+  const keep = b.getAttribute("data-keep"), kept = keep ? keep.split(" ") : null;
+  for (const { name } of [...a.attributes]) if (!b.hasAttribute(name) && !(kept && kept.includes(name)) && name !== "data-ok" && name !== "data-fail" && name !== "data-shut") a.removeAttribute(name);   // a copy button's moment of feedback and an Escape-closed agent list (refs.js), set by hand: a poll's re-render mustn't wipe them
   for (const { name, value } of b.attributes) if (a.getAttribute(name) !== value) a.setAttribute(name, value);
   a._on = b._on;
   if (b._v !== undefined && document.activeElement !== a && a.value !== b._v) a.value = b._v;

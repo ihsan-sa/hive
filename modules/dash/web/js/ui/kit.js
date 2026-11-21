@@ -58,8 +58,11 @@ export function section({ title, note, info, actions, id, key, level, fold, summ
   // fold: a closed row that opens (summary is its quiet one-line count); info: the long sentence, behind an "i" button.
   // A fold remembers being opened (by key, else title): a refresh re-renders it, and morph drops an open the new tree lacks.
   const fk = fold && (key || id || title);
-  if (fold) return h("details", { class: "fold-row", id: id || null, "data-key": key || null, open: FOLDS.get(fk) ? "" : null, ontoggle: e => { FOLDS.set(fk, e.target.open); } },
-    h("summary", null, icon("chevron-right"), title, summary ? h("small", null, summary) : null), h("div", { class: "fold-in" }, body));
+  // The click is remembered at once: the toggle event comes a task later, and a poll's re-render in between (every 1.5 s) rebuilt the
+  // fold from the old state and undid the click (sweep 2026-11-21: "closing it also sticks" failed). ontoggle still settles it, for
+  // this fold only: toggle is caught on the way down, so a <details> inside the body passed through here too.
+  if (fold) return h("details", { class: "fold-row", id: id || null, "data-key": key || null, open: FOLDS.get(fk) ? "" : null, ontoggle: (e, n) => { if (e.target === n) FOLDS.set(fk, n.open); } },
+    h("summary", { onclick: (e, n) => { FOLDS.set(fk, !n.parentNode.open); } }, icon("chevron-right"), title, summary ? h("small", null, summary) : null), h("div", { class: "fold-in" }, body));
   return h("section", { class: "sec", id: id || null, "data-key": key || null, "data-level": level || null, "aria-label": title || null, "data-name": title || null },
     title ? h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, title), info ? infoButton("About " + title, info) : null, note ? h("span", { class: "sec-n", title: typeof note === "string" ? note : null }, note) : null, actions ? h("div", { class: "sec-a" }, actions) : null) : null,
     body);

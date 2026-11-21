@@ -438,10 +438,30 @@ class Hunt:
                 self.near.setdefault(k, row)
                 continue
             self.near.pop(k, None)
+            if row["check_status"] != "verified": self.official_recheck(row, org)
             self.leads[k] = row
             got += 1
             self.log(f"  + {per['name']} — {per['title'][:70]} ({org}) [{res['status']}]")
         return got
+
+    def official_recheck(self, row, org):
+        """A lead read on another site gets one search for the person on the organisation's own domain; it is upgraded when `check` verifies them there."""
+        d = self.domains.get(org) or self.domains.get(people.org_core(org)) if isinstance(self.domains, dict) else None
+        d = d[0] if isinstance(d, (list, tuple)) and d else d
+        q = f'site:{d} "{people.clean_name(row["name"])}"' if isinstance(d, str) else f'"{people.clean_name(row["name"])}" "{org}"'
+        try: hits, _ = engines.search(q, self.sources, n=6, case=self.case)
+        except Exception: return False
+        seen = 0
+        for h in hits:
+            if h["url"] == row["source_url"] or not people.official(org, h["url"], self.domains): continue
+            seen += 1
+            if seen > 3: break
+            res = people.check(fetcher.fetch(h["url"], self.case), row["name"], row["title"], org, self.domains)
+            if res["status"] == "verified":
+                note = f"was {row['check_status']} on {row['source_url']}; verified on the organisation's own site"
+                row.update(official_site="yes", source_url=h["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status="verified", check_quote=res["quote"], note="; ".join(x for x in (note, row.get("note")) if x))
+                return True
+        return False
 
     def try_org(self, org):
         """Given pages first, then angles one by one, until this org has given all it may."""

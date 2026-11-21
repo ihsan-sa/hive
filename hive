@@ -987,28 +987,40 @@ def open_asks_by_thread():
     except Exception: pass
     return out
 
+STOP_LINE = re.compile(r"^\s*\**(?:Waiting|Done|Blocked|Needs the person|Told to stop):", re.M | re.I)
 def cmd_waits(a):
     """Runs that stopped on a `Waiting:` reason (~/.hive/stop-gate.jsonl) and have not posted since: the wait came due (--after, default
-    3h old, or a post landed in the thread) without waking them. The keeper resumes these by name before starting anyone new."""
+    3h old, or a post landed in the thread) without waking them, and still the thread's state (see the skips below). The keeper resumes these by name before starting anyone new."""
     now = time.time(); cutoff = now - 86400
     try: st = json.loads((STATE / "starter.json").read_text())
     except (OSError, ValueError): st = {}
-    queued = set(st.get("pending", {})) | set(st.get("resume", {}))
-    last = {}
+    # held: its wake waits for a paused or stopped work tier (`hive tier`), as in cmd_stalled; a keeper ping to it is held too (ae5e1 pinged twice on 2026-11-21, held each time)
+    queued = set(st.get("pending", {})) | set(st.get("resume", {})) | set(st.get("held", {}))
+    last, stops = {}, {}
     for ln in (STATE / "stop-gate.jsonl").read_text().splitlines():
         try: r = json.loads(ln)
         except ValueError: continue
         if r.get("event") != "passed" or r.get("at", 0) < cutoff: continue
+        stops.setdefault(r.get("thread"), []).append((r["at"], r.get("name"), str(r.get("why", ""))))
         if str(r.get("why", "")).startswith("Waiting:"): last[(r["name"], r["thread"])] = r
         else: last.pop((r.get("name"), r.get("thread")), None)  # a later Done:/Blocked: stop ends the wait
     ps = list(posts()); n = 0  # a list: posts() is a generator, read once per wait below
+    ts = lambda p: dt.datetime.fromisoformat(p["at"]).replace(tzinfo=dt.timezone.utc).timestamp() if "+" not in p["at"] else dt.datetime.fromisoformat(p["at"]).timestamp()
     for (name, thread), r in sorted(last.items(), key=lambda kv: kv[1]["at"]):
         if name in queued: continue
-        ts = lambda p: dt.datetime.fromisoformat(p["at"]).replace(tzinfo=dt.timezone.utc).timestamp() if "+" not in p["at"] else dt.datetime.fromisoformat(p["at"]).timestamp()
         after = [p for p in ps if p.get("thread") == thread and ts(p) > r["at"]]
         if any(str(p.get("from", "")).lower() == name for p in after): continue
+        spoke = max((ts(p) for p in after if str(p.get("from", "")).lower() in ("person", "hives")), default=0)
+        # Another agent ended a run in this thread after the wait, and the person hasn't spoken since: that run's own stop now says where the
+        # thread stands (and lists here itself if it is a lapsed wait). aa66a was resumed on 11-21 18:33 for a Nov 21 wait a4f35 had moved to Nov 22.
+        # Board posts count too: a Codex run (a4f35) passes no stop gate, but its post's own stop line, or its moved-out `reason`, says the same.
+        said = [(ts(p), str(p.get("from", "")).lower(), "\n".join([str(p.get("reason", ""))] + [l for l in str(p.get("text", "")).splitlines() if STOP_LINE.match(l)]))
+                for p in after if p.get("reason") or STOP_LINE.search(str(p.get("text", "")))]
+        if any(at > max(r["at"], spoke) and who != name and who not in ("person", "starter", "remind", "watchdog") and name not in why
+               for at, who, why in stops.get(thread, []) + said): continue  # unless that stop waits on this one
+        if "person" in r["why"].lower() and not spoke: continue  # a wait on the person lapses only when they speak (a56bb's pause, 11-21)
         age = now - r["at"]
-        if not after and (age < a.after * 3600 or "person" in r["why"].lower()): continue  # a wait on the person isn't lapsed; a lead, not a verdict
+        if not after and age < a.after * 3600: continue  # a lead, not a verdict
         n += 1
         print(f"{name}  {thread}  waiting {age / 3600:.1f}h, {len(after)} posts since: {r['why'][:110]}")
     print(f"-- {n} waits to resume by name (`hive post --thread T` with @name)" if n else "-- no lapsed waits")
