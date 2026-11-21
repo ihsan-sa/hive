@@ -536,6 +536,15 @@ def tick(txt, words, post):
 PERSON_HOLD = re.compile(r"\b(pause[ds]?|pausing|stop|stopped|halt|hold off|on hold|don'?t (run|start|touch))\b", re.I)
 PERSON_GO = re.compile(r"\b(un-?pause[ds]?|resume[ds]?|carry on|go ahead|start again|continue)\b", re.I)
 
+# A question about pausing is not a pause: "Should we pause the voice board? what is most active" held its thread
+# (11160857c8f0), as "hello? why is this paused" would have. "Can you pause X?" is still a request, so it holds.
+HOLD_QUESTION = re.compile(r"^\W*(?:\w+\W+){0,2}?(?:why|should|shall|is|are|was|were|did|does|what|how|has|have)\b", re.I)
+
+def hold_is_question(text):
+    """True when every sentence that names a pause or stop is a question that asks about it rather than asks for it."""
+    hits = [s for s in re.split(r"(?<=[.!?\n])\s*", text) if PERSON_HOLD.search(s)]
+    return bool(hits) and all((s.rstrip().endswith("?") and HOLD_QUESTION.search(s)) or re.match(r"\W*(?:why|how come)\b", s, re.I) for s in hits)
+
 def person_held_of(threads, board=None):
     """{thread: why} for threads whose newest post from the person reads as a pause or stop ("Pause work please pause it"), or that the
     starter holds as stopped. The starter's stop rule takes only a bare "stop", so the keeper twice dispatched rounds into a paused project thread
@@ -568,7 +577,7 @@ def person_held_of(threads, board=None):
         same_day_clock = re.search(
             r"\buntil\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\s+today\b", text, re.I)
         if same_day_clock and age_d > 1.5: continue
-        if PERSON_HOLD.search(text) and not PERSON_GO.search(text):
+        if PERSON_HOLD.search(text) and not PERSON_GO.search(text) and not hold_is_question(text):
             out[th] = f"the person's newest post here, {p.get('id')}, reads as a pause: \"{' '.join(text.split())[:80]}\""
     return out
 

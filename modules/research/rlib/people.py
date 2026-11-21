@@ -40,7 +40,8 @@ def plausible_name(n):
 
 
 def clean_name(n):
-    n = re.sub(r"^(?:Dr|Prof|Mr|Ms|Mrs|Mx)\.?\s+", "", n.strip())
+    n = re.sub(r"^(?:(?:Join|Meet|Welcome|Contact|Email|Call|Ask|Thank|Thanks|Congratulations|Congratulate|Featuring|Hear from|With|By|Via)\s+)+(?=[A-Z])", "", n.strip())  # "Join Beth Mitchell, Career Services Director, for ..."
+    n = re.sub(r"^(?:Dr|Prof|Mr|Ms|Mrs|Mx)\.?\s+", "", n)
     n = re.sub(SUFFIX + "$", "", n).strip(" ,")
     return n.title() if n.isupper() else n  # BRIAN BARNETT, as some directories print it
 
@@ -48,7 +49,7 @@ def clean_name(n):
 def clean_title(t):
     t = t.split("\n")[0]
     # Where the post ends: "CEO of Nexeon, said:", "..., Dr Alex Groombridge, CTO" (the next person), "CEO, spearheads the ...".
-    t = re.split(r"(?<![A-Z])[.;:|•]\s|\s[–—-]\s|\s(?:said|says|who|and has|has|is|was|will|at|in|on|to)\s|[\"“”(]|,?\s(?:said|says|added|explained)\b|,\s+(?:Dr|Prof|Mr|Ms|Mrs)\.?\s|,\s+[a-z]+s\s+(?:the|a|an|its)\b|,\s+the\s+[a-z]|,\s+(?:where|which|whose|when)\b|\suntil\s|\sand\s+(?:highly|widely|also|one)\b", t)[0].strip(" ,.")
+    t = re.split(r"(?<![A-Z])[.;:|•]\s|\s[–—-]\s|\s(?:said|says|who|and has|has|is|was|will|at|in|on|to)\s|[\"“”(]|,\s+(?:sees|see|feels|believes|notes|adds|hopes|expects|thinks|wants|plans|looks|knows|argues|stresses)\b|,?\s(?:said|says|added|explained)\b|,\s+(?:Dr|Prof|Mr|Ms|Mrs)\.?\s|,\s+[a-z]+s\s+(?:the|a|an|its)\b|,\s+the\s+[a-z]|,\s+(?:where|which|whose|when)\b|\suntil\s|\sand\s+(?:highly|widely|also|one)\b", t)[0].strip(" ,.")
     t = re.sub(r"\b((?:co-?)?founder)\s+of\s+[a-z][a-z -]*(?:,.*)?$", r"\1", t, flags=re.I)  # "co-founder of advanced materials supplier"
     if len(t) > 110: t = t[:110].rsplit(" ", 1)[0].strip(" ,")  # whole words only: a cut "Inno" read as another employer
     return t
