@@ -15,7 +15,7 @@ The web page is web/ next to this file (ui.html, the previous page, is at /old);
   hive-dash serve [--port P] web UI on http://127.0.0.1:P/ (loopback only; default 8077)
   hive-dash --json          the snapshot as JSON
 """
-import base64, email.utils, shlex, errno, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time, zlib
+import base64, ipaddress, socket, urllib.parse, email.utils, shlex, errno, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time, zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -2966,7 +2966,14 @@ POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
 
 
-def word_shell(): v = (jload(HOME / "core" / "config.json", {}) or {}).get("word_shell"); return v if isinstance(v, str) and re.fullmatch(r"https://[a-z0-9-]+(\.[a-z0-9-]+)*(:[0-9]{1,5})?", v) else None  # the root-run word shell's origin (projects/word-shell/DESIGN.md); unset = off. The dash only tells it which thread is open
+def word_shell():
+    """The root-run word shell's origins (projects/word-shell/DESIGN.md): config.json word_shell, one origin or a list (its own name
+    and its tailnet port). Unset = off. Any malformed entry turns it all off. The dash only tells the shell which thread is open."""
+    v = (jload(HOME / "core" / "config.json", {}) or {}).get("word_shell")
+    v = [v] if isinstance(v, str) else v
+    if not isinstance(v, list) or not v or len(v) > 4: return None
+    ok = all(isinstance(o, str) and re.fullmatch(r"https://[a-z0-9-]+(\.[a-z0-9-]+)*(:[0-9]{1,5})?", o) for o in v)
+    return list(dict.fromkeys(v)) if ok else None
 
 
 DOOR_ROUTE = re.compile(r"/api/[a-z][a-z-]{0,30}")
@@ -3097,12 +3104,59 @@ def route_of(headers, peer, port, web):
     host = (headers.get("host") or "").lower()
     outside = outside_hosts(web.get("outside") or {})
     if peer == "unix": return "outside" if host in outside else "refused"
+    if host and host == tailnet_host(web): return "tailnet" if peer in ("127.0.0.1", "::1") else "refused"   # tailscale serve on :8446; admit checks who
     if host not in {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"} | outside: return "refused"
     if host in outside or peer not in ("127.0.0.1", "::1") or any(h in headers for h in FORWARDED):
         # With outside.socket the tunnel comes only through that socket. Another account can bind the TCP port while the dash
         # restarts and catch a token the tunnel sends there, so a token on TCP proves nothing and is never looked at.
         return "refused" if (web.get("outside") or {}).get("socket") else "outside"
     return "local"
+
+
+def tailnet_host(web):
+    """web.json tailnet.host: the name and port tailscale serve answers on for the dash (as the word shell frames it). Lowercase, with the port."""
+    t = web.get("tailnet") if isinstance(web.get("tailnet"), dict) else {}
+    h = str(t.get("host") or "").strip().lower()
+    return h if re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+:[0-9]{1,5}", h) else None
+
+
+TS_SOCK = "/run/tailscale/tailscaled.sock"
+_whois = {}
+
+
+def ts_whois(ip, now=None):
+    """(stable node id, login) tailscaled gives for a tailnet address, or None. Asked over its local socket; kept a minute."""
+    now = now or time.time(); hit = _whois.get(ip)
+    if hit and now - hit[0] < 60: return hit[1]
+    out = None
+    try:
+        import http.client
+        class C(http.client.HTTPConnection):
+            def connect(self): self.sock = socket.socket(socket.AF_UNIX); self.sock.settimeout(3); self.sock.connect(TS_SOCK)
+        c = C("local-tailscaled.sock", timeout=3)
+        c.request("GET", "/localapi/v0/whois?addr=" + urllib.parse.quote(f"[{ip}]:1" if ":" in ip else f"{ip}:1"), headers={"Sec-Tailscale": "localapi"})
+        r = c.getresponse(); d = json.loads(r.read() or b"{}") if r.status == 200 else {}; c.close()
+        node, login = (d.get("Node") or {}).get("StableID"), (d.get("UserProfile") or {}).get("LoginName")
+        if isinstance(node, str) and node: out = (node, str(login or "").strip().lower())
+    except (OSError, ValueError, http.client.HTTPException): out = None
+    _whois[ip] = (now, out); return out
+
+
+def tailnet_person(headers, uid, web, whois=None):
+    """The login on the tailnet route, or None. Three things, none of them a header a local account can send:
+    the connection's other end is root (tailscale serve; another account connecting to the port isn't), there is exactly one
+    X-Forwarded-For address, which serve sets, and tailscaled says that address is a device in web.json tailnet.nodes (stable node
+    ids: the person's own devices, never the machine, whose own traffic tailscaled also puts under the person's login)."""
+    t = web.get("tailnet") if isinstance(web.get("tailnet"), dict) else {}
+    nodes = {n for n in t.get("nodes") or [] if isinstance(n, str) and n} if isinstance(t.get("nodes"), list) else set()
+    if uid != 0 or not nodes: return None
+    xff = [v for k, v in (headers.items() if isinstance(headers, dict) else headers) if k.lower() == "x-forwarded-for"]   # every copy, so a doubled header is seen
+    ip = xff[0].strip() if len(xff) == 1 and "," not in xff[0] else ""
+    try: ipaddress.ip_address(ip)
+    except ValueError: return None
+    w = (whois or ts_whois)(ip)
+    if not w or w[0] not in nodes: return None
+    return w[1] or "tailnet device"
 
 
 def same_origin(headers, page_nav=False):
@@ -6243,7 +6297,7 @@ def serve(port):
             if modified: self.send_header("Last-Modified", modified)
             if cookie: self.send_header("Set-Cookie", cookie)
             # Board text is written by agents: the page takes nothing from elsewhere and sends nothing anywhere.
-            framing = "; frame-ancestors 'self'" if framed_here else "" if self.route == "open" else "; frame-ancestors 'none'" if not (self.route != "open" and "post" in self.can and word_shell()) else "; frame-ancestors " + word_shell()  # the page can post as the person, so it can't sit in someone's frame; a TV page may sit in this site's own (the deck's single screen)
+            framing = "; frame-ancestors 'self'" if framed_here else "" if self.route == "open" else "; frame-ancestors 'none'" if not (self.route != "open" and "post" in self.can and word_shell()) else "; frame-ancestors " + " ".join(word_shell())  # the page can post as the person, so it can't sit in someone's frame; a TV page may sit in this site's own (the deck's single screen)
             frames = ""
             self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'".replace("frame-src 'self'", "frame-src 'self'" + frames) + framing)
             if self.route != "open": self.send_header("Referrer-Policy", "no-referrer")
@@ -6374,6 +6428,13 @@ def serve(port):
                 # web.json "add_logins": sign-ins that may also sign the Hive in to its accounts, for someone who owns the account but shouldn't have full. Only ever adds that one cap; a bad value means no.
                 names = web.get("add_logins")
                 if isinstance(names, list) and "logins" not in self.can and str(claims.get("email") or "").strip().lower() in {str(n).lower() for n in names}: self.can = (*self.can, "logins")
+            elif route == "tailnet":   # tailscale serve on :8446: one of the person's pinned devices (tailnet_person); no cookie is set or read here
+                login = tailnet_person(list(self.headers.items()), peer_uid(self.client_address) if self.client_address[0] in ("127.0.0.1",) else None, web)
+                if not login: self.deny(403, "this device isn't one of this app's tailnet devices"); return False
+                self.can, self.signed, self.email = CAPS, True, login
+                self.signer = f"{signer_of({'email': login}, web.get('tailnet'))} at tailnet"[:80]
+                self.own_site = True
+                self.signin_key = hashlib.sha256(f"tailnet|{login}".encode()).hexdigest()
             elif has_session(hd.get("cookie"), web, port):
                 self.can, self.signed = CAPS, True; self.signin_key = "local"
             sites = (web.get("outside") or {}).get("sites")
@@ -6392,7 +6453,7 @@ def serve(port):
 
         def full_signin(self):
             """The owner's full sign-in: outside in full mode, or the local session. The board page's bridge and the doors need it."""
-            return (getattr(self, "route", None) == "outside" and getattr(self, "mode", None) == "full") or (getattr(self, "route", None) == "local" and self.signed)
+            return (getattr(self, "route", None) == "outside" and getattr(self, "mode", None) == "full") or (getattr(self, "route", None) in ("local", "tailnet") and self.signed)
 
         def kb_wipe_may(self):
             """Who may wipe the knowledge base or put a copy back: a full sign-in with both the files and settings rights, on this
@@ -6425,7 +6486,7 @@ def serve(port):
             J = "application/json"
             why = self.kb_wipe_may()
             if why: return self.deny(403, why)
-            by = "the person, from the dashboard" + (" (from outside)" if self.route == "outside" else "")
+            by = "the person, from the dashboard" + (" (from outside)" if self.route == "outside" else " (from the tailnet)" if self.route == "tailnet" else "")
             ok = path == "/api/kb/wipe" and kb_take_token(d.get("token"), self.signin_key)   # used up whatever follows: a refused try shows the facts again
             if self.kb_fresh_left() == 0:   # put back too: from outside, both need a recent sign-in
                 return self.send(json.dumps({"error": "this sign-in is more than 15 minutes old, so sign in again first", "signin": True}).encode(), J, status=403)

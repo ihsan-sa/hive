@@ -306,6 +306,19 @@ def check(intent, st, c, alive):
     if per_day and sum(str(e.get("at", ""))[:10] == day for e in ev) >= per_day: return "budget_day"
     return None
 
+NEXT_AFTER = re.compile(r"\b(?:after:?|on or after|not before)\s*(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}))?", re.I)
+DEFER_MAX_D = 14   # a Next dated further out than this is held only this long: superseded() drops it sooner if anyone moves the thread
+def not_before(line, t=None):
+    """When a Next line says its step can run, as seconds, if that is later than t (default now); else None. Read the way the keeper reads a rung's
+    after: (goals.AFTER, CHECK_ON): a day means 00:00 UTC, and only the step's own words count, not dates in its check. 45 of 654 hops on 11-14..11-21
+    launched on a Next that named a later after-date; graded, 5 of 8 delivered (93% for the rest), with 15 more graded not asked and 3 quiet (aceaa, R58)."""
+    t = t or now().timestamp()
+    m = NEXT_AFTER.search(re.split(r"check:", line, maxsplit=1, flags=re.I)[0]) or G.CHECK_ON.search(line)
+    if not m: return None
+    try: when = dt.datetime.fromisoformat(f"{m.group(1)}T{(m.group(2) if m.re is NEXT_AFTER and m.group(2) else '00:00')}+00:00").timestamp()
+    except ValueError: return None
+    return min(when, t + DEFER_MAX_D * 86400) if when > t else None
+
 def chain_of(r, post):
     """(chain, hop) for a step: the chain of the launch this run came from, else a new one named for its thread and first post."""
     for e in reversed(events()):
@@ -361,13 +374,14 @@ def _on_run_end(r, c, st, alive):
     if not claim(DIR / "done" / f"run-{safe(r.get('name'))}-{safe(r.get('at'))}"): drop(seen, "run_claimed"); return None
     chain, hop = chain_of(r, got["post"])
     intent = {"chain": chain, "hop": hop, "run": r.get("session"), "post": got["post"], "name": r.get("name"), "thread": r.get("thread"), "line": got["line"], "since": got["since"], "at": iso()}
+    if (nb := not_before(got["line"])): intent["not_before"] = nb   # a dated step waits for its date in enqueue rather than waking an agent that can only say it isn't due
     why = check(intent, st, c, alive)
     if not why and any(not q.get("continue") for q in (st.get("pending") or {}).get(r.get("name"), [])): why = "agent_queued"  # it wakes anyway
     if why:
         claim(DIR / "done" / safe(got["post"])); drop(intent, why); return None
     DIR.mkdir(parents=True, exist_ok=True)
     tmp = DIR / f".{safe(chain)}.tmp"; tmp.write_text(json.dumps(intent)); tmp.replace(DIR / f"{safe(chain)}.json")
-    record("intent", **{k: intent[k] for k in ("chain", "hop", "thread", "post", "name", "line")})
+    record("intent", **{k: intent[k] for k in ("chain", "hop", "thread", "post", "name", "line", "not_before") if k in intent})
     return intent
 
 def enqueue(st, c, alive, stays_on):

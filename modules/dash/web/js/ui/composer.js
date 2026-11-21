@@ -1056,7 +1056,10 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
       h("div", { class: "cp-tw", "data-key": "tw", ...(CP.md ? { "data-md": "" } : {}) },
       // The layer carries the draft's own signature and nodes: with an empty one the morph wiped it on every re-render and the
       // next frame drew it back, a one-frame blank of the text under the box (drive_md caught it one run in six).
-      h("div", { class: "cp-bd", "data-own": "", "data-sig": d.text, "aria-hidden": "true" }, ...(d.text ? mdLayer(d.text) : [])),
+      // data-keep: morph stripped mdSync's font, width and geometry key each re-render, so until the next frame the layer sat at the
+      // box's full width (scrollbar included) in the default font while data-md stayed on (sweep 2026-11-21: 356 px vs 341, 273 px tall vs 402),
+      // and every re-render redid mdSync's forced-layout reads.
+      h("div", { class: "cp-bd", "data-own": "", "data-keep": "style data-w data-geo", "data-sig": d.text, "aria-hidden": "true" }, ...(d.text ? mdLayer(d.text) : [])),
       h("textarea", { class: "cp-t", "data-key": "t", rows: 1, placeholder: ph, "aria-label": th ? "Message" : "What do you want done?", value: d.text, enterkeyhint: "send",
         oninput: (e, n) => {
           d.text = n.value; keep(d); CP.hist = null; mdSync(n);

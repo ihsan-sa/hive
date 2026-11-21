@@ -11,7 +11,7 @@ LONG_WORDS = 30
 FENCE, SPAN = re.compile(r"```.*?```", re.S), re.compile(r"`[^`\n]*`")
 URL = re.compile(r"^(?:https?://|www\.|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:ca|com|org|net|io|dev|ai|app|cc|co|uk|de)/)", re.I)
 PATH = re.compile(r"(?<!\S)[\w.~-]*/[\w.~/-]*(?=[\s,;:!?)]|$)")
-REPORT_BACK = re.compile(r"\bthen (?:tell me|say so|say which|let me know|reply|post)\b", re.I)  # one step plus a report back is one ask, not a chain (2026-11-19: 2 of 8 flagged lines)
+REPORT_BACK = re.compile(r"\bthen (?:tell me|say so|say which|let me know|reply|post)\b|\b(?:until|till|by|since|and|or) then\b", re.I)  # one step plus a report back is one ask, not a chain (2026-11-19: 2 of 8 flagged lines); 'until then' isn't a step (2026-11-21)
 CHAIN = re.compile(r"\bthen\b|\bafter that\b|\bonce you\b|(?:^|\s)1[.)]\s.*(?:^|\s)2[.)]\s", re.I | re.S)
 OURS = re.compile(r"\b(?<![-\w])(?:reload|refresh(?![- ]tokens?)|test (?:it|this|that|the|on|whether|if)|try it|confirm (?:that )?it works)\b|\bsay (?:if|whether) it looks right\b"
                   r"|\breview (?:the |this |that |our |a |an )?(?:open )?(?:pr|pull request)\b"
