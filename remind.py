@@ -166,7 +166,8 @@ def tick(store=None, now=None, post=post_as_remind):
 
 
 def options(a):
-    """--to NAME / --thread T (or --to=NAME) are read before the words and at the very end only, so text that says "--to" mid-sentence stays text; -- ends them."""
+    """--to NAME / --thread T (or --to=NAME) are read before the words, right after WHEN (`at 13:00 --to me TEXT`: else the flags were text and the
+    reminder went to the person), and at the very end only, so text that says "--to" mid-sentence stays text; -- ends them."""
     opts = {}
     def take(i):
         f, eq, v = a[i].partition("=")
@@ -177,6 +178,9 @@ def options(a):
         opts[f] = v; a.pop(i); return True
     while a and take(0): pass
     if a and a[0] == "--": a.pop(0); return a, opts
+    if a[:1] in (["at"], ["every"]):  # the text starts after WHEN, two words for "at 2026-11-06 09:00"
+        i = 3 if a[0] == "at" and len(a) > 3 and re.fullmatch(r"\d{4}-\d\d-\d\d", a[1]) and re.fullmatch(r"\d\d:\d\d", a[2]) else 2
+        while len(a) > i and take(i): pass
     while len(a) >= 2 and (take(len(a) - 2) if "=" not in a[-1] else take(len(a) - 1)): pass
     return a, opts
 

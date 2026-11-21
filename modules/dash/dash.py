@@ -2966,6 +2966,7 @@ POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
 
 
+def word_shell(): v = (jload(HOME / "core" / "config.json", {}) or {}).get("word_shell"); return v if isinstance(v, str) and re.fullmatch(r"https://[a-z0-9-]+(\.[a-z0-9-]+)*(:[0-9]{1,5})?", v) else None  # the root-run word shell's origin (projects/word-shell/DESIGN.md); unset = off. The dash only tells it which thread is open
 
 
 DOOR_ROUTE = re.compile(r"/api/[a-z][a-z-]{0,30}")
@@ -6242,7 +6243,7 @@ def serve(port):
             if modified: self.send_header("Last-Modified", modified)
             if cookie: self.send_header("Set-Cookie", cookie)
             # Board text is written by agents: the page takes nothing from elsewhere and sends nothing anywhere.
-            framing = "; frame-ancestors 'self'" if framed_here else "" if self.route == "open" else "; frame-ancestors 'none'"  # the page can post as the person, so it can't sit in someone's frame; a TV page may sit in this site's own (the deck's single screen)
+            framing = "; frame-ancestors 'self'" if framed_here else "" if self.route == "open" else "; frame-ancestors 'none'" if not (self.route != "open" and "post" in self.can and word_shell()) else "; frame-ancestors " + word_shell()  # the page can post as the person, so it can't sit in someone's frame; a TV page may sit in this site's own (the deck's single screen)
             frames = ""
             self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'".replace("frame-src 'self'", "frame-src 'self'" + frames) + framing)
             if self.route != "open": self.send_header("Referrer-Policy", "no-referrer")
@@ -6455,6 +6456,7 @@ def serve(port):
             if self.route != "open" and "modules" in self.can: info["features"] = ["slack-door"]; info["slack_door"] = slack_door_view()  # Settings > Modules > slack-door "Set up" (POST /api/slack-door)
             if self.route != "open" and install_id(): info["install"] = install_id()   # the report module's install code, shown at the foot of Settings so the owner can match this Hive to its reports
             if self.route != "open": info["default_model"] = default_model(); info["voice"] = voice_ready(); info["phone"] = phone_ready() and "post" in self.can
+            if self.route != "open" and "post" in self.can and word_shell(): info["word_shell"] = word_shell()
             if self.route != "open" and "post" in self.can and "files" in self.can and (self.route != "outside" or self.mode == "full"):
                 ds = {x["page"]: n for n, x in doors().items() if door_for(n, self.route, self.email)}
                 if ds: info["doors"] = ds   # project page -> door name: the preview relays that page's calls (preview/render.js)

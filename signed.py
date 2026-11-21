@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 PINS = Path("/var/lib/h2warden/person-keys.json")   # root's, world-readable. Format: {"keys": {"<fingerprint>": {"device": "<name>", "revoked": false}}}
+WORDLOG = Path("/var/lib/h2word/posts.jsonl")   # the root-run word shell's record (design: projects/word-shell/DESIGN.md). One JSON per line: {"id", "sha256" (hex of the exact utf-8 text), "at", "device" (pinned key fingerprint), "yes"}; only id, sha256 and a non-empty device are read: a line with no pinned device gets no mark. Missing until that service exists.
 WINDOW = 300     # seconds between the time signed and the time on the post
 TAG = "hive-post-v1"
 # What person_post may put before the signed words, in the order it adds them. Nothing else may be in front of them.
@@ -76,6 +77,26 @@ def pins(path=PINS, need_root=True):
         keys = json.loads(path.read_text()).get("keys")
     except (OSError, ValueError, AttributeError): return {}
     return keys if isinstance(keys, dict) else {}
+
+def wordlog(path=WORDLOG, need_root=True):
+    """{post id: {text hashes}} from the word shell's log, or {} if it's missing, not owned by root, or writable by anyone but root."""
+    try:
+        st = path.stat()
+        if need_root and (st.st_uid != 0 or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)): return {}
+        lines = path.read_text().splitlines()
+    except OSError: return {}
+    out = {}
+    for l in lines:
+        try: e = json.loads(l)
+        except ValueError: continue
+        if isinstance(e, dict) and isinstance(e.get("id"), str) and isinstance(e.get("sha256"), str) and e.get("device"): out.setdefault(e["id"], set()).add(e["sha256"])
+    return out
+
+def shell_posted(p, log=None):
+    """True only if the word shell's log has this person post's id with the hash of its exact text."""
+    if p.get("from") != "person": return False
+    log = wordlog() if log is None else log
+    return hashlib.sha256(str(p.get("text", "")).encode()).hexdigest() in log.get(p.get("id"), ())
 
 def when(s):
     t = datetime.fromisoformat(s.replace("Z", "+00:00"))
