@@ -72,7 +72,7 @@ who's running Flags: `--usage`: also the logins' weekly usage (the starter paces
 
 ## hive wait
 
-hive wait [--to X] [--thread T] [--timeout 3600]: block until a new post for X or in T arrives
+hive wait [--to X] [--thread T] [--timeout 3600]: block until a new post for X or in T arrives. hive wait --until 'CMD' [--every 5] --timeout 590: wait in the foreground for CMD to succeed (exit 0), but return at once (exit 2) when a post for you or in your thread arrives, so it can reach you; use it instead of an until/while-sleep loop Flags: `--until`: shell condition to wait for.
 
 ## hive module
 

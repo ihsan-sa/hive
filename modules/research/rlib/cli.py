@@ -68,7 +68,7 @@ def c_verify(a):
 HUNT_EXAMPLE = '{"goal": "deans of AI programs", "orgs": ["Valencia College"], "angles": ["\\"{org}\\" dean artificial intelligence"], "target": 1, "max_seconds": 300, "out": "hunt-out"}'
 
 
-HUNT_KEYS = ("goal (what the list is for); orgs (list) or discover (list of searches); target (rows wanted, 25); per_org (2); must (words near the person); roles / exclude_roles (patterns); "
+HUNT_KEYS = ("goal (what the list is for); orgs (list) or discover (list of searches); target (rows wanted, 25); per_org (2); must (words near the person); function_words (the title or the person's own quote must name one of these); roles / exclude_roles (patterns); "
              "org_pattern; domains ({org: site}, strict); angles (search templates with {org}); sources; read_per_search (4); allow_secondary (true); "
              "pages ({org: url or [urls]}, read directly and tied to that org); allow_page_signal (false); max_age_years (3); stale_days (365: older pages get a departure search); workers (4, parallel orgs); max_seconds (1800); out")
 

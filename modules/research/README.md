@@ -48,6 +48,7 @@ A note says when a page is over two years old or came from an archive copy: both
  "must": ["artificial intelligence"],
  "roles": "dean|director|vice president",
  "exclude_roles": "athletic|admissions",
+ "function_words": ["career", "workforce"],
  "orgs": ["Valencia College", "Broward College"],
  "angles": ["\"{org}\" workforce dean artificial intelligence"],
  "discover": ["community college AI program launch"],
@@ -60,6 +61,8 @@ A note says when a page is over two years old or came from an archive copy: both
 Run `research hunt spec.json --dry-run` first. It searches nothing and writes nothing (it does not even create the case folder). It prints the org, angle and source counts, the first search, and `up to N searches, M already done, about S s at T s a search over W workers; budget B s`; T is the median of the search times logged on this case by an earlier run, else 5 s. `--dry-run --json` prints that estimate as one JSON object (`orgs`, `angles`, `searches`, `done`, `orgs_full`, `per_search_s`, `est_s`, `budget_s`, `workers`, `warnings`, and `warning_details`: each warning as `{key, text}`). Warnings (stderr, and `warnings` in the JSON) are raised for: a `domains` entry that is not a bare site or whose key is not in `orgs`, a `pages` URL that is not http(s) or is on a different site than its `domains` entry, an estimate over `max_seconds`, orgs already full on this case (their untried searches are left out of the estimate), a `target` above orgs times `per_org` (no `discover`), an angle without `{org}`, a duplicate or blank `orgs` entry, `max_seconds` under 60, more `workers` than searches, `max_age_years` of 0 or less, `read_per_search` below 1, `stale_days` of 0 or less, `exclude_roles` that matches the `roles` pattern itself, and a missing `roles` or `must`. A `hunt.json` that cannot be read exits 2 naming the file. A real run that stops SHORT ends its `hunt:` line with `(N searches left)`; a `sources` name that is not a source exits 2 with a suggestion (dry run too); a re-run adds `, N org(s) already full at the start`.
 
 `must` words normally have to be close to the person on the page. If they describe the organisation rather than the person ("open source" for a foundation), set `"allow_page_signal": true`.
+
+`function_words` (optional) makes a verified title count only when the title or the person's own quote names the function: a title like "Chief Information Officer" is held back as a near miss when the list is for career-services buyers, while a VP of Academic Affairs whose own quote names the future of work stays. Words, not a pattern.
 
 List `roles` most wanted first: when an org's `per_org` cap is hit on a page, the earlier roles get the places. It tries every angle on every org, finds more orgs from `discover`, and writes `leads.csv` (each row with its page and quote), `near_misses.csv` and `REPORT.md`. A row needs the person, the title and a `must` word near them on a page that names the org. If it can't reach the target it says it's short and exits 3: it never pads. Run it again on the same case to continue.
 

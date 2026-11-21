@@ -200,7 +200,7 @@ def verify_csv(path, case, out=None, find=False, cols=None, domains=None, worker
     return {"rows": len(rows), "counts": dict(collections.Counter(r["check_status"] for r in rows)), "out": dest, "problems": [{"name": r.get(c["name"]), "status": r["check_status"], "note": r["check_note"]} for r in rows if r["check_status"] != "verified" or r["check_note"]]}
 
 
-HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles org_pattern domains angles sources read_per_search allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out".split())
+HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles org_pattern domains angles sources read_per_search allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words".split())
 
 
 def _pattern(spec, key):
@@ -237,6 +237,10 @@ class Hunt:
         if isinstance(m, str): m = [m]  # one word given bare: not a list of its letters
         if not isinstance(m, list) or not all(isinstance(x, str) for x in m): raise ValueError("spec must is a list of words (or one word)")
         self.must = list(m)
+        fw = spec.get("function_words") or []
+        if isinstance(fw, str): fw = [fw]
+        if not isinstance(fw, list) or not all(isinstance(x, str) for x in fw): raise ValueError("spec function_words is a list of words (or one word)")
+        self.function_words = list(fw)
         self.role, self.exclude = _pattern(spec, "roles"), _pattern(spec, "exclude_roles")
         for k in ("angles", "orgs", "discover"):
             v = spec.get(k)
@@ -324,6 +328,11 @@ class Hunt:
         except re.error: return 0  # a pattern with groups of its own has no simple order
         return next((i for i, x in enumerate(parts) if x.search(t)), len(parts))
 
+    def function_fit(self, title, signal=""):
+        """A verified title is not buyer fit: the title or the person's own quote must name the function (career, workforce...)."""
+        low = fold(f"{title} {signal}")
+        return any(people.term_regex(w).search(low) for w in self.function_words)
+
     def good_role(self, t):
         if self.exclude and self.exclude.search(t): return False
         return bool(self.role.search(t)) if self.role else True
@@ -333,6 +342,7 @@ class Hunt:
         if res.get("left"): return "the page says they left"
         if res["status"] == "secondary" and not self.allow_secondary: return "only on another site"
         if far and not self.allow_page_signal: return "the signal isn't near this person"
+        if self.function_words and not self.function_fit(row.get("title", ""), row.get("signal", "") + " " + (row.get("check_quote") or "")): return "no function word in the title or the person's own quote"
         at = people.employer_after(text, row["name"], org) or people.employer_before(text, row["name"], org) or people.employer_listed(text, row["name"], org)
         if at: return f"the page puts them at {at}"
         # A college's own summit page lists its guests too.
@@ -366,6 +376,19 @@ class Hunt:
             if said: return f"a search result says they left: {said} ({h['url']})"
         return ""
 
+    def staff_links(self, page, n=2):
+        """Up to n same-site links whose text says team or staff, best first: where a unit page keeps its people when it prints only a mailbox."""
+        here = page.get("final_url") or page["url"]
+        site = registrable(domain_of(here))
+        out = []
+        for u, t in page.get("links") or []:
+            t = " ".join(str(t).split()).lower()
+            if u.rstrip("/") == here.rstrip("/") or u in [o[1] for o in out] or registrable(domain_of(u)) != site: continue
+            if re.search(r"\b(?:contact|registrar|media|health|about)\b", t) or len(t) > 40: continue
+            rank = 0 if re.search(r"\b(?:meet|our)\b.*\b(?:team|staff)\b|\bteam\b", t) else 1 if re.search(r"\bstaff\b|\bdirectory\b", t) else None
+            if rank is not None: out.append((rank, u))
+        return [u for _, u in sorted(out)[:n]]
+
     def weigh(self, org, page, angle):
         """Every person on this page who fits becomes a row, a near miss, or nothing."""
         got = 0
@@ -381,6 +404,11 @@ class Hunt:
         if self.must and not hit_terms: return 0
         found_people = people.people_in(text, page["people_ld"])
         if not found_people and re.search(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\(?\b\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b", text): self.no_head.setdefault(org, page.get("final_url") or page["url"])  # read, and prints only a mailbox or phone
+        if not found_people and org in self.no_head and not getattr(self, "_in_staff", False):
+            for u in self.staff_links(page):  # the unit page prints a mailbox; its "Meet the Team" link prints the people
+                self._in_staff = True
+                try: got += self.weigh(org, fetcher.fetch(u, self.case), "(staff link) " + u)
+                finally: self._in_staff = False
         for per in sorted(found_people, key=lambda p: (not people.names_org(org, p["title"]), self.role_rank(p["title"]))):  # a title naming this organisation before one naming a unit of it
             if not self.good_role(per["title"]): continue
             k = people.person_key(per["name"])
@@ -399,6 +427,7 @@ class Hunt:
                     # before the name only the line just above counts (a label); a unit heading higher up is not this person's job (Francis, Toledo)
                     ctx = (lines[k - 1][-reach:] if k else "") + " " + ln[max(0, m.start() - reach):m.end() + reach] + " " + " ".join(lines[k + 1:k + 5])[:reach]  # the next few lines are the person's block; further down is the next unit
                     if any(people.term_regex(t).search(ctx) for t in hit_terms): close = True; break
+            if not close and hit_terms and per.get("how") == "directory" and any(people.term_regex(t).search(fold(page.get("title") or "")) for t in hit_terms): close = True  # a contact block on a page titled for the signal: the listed head is the program's contact
             if hit_terms and not sig and not res["official"]: close = False  # only a menu says it, as on a namesake's site
             row = dict(name=per["name"], title=per["title"], organisation=org, official_site="yes" if res["official"] else "no", signal=sig, signal_near_person="yes" if close else "no", source_url=page.get("final_url") or page["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status=res["status"], check_quote=res["quote"], angle=angle, note=res["note"])
             why = self.held_back(res, row, org, bool(hit_terms and not close), text)
