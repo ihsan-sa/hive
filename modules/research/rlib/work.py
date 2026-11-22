@@ -459,7 +459,10 @@ class Hunt:
             if hit_terms and not sig and not res["official"]: close = False  # only a menu says it, as on a namesake's site
             row = dict(name=per["name"], title=per["title"], organisation=org, official_site="yes" if res["official"] else "no", signal=sig, signal_near_person="yes" if close else "no", source_url=page.get("final_url") or page["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status=res["status"], check_quote=res["quote"], angle=angle, note=res["note"])
             self.dir_entry = per.get("how") == "directory"
-            why = self.held_back(res, row, org, bool(hit_terms and not close), text)
+            far = bool(hit_terms and not close)
+            if far and res["official"] and not staff_sig and org in self.org_signal and self.function_fit(row["title"], row.get("check_quote") or ""):
+                staff_sig, far = self.org_signal[org], False  # an official page with a careers head on it, and the org has a signal page of its own: the signal is the org's, as with a (site) head
+            why = self.held_back(res, row, org, far, text)
             if staff_sig:
                 row.update(signal=f"(the organisation's, from {staff_sig[0]}) {staff_sig[1]}", signal_near_person="no")
                 row["note"] = "; ".join(x for x in ("the signal is the organisation's, from another of its pages, not this person's", row.get("note")) if x)

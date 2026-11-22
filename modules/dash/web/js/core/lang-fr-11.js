@@ -205,6 +205,13 @@ export default {
   "What it says it is on (hive me), and when it said so; muted: what it was asked, when it has said nothing": "Ce qu'il dit faire (hive me), et quand il l'a dit ; atténué : ce qu'on lui a demandé, quand il n'a rien dit",
   ", a warden": ", un gardien",
   "you wrote last and no agent has started on it": "tu as écrit en dernier et aucun agent n'a commencé dessus",
+  // E111b: Now's panel of processes no board agent started (ui/helpers.js looseGroup, core subagents.py's type and desc), 2026-11-22
+  "process": "processus",
+  "claude session": "session claude",
+  "warm agent": "agent préchauffé",
+  "booted ahead for the next new agent; waits for its first post": "démarré à l'avance pour le prochain nouvel agent ; attend son premier message",
+  "starting": "démarrage",
+  "(no task given)": "(aucune tâche donnée)",
   __patterns: [
     // from lang-es-15.js
 // the board's bridge held by a page that went quiet (views/board.js, 2026-11-20)
@@ -235,7 +242,7 @@ export default {
 [/^(is|are) finishing for (.+), which has ended(?: \((.+)\))?(\.?)$/, (_, v, who, a, dot) => `${v === "is" ? "termine" : "terminent"} pour ${who === "an agent" ? "un agent" : who}, qui a fini${a ? " (" + a + ")" : ""}${dot}`],
 [/^No agent on the board started this, so there is nobody to write to about it\. (.+) runs it\.$/, (_, w) => `Aucun agent du tableau n'a lancé ceci, donc il n'y a personne à qui écrire à ce sujet. ${w === "Something outside the board" ? "Quelque chose hors du tableau" : w === "the Hive" ? "Le Hive" : w} l'exécute.`],
 [/^(\d+) agents? and (\d+) helpers? finished in the last 24 hours\.$/, (_, a, n) => `${a} ${+a > 1 ? "agents" : "agent"} et ${n} ${+n > 1 ? "assistants" : "assistant"} ${+a + +n > 1 ? "ont terminé" : "a terminé"} ces dernières 24 heures.`],
-[/^ not started by an agent (is|are) also running\.$/, (_, v) => ` sans avoir été lancé${v === "is" ? "" : "s"} par un agent ${v === "is" ? "est aussi en cours" : "sont aussi en cours"}.`],
+[/^not started by an agent (is|are) also running\.$/, (_, v) => `sans avoir été lancé${v === "is" ? "" : "s"} par un agent ${v === "is" ? "est aussi en cours" : "sont aussi en cours"}.`],
 [/^(\d+) process(es)?$/, (_, n) => `${n} processus`],
     // from lang-es-kbwipe.js
 // the server's reasons that end in the system's own words for what went wrong (a file name and the error, left as they come)
@@ -269,5 +276,13 @@ export default {
   + (d ? ` · ${d} pas encore envoyée${+d > 1 ? "s" : ""}` : "") + (o ? ` · ${o} avec l'agent` : "")],
 [/^This passage changed in this revision\. (Comment|Ask): ([\s\S]*)$/, (_, k, t) => `Ce passage a changé dans cette révision. ${({ Comment: "Commenter", Ask: "Demander" })[k]} : ${t}`],
 [/^Note (\d+), (Comment|Ask): ([\s\S]*)$/, (_, n, k, t) => `Note ${n}, ${({ Comment: "Commenter", Ask: "Demander" })[k]} : ${t}`],
-  ],
+  // E111b: Now's panel of outside processes, a helper's calls, and Usage's range buttons ("Last 24h")
+[/^(\d+) process(es)? · Claude Code or Codex run by a session or program outside the board$/, (_, n) => `${n} processus · Claude Code ou Codex lancé par une session ou un programme hors du tableau`],
+[/^tmux session (.+)$/, "session tmux $1"],
+[/^(\d+) helpers? working for (.+)$/, (_, n, o) => `${n} ${+n > 1 ? "assistants" : "assistant"} travaillant pour ${o}`],
+[/^(\d+) calls? so far$/, (_, n) => `${n} ${+n > 1 ? "appels" : "appel"} jusqu'ici`],
+[/^(\d+) calls?$/, (_, n) => `${n} ${+n > 1 ? "appels" : "appel"}`],
+[/^Last (\d+)(h|d)$/, (_, n, u) => u === "h" ? (n === "1" ? "Dernière heure" : `Dernières ${n} h`) : (n === "1" ? "Dernier jour" : `Derniers ${n} jours`)],
+[/^5 hours (none open|reset, not read since)$/, (_, x) => `5 heures : ${x === "none open" ? "aucune ouverte" : "réinitialisé, pas relu depuis"}`],
+],
 };

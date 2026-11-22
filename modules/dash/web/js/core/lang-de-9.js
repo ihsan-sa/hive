@@ -204,6 +204,13 @@ export default {
   "· from rev": "· aus Rev.",
   "Addressed in revision": "Behoben in Revision",
   "This passage changed in this revision.": "Diese Passage hat sich in dieser Revision geändert.",
+  // E111b: Now's panel of processes no board agent started (ui/helpers.js looseGroup, core subagents.py's type and desc), 2026-11-22
+  "process": "Prozess",
+  "claude session": "Claude-Sitzung",
+  "warm agent": "vorgewärmter Agent",
+  "booted ahead for the next new agent; waits for its first post": "im Voraus gestartet für den nächsten neuen Agent; wartet auf seinen ersten Beitrag",
+  "starting": "startet",
+  "(no task given)": "(keine Aufgabe angegeben)",
   __patterns: [
     // from lang-es-15.js
 // the board's bridge held by a page that went quiet (views/board.js, 2026-11-20)
@@ -234,7 +241,7 @@ export default {
 [/^(is|are) finishing for (.+), which has ended(?: \((.+)\))?(\.?)$/, (_, v, who, a, dot) => `${v === "is" ? "schließt" : "schließen"} noch ab für ${who === "an agent" ? "einen Agent" : who}, beendet${a ? " (" + a + ")" : ""}${dot}`],
 [/^No agent on the board started this, so there is nobody to write to about it\. (.+) runs it\.$/, (_, w) => `Kein Agent auf dem Board hat das gestartet, also gibt es niemanden, dem du dazu schreiben kannst. Es läuft über ${w === "Something outside the board" ? "etwas außerhalb des Boards" : w === "the Hive" ? "den Hive" : w}.`],
 [/^(\d+) agents? and (\d+) helpers? finished in the last 24 hours\.$/, (_, a, n) => `${a} ${a === "1" ? "Agent" : "Agenten"} und ${n} Helfer ${a === "1" && n === "1" ? "ist" : "sind"} in den letzten 24 Stunden fertig geworden.`],
-[/^ not started by an agent (is|are) also running\.$/, (_, v) => ` ohne Start durch einen Agent ${v === "is" ? "läuft auch" : "laufen auch"}.`],
+[/^not started by an agent (is|are) also running\.$/, (_, v) => `ohne Start durch einen Agent ${v === "is" ? "läuft auch" : "laufen auch"}.`],
 [/^(\d+) process(es)?$/, (_, n) => `${n} ${n === "1" ? "Prozess" : "Prozesse"}`],
     // from lang-es-kbwipe.js
 // the server's reasons that end in the system's own words for what went wrong (a file name and the error, left as they come)
@@ -280,5 +287,13 @@ export default {
   + (d ? ` · ${d} nicht gesendet` : "") + (o ? ` · ${o} beim Agent` : "")],
 [/^This passage changed in this revision\. (Comment|Ask): ([\s\S]*)$/, (_, k, t) => `Diese Passage hat sich in dieser Revision geändert. ${{ Comment: "Kommentar", Ask: "Anfrage" }[k]}: ${t}`],
 [/^Note (\d+), (Comment|Ask): ([\s\S]*)$/, (_, n, k, t) => `Notiz ${n}, ${{ Comment: "Kommentar", Ask: "Anfrage" }[k]}: ${t}`],
-  ],
+  // E111b: Now's panel of outside processes, a helper's calls, and Usage's range buttons ("Last 24h")
+[/^(\d+) process(es)? · Claude Code or Codex run by a session or program outside the board$/, (_, n) => `${n} ${n === "1" ? "Prozess" : "Prozesse"} · Claude Code oder Codex, gestartet von einer Sitzung oder einem Programm außerhalb des Boards`],
+[/^tmux session (.+)$/, "tmux-Sitzung $1"],
+[/^(\d+) helpers? working for (.+)$/, (_, n, o) => `${n} Helfer ${n === "1" ? "arbeitet" : "arbeiten"} für ${o}`],
+[/^(\d+) calls? so far$/, (_, n) => `${n} ${n === "1" ? "Aufruf" : "Aufrufe"} bisher`],
+[/^(\d+) calls?$/, (_, n) => `${n} ${n === "1" ? "Aufruf" : "Aufrufe"}`],
+[/^Last (\d+)(h|d)$/, (_, n, u) => u === "h" ? (n === "1" ? "Letzte Stunde" : `Letzte ${n} Std.`) : (n === "1" ? "Letzter Tag" : `Letzte ${n} Tage`)],
+[/^5 hours (none open|reset, not read since)$/, (_, x) => `5 Stunden: ${x === "none open" ? "keine offen" : "zurückgesetzt, seitdem nicht gelesen"}`],
+],
 };

@@ -5,7 +5,7 @@ A release is a tag v<major>.<minor>.<patch> on origin; only this major line coun
 5 minutes, and `"update_every_s"` in config.json makes it look for a release less often. `"auto_update": false` stops
 it installing: it still looks, so the app can say a release is there, and `hive update` by hand or Update now in the app
 installs it. `"update_pace": "daily"` makes the timer's run calmer: at most one release a day, and only one out for CALM_AGE (only if picked in Settings; no key means every release, the default).
-`hive update` by hand and Update now always take the newest. Those settings and the state in update.json (tag, newest, checked, at, failed, error) are read by Settings in the app.
+`hive update` by hand and Update now always take the newest, but on a Mac only up to the site's mac-pin (mac_pin()). Those settings and the state in update.json (tag, newest, checked, at, failed, error) are read by Settings in the app.
 What it keeps: the agents' own commits in ~/core (rebased onto the release) and uncommitted edits such as saved settings.
 When either conflicts with the release, the release wins so the Hive still updates: the old state goes to a git branch kept/<tag>-<time>
 in ~/core, and an agent of this Hive is started to see whether any of it still matters (the person, post 110415432d10).
@@ -59,6 +59,24 @@ def claude_update(st):
     env = {"HOME": str(HOME), "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": os.environ.get("LANG", "C.UTF-8"), "CLAUDE_CONFIG_DIR": str(d)}
     try: subprocess.run([claude, "update"], cwd=d, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
     except (OSError, subprocess.SubprocessError): pass
+
+SITE = os.environ.get("HIVE_SITE") or "https://hivelab.ca"
+def mac_pin(st):
+    """On a Mac Hive (~/.hive-host, from the installer), the highest release it may take, or None for no ceiling.
+    While the newest release went out without passing its macOS test, the release train names the last one that passed and
+    the site publishes it as /mac-pin: get-mac.sh installs that tag, and this keeps the timer from climbing past it until the pin goes.
+    A 404 or an answer that isn't a tag means no pin; when the site can't be reached the last pin seen still holds."""
+    try:
+        if (HOME / ".hive-host").read_text()[:16].strip() != "mac": return None
+    except OSError: return None
+    try:
+        with urllib.request.urlopen(SITE.rstrip("/") + "/mac-pin", timeout=15) as r: t = r.read(64).decode("utf-8", "replace").strip()
+    except urllib.error.HTTPError as e: t = st.get("mac_pin", "") if e.code >= 500 else ""
+    except (OSError, ValueError): t = st.get("mac_pin", "")
+    t = t if TAG.match(t) else ""
+    if t: st["mac_pin"] = t
+    else: st.pop("mac_pin", None)
+    return t or None
 
 def tags():
     out = git("ls-remote", "--tags", "--refs", "origin", f"v{MAJOR}.*", timeout=60)
@@ -539,6 +557,8 @@ def update_core(a, st, asked, off):
     skip = st.get("failed", [])
     if not a.auto and not a.check: skip = []  # someone ran it by hand, after fixing what failed, say: try the skipped releases again
     new = [t for t in all_tags if t not in skip and (not st.get("tag") or key(t) > key(st["tag"]))]
+    if new and (pin := mac_pin(st)) and (held := [t for t in new if key(t) > key(pin)]):  # a Mac waits below a release that failed its macOS test
+        new = [t for t in new if key(t) <= key(pin)]; print(f"{held[-1]} is out, but this Mac stays at {pin} or below until it passes on macOS")
     # A fresh install is already on this tag: nothing to do, and nothing to tell anyone.
     if new and not st.get("tag") and git("rev-parse", "HEAD", check=False).stdout == git("rev-parse", "-q", "--verify", f"{new[-1]}^{{commit}}", check=False).stdout:
         st["tag"] = new[-1]; new = []

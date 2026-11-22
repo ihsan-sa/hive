@@ -130,7 +130,13 @@ CONTENTLESS = re.compile(r"[A-Za-z0-9]")
 
 def contentless(post):
     """The waking post said nothing beyond names and punctuation ("???", "!!", a bare mention): there is no ask to grade against."""
-    return bool(post) and not CONTENTLESS.search(re.sub(r"@\w+", "", str(post.get("text") or "")))
+    return bool(post) and not post.get("files") and not CONTENTLESS.search(re.sub(r"@\w+", "", str(post.get("text") or "")))   # a bare mention with a screenshot asks about the screenshot
+
+def attached(post):
+    """The files a post carried, as the grader's line. The person often sends only a screenshot or a PDF with a bare mention:
+    without this the grader saw an empty post and graded the run not_asked or "ask inferred" (13 of 40 such runs not_asked, 11-08..11-22)."""
+    names = [str(f.get("name") or Path(str(f.get("path", ""))).name) for f in (post or {}).get("files") or [] if isinstance(f, dict)]
+    return f" [attached: {', '.join(names[:8])}{' …' if len(names) > 8 else ''}]" if names else ""
 
 def switch_post(p, name):
     """The agent's own post that carries a new model or effort and names it: `hive model X`, or a restart at another effort. It resumes on that post at once."""
@@ -369,7 +375,7 @@ def clip(s, n): s = str(s or "").strip(); return s if len(s) <= n else s[:n] + "
 
 def block(run, post, mine, after):
     lines = [f"RUN {run['key']}: agent {run['name']}, woken by {run['from']} in thread {run['thread']}, ran {run['started'][11:16]} to {run['ended'][11:16]} UTC, " + ("ended its turn waiting on a background job, then was restarted to hand it a new post (not a crash: its work goes on in its next run)" if run.get("parked") else f"exit {run['exit']}"),
-             f"  WAKING POST ({post.get('from') if post else '?'}): {clip((post or {}).get('text'), 1500)}"]
+             f"  WAKING POST ({post.get('from') if post else '?'}): {clip((post or {}).get('text'), 1500)}{attached(post)}"]
     shown = mine if len(mine) <= 6 else mine[:5] + mine[-1:]   # the first few, and the last: the result comes at the end
     for i, p in enumerate(shown):
         if i == 5 and len(mine) > 6: lines.append(f"  ... and {len(mine) - 6} more posts")
@@ -385,7 +391,7 @@ Grades:
   nothing    it posted, but no delivery and no handover: status only, questions back, or the wrong thing
   not_asked  the post asked this agent nothing concrete (a thread update, an acknowledgement, a hand-off to someone else)
 
-Judge only against what the post asked, not whether the work was good. A post that says "stop" or "thanks" and a short reply is not_asked; so is a chase ("???", "hello?", "status?", "done yet?", "did you do it", a note that a wait is due) answered with where things stand, and a post asking for work the person had put on hold, answered by pointing to that hold. A run the starter carried on from the agent's own Next: line is graded against that line: the step done and checked is delivered; finding it can't run yet (not due, waiting) and doing nothing else is nothing, since the run was spent for no step. A memguard post that killed the agent's job asks it to rerun the job or say why it needs no rerun: a reply with a concrete reason none is needed (the result is already in hand, the job was superseded or finished its purpose, a smaller check replaces it, done) is delivered; "it retries by itself" is delivered only if the run shows the retry is set up. Reply with JSON only:
+Judge only against what the post asked, not whether the work was good. A waking post with attached files and few or no words asks the agent to act on those files (a screenshot to look at, a document to review or answer) in the light of the thread: the agent reading them right and doing the evident thing is the ask, not not_asked. A post that says "stop" or "thanks" and a short reply is not_asked; so is a chase ("???", "hello?", "status?", "done yet?", "did you do it", a note that a wait is due) answered with where things stand, and a post asking for work the person had put on hold, answered by pointing to that hold. A run the starter carried on from the agent's own Next: line is graded against that line: the step done and checked is delivered; finding it can't run yet (not due, waiting) and doing nothing else is nothing, since the run was spent for no step. A memguard post that killed the agent's job asks it to rerun the job or say why it needs no rerun: a reply with a concrete reason none is needed (the result is already in hand, the job was superseded or finished its purpose, a smaller check replaces it, done) is delivered; "it retries by itself" is delivered only if the run shows the retry is set up. Reply with JSON only:
 {"grades":[{"run":"<RUN key>","grade":"delivered|partial|nothing|not_asked","why":"<at most 20 words>"}]}
 
 One more job, on delivered and partial runs only. If a post by the agent holds a fact another agent could use months from now in other work, add to that run's grade:
