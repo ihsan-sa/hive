@@ -321,6 +321,27 @@ def not_before(line, t=None):
     except ValueError: return None
     return min(when, t + DEFER_MAX_D * 86400) if when > t else None
 
+JOB_GATE = re.compile(r"\b(?:when|once|after|until)\b[^.;]{0,120}?(?<![/\w])(?:finish(?:es|ed)?|completes?|is done|ends|exists)\b(?!`)", re.I)
+JOB_TICK = re.compile(r"`([^`\s]+)`")
+JOB_CAP = 4 * 3600   # a marker that never comes holds the step this long after the post, then it launches anyway
+def job_marker(line):
+    """The `finished` file a Next waits on, as a path that does not exist yet, or None. Read from the step's words only: "when `lead-list-deans2` finishes",
+    "read `lead-list-deans3/` once `finished` exists", "when `x/finished` exists". The job dir is looked up as written, under ~ and under projects/ (one level of
+    project): an unknown dir, a marker already there, or a dir with no `started` when the words don't name `finished` is no hold. 3 launches on 11-22 (ac009) woke on such a Next minutes after starting the job and could only say
+    it hadn't finished: 2 graded nothing (a3a28)."""
+    step = re.split(r"check:", line, maxsplit=1, flags=re.I)[0]
+    if not (g := JOB_GATE.search(step)): return None
+    for tok in JOB_TICK.findall(step[:g.end()]):
+        tok = tok.rstrip("/")
+        if tok == "finished": continue
+        rel = Path(os.path.expanduser(tok)); rel = rel if rel.name == "finished" else rel / "finished"
+        for b in [Path("/")] if rel.is_absolute() else [HOME, PROJECTS] + sorted(d for d in PROJECTS.glob("*") if d.is_dir()):
+            f = b / rel
+            if f.parent.is_dir() and f.parent != HOME and f.parent != PROJECTS:
+                said = "finished" in step[:g.end()] or (f.parent / "started").exists()   # the job writes markers: a dir that never will doesn't stall the step
+                return None if f.exists() or not said else str(f)
+    return None
+
 MONTHS = {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
 SHORT_DATE = re.compile(r"\b(?:after:?|on or after|not before|until|on)\s*(?:(\d{4}-\d{2}-\d{2})|(\d{2})-(\d{2})(?![\d-])|([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?!\d)|(\d{1,2})\s+([a-z]{3})[a-z]*\b)", re.I)
 def short_date(step, t):
@@ -398,13 +419,14 @@ def _on_run_end(r, c, st, alive):
     chain, hop = chain_of(r, got["post"])
     intent = {"chain": chain, "hop": hop, "run": r.get("session"), "post": got["post"], "name": r.get("name"), "thread": r.get("thread"), "line": got["line"], "since": got["since"], "at": iso()}
     if (nb := not_before(got["line"])): intent["not_before"] = nb   # a dated step waits for its date in enqueue rather than waking an agent that can only say it isn't due
+    if (wf := job_marker(got["line"])): intent["wait_file"] = wf   # a step on a running job waits for its finished marker (JOB_CAP at most)
     why = check(intent, st, c, alive)
     if not why and any(not q.get("continue") for q in (st.get("pending") or {}).get(r.get("name"), [])): why = "agent_queued"  # it wakes anyway
     if why:
         claim(DIR / "done" / safe(got["post"])); drop(intent, why); return None
     DIR.mkdir(parents=True, exist_ok=True)
     tmp = DIR / f".{safe(chain)}.tmp"; tmp.write_text(json.dumps(intent)); tmp.replace(DIR / f"{safe(chain)}.json")
-    record("intent", **{k: intent[k] for k in ("chain", "hop", "thread", "post", "name", "line", "not_before") if k in intent})
+    record("intent", **{k: intent[k] for k in ("chain", "hop", "thread", "post", "name", "line", "not_before", "wait_file") if k in intent})
     return intent
 
 def enqueue(st, c, alive, stays_on):
@@ -418,6 +440,7 @@ def enqueue(st, c, alive, stays_on):
         if mark.exists(): f.unlink(missing_ok=True); continue
         if k["name"] in (alive or {}): continue
         if (k.get("not_before") or 0) > now().timestamp(): continue
+        if k.get("wait_file") and not Path(k["wait_file"]).exists() and now().timestamp() < (k.get("since") or 0) + JOB_CAP: continue
         if k.get("judge") and not judge_acts():
             claim(mark); drop(k, "judge_off"); f.unlink(missing_ok=True); continue
         if (why := check(k, st, c, alive)):

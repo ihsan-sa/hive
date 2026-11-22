@@ -207,6 +207,12 @@ def title_core(title):
     """The page title without the site suffix ("Headline | Site"), folded; "" when too short to be a headline."""
     core = fold(re.split(r"\s[|\u2013\u2014-]\s", title or "")[0]).strip()
     return core if len(core) >= 20 else ""
+EARLIER_JOB = re.compile(r"\b(?:previously|formerly|prior to (?:joining|coming|that)|before (?:joining|coming)|earlier in (?:his|her|their) career|in (?:his|her|their) (?:previous|prior|former) (?:role|position|job)|at (?:several|other|many|previous|prior|former|two|three|four) (?:[\w-]+ ){0,2}(?:institutions|colleges|universities|schools|companies|employers))\b", re.I)
+def sentence_at(text, start, end):
+    """The sentence around text[start:end]: from the last stop or line break before it to the next one after it."""
+    a = max(text.rfind(c, 0, start) for c in ".!?\n") + 1
+    b = min([i for i in (text.find(c, end) for c in ".!?\n") if i >= 0] or [len(text)])
+    return text[a:b]
 NAV_AI = re.compile(r"\b(?:skip to )?ai search\b|\bask ai\b|\bai chat\b|\bai assistant\b", re.I)
 DEV_HOST = re.compile(r"(?:^|[.])(?:www-)?(?:dev|staging|stage|test|qa|uat|preview|sandbox)(?:[.-]|$)", re.I)
 JOB_BOARD = re.compile(r"(?:^|\.)(?:indeed|glassdoor|ziprecruiter|simplyhired|monster|linkedin|careerbuilder|higheredjobs)\.", re.I)
@@ -446,7 +452,7 @@ class Hunt:
             body = low.replace(tc, " " * len(tc)) if tc else low  # the headline is also in the body: its careers word says nothing about the sentences around the AI word (blanked to its own length, so offsets still line up)
             flat = " ".join(clean.split())  # fold() collapses whitespace: cut the excerpt from text with the same spacing, or it comes from the wrong place
             if len(flat) != len(low): flat = low
-            m = next((x for x in people.term_regex(hit_terms[0]).finditer(body) if CAREER_NEAR.search(body[max(0, x.start() - 300):x.end() + 300])), None)  # the word beside a careers or workforce word: AI research news (UT) is not a careers signal
+            m = next((x for x in people.term_regex(hit_terms[0]).finditer(body) if CAREER_NEAR.search(body[max(0, x.start() - 300):x.end() + 300]) and not EARLIER_JOB.search(sentence_at(body, x.start(), x.end()))), None)  # the word beside a careers or workforce word: AI research news (UT) is not a careers signal; nor a leader bio on an AI degree at an earlier employer (SLCC president, fnwords23)
             excerpt = flat[max(0, m.start() - 80):m.end() + 120].strip() if m else ""
             nav = NAV_AI.sub(" ", excerpt)  # "Skip to AI Search" is the site's own menu, not a statement
             words = re.findall(r"[A-Za-z]+", nav)
