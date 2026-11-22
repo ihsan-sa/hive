@@ -306,12 +306,13 @@ def check(intent, st, c, alive):
     if per_day and sum(str(e.get("at", ""))[:10] == day for e in ev) >= per_day: return "budget_day"
     return None
 
-NEXT_AFTER = re.compile(r"\b(?:after:?|on or after|not before)\s*(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}))?", re.I)
+NEXT_AFTER = re.compile(r"\b(?:after:?|on or after|not before|on)\s*(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}))?", re.I)
 DEFER_MAX_D = 14   # a Next dated further out than this is held only this long: superseded() drops it sooner if anyone moves the thread
 def not_before(line, t=None):
     """When a Next line says its step can run, as seconds, if that is later than t (default now); else None. Read the way the keeper reads a rung's
     after: (goals.AFTER, CHECK_ON): a day means 00:00 UTC, and only the step's own words count, not dates in its check. 45 of 654 hops on 11-14..11-21
-    launched on a Next that named a later after-date; graded, 5 of 8 delivered (93% for the rest), with 15 more graded not asked and 3 quiet (aceaa, R58)."""
+    launched on a Next that named a later after-date; graded, 5 of 8 delivered (93% for the rest), with 15 more graded not asked and 3 quiet (aceaa, R58).
+    "on DATE" counts too: "Next: on 2026-11-24 run ..." launched meta-person 3 times a day on 11-19..22 to find it not due (ac89a)."""
     t = t or now().timestamp()
     m = NEXT_AFTER.search(re.split(r"check:", line, maxsplit=1, flags=re.I)[0]) or G.CHECK_ON.search(line)
     if not m: return None
