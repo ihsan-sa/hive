@@ -19,7 +19,6 @@ export default {
   "Add to home screen": "Ajouter à l'écran d'accueil",
   "Put your Hive on your home screen and it opens full screen, like an app.": "Mets ton Hive sur ton écran d'accueil : il s'ouvre en plein écran, comme une application.",
   "Install app": "Installer l'application",
-  "iPhone or iPad: in Safari, tap Share, then Add to Home Screen.": "iPhone ou iPad : dans Safari, touche Partager, puis Sur l'écran d'accueil.",
   "Android or Chrome: open the browser menu, then Install app.": "Android ou Chrome : ouvre le menu du navigateur, puis Installer l'application.",
   "other apps that can reach you, or that the agent can read": "d'autres applications qui peuvent te joindre, ou que l'agent peut lire",
   "Connect other apps": "Connecter d'autres applications",

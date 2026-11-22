@@ -311,7 +311,11 @@ main() {
   # or it fails the same way, with "Failed to connect to bus" after the linger note (lima-vm/lima#5730).
   "$L" shell --workdir / "$VM" sudo sh -c 'timeout 5 loginctl list-sessions >/dev/null 2>&1 || { systemctl kill --signal=SIGKILL systemd-logind.service; systemctl start systemd-logind; }' </dev/null || true
   # shellcheck disable=SC2016  # these expand in the VM
-  "$L" shell --workdir / "$VM" sudo env HIVE_INSIDE=1 HIVE_HOST=mac HIVE_REPORT="${HIVE_REPORT:-}" HIVE_BRANCH="${HIVE_BRANCH:-}" HIVE_VOICE="${HIVE_VOICE:-}" SITE="$SITE" sh -c \
+  # While the newest release failed its Mac test, the site's mac-pin names the last release that passed it, and the VM installs that one.
+  PIN="${HIVE_TAG:-}"; [ -n "$PIN" ] || [ -n "${HIVE_BRANCH:-}" ] || PIN=$(curl -fsS -m 15 "$SITE/mac-pin" 2>/dev/null | head -n 1 || true)
+  printf %s "$PIN" | grep -Eqx 'v2\.[0-9]+\.[0-9]+' || PIN=""
+  [ -z "$PIN" ] || echo "The newest release hasn't passed its Mac test yet, so this installs $PIN, the last one that did. Its auto-update moves it to the newest, and steps back if that fails to install."
+  "$L" shell --workdir / "$VM" sudo env HIVE_INSIDE=1 HIVE_HOST=mac HIVE_REPORT="${HIVE_REPORT:-}" HIVE_BRANCH="${HIVE_BRANCH:-}" HIVE_TAG="$PIN" HIVE_VOICE="${HIVE_VOICE:-}" SITE="$SITE" sh -c \
     '[ -n "$HIVE_BRANCH" ] || unset HIVE_BRANCH; f=$(mktemp); curl -fsSL -o "$f" "$SITE/install.sh" && sh "$f"' </dev/null \
     || die "the install in the VM failed. Run this line again to retry"
 

@@ -3,7 +3,7 @@
 // folder you were in. Folders come from the Knowledge API (/api/kb/open, under the "files" right), so a project file is read
 // the way Knowledge reads it: redacted text, images as images, nothing run.
 import { h } from "../core/dom.js";
-import { can, said } from "../core/store.js";
+import { can, said, jget } from "../core/store.js";
 import { button, icon } from "../ui/kit.js";
 import { threadFiles, kindOf, badgeOf, filesClosedByHand } from "../ui/preview.js";
 import { fix } from "../core/format.js";
@@ -37,9 +37,32 @@ export function drawFiles(head, body, { open, close }) {
     ...(mine.length ? [...group("Outputs", out), ...group("Sources", src)]
       : [h("h3", { class: "pf-h" }, "In this conversation"), h("p", { class: "meta pf-none" }, "No files here yet. Attach one, or ask an agent to.")]));
   const proj = can("files") ? h("section", { class: "pf-sec", "aria-label": "Project files" }, h("h3", { class: "pf-h" }, "Project files"), h("div", { class: "pf-dir" })) : null;
-  body.replaceChildren(h("div", { class: "pf" }, here, proj));
+  // The library's documents, newest first: one opens beside this chat to mark up, its notes coming here (ui/docviewer.js sideViewer).
+  const docs = can("files") && thread() ? h("section", { class: "pf-sec", "aria-label": "Documents", hidden: true }) : null;
+  body.replaceChildren(h("div", { class: "pf" }, here, docs, proj));
   body.scrollTop = 0;
+  if (docs) library(docs, open);
   if (proj) browse(proj.lastChild, dir, open);
+}
+
+const thread = () => { const m = /^#comms\/([^/?]+)/.exec(location.hash); return m ? decodeURIComponent(m[1]) : null; };
+let docsAll = false;
+async function library(box, open) {
+  let list;
+  try { list = (await jget("/api/docs")).docs || []; } catch (e) { return; }
+  if (!list.length || !box.isConnected) return;
+  list.sort((a, b) => (b.at || 0) - (a.at || 0));
+  const th = thread(), N = 5;
+  const draw = () => {
+    const shown = docsAll ? list : list.slice(0, N);
+    box.replaceChildren(...[h("h3", { class: "pf-h" }, "Documents", h("span", { class: "pf-c" }, String(list.length))),
+      ...shown.map(d => row(d.title, ["rev " + d.rev, d.drafts ? d.drafts + " unsent" : "", d.open ? d.open + " open notes" : ""].filter(Boolean).join(" · "), "DOC", "pdf",
+        () => open([{ doc: d.id, name: d.title, thread: th }], 0))),
+      list.length > N ? h("button", { type: "button", class: "pf-row pf-docmore", onclick: () => { docsAll = !docsAll; draw(); } },
+        h("span", { class: "pf-n" }, h("span", { class: "meta" }, docsAll ? "Fewer" : "All " + list.length + " documents"))) : null].filter(Boolean));
+    box.hidden = false;
+  };
+  draw();
 }
 
 async function browse(box, path, open) {

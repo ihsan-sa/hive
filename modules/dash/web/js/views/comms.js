@@ -503,7 +503,7 @@ function searchRows(c, ctx, ws) {
   found.sort((a, b) => a.rest.length - b.rest.length || b.hits.at(-1).t - a.hits.at(-1).t);   // a title or id that holds every search word before a thread that matched only in its posts (ae868, sidebar-sim)
   const all = C.tq.trim();
   return [
-    simpleOn() ? null : { key: "(everything)", href: href("comms", "~all"), title: "All messages", text: `${plural(total, "match", "matches")} in ${plural(found.length, app() ? "conversation" : "thread")}`, current: c.all, onClick: () => { if (c.all) C.q = all; else C.next = all; ctx.update(); } },
+    simpleOn() ? null : { key: "(everything)", href: href("comms", "~all"), title: "All messages", text: found.length ? `${plural(total, "match", "matches")} in ${plural(found.length, app() ? "conversation" : "thread")}` : "Nothing matches", current: c.all, onClick: () => { if (c.all) C.q = all; else C.next = all; ctx.update(); } },
     ...found.map(({ d, hits, rest }) => ({ key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: railTitle(d.name), meta: ago(hits.at(-1).t).replace(" ago", ""),
       lead: tierLead(d.name), onClick: open(d.name, rest.join(" ")),
       text: rest.length ? [`${hits.length} · ${authorName(hits.at(-1).from)}: `, snippet(hits.at(-1), rest)] : `${d.posts.length} · name matches` })),

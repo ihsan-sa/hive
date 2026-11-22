@@ -3,6 +3,7 @@
 // Emphasis is stricter than GFM on purpose: `*` has to open after a space or bracket, so globs and products stay as written.
 // A plain post costs what it always did: maths, footnotes and fences build only light placeholders; js/rich/ draws them near the screen.
 import { h } from "../core/dom.js";
+import { icon } from "./icons.js";
 import { S } from "../core/store.js";
 import { threadHref } from "../core/router.js";
 import { threadTitle, labelCodes, agentLabel, isAgent } from "../core/model.js";
@@ -16,7 +17,7 @@ const KBEXT = "(?:md|markdown|txt|csv|json|ya?ml|py|sh|html|pdf|png|jpe?g|gif|we
 const INLINE = new RegExp([
   "\\\\([\\\\`*_~\\[\\]()#>|!$-])",                                        // 1 escaped character
   "(`+)(?!`)(.+?)(?<!`)\\2(?!`)",                                          // 2,3 code
-  "!?\\[([^\\]\\n]+)\\]\\((https?:\\/\\/[^\\s)]+)(?:\\s+\"[^\"]*\")?\\)",  // 4,5 link or image
+  "!?\\[([^\\]\\n]+)\\]\\((https?:\\/\\/[^\\s)]+|#docs\\/[\\w.-]+)(?:\\s+\"[^\"]*\")?\\)",  // 4,5 link or image; [title](#docs/ID) is a library document
   "\\*\\*(?=\\S)(.+?)(?<=\\S)\\*\\*",                                      // 6 bold
   "(?<![A-Za-z0-9_])__(?=\\S)(.+?)(?<=\\S)__(?![A-Za-z0-9_])",             // 7 bold
   "(?<![^\\s(\\[\"'>])\\*(?=[^\\s*])(.+?)(?<=[^\\s*/])\\*(?![A-Za-z0-9*])", // 8 italic
@@ -31,7 +32,7 @@ const INLINE = new RegExp([
   "(?<![\\w/.~#-])([0-9a-f]{12})(?![\\w/-])",                                  // 17 a bare post or thread id: a link if the board has it
 ].join("|"), "g");
 // Knowledge only (opts.anchors): [text](#heading-slug) also makes a link, to a heading of the same file. Chat keeps INLINE as it was.
-const INLINE_A = new RegExp(INLINE.source.replace("\\((https?:\\/\\/[^\\s)]+)", "\\(((?:https?:\\/\\/|#)[^\\s)]+)"), "g");
+const INLINE_A = new RegExp(INLINE.source.replace("\\((https?:\\/\\/[^\\s)]+|", "\\(((?:https?:\\/\\/|#)[^\\s)]+|"), "g");
 let rx = INLINE, anchors = false, slugs = null;
 const slugOf = s => s.toLowerCase().replace(/[`*_~]|\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[^\p{L}\p{N}\s_-]/gu, "").trim().replace(/\s/g, "-");
 const here = (slug, ...kids) => h("a", { href: "#" + slug, onclick: (e, a) => { e.preventDefault(); const t = [...(a.closest(".md") || document).querySelectorAll("[data-anchor]")].find(x => x.dataset.anchor === slug); if (t) t.scrollIntoView({ block: "start", behavior: "smooth" }); } }, ...kids);
@@ -90,6 +91,7 @@ function run(s, ms) {
     let end = m.index + m[0].length, node;
     if (m[1] != null) node = m[1];
     else if (m[3] != null) { let c = raw(m[3], ms); c = /^ .*[^ ].* $|^ [^ ] $/.test(c) ? c.slice(1, -1) : c; const said = codeName(c), f = !said && FILE.exec(c), k = !said && !f && KBREF.exec(c); node = said ? said : f ? fileRef(f[1], f[2], h("code", null, c)) : k ? kbRef(k[1], h("code", null, c)) : namedRef(c, h("code", null, c)) || h("code", null, c); }
+    else if (m[5] != null && m[5].startsWith("#docs/")) node = h("a", { class: "ref", "data-kind": "doc", "data-pv-key": "doc:" + m[5].slice(6), href: m[5], title: "Open the document " + m[5].slice(6) }, icon("doc"), run(m[4], ms));   // the chat opens it in the side panel (ui/preview.js)
     else if (m[5] != null && anchors && m[5][0] === "#") node = here(m[5].slice(1), run(m[4], ms));
     else if (m[5] != null) { const was = inLink; inLink = true; node = link(raw(m[5], ms), run(m[4], ms)); inLink = was; }
     else if (m[6] != null || m[7] != null) node = h("strong", null, run(m[6] ?? m[7], ms));

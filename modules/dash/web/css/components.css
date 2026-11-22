@@ -3439,6 +3439,9 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
    quiet label first, then the switch, vertically centred on the segment. */
 .cm-show-m{background:none}
 .cm-show-m .cm-views{min-height:28px;flex-wrap:nowrap}
+/* A rail dragged under ~265 px (its floor is 220) had no room for Focus / Recent and the switch on one row: the row stayed 249 px wide and the rail cut
+   "Hide not needed" and its switch off. It may wrap now: the switch drops under the segment there, still pinned right; at 280 px both still fit one row. */
+.cm-show-m .cm-views{flex-wrap:wrap;row-gap:4px}
 .cm-show-m .cm-views .seg button{padding:0 8px}
 .cm-show-m .cm-hidefaded{margin-left:auto;padding:0 2px 0 0;gap:6px;color:var(--ink-3)!important;font-weight:var(--w-med);white-space:nowrap;min-width:0}
 .cm-show-m .cm-hidefaded:hover{color:var(--ink)!important}
@@ -3638,7 +3641,6 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .dv-field{display:block;width:100%;box-sizing:border-box;border:0;outline:0;resize:none;background:transparent;color:#15140F;font:inherit;padding:2px 0;margin:0}
 .dv-field::placeholder{color:#8F897F}
 .dv-text-ro{white-space:pre-wrap}
-.dv-hint{margin-top:4px;font:11px var(--mono);color:#77716A}
 .dv-acts{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
 .dv-acts>.dv-hint{flex:1;margin-top:0;align-self:center}
 @media (forced-colors:active){.dv-hl{forced-color-adjust:none;background:Highlight!important;opacity:.45}.dv-box{border:2px solid CanvasText!important}.dv-pin{forced-color-adjust:none;border:1px solid CanvasText}}
@@ -3661,17 +3663,12 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .dv-tool{height:var(--ctl-s);padding:0 10px;border:1px solid var(--edge);border-radius:var(--r-m);background:var(--surface);color:var(--ink);font:var(--fs-small) var(--font);cursor:pointer}
 .dv-tool[aria-pressed=true]{background:var(--ink);color:var(--on-ink);border-color:var(--ink)}
 .dv-tip{color:var(--ink-3);font-size:var(--fs-meta)}
-.dv-general .dv-hint,.dv-pn .dv-hint{color:var(--ink-3)}
 .dv-gfield{display:block;width:100%;box-sizing:border-box;min-height:52px;padding:6px 9px;border:1px solid var(--edge);border-radius:var(--r-m);background:var(--surface);color:var(--ink);font:var(--fs-small)/1.45 var(--font);resize:vertical}
 .dv-chat .dv-gfield{margin-top:var(--s2)}
 .dv-sec-h{display:flex;align-items:center;justify-content:space-between;gap:var(--s2);margin-bottom:var(--s1)}
 .dv-sec h2,.dv-sec>summary{margin:0;font-size:var(--fs-small);font-weight:var(--w-bold);color:var(--ink-2)}
 .dv-sec>summary{cursor:pointer;padding:2px 0}
-.dv-send{height:var(--ctl-s);padding:0 12px;border:0;border-radius:var(--r-m);background:var(--accent);color:var(--on-accent);font:var(--w-med) var(--fs-small) var(--font);cursor:pointer}
-.dv-send[disabled]{opacity:.6;cursor:default}
 .dv-list{list-style:none;margin:0;padding:0}
-.dv-item{display:flex;align-items:flex-start;gap:6px;padding:6px 0;border-top:1px solid var(--line)}
-.dv-item:first-child{border-top:0}
 .dv-item-go{display:flex;gap:8px;flex:1;min-width:0;align-items:flex-start;border:0;background:none;padding:2px 4px;margin:-2px -4px;border-radius:var(--r-s);color:inherit;font:inherit;text-align:left;cursor:pointer}
 .dv-item-go:hover:not([disabled]){background:var(--hover)}
 .dv-item-go[disabled]{cursor:default}
@@ -3680,10 +3677,10 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .dv-item-w{color:var(--ink-3);font-size:var(--fs-meta)}
 .dv-item-q{color:var(--ink-3);font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dv-item-x{white-space:pre-wrap;overflow-wrap:anywhere}
-.dv-mini{flex:none;height:24px;padding:0 8px;border:1px solid var(--edge);border-radius:var(--r-s);background:var(--surface);color:var(--ink);font:var(--fs-meta) var(--font);cursor:pointer}
-.dv-mini[disabled]{opacity:.6}
 .dv-posts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--s2);font-size:var(--fs-small)}
 .dv-posts div{color:var(--ink-2);overflow-wrap:anywhere}
+/* Beside a conversation (ui/preview.js showDoc): one column in the side panel, the notes and Send above the pages. */
+.dv[data-side] .dv-title{display:none}
 @media (max-width:900px){
   .dv{grid-template-columns:minmax(0,1fr)}
   .dv-side{position:static;max-height:none}
@@ -3692,3 +3689,187 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 }
 @media (forced-colors:active){.dv-card{border:2px solid CanvasText;background:Canvas;color:CanvasText}.dv-drawing{border-color:CanvasText}.dv-send,.dv-tool[aria-pressed=true]{forced-color-adjust:none;background:ButtonText;color:ButtonFace}.dv-pin:focus-visible{outline:2px solid Highlight}}
 @media (max-width:699px){ .dvp>.dv-back{display:none} }   /* the chat place's own back arrow is there on a phone */
+
+/* Mark-up on a file in the preview panel (js/preview/markup.js): a Note button by the selection, its card, and the notes bar. */
+.pv-mk-go{position:absolute;z-index:5;box-shadow:var(--e2)}
+.pv-mk-go[hidden],.pv-mk-card[hidden],.pv-mk[hidden]{display:none}
+.pv-mk-card{position:absolute;z-index:6;width:min(340px,calc(100% - 16px));display:flex;flex-direction:column;gap:var(--s2);padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:var(--e3)}
+.pv-mk-in{width:100%;min-height:52px;resize:vertical;font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:inherit}
+.pv-mk-q{font-size:.85em;color:var(--ink-2);border-left:3px solid var(--accent);padding-left:8px;overflow-wrap:anywhere}
+.pv-mk-row{display:flex;align-items:center;gap:var(--s2);min-width:0}
+.pv-mk-card .pv-mk-row .meta{flex:1;font-size:.8em}
+.pv-mk{flex:none;display:flex;flex-direction:column;gap:var(--s2);padding:8px 10px 8px 14px;border-top:1px solid var(--line);background:var(--surface);max-height:45%;overflow:auto}
+.pv-mk-n{background:none;border:0;padding:4px 2px;font:inherit;font-weight:600;color:inherit;cursor:pointer;min-height:28px}
+.pv-mk-list{margin:0;padding:0 0 0 1.4em;display:flex;flex-direction:column;gap:6px}
+.pv-mk-list li{display:grid;grid-template-columns:1fr auto;column-gap:6px;align-items:start}
+.pv-mk-list li>.pv-mk-q,.pv-mk-list li>.pv-mk-t{grid-column:1}
+.pv-mk-t{overflow-wrap:anywhere;white-space:pre-wrap}
+.pv-mk-list li>.pv-mk-x{grid-column:2;grid-row:1 / span 2}
+.pv-mk-err{color:var(--bad);font-size:.9em}
+
+/* Document review beside a chat: new and changed rules (doc-side handoff, 2026-11-21).
+   Load AFTER dv-pv.css / components.css. Every value comes from tokens.css; the paper colours of the page, pins and note card stay
+   literal on purpose (they sit on a white PDF page in both themes, which is forced to color-scheme:light).
+   DELETE from dv-pv.css (replaced below):
+     .pv[data-kind=doc] .pv-s{padding:var(--s3)}
+     .dv[data-side]{grid-template-columns:minmax(0,1fr);gap:var(--s3)}
+     .dv[data-side] .dv-side{position:static;max-height:none}
+     .dv[data-side] .dv-pn{gap:var(--s3);padding-bottom:0}
+     .dv[data-side] .dv-list{max-height:28vh;overflow:auto}
+     .dv-general .dv-hint,.dv-pn .dv-hint{color:var(--ink-3)}
+     .dv-send{...} .dv-send[disabled]{...}      (restyled below)
+     .dv-item{...} .dv-item:first-child{...}     (restyled below)
+     .dv-mini{...} .dv-mini[disabled]{...}       (restyled below)
+     .dv-hint{...}                               (restyled below: no more monospace) */
+
+/* ================= 1. the panel header: one row ================= */
+/* DOC · title · rev ▾ ············ ↗ ⤢ ×  (no second row, no folder button: Files stays on the conversation's own folder icon) */
+.pv[data-kind=doc] .pv-h{flex-direction:row;align-items:center;gap:0;padding:6px 6px 6px var(--s3);background:var(--surface);border-bottom:1px solid var(--line)}
+.pv[data-kind=doc] .pv-t{flex:1;min-width:0;gap:var(--s2)}
+.pv-n1{flex:1;min-width:0;flex-direction:row;align-items:center;gap:var(--s1)}
+.pv-n1>.pv-fn{flex:0 1 auto;min-width:0;font-size:var(--fs-body)}
+.pv-tools{flex:none;display:flex;align-items:center;gap:2px}
+.pv-tools>.btn[data-kind=icon]{width:var(--ctl-s);height:var(--ctl-s)}
+/* the revision picker: a native <select> (keyboard, screen readers and the phone's own picker all work), drawn as quiet text "rev B ▾" */
+.dv-revw{position:relative;flex:none;display:inline-flex;align-items:center;color:var(--ink-3)}
+.dv-revw::after{content:"";position:absolute;right:6px;top:50%;width:10px;height:10px;margin-top:-5px;background:currentColor;pointer-events:none;
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") center/contain no-repeat;
+          mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") center/contain no-repeat}
+.dv-revw:hover,.dv-revw:focus-within{color:var(--ink)}
+.dv-rev{-webkit-appearance:none;appearance:none;height:var(--ctl-s);padding:0 20px 0 6px;border:0;border-radius:var(--r-s);background:transparent;color:inherit;font:var(--fs-meta)/1 var(--font);font-variant-numeric:tabular-nums;cursor:pointer}
+.dv-rev:hover{background:var(--hover)}
+.dv-rev:focus-visible{outline:none;box-shadow:var(--ring)}
+.dv-revw[data-old]{color:var(--warn-ink)}   /* an older revision is shown: the word itself says so ("rev A · older") */
+
+/* ================= 2. the body: the page first ================= */
+.pv[data-kind=doc] .pv-s{padding:0;overflow:hidden;display:flex;flex-direction:column}
+.dv[data-side]{flex:1;min-height:0;display:flex;flex-direction:column;align-items:stretch;gap:0}   /* align-items: the full page's grid sets start */
+.dv[data-side] .dv-pages{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;gap:var(--s3);padding:var(--s3) var(--s3) var(--s5);background:var(--sunken);scroll-padding:var(--s3)}
+.dv[data-side] .dv-page{flex:none}
+body[data-pv-full] .pv[data-kind=doc] .dv[data-side] .dv-pages{padding-inline:max(var(--s3),calc((100% - 900px) / 2))}   /* expanded: the page stops at 900 px, centred */
+
+/* ================= 3. the notes tray: strip + drawer, under the page ================= */
+.dv[data-side] .dv-side{flex:none;max-height:58%;min-height:0;display:flex;flex-direction:column;background:var(--surface);box-shadow:0 -1px 0 var(--line)}
+.dv[data-side] .dv-panel,.dv[data-side] .dv-pn{flex:1;min-height:0;display:flex;flex-direction:column;gap:0;padding:0}
+/* the strip: always there, one row, never covers the page */
+.dv-strip{flex:none;display:flex;align-items:center;gap:var(--s1);min-height:52px;padding:var(--s2) var(--s2) var(--s2) var(--s2)}
+.dv-strip>.dv-sp{flex:1;min-width:0}
+.dv-tip{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-3);font-size:var(--fs-meta)}
+@container (max-width:460px){.dv-strip .dv-tip{display:none}}
+/* Box: a quiet tool; pressed, it is ink and says how to leave */
+.dv-tool{display:inline-flex;align-items:center;gap:6px;height:var(--ctl);padding:0 10px;border:0;border-radius:var(--r-m);background:none;color:var(--ink-2);font:var(--w-med) var(--fs-small)/1 var(--font);white-space:nowrap;cursor:pointer}
+.dv-tool:hover{background:var(--hover);color:var(--ink)}
+.dv-tool>svg{width:16px;height:16px;flex:none}
+.dv-tool[aria-pressed=true]{background:var(--ink);color:var(--on-ink)}
+.dv-tool:focus-visible,.dv-count:focus-visible,.dv-send:focus-visible,.dv-mini:focus-visible,.dv-item-go:focus-visible{outline:none;box-shadow:var(--ring)}
+/* Notes ▴ with its count: the toggle for the drawer (a span with the same look on the full page, where nothing folds) */
+.dv-count{display:inline-flex;align-items:center;gap:var(--s2);height:var(--ctl);padding:0 8px 0 10px;border:0;border-radius:var(--r-m);background:none;color:var(--ink-2);font:var(--fs-small)/1 var(--font);white-space:nowrap;cursor:pointer}
+button.dv-count:hover{background:var(--hover);color:var(--ink)}
+.dv-count>svg{width:14px;height:14px;flex:none;color:var(--ink-3);transition:transform var(--dur) var(--ease)}
+.dv-count[aria-expanded=true]>svg{transform:rotate(180deg)}
+.dv-count>.dv-cw{color:var(--ink)}
+.dv-count>.dv-cs{color:var(--ink-3)}
+.dv-count>.dv-cs::before{content:"·";margin-right:var(--s2)}
+@container (max-width:420px){.dv-count>.dv-cs{display:none}}   /* on a phone: "Notes ② ▴" + Send; the drawer says the rest */
+/* the number: amber (yours to act on) while notes wait to be sent; grey when they are only with the agent */
+.dv-num{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;box-sizing:border-box;border-radius:var(--r-pill);background:var(--sunken);color:var(--ink-2);font:var(--w-bold) var(--fs-micro)/1 var(--font);font-variant-numeric:tabular-nums}
+.dv-num[data-tone=info]{background:var(--accent);color:var(--on-accent)}
+/* Send: the page's one primary button, ink like every primary button */
+.dv-send{display:inline-flex;align-items:center;gap:6px;height:var(--ctl);padding:0 14px 0 12px;border:0;border-radius:var(--r-m);background:var(--ink);color:var(--on-ink);font:var(--w-med) var(--fs-small)/1 var(--font);white-space:nowrap;cursor:pointer;transition:background-color var(--dur)}
+.dv-send:hover{background:color-mix(in oklch,var(--ink) 86%,var(--surface))}
+.dv-send>svg{width:16px;height:16px;flex:none}
+.dv-send[disabled]{opacity:.55;cursor:default}
+
+/* the drawer: the list, opened from the strip; the page above shrinks, it is never covered */
+.dv-drawer{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:var(--s1) var(--s3) 0}
+.dv-drawer[hidden]{display:none}
+.dv[data-side] .dv-drawer{border-bottom:1px solid var(--line)}
+.dv-sec{margin-top:var(--s3)}
+.dv-sec:first-child{margin-top:var(--s2)}
+.dv-sec h2,.dv-sec>summary{margin:0 0 var(--s1);font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
+.dv-sec>summary{cursor:pointer;padding:2px 0;list-style:none}
+.dv-sec>summary::-webkit-details-marker{display:none}
+.dv-sec>summary::after{content:" ▸"}
+.dv-sec[open]>summary::after{content:" ▾"}
+.dv-sec-h{display:flex;align-items:center;justify-content:space-between;gap:var(--s2)}
+.dv-item{display:flex;align-items:flex-start;gap:var(--s1);margin:0 calc(-1 * var(--s2));padding:2px var(--s2);border:0;border-radius:var(--r-m)}
+.dv-item:hover,.dv-item[data-on]{background:var(--tint)}
+.dv-item[data-on]{box-shadow:inset 2px 0 0 var(--accent)}
+.dv-item-go{padding:6px 0;margin:0;gap:10px}
+.dv-item-go:hover:not([disabled]){background:none}
+.dv-item-t{gap:2px}
+.dv-item-x{color:var(--ink);font-size:var(--fs-body);line-height:var(--lh-tight)}
+.dv-item-q{font-size:var(--fs-meta)}
+.dv-item-w{font-size:var(--fs-micro);color:var(--ink-3)}
+.dv-item[data-status=addressed] .dv-item-x{color:var(--ink-3)}
+.dv-dot[data-done]{background:var(--sunken)!important;color:var(--ink-3)}   /* addressed: a grey number; the inline colour is for open notes */
+.dv-item-st{display:inline-flex;align-items:center;gap:4px}
+.dv-item-st>svg{width:12px;height:12px}
+/* a row's own actions are quiet text, shown on hover or focus; always shown on touch */
+.dv-mini{flex:none;align-self:center;display:inline-flex;align-items:center;gap:4px;height:var(--ctl-s);padding:0 8px;border:0;border-radius:var(--r-s);background:none;color:var(--ink-2);font:var(--fs-meta)/1 var(--font);white-space:nowrap;cursor:pointer;opacity:0;transition:opacity var(--dur)}
+.dv-mini>svg{width:14px;height:14px}
+.dv-mini:hover{background:var(--hover);color:var(--ink)}
+.dv-mini[disabled]{opacity:.5;cursor:default}
+.dv-item:is(:hover,:focus-within,[data-on]) .dv-mini{opacity:1}
+@media (hover:none){.dv-mini{opacity:1}}
+.dv-mini[data-kind=x]{width:var(--ctl-s);padding:0;justify-content:center;color:var(--ink-3)}
+/* the whole-document note: the drawer's last line, sticky so it is there however long the list */
+.dv-general{position:sticky;bottom:0;margin:var(--s3) calc(-1 * var(--s3)) 0;padding:var(--s2) var(--s3) var(--s3);background:var(--surface)}
+.dv-gfield{min-height:0;height:auto;padding:8px 10px;border-radius:var(--r-m);resize:none;field-sizing:content;max-height:8lh}
+.dv-gfield::placeholder{color:var(--ink-3)}
+/* notices (new revision here, older revision shown, being filed, could not save): a line above the strip */
+.dv-flash{flex:none;display:flex;flex-direction:column;gap:var(--s1);padding:var(--s2) var(--s2) 0}
+.dv-flash>.dv-note{display:flex;align-items:center;gap:var(--s2);margin:0;padding:6px 6px 6px 10px}
+.dv-flash>.dv-note>span{flex:1;min-width:0}
+.dv-note[data-tone=quiet]{background:var(--sunken);color:var(--ink-2)}
+.dv-flash .dv-link{flex:none;padding:4px 8px;border-radius:var(--r-s);text-decoration:none;font-weight:var(--w-med)}
+.dv-flash .dv-link:hover{background:var(--tint)}
+
+/* ================= 4. the note card on the page ================= */
+.dv-hint{margin-top:4px;font:var(--fs-micro)/1.3 var(--font);color:#77716A}   /* was monospace: "Enter adds · Shift+Enter new line" in words */
+.dv-hint kbd{font:inherit;font-weight:var(--w-bold);color:#4A4740}
+@media (hover:none){.dv-card .dv-acts>.dv-hint{visibility:hidden}}   /* on touch the Add button is the way; keyboard hints are noise */
+.dv-act[data-primary]{background:#15140F;border-color:#15140F;color:#FDFCF8}
+.dv-act[data-primary]:hover{background:#3A3832}
+@media (pointer:coarse){.dv-act{min-height:36px;padding:0 14px}.dv-kind{padding:6px 8px}.dv-x{padding:6px 8px;margin:-6px -8px -6px 0}}
+
+/* ================= 5. phone: the panel is a bottom sheet (max-width:700px) ================= */
+@media (max-width:700px){
+  .pv[data-kind=doc] .pv-h{padding:2px 4px 4px var(--s3)}
+  .pv-tools>.btn[data-kind=icon]{width:var(--ctl-l);height:var(--ctl-l)}
+  .dv-rev{height:var(--ctl-l)}
+  .dv[data-side] .dv-pages{padding:var(--s2) var(--s2) var(--s4)}
+  .dv-strip{min-height:60px;padding:var(--s2) var(--s2) calc(var(--s2) + env(safe-area-inset-bottom,0px))}
+  .dv-tool,.dv-count,.dv-send{height:var(--ctl-l)}
+  .dv-mini{height:var(--ctl-l)}
+  .dv[data-side] .dv-side{max-height:62%}
+  .pv[data-kind=doc]{padding-bottom:0}   /* the strip carries the safe area itself */
+}
+
+/* ================= 6. the full Documents page (#docs/ID): page left, notes right, same parts ================= */
+.dv:not([data-side]) .dv-side{display:flex;flex-direction:column;max-height:calc(100dvh - var(--bar-h) - 16px);overflow:visible}
+.dv:not([data-side]) .dv-panel,.dv:not([data-side]) .dv-pn{flex:1;min-height:0;display:flex;flex-direction:column;gap:0;padding:0}
+.dv:not([data-side]) .dv-head{flex:none;padding-bottom:var(--s2)}
+.dv:not([data-side]) .dv-drawer{padding:0 0 var(--s2);margin:0 calc(-1 * var(--s2));padding-inline:var(--s2)}
+.dv:not([data-side]) .dv-flash{padding:0 0 var(--s2)}
+.dv:not([data-side]) .dv-strip{position:sticky;bottom:0;margin:0 calc(-1 * var(--s2));padding-inline:var(--s2);border-top:1px solid var(--line);background:var(--bg)}
+.dv:not([data-side]) .dv-general{background:var(--bg);margin-inline:calc(-1 * var(--s2));padding-inline:var(--s2)}
+.dv:not([data-side]) .dv-meta .dv-revw{margin-left:calc(-1 * var(--s1))}
+
+/* ================= 7. the chat: a document link ================= */
+/* inline, in the sentence: a link like a file link (underlined), with a small page glyph */
+a.ref[data-kind=doc]{display:inline;font-weight:inherit;color:var(--ink);text-decoration:underline;text-decoration-color:var(--ink-3);text-underline-offset:2px;cursor:pointer}
+a.ref[data-kind=doc]:hover{text-decoration-color:var(--ink)}
+a.ref[data-kind=doc]>.ic{width:1em;height:1em;margin-right:2px;vertical-align:-.14em;color:var(--ink-3)}
+a.ref[data-kind=doc][data-pv-on]{background:color-mix(in oklab,var(--accent) 16%,transparent);border-radius:var(--r-s)}
+/* and under the message, a card like a file attachment (.msg-file), with what it is and where its notes stand */
+.msg-file[data-kind=doc]>b{color:var(--ink-2)}
+.msg-file[data-kind=doc] .msg-st{font-size:var(--fs-micro);color:var(--ink-3)}
+.msg-file[data-kind=doc] .msg-st[data-tone=info]{color:var(--accent-ink);font-weight:var(--w-med)}
+
+/* ================= 8. zoom: Fit / 150% / 200% (the header's zoom button, Ctrl/⌘ + wheel or pinch, double-tap on a phone) ================= */
+.dv-pages{--z:1}
+.dv[data-side] .dv-pages[data-zoom]{align-items:flex-start}
+.dv[data-side] .dv-page{width:calc(var(--z) * 100%)}
+.pv-zoom{min-width:44px;font-variant-numeric:tabular-nums}
+.dv:not([data-side]) .dv-general{position:static}   /* full page: the Conversation section follows it in the same column */

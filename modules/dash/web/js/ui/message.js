@@ -18,7 +18,8 @@ import { replyTo, draft, quoteRef } from "./composer.js";
 import { wordButton } from "./rootword.js";
 import { voiceMemo, VOICE } from "./voicememo.js";
 import { readAloud, stopReading, reading } from "./speak.js";
-import { openPreview, previewKey, kindOf, badgeOf, remember } from "./preview.js";
+import { openPreview, openDoc, previewKey, kindOf, badgeOf, remember } from "./preview.js";
+import { docMeta } from "./docmeta.js";
 import { boxIds, boxEmbed, boxesOn, dropBoxLines } from "./pybox.js";
 
 // ---- read marks ----
@@ -164,6 +165,26 @@ function attachment(p, f) {
     ...body, h("span", { class: "msg-open" }, icon("download"), "Download"));
   return h("button", { type: "button", class: "msg-file", title: "Open " + f.name + " beside the conversation", "data-pv-key": key, "data-pv-on": on, "data-kind": k, onclick: () => viewFile(p, f) },
     ...body, h("span", { class: "msg-open" }, OPEN_VERB[k] || "Open"));
+}
+
+// A library document linked in a post ([title](#docs/<id>)) also gets a card under it, like an attached file: its revision and
+// how many notes wait, and a click opens it beside the conversation to mark up (ui/preview.js openDoc; design ~/designs/doc-side).
+const DOCRX = /\[([^\]\n]+)\]\(#docs\/([\w.-]+)\)/g;
+function docCards(p) {
+  const seen = new Set(), out = [];
+  for (const [, name, id] of (p.text || "").matchAll(DOCRX)) {
+    if (seen.has(id)) continue; seen.add(id);
+    const m = docMeta(id), key = "doc:" + id, title = (m && m.title) || name;
+    const st = m && (m.drafts ? [`${m.drafts} note${m.drafts > 1 ? "s" : ""} to send`, "info"] : m.open ? [`${m.open} note${m.open > 1 ? "s" : ""} with the agent`, null] : null);
+    out.push(h("button", { type: "button", class: "msg-file", "data-kind": "doc", "data-key": key, "data-pv-key": key, "data-pv-on": previewKey() === key ? "" : null,
+        title: `Open ${title} beside the conversation, to mark it up`, onclick: () => openDoc(id, title) },
+      h("b", { "aria-hidden": "true" }, "DOC"),
+      h("span", null, h("span", { class: "msg-fn" }, title),
+        h("span", { class: "meta" }, ["Document", m && m.rev && "rev " + m.rev, m && m.pages && m.pages + (m.pages > 1 ? " pages" : " page")].filter(Boolean).join(" · ")),
+        st ? h("span", { class: "msg-st", "data-tone": st[1] }, st[0]) : null),
+      h("span", { class: "msg-open" }, "Open")));
+  }
+  return out;
 }
 
 // ---- long posts: the start and the end show, the middle folds, so a report's conclusion is never the hidden part ----
@@ -438,7 +459,7 @@ export function message(p, opts = {}) {
   return opts.showThread === false ? inConversation(p.th, () => appMessage(p, opts)) : appMessage(p, opts);   // read in its own conversation, it names agents by their place there
 }
 function appMessage(p, opts) {
-  const files = p.files || [], ws = opts.mark;
+  const files = p.files || [], ws = opts.mark, docs = docCards(p);
   if (ws && ws.length && !OPEN.has(p.id) && displayText(p).length > LONG) {
     const lc = displayText(p).toLowerCase(), f = fold(displayText(p));
     if (f && ws.some(w => lc.includes(w)) && !ws.some(w => (f.head + f.tail).toLowerCase().includes(w))) OPEN.add(p.id);
@@ -460,7 +481,7 @@ function appMessage(p, opts) {
       p.reply_to ? quote(p) : null,
       EDIT.id === p.id ? editBox(p, opts) : boxes.length && !q.disp ? null : body(q, ws),
       boxes.length ? h("div", { class: "msg-boxes", "data-key": "boxes" }, boxes.map(id => boxEmbed(p.id, id))) : null,
-      files.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f))) : null,
+      files.length || docs.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f)), docs) : null,
       tagChips(p),
       split ? didFold(p, split) : null,
       kind === "agent" ? ranFold(p) : null,
@@ -742,7 +763,7 @@ function devHead(p, showThread) {
     h("span", { class: "msg-end" }, h("time", { class: "meta num", datetime: p.at, title: p.at }, clock(p.t))));
 }
 function devMessage(p, opts) {
-  const long = devBody(p).length > DEV_LONG, files = p.files || [], ws = opts.mark;
+  const long = devBody(p).length > DEV_LONG, files = p.files || [], ws = opts.mark, docs = docCards(p);
   // A word found past the cut would look like a false match: open the post so it shows.
   if (long && ws && ws.length && !OPEN.has(p.id)) {
     const lc = p.text.toLowerCase(), cut = mdCut(p.text, DEV_CUT).toLowerCase();
@@ -753,7 +774,7 @@ function devMessage(p, opts) {
     devHead(p, opts.showThread !== false),
     devTools(p, ws),
     cut(devBodyEl(p, ws)),
-    files.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f))) : null,
+    files.length || docs.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f)), docs) : null,
     tagChips(p),
     long ? button(moreLabel(p), (e, b) => {
       if (OPEN.has(p.id)) OPEN.delete(p.id); else OPEN.add(p.id);
