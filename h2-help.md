@@ -176,7 +176,7 @@ hive forget ID: remove a line from the person's memory when they ask (`hive reme
 
 ## hive remind
 
-hive remind at +1h|09:00|"2026-11-20 09:00" TEXT | every "0 8 * * *" TEXT [--to NAME] [--thread T] | list [--thread T] | rm ID: a reminder or recurring post into the chat that asked (default the thread that woke you), as `remind`, to person by default; the hive-remind timer posts what is due each minute. Use it for any reminder or scheduled job: never write a systemd timer or cron line (core/remind.py)
+hive remind at +1h|09:00|"2026-11-20 09:00" TEXT | every "0 8 * * *" TEXT [--to NAME] [--thread T] | list [--thread T] | rm ID: a reminder or recurring post into the chat that asked (default the thread that woke you), as `remind`, to person by default; the hive-remind timer posts what is due each minute. Use it for any reminder or scheduled job: never write a systemd timer or cron line. Waiting on something outside (a job's finished file, a printer back on line, a key the person pins)? Add --if "CMD" [--wait 24h]: it posts only once that shell check exits 0 (rechecked every 15 min, posted anyway when the wait runs out), so nobody is woken to say not yet; on a schedule a failing check skips that firing. Not from the sandbox (core/remind.py)
 
 ## hive focus
 

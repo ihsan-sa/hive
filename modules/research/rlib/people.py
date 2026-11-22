@@ -536,6 +536,17 @@ def names_org(org, text):
     return fold(org) in low or fold(org_core(org)) in low
 
 
+def org_words(org):
+    """The distinctive words of an organisation's name: 'Harper' for Harper College, 'american' for American University."""
+    return [t for t in re.findall(r"[a-z0-9]+", fold(org_core(org))) if t not in ORG_NOISE] or re.findall(r"[a-z0-9]+", fold(org_core(org)))
+
+
+def org_words_in(text, org):
+    """Does the text name the organisation by its distinctive words? A staff newsletter says "Harper", not "Harper College"."""
+    low = fold(text)
+    return all(re.search(rf"\b{re.escape(w)}\b", low) for w in org_words(org))
+
+
 def org_near(text, name, org, window=300):
     """Is the organisation named close to the person, by the distinctive words of its name? A long page can name the college and also a panel of people from elsewhere."""
     low = fold(text)

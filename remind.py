@@ -3,6 +3,11 @@
   hive remind at WHEN TEXT [--to NAME] [--thread T]     WHEN: +30m, +2h, +1d, HH:MM (next one), or 2026-11-06T09:00 / "2026-11-06 09:00" (local time)
   hive remind every "M H DOM MON DOW" TEXT [--to NAME] [--thread T]     five-field cron: * , - / lists, ranges, steps; DOW 0-7
   hive remind list [--thread T]     hive remind rm ID     hive remind tick (what the hive-remind timer runs once a minute: posts what is due)
+  --if "CMD" [--wait 24h]   (with at or every) post only once the shell check CMD exits 0: a reminder that waits on something outside
+                            (a job's `finished` file, a printer back on line, a key pinned) wakes nobody to say "not yet". At the due time
+                            and every 15 min after, CMD runs (20 s cap, in ~); a one-shot posts when it passes, or after --wait (default
+                            24h, at most 7d) anyway, saying the check still failed. A schedule skips a firing whose check fails.
+                            e.g. hive remind at +30m "read deans3/REVIEW.md" --to a1b2c --if "test -e ~/projects/x/deans3/finished"
 The thread defaults to the one that woke you (the asking chat). --to is person (the default) or an agent's own name.
 The post is made as `remind` into that thread, `@NAME TEXT`, addressed to NAME. Moved here from the arm-remind module so it works on a fresh install."""
 import datetime as dt, fcntl, json, os, re, secrets, subprocess, sys
@@ -40,7 +45,12 @@ def check_names(*names):
 
 
 THREAD = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,100}")
-MAX_FAILS = 30  # a post that fails this many ticks in a row (a thread hive refuses) is dropped, not retried forever
+MAX_FAILS = 30
+CHECK_EVERY_MIN = 15      # an unmet --if is looked at again this often
+CHECK_TIMEOUT_S = 20
+WAIT_DEFAULT_H, WAIT_MAX_H = 24, 7 * 24
+# i0423 (a3810, 2026-11-22): 15 of the 21 reminder wakes graded nothing or partial in the 7 days to 11-22 were polls of an outside
+# condition that had not changed (printer off line, key not pinned, lease held, replay not finished): a whole model run to say "not yet".  # a post that fails this many ticks in a row (a thread hive refuses) is dropped, not retried forever
 
 
 def mine(it, by, here):
@@ -116,7 +126,22 @@ def lock(path):
     f = open(str(path) + ".lock", "w"); fcntl.flock(f, fcntl.LOCK_EX); return f
 
 
-def add(kind, when, text, to="person", thread=None, store=None, now=None, by=""):
+def parse_wait(s):
+    m = re.fullmatch(r"\+?(\d+)([mhd])", str(s).strip())
+    if not m: fail(f"can't read --wait {s!r} (e.g. 6h, 2d)")
+    h = int(m[1]) * {"m": 1 / 60, "h": 1, "d": 24}[m[2]]
+    if not 0 < h <= WAIT_MAX_H: fail(f"--wait is at most {WAIT_MAX_H // 24}d")
+    return h
+
+
+def check(cmd, run=subprocess.run):
+    """True when the --if shell check exits 0. A check that hangs or can't start counts as not met."""
+    env = {k: v for k, v in os.environ.items() if k not in ("HIVE_NAME", "HIVE_THREAD")}
+    try: return run(["bash", "-c", cmd], cwd=str(HOME), env=env, capture_output=True, timeout=CHECK_TIMEOUT_S, stdin=subprocess.DEVNULL).returncode == 0
+    except (subprocess.TimeoutExpired, OSError): return False
+
+
+def add(kind, when, text, to="person", thread=None, store=None, now=None, by="", cond=None, wait=None):
     store, now = store or STATE / "reminders.json", now or dt.datetime.now()
     thread = thread or woke_thread() or fail("which thread? add --thread T")
     if not THREAD.fullmatch(thread): fail(f"{thread!r} is not a thread id")
@@ -131,6 +156,10 @@ def add(kind, when, text, to="person", thread=None, store=None, now=None, by="")
         items = load(store)
         if sum(i.get("by") == by for i in items) >= MAX_ITEMS or len(items) >= 10 * MAX_ITEMS: fail("too many reminders; remove some")
         item = {"id": secrets.token_hex(3), "due": due.isoformat(timespec="minutes"), "cron": cron, "to": to, "thread": thread, "text": text, "by": by}
+        if cond:
+            item["if"] = cond
+            if not cron: item["until"] = (due + dt.timedelta(hours=parse_wait(wait) if wait else WAIT_DEFAULT_H)).isoformat(timespec="minutes")
+        elif wait: fail("--wait goes with --if")
         save(items + [item], store)
     return item
 
@@ -138,12 +167,13 @@ def add(kind, when, text, to="person", thread=None, store=None, now=None, by="")
 def post_as_remind(item, late=False, run=subprocess.run):
     """Posted as `remind`, never as the person. The setter's own text keeps its mentions; they were checked when set and are checked again now."""
     check_names(item["to"], *MENTION.findall(item["text"]))
-    text = f"@{item['to']} " + item["text"] + (" (this was due earlier; the machine was off or busy)" if late else "")
+    text = (f"@{item['to']} " + item["text"] + (" (this was due earlier; the machine was off or busy)" if late else "")
+            + (f" (the check `{item['if']}` still fails; posted because its wait ran out)" if item.get("gave_up") else f" (its check `{item['if']}` now passes)" if item.get("if") else ""))
     env = {k: v for k, v in os.environ.items() if k not in ("HIVE_NAME", "HIVE_THREAD")}
     run([sys.executable, "-I", str(CORE / "hive"), "post", "--as", "remind", "--to", item["to"], "--thread=" + item["thread"]], input=text, text=True, capture_output=True, check=True, env=env, timeout=120)
 
 
-def tick(store=None, now=None, post=post_as_remind):
+def tick(store=None, now=None, post=post_as_remind, checker=check):
     store, now = store or STATE / "reminders.json", now or dt.datetime.now()
     fired = []
     with lock(store):
@@ -153,6 +183,13 @@ def tick(store=None, now=None, post=post_as_remind):
             except (KeyError, TypeError, ValueError): print("remind: dropped an unreadable item", json.dumps(it)[:200], file=sys.stderr); continue
             if due > now: keep.append(it); continue
             late = (now - due).total_seconds() > 1800
+            if it.get("if"):
+                if checker(it["if"]): it.pop("gave_up", None)
+                elif it["cron"]: keep.append({**it, "due": next_after(it["cron"], now).isoformat(timespec="minutes")}); continue  # this firing skipped
+                elif now < dt.datetime.fromisoformat(it.get("until") or it["due"]):
+                    keep.append({**it, "due": (now + dt.timedelta(minutes=CHECK_EVERY_MIN)).isoformat(timespec="minutes"), "first_due": it.get("first_due", it["due"])}); continue
+                else: it = {**it, "gave_up": True}
+                if it.get("first_due"): late = False   # held on purpose, not missed
             try: post(it, late)
             except SystemExit as e: print(f"remind: dropped {it.get('id')}: {e}", file=sys.stderr); continue  # a name it may no longer use: retrying won't help
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, KeyError):
@@ -171,7 +208,7 @@ def options(a):
     opts = {}
     def take(i):
         f, eq, v = a[i].partition("=")
-        if f not in ("--to", "--thread"): return False
+        if f not in ("--to", "--thread", "--if", "--wait"): return False
         if not eq:
             if i + 1 >= len(a): fail(f"{f} needs a value")
             v = a.pop(i + 1)
@@ -187,15 +224,18 @@ def options(a):
 
 def main(argv):
     a, opts = options(list(argv)); to, thread = opts.get("--to", "person"), opts.get("--thread")
+    cond, wait = opts.get("--if"), opts.get("--wait")
+    if cond is not None and not cond.strip(): fail("--if needs a shell check")
+    if cond is not None and os.environ.get("HIVE_REMIND_NO_IF"): fail("--if can't be set from inside the sandbox (its check runs outside it)")
     by = os.environ.get("HIVE_NAME") or "person"
     if a[:1] in (["at"], ["every"]) and len(a) >= 3:
         when, rest = a[1], a[2:]
         if a[0] == "at" and len(rest) > 1 and re.fullmatch(r"\d\d:\d\d", rest[0]) and re.fullmatch(r"\d{4}-\d\d-\d\d", when): when, rest = f"{when} {rest[0]}", rest[1:]
-        it = add(a[0], when, " ".join(rest), to, thread, by=by); print(it["id"], "next", it["due"], "in", it["thread"], "(stop it: hive remind rm " + it["id"] + ")")
+        it = add(a[0], when, " ".join(rest), to, thread, by=by, cond=cond, wait=wait); print(it["id"], "next", it["due"], "in", it["thread"], (f"once `{cond}` passes" + (f", or at {it['until']} anyway " if it.get("until") else " ")) if cond else "", "(stop it: hive remind rm " + it["id"] + ")")
     elif a[:1] == ["list"]:
         here = woke_thread() if by != "person" else None
         items = [it for it in load(STATE / "reminders.json") if mine(it, by, here) and (not thread or it["thread"] == thread)]
-        for it in items: print(it["id"], it["due"], it["cron"] or "once", "@" + it["to"], it["thread"], it["text"][:60])
+        for it in items: print(it["id"], it["due"], it["cron"] or "once", "@" + it["to"], it["thread"], it["text"][:60] + (f"  [if {it['if'][:50]}]" if it.get("if") else ""))
         if not items: print("no reminders" + (f" in {thread}" if thread else ""))
     elif a[:1] == ["rm"] and len(a) == 2:
         with lock(STATE / "reminders.json"):

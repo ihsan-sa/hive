@@ -40,7 +40,7 @@ const inCard = () => { const a = document.activeElement; return !!(a && a.closes
 export function leave() { if (V) { V.ac.abort(); V = null; } }
 
 /** The live viewer for document `base` in the side panel, its notes going to `thread`. It polls by itself while open. */
-// slots: { title, rev, zoom } in the panel's header (ui/preview.js showDoc): the title, the revision picker and the zoom button live there.
+// slots: { title, rev, zoom, dl } in the panel's header (ui/preview.js showDoc): the title, the revision picker, the zoom button and Download live there.
 export function sideViewer(base, thread, slots = null) {
   if (SV && SV.base === base && SV.side.thread === thread) { SV.wire(slots); return SV.el; }
   sideLeave();
@@ -372,6 +372,7 @@ function make(base, side = null) {
     const s = v.slots, d = v.d; if (!s || !d) return;
     if (s.title) { s.title.textContent = d.title; s.title.title = d.title; }
     if (s.rev) mount(s.rev, revPicker(d));
+    if (s.dl) mount(s.dl, dlLink(d, true));
   };
   pagesEl.addEventListener("wheel", e => {
     if (!v.side || !(e.ctrlKey || e.metaKey)) return;
@@ -439,6 +440,13 @@ function make(base, side = null) {
     mount(panelEl, panel(posts));
     v.paintHead();
   };
+  // Download: the PDF of the revision on screen, as a file (the person, 112213048ac8). The raw route sends a PDF as an attachment.
+  function dlLink(d, iconOnly) {
+    if (!d.path) return null;
+    const name = d.path.split("/").pop(), say = tr("Download") + " " + (d.rev === "next" ? tr("the revision being filed") : "rev " + d.rev);
+    return h("a", { class: "btn dv-dl", "data-key": "dl", "data-kind": iconOnly ? "icon" : "quiet", "data-size": "s", href: "/api/kb/raw?path=" + encodeURIComponent(d.path), download: name, title: say + " (" + name + ")", "aria-label": say },
+      icon("download"), iconOnly ? null : h("span", null, tr("Download")));
+  }
   function revPicker(d) {
     const latest = d.revs[d.revs.length - 1], old = !!(v.rev && v.rev !== latest.rev);
     return h("label", { class: "dv-revw", "data-old": old ? "" : null }, h("span", { class: "vh" }, "Revision"),
@@ -488,7 +496,7 @@ function make(base, side = null) {
         onkeydown: e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); const t = e.target.value.trim(); if (t) reply(t, e.target); } } }) : null);
     return h("div", { class: "dv-pn" },
       side ? null : h("div", { class: "dv-head", "data-key": "head" }, h("h1", { class: "dv-title" }, d.title),
-        h("div", { class: "dv-meta" }, h("span", null, d.id), revPicker(d), d.pages ? h("span", null, d.pages.length + (d.pages.length > 1 ? " pages" : " page")) : null)),
+        h("div", { class: "dv-meta" }, h("span", null, d.id), revPicker(d), d.pages ? h("span", null, d.pages.length + (d.pages.length > 1 ? " pages" : " page")) : null, dlLink(d, false))),
       h("div", { class: "dv-drawer", id: did, "data-key": "drawer", hidden: !open || null, role: side ? "region" : null, "aria-label": side ? "Notes" : null },
         drafts.length ? section("To send", drafts, item) : null,
         sent.length ? section("With the agent", sent, item) : null,

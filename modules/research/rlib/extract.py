@@ -158,6 +158,7 @@ SECOND_LEVEL = {"ac", "co", "com", "edu", "gov", "net", "org"}
 
 def registrable(host):
     """foo.bar.edu -> bar.edu; foo.ac.uk -> foo.ac.uk."""
+    if re.fullmatch(r"[\d.]+|\[?[0-9a-f:]+\]?", host or ""): return host  # an IP address is its own site, not "0.1"
     parts = host.split(".")
     if len(parts) >= 3 and len(parts[-1]) == 2 and parts[-2] in SECOND_LEVEL: return ".".join(parts[-3:])
     return ".".join(parts[-2:])
