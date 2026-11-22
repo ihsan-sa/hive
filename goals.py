@@ -366,6 +366,27 @@ def post_model_args(text, model):
     the worker's own `hive model` (review 110618506919)."""
     return ["--model", model] if model and text.startswith("@new ") else []
 
+NO_RUNG_MODEL, NO_RUNG_FROM = "opus", ("sonnet", "haiku")
+def no_rung_model(row, text, model, chosen=None, sets=None):
+    """A keeper round with no rung to take asks for judgement (what else would move the Measure), not a step to carry out, and over
+    11-15..11-22 Sonnet delivered 45 of 59 such rounds (76%) to Opus's 29 of 31 (94%); 14 of the 17 misses were Sonnet (hive-meta R59,
+    misses.py --days 7). The step-up never caught them: outcomes.step_up skips keeper rounds. So a no-rung brief to a fresh agent asks
+    for NO_RUNG_MODEL, and one to a woken worker held on a cheaper model writes the model-set file the grader's step-up writes (the
+    starter holds it from the next run; the worker steps down with `hive model sonnet --next`). A worker on Opus, Fable or a provider
+    model is left alone. Returns (model for post_model_args, model-set path written or None)."""
+    if row.get("rung"): return model, None
+    if text.startswith("@new "): return NO_RUNG_MODEL, None
+    name = text.split()[0].lstrip("@") if text.startswith("@") else ""
+    if not re.fullmatch(r"[a-z][0-9a-f]{4,}", name): return model, None
+    try: held = (chosen if chosen is not None else json.loads((HOME / ".hive" / "starter.json").read_text()).get("chosen", {})).get(name) or {}
+    except (OSError, ValueError): return model, None
+    if held.get("model") not in NO_RUNG_FROM or held.get("free"): return model, None
+    f = Path(sets or HOME / ".hive" / "model-set") / f"{name}.json"
+    if f.exists(): return model, None
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"model": NO_RUNG_MODEL, "why": f"goals: keeper round on {row.get('thread')} with no rung to take, on {held['model']} (hive-meta R59)"}))
+    return model, f
+
 def graded(worker, thread, n=1, path=None, tail=600_000):
     """The newest `n` runs of `worker` in `thread` that hive outcomes graded on its work (delivered, partial, nothing, silent), newest first.
     Reads only the file's tail: the brief wants the last rounds, not the history."""
@@ -671,7 +692,8 @@ def main():
             sys.exit(f"{th}: its work tier is {why} (`hive tier why {th}`), so the starter would hold the brief. No round posted; --force posts one anyway.")
         if not a.force and (why := person_held_of([th]).get(th)):
             sys.exit(f"{th}: {why}. No round posted; --force posts one anyway (only once the person has said to go on).")
-        cmd = ["hive", "post", "--thread", th] + post_model_args(b, a.model)
+        model, _ = no_rung_model(r, b, a.model)
+        cmd = ["hive", "post", "--thread", th] + post_model_args(b, model)
         sys.exit(subprocess.run(cmd, input=b, text=True).returncode)
     if a.idle: g["rows"] = [r for r in g["rows"] if r["idle"]]
     print(json.dumps(g, indent=1, default=str) if a.json else render(g))
