@@ -9,6 +9,7 @@ import { h, tr } from "../core/dom.js";
 import { stamp, ago, fix } from "../core/format.js";
 import { button, icon, copyPress, scrim } from "./kit.js";
 import { href } from "../core/router.js";
+import { sideViewer, sideLeave } from "./docviewer.js";
 
 /** A file's kind, from its name: picks the renderer and the badge. */
 export const KINDS = [
@@ -46,7 +47,7 @@ const kbRaw = it => "/api/kb/raw?path=" + encodeURIComponent(it.kb) + (/\.html?$
 export const kbRawOk = it => /\.(png|jpe?g|gif|webp|pdf)$/i.test(it.name);
 export const fileHref = it => (it.kb ? kbRaw(it) : `/files/${String(it.id).split("/").map(encodeURIComponent).join("/")}/${encodeURIComponent(it.name)}`);   // id groups/<focus>: a group's file
 export const viewHref = it => (it.kb ? kbRaw(it) : fileHref(it) + (VIEW.has(kindOf(it.name)) ? "?view=1" : ""));
-export const keyOf = it => (it.kb ? "kb:" + it.kb + (it.box ? "#box=" + it.box : "") : it.id + "/" + it.name);   // a Python box pinned from the chat (pybox.js) is its own item
+export const keyOf = it => (it.doc ? "doc:" + it.doc : it.kb ? "kb:" + it.kb + (it.box ? "#box=" + it.box : "") : it.id + "/" + it.name);   // a Python box pinned from the chat (pybox.js) is its own item
 // Every file chip drawn in a message, by key, so the Files list can show this conversation's files with their size and sender.
 const KNOWN = new Map();
 export const remember = it => { KNOWN.set(keyOf(it), it); return it; };
@@ -94,7 +95,7 @@ function mark() {
 
 /** Open items[i] in the panel. Opening while it's open just switches the file. */
 export function openPreview(items, i = 0) {
-  items = (items || []).filter(x => x && (x.id || x.kb) && x.name);
+  items = (items || []).filter(x => x && (x.id || x.kb || x.doc) && x.name);
   if (!items.length) return;
   shell();
   P.items = items; P.list = false;
@@ -106,7 +107,7 @@ export function openPreview(items, i = 0) {
 export function openFiles(auto) {
   if (auto !== true) { try { localStorage.removeItem(AUTO); } catch (e) {} }   // opened by hand: it opens by itself again
   shell();
-  P.list = true; P.seq++; clearTimeout(P.live); P.ctl && P.ctl.abort(); P.ctl = null;
+  P.list = true; P.seq++; clearTimeout(P.live); P.ctl && P.ctl.abort(); P.ctl = null; sideLeave(); unmark();
   P.root.setAttribute("aria-label", tr("Files")); P.root.dataset.kind = "files"; P.foot.hidden = true;
   P.auto = auto === true; placeFiles();
   mark();
@@ -183,7 +184,7 @@ function shell() {
 
 export function closePreview() {
   if (!P.root) return;
-  P.ctl && P.ctl.abort(); clearTimeout(P.live);
+  P.ctl && P.ctl.abort(); clearTimeout(P.live); sideLeave(); unmark();
   P.root.remove(); P.grip.remove(); document.body.removeAttribute("data-pv"); document.body.removeAttribute("data-pv-full");
   if (P.blob) { URL.revokeObjectURL(P.blob); P.blob = null; }
   const back = P.back;
@@ -326,6 +327,9 @@ async function show(k) {
   const n = P.items.length; P.i = ((k % n) + n) % n;
   const it = P.items[P.i], my = ++P.seq;
   P.ctl && P.ctl.abort(); P.ctl = new AbortController(); clearTimeout(P.live);
+  if (it.doc) { unmark(); return showDoc(it); }
+  sideLeave();
+  if (P.mk && P.mk.k !== keyOf(it)) unmark();
   P.root.setAttribute("aria-label", tr("Preview of " + it.name));
   P.root.dataset.kind = kindOf(it.name);
   header(it, null);
@@ -344,19 +348,84 @@ async function show(k) {
   if (my !== P.seq || !P.root || P.list) return;
   header(it, r);
   P.body.replaceChildren(r.node);
+  marks(it, r);
   live(it, my, { t: 0, size: 0 });
 }
+
+// Text a file shows in the panel can be marked up, the notes sent to this conversation (preview/markup.js). Pictures, sound, video
+// and pages in a frame can't be selected here; a library document has its own viewer (showDoc).
+const NOMARK = new Set(["image", "video", "audio", "html", "pdf"]);
+function marks(it, r) {
+  const th = hashThread(), k = keyOf(it);
+  if (P.mk && P.mk.k === k && P.mk.th === th) return;
+  unmark();
+  if (!th || NOMARK.has(kindOf(it.name)) || !r || !r.node || r.node.classList.contains("pv-err")) return;
+  const my = P.seq;
+  import("../preview/markup.js").then(m => {
+    if (my !== P.seq || !P.root || P.list || P.mk) return;
+    const where = it.kb ? it.kb : it.id ? "attached to post " + it.id : it.name;
+    P.mk = Object.assign(m.markup(it, th, { root: P.root, body: P.body, key: k, where }), { k, th });
+    P.root.insertBefore(P.mk.bar, P.foot);
+  });
+}
+function unmark() { if (P.mk) { P.mk.stop(); P.mk = null; } }
+
+// A library document (it.doc, its id) opens in the Documents viewer, to mark up here: select text or draw a box, and the notes go
+// to the conversation it was opened from (it.thread) and its agent (ui/docviewer.js sideViewer). The person, 112122559e33.
+function showDoc(it) {
+  P.root.setAttribute("aria-label", tr("Mark up " + it.name)); P.root.dataset.kind = "doc";
+  P.foot.hidden = true;
+  // One row: the title and the revision picker, then zoom, open on the Documents page, full width, close. The viewer fills the
+  // title, mounts the picker in the slot and wires the zoom button (ui/docviewer.js sideViewer).
+  const title = h("span", { class: "pv-fn", title: it.name }, it.name), rev = h("span", { class: "pv-revslot" });
+  const zoom = button("Fit", () => {}, { kind: "quiet", size: "s", cls: "pv-zoom" });
+  P.head.replaceChildren(
+    h("div", { class: "pv-t" },
+      button("All files", openFiles, { kind: "icon", icon: "folder", size: "s", cls: "pv-files" }),
+      h("b", { class: "pv-badge", "data-kind": "pdf" }, "DOC"),
+      h("div", { class: "pv-n pv-n1" }, title, rev),
+      h("span", { class: "pv-tools" },
+        zoom,
+        h("a", { class: "btn", "data-kind": "icon", "data-size": "s", href: href("docs", it.doc), title: tr("Open on the Documents page"), "aria-label": tr("Open on the Documents page") }, icon("open")),
+        fullBtn(),
+        button("Close (Esc)", closePreview, { kind: "icon", icon: "close", size: "s", cls: "pv-x" }))));
+  P.body.replaceChildren(sideViewer(it.doc, it.thread, { title, rev, zoom }));
+  P.body.scrollTop = 0;
+  mark();
+}
+const hashThread = () => { const m = /^#comms\/([^/?]+)/.exec(location.hash); return m ? decodeURIComponent(m[1]) : null; };
+/** Open library document `id` beside the conversation, its notes going to `thread` (the one on screen). */
+export function openDoc(id, name, thread = hashThread()) { if (thread) openPreview([{ doc: id, name: name || "Document " + id, thread }], 0); }
 
 // Capture, so Escape closes the preview and doesn't reach the view under it. A window open on top gets it first; so does
 // the agent panel and a full-screen figure when they're open (they close first, then a second Escape closes this).
 addEventListener("keydown", e => {
   if (e.key !== "Escape" || !P.root || document.querySelector("dialog[open]") || document.querySelector("aside.panel") || document.querySelector(".rc-fig[data-full]")) return;   // a full-screen figure is on top: its own Escape handler closes it first
   if (document.fullscreenElement) return;
+  if (P.root.querySelector(".dv-card,.dv[data-boxing],.dv[data-side] .dv-count[aria-expanded=true]")) return;   // a note being written or a box being drawn: the viewer's Escape cancels that first
+  const mc = P.root.querySelector(".pv-mk-card:not([hidden])"), mg = P.root.querySelector(".pv-mk-go:not([hidden])");
+  if (mc || mg) { e.stopPropagation(); if (mc) { mc.hidden = true; } else { mg.hidden = true; getSelection().removeAllRanges(); } return; }   // a file note being written, or the Note button up: Escape drops that first
   e.stopPropagation();
   const m = P.root.querySelector(".pv-menu:not([hidden]):not(.pv-sv)");
   if (m) m._shut(); else closePreview();
 }, true);
-addEventListener("hashchange", () => { if (P.root && P.list && !/^#comms\/./.test(location.hash)) { closePreview(); return; } if (P.root) mark(); });   // the Files list belongs to a conversation: leaving it closes it
+addEventListener("hashchange", () => {
+  if (P.root && P.list && !/^#comms\/./.test(location.hash)) { closePreview(); return; }
+  const it = P.root && !P.list && P.items[P.i];
+  if (it && it.doc && hashThread() !== it.thread) { closePreview(); return; }   // its notes are for the conversation it was opened from
+  if (P.root) mark();
+});
+
+// A library document linked in a message ([title](#docs/<id>)) opens beside the conversation, to mark up there.
+document.addEventListener("click", e => {
+  const a = e.target.closest && e.target.closest('#main a[href^="#docs/"]');
+  if (!a || e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+  const th = hashThread(), id = decodeURIComponent(a.getAttribute("href").slice(6)).split(/[?#/]/)[0];
+  if (!th || !id || !a.closest(".msg,.md")) return;
+  e.preventDefault();
+  const name = a.textContent.trim().replace(/^#docs\/\S+$/, "") || "Document " + id;
+  openDoc(id, name, th);
+});   // the Files list belongs to a conversation: leaving it closes it
 
 // A project path in a message (markdown.js: data-kind=kbfile) opens the live panel on that file.
 document.addEventListener("click", e => {

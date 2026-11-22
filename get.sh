@@ -238,8 +238,11 @@ clone() {
   step "Getting the Hive"
   retry fetch || die "couldn't download the Hive from $REPO. Check this machine's internet connection, then run the same line again"
   # A release is a tag, and only a tag has been through the tests. HIVE_BRANCH asks for that branch as it stands.
+  # HIVE_TAG names one release to install instead of the newest: the Mac line sets it while the newest failed its Mac test (get-mac.sh, mac-pin).
   if [ -z "${HIVE_BRANCH:-}" ]; then
-    TAG=$(git -C "$T/hive" tag -l 'v2.*' | grep -E '^v2\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
+    TAG=""
+    if printf %s "${HIVE_TAG:-}" | grep -Eqx 'v2\.[0-9]+\.[0-9]+' && git -C "$T/hive" rev-parse -q --verify "refs/tags/$HIVE_TAG" >/dev/null 2>&1; then TAG=$HIVE_TAG; fi
+    [ -n "$TAG" ] || TAG=$(git -C "$T/hive" tag -l 'v2.*' | grep -E '^v2\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
     [ -z "$TAG" ] || git -C "$T/hive" checkout -q -B "$BRANCH" "$TAG" >&3 2>&3
   fi
   # Kept apart, because the clone itself gets moved.

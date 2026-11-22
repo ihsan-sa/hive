@@ -1,7 +1,7 @@
 // "Brought up for you": threads an agent raised with `hive show THREAD --why ...`, pinned in the Chat side list, over Conversations, until their time is up or the person dismisses them.
 import { h } from "../core/dom.js";
 import { S, emit, loadShown, post } from "../core/store.js";
-import { threadTitle } from "../core/model.js";
+import { threadTitle, agentLabel, inConversation } from "../core/model.js";
 import { threadHref } from "../core/router.js";
 import { now } from "../core/format.js";
 import { button } from "./kit.js";
@@ -12,6 +12,9 @@ function dismiss(th) {
   post("/api/shown", { thread: th }).catch(() => {}).finally(loadShown);
 }
 
+// Who raised it: the app look names no code (E10), so the agent goes by its place in that conversation ("The agent"); the developer look keeps the code.
+const who = r => { const n = inConversation(r.thread, () => agentLabel(r.from)) || ""; return n && n !== r.from ? n[0].toUpperCase() + n.slice(1) : n; };
+
 export function brought() {
   const live = (S.shown || []).filter(r => r.until * 1000 > now());
   if (!live.length) return null;
@@ -20,6 +23,6 @@ export function brought() {
     live.map(r => h("div", { class: "brought-r", "data-key": r.thread },
       h("a", { class: "brought-i", href: threadHref(r.thread), title: r.why || null },
         h("span", { class: "brought-t" }, threadTitle(r.thread)),
-        h("span", { class: "meta brought-w" }, r.from + (r.why ? ": " + r.why : ""))),
+        h("span", { class: "meta brought-w" }, who(r) + (r.why ? ": " + r.why : ""))),
       button(`Dismiss ${threadTitle(r.thread)}`, () => dismiss(r.thread), { kind: "icon", icon: "close", size: "s", cls: "brought-x" }))));
 }

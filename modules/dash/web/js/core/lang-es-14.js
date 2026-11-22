@@ -104,7 +104,6 @@ export default {
   "Add to home screen": "Añadir a la pantalla de inicio",
   "Put your Hive on your home screen and it opens full screen, like an app.": "Pon tu Hive en la pantalla de inicio y se abre a pantalla completa, como una app.",
   "Install app": "Instalar app",
-  "iPhone or iPad: in Safari, tap Share, then Add to Home Screen.": "iPhone o iPad: en Safari, toca Compartir y luego Añadir a pantalla de inicio.",
   "Android or Chrome: open the browser menu, then Install app.": "Android o Chrome: abre el menú del navegador y luego Instalar app.",
   // the head's job rows (comms.js jobRows, HA-24)
   "Job": "Trabajo",

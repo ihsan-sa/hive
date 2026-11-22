@@ -4,10 +4,15 @@
 // file, files the new revision in the library, and marks the notes it addressed (docs.py addressed). The rest stay open and are drawn
 // on the newer revision, found again by their quoted words. The person, 11211810943e and 112118149ee3.
 // One live element per document, kept across the app's redraws: views/docs.js returns a bare stand-in (data-own) carrying _real.
+// sideViewer(base, thread): the same viewer in the chat's side panel (ui/preview.js), its notes and replies sent to that conversation
+// and its agent rather than doc-<id> (the person, 112122559e33).
 import { h, mount, selecting } from "../core/dom.js";
 import { S, jget, post } from "../core/store.js";
 import { ago } from "../core/format.js";
 import { threadHref } from "../core/router.js";
+import { partner, isAgent } from "../core/model.js";
+import { icon } from "./icons.js";
+import { docMetaRefresh } from "./docmeta.js";
 
 const C = { comment: "#C2552C", ask: "#4F6D8A", draw: "#4A4740" };
 const HL = { comment: "rgba(217,120,80,0.30)", ask: "rgba(79,109,138,0.22)" };
@@ -17,26 +22,43 @@ const BOXKEY = isMac ? "⌘⇧X" : "Ctrl+Shift+X";
 const KINDWORD = { comment: "Comment", ask: "Ask" };
 
 let V = null;   // the open document: { base, el, d, ... }
+let SV = null;  // the one open in the chat's side panel, with { side: { thread } }
 
 /** The live viewer for document `base`, or its stand-in when it is already on the page. */
 export function viewer(base, ctx) {
   if (!V || V.base !== base) { if (V) V.ac.abort(); V = make(base); }
   V.ctx = ctx;
-  if (!V.d && !V.loading) load();
+  if (!V.d && !V.loading) load(V);
   V.syncPanel();
   if (!V.el.isConnected) return V.el;
   const c = V.el.cloneNode(false); c._real = V.el; return c;
 }
 /** The poll: a newer revision or the agent's marks show up without a reload, but never under a card being written. */
-export function poll() { if (V && V.el.isConnected && !V.compose && !V.open && !V.sending && !inCard() && !selecting()) load(); }
+export function poll() { if (quiet(V)) load(V); }
+const quiet = v => v && v.el.isConnected && !v.compose && !v.open && !v.sending && !v.loading && !inCard() && !selecting();
 const inCard = () => { const a = document.activeElement; return !!(a && a.closest && a.closest(".dv-card")); };
 export function leave() { if (V) { V.ac.abort(); V = null; } }
 
-async function load() {
-  const v = V; v.loading = true;
+/** The live viewer for document `base` in the side panel, its notes going to `thread`. It polls by itself while open. */
+// slots: { title, rev, zoom } in the panel's header (ui/preview.js showDoc): the title, the revision picker and the zoom button live there.
+export function sideViewer(base, thread, slots = null) {
+  if (SV && SV.base === base && SV.side.thread === thread) { SV.wire(slots); return SV.el; }
+  sideLeave();
+  const v = SV = make(base, { thread });
+  v.wire(slots);
+  load(v);
+  const t = setInterval(() => { if (SV !== v) return clearInterval(t); if (quiet(v) && !document.hidden) load(v); }, 4000);
+  v.ac.signal.addEventListener("abort", () => clearInterval(t));
+  return v.el;
+}
+/** The side panel closed or moved on: its viewer stops. */
+export function sideLeave() { if (SV) { SV.ac.abort(); SV = null; } }
+
+async function load(v) {
+  v.loading = true;
   try {
     const d = await jget(`/api/docs/doc?id=${encodeURIComponent(v.base)}` + (v.rev ? `&rev=${encodeURIComponent(v.rev)}` : ""));
-    if (v !== V) return;
+    if (v.ac.signal.aborted) return;
     // The banner is for a revision that arrived while the page was open, not for the person switching back to the latest.
     const was = v.d, last = d.revs?.at(-1)?.rev, newer = was && v.latest && last !== v.latest && !v.rev;
     v.latest = last;
@@ -46,12 +68,12 @@ async function load() {
     v.d = d; v.err = null; v.dataSig = sg;
     if (!was || d.sha !== was.sha || d.rev !== was.rev) v.drawPages();
     if (!same || newer) v.paint();
-  } catch (e) { if (v === V) { v.err = e.message; v.paint(); } }
+  } catch (e) { if (!v.ac.signal.aborted) { v.err = e.message; v.paint(); } }
   finally { v.loading = false; }
 }
 function arrived(d, was) {
   const now = d.notes.filter(n => n.addressedIn === d.rev).length, open = d.notes.filter(n => n.status === "sent").length;
-  return `Revision ${d.rev} is here` + (now ? `: ${now} note${now > 1 ? "s" : ""} addressed` : "") + (open ? `, ${open} still open (drawn below)` : "") + ".";
+  return `Revision ${d.rev} is here` + (now ? `: ${now} note${now > 1 ? "s" : ""} addressed` : "") + (open ? `, ${open} still open (drawn on the page)` : "") + ".";
 }
 
 // ---- the text layer: transparent words over the page picture, so the browser's own selection works ----
@@ -110,12 +132,13 @@ function placed(d) {
 }
 const where = n => n.p == null ? "whole document" : (n.box ? "box, " : "") + "p. " + n.p;
 
-function make(base) {
+function make(base, side = null) {
   const ac = new AbortController(), sig = ac.signal;
-  const v = { base, ac, d: null, rev: null, compose: null, open: null, boxMode: false, banner: null, err: null, panelSig: "" };
+  const v = { base, side, ac, d: null, rev: null, compose: null, open: null, boxMode: false, banner: null, err: null, panelSig: "", tray: false, zoom: 1, slots: null };
   const pagesEl = h("div", { class: "dv-pages", "aria-label": "Document pages" });
   const panelEl = h("div", { class: "dv-panel" });
-  const el = h("div", { class: "dv", "data-key": "dv:" + base, "data-own": "", "data-sig": base }, pagesEl, h("aside", { class: "dv-side", "aria-label": "Notes" }, panelEl));
+  const el = side ? h("div", { class: "dv", "data-side": "" }, pagesEl, h("div", { class: "dv-side", role: "region", "aria-label": "Notes" }, panelEl))
+    : h("div", { class: "dv", "data-key": "dv:" + base, "data-own": "", "data-sig": base }, pagesEl, h("aside", { class: "dv-side", "aria-label": "Notes" }, panelEl));
   Object.assign(v, { el, pagesEl, panelEl });
 
   v.drawPages = () => {
@@ -191,8 +214,7 @@ function make(base) {
     t.addEventListener("keydown", e => {
       e.stopPropagation();
       if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); onEnter(t.value.trim()); }
-      else if (v.boxMode && !typing && !e.metaKey && !e.ctrlKey && !e.altKey && kbKey(e)) { e.preventDefault(); e.stopPropagation(); }
-    else if (e.key === "Escape") { e.preventDefault(); onEsc(); }
+      else if (e.key === "Escape") { e.preventDefault(); onEsc(); }
     });
     return t;
   }
@@ -208,15 +230,15 @@ function make(base) {
       h("div", { class: "dv-card-head" }, kindSeg(c.kind, k => { c.kind = k; c.text = t.value; v.drawMarks(); }),
         h("span", { class: "dv-where" }, where(c)), h("button", { type: "button", class: "dv-x", title: "Cancel", "aria-label": "Cancel", onclick: cancel }, "×")),
       c.quote ? h("div", { class: "dv-quote" }, "“" + clip(c.quote, 140) + "”") : null,
-      t, h("div", { class: "dv-acts" }, h("span", { class: "dv-hint" }, "↵ add · ⇧↵ new line · esc"),
-        h("button", { type: "button", class: "dv-act", onclick: () => { const x = t.value.trim(); if (x) return add(c, x); t.focus(); } }, "Add")));
+      t, h("div", { class: "dv-acts" }, h("span", { class: "dv-hint" }, h("kbd", null, "Enter"), " adds · ", h("kbd", null, "Shift+Enter"), " new line"),
+        h("button", { type: "button", class: "dv-act", "data-primary": "", onclick: () => { const x = t.value.trim(); if (x) return add(c, x); t.focus(); } }, "Add")));
   }
   function noteCard(n) {
     const k = n.kind, draft = n.status === "draft";
     const close = () => { v.open = null; placeCard(); };
     const t = draft ? field(n.text, k, text => text && act({ do: "edit", note_id: n.id, text, kind: k }).then(close), close) : null;
-    const state = n.status === "draft" ? "Draft, not sent yet" : n.status === "sent" ? "Sent " + ago(Date.parse(n.sentAt)) + ", waiting for the agent"
-      : n.addressedIn === "by hand" ? "Marked done" : "Addressed in revision " + n.addressedIn;
+    const state = n.status === "draft" ? "Draft, not sent yet" : n.status === "sent" ? "Sent " + ago(Date.parse(n.sentAt)) + " · with the agent"
+      : n.addressedIn === "by hand" ? "Marked addressed by you" : "Addressed in revision " + n.addressedIn;
     return shell(k,
       h("div", { class: "dv-card-head" }, dot(n.n, k), h("b", null, KINDWORD[k]), h("span", { class: "dv-where" }, where(n) + (n.rev !== v.d.rev ? " · from rev " + n.rev : "")),
         h("button", { type: "button", class: "dv-x", title: "Close", "aria-label": "Close", onclick: close }, "×")),
@@ -226,12 +248,15 @@ function make(base) {
       h("div", { class: "dv-acts" },
         draft ? h("button", { type: "button", class: "dv-act", onclick: () => send([n.id]).then(close) }, "Send") : null,
         draft ? h("button", { type: "button", class: "dv-act", onclick: () => act({ do: "edit", note_id: n.id, text: t.value.trim() || n.text, kind: k }).then(close) }, "Save") : null,
-        n.status === "sent" ? h("button", { type: "button", class: "dv-act", onclick: () => act({ do: "done", note_id: n.id }).then(close) }, "Mark done") : null,
+        n.status === "sent" ? h("button", { type: "button", class: "dv-act", onclick: () => act({ do: "done", note_id: n.id }).then(close) }, "Mark addressed") : null,
         n.status === "addressed" ? h("button", { type: "button", class: "dv-act", onclick: () => act({ do: "reopen", note_id: n.id }).then(close) }, "Reopen") : null,
         n.status !== "sent" ? h("button", { type: "button", class: "dv-act dv-del", onclick: () => act({ do: "delete", note_id: n.id }).then(close) }, "Delete") : null));
   }
-  function openNote(id) { v.compose = null; v.open = id; v.focusCard = true; getSelection().removeAllRanges(); v.drawMarks(); }
-  function cancel() { v.compose = null; v.drawMarks(); }
+  function openNote(id) {
+    v.compose = null; v.open = id; v.focusCard = true; getSelection().removeAllRanges(); v.drawMarks(); v.syncPanel(true);
+    if (v.tray) requestAnimationFrame(() => panelEl.querySelector(`.dv-item[data-key="${id}"]`)?.scrollIntoView({ block: "nearest" }));
+  }
+  function cancel() { v.compose = null; v.drawMarks(); v.syncPanel(true); }
   v.focusNote = id => {
     const n = v.d.notes.find(x => x.id === id); if (!n) return;
     if (n.p == null) return;
@@ -319,12 +344,50 @@ function make(base) {
     const typing = e.target.closest && e.target.closest("textarea, input, select, [contenteditable]");
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "x" && !typing) { e.preventDefault(); setBox(!v.boxMode); }
     else if (v.boxMode && !typing && !e.metaKey && !e.ctrlKey && !e.altKey && kbKey(e)) { e.preventDefault(); e.stopPropagation(); }
-    else if (e.key === "Escape" && (v.boxMode || v.compose || v.open)) { e.preventDefault(); e.stopPropagation(); if (v.boxMode) setBox(false); v.compose = null; v.open = null; v.drawMarks(); }
+    else if (e.key === "Escape" && (v.boxMode || v.compose || v.open)) { e.preventDefault(); e.stopPropagation(); if (v.boxMode) setBox(false); v.compose = null; v.open = null; v.drawMarks(); v.syncPanel(true); }
+    else if (e.key === "Escape" && v.side && v.tray && !typing) { e.preventDefault(); e.stopPropagation(); v.tray = false; v.syncPanel(true); panelEl.querySelector(".dv-count")?.focus(); }
   }, { signal: sig, capture: true });
+
+  // ---- zoom (side panel): Fit, 150%, 200%; Ctrl/⌘ + wheel or a trackpad pinch; a double-tap on a phone ----
+  function setZoom(z, at) {
+    z = Math.max(1, Math.min(3, Math.round(z * 4) / 4));
+    const r = pagesEl.getBoundingClientRect(), ax = at ? at.x - r.left : r.width / 2, ay = at ? at.y - r.top : r.height / 2;
+    const fx = (pagesEl.scrollLeft + ax) / (pagesEl.scrollWidth || 1), fy = (pagesEl.scrollTop + ay) / (pagesEl.scrollHeight || 1);
+    v.zoom = z; pagesEl.style.setProperty("--z", z); pagesEl.toggleAttribute("data-zoom", z !== 1);
+    pagesEl.scrollLeft = fx * pagesEl.scrollWidth - ax; pagesEl.scrollTop = fy * pagesEl.scrollHeight - ay;
+    paintZoom();
+  }
+  function paintZoom() {
+    const b = v.slots && v.slots.zoom; if (!b) return;
+    b.textContent = v.zoom === 1 ? "Fit" : Math.round(v.zoom * 100) + "%";
+    b.title = v.zoom >= 2 ? "Zoom: fit the width" : "Zoom in"; b.setAttribute("aria-label", b.title);
+  }
+  v.wire = slots => {
+    if (!slots) return;
+    v.slots = slots;
+    if (slots.zoom) { slots.zoom.onclick = () => setZoom(v.zoom === 1 ? 1.5 : v.zoom === 1.5 ? 2 : 1); paintZoom(); }
+    v.paintHead();
+  };
+  v.paintHead = () => {
+    const s = v.slots, d = v.d; if (!s || !d) return;
+    if (s.title) { s.title.textContent = d.title; s.title.title = d.title; }
+    if (s.rev) mount(s.rev, revPicker(d));
+  };
+  pagesEl.addEventListener("wheel", e => {
+    if (!v.side || !(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault(); setZoom(v.zoom * (e.deltaY < 0 ? 1.25 : 0.8), { x: e.clientX, y: e.clientY });
+  }, { signal: sig, passive: false });
+  let tap = null;
+  pagesEl.addEventListener("pointerup", e => {
+    if (!v.side || e.pointerType !== "touch" || v.boxMode || e.target.closest(".dv-card,.dv-pin") || String(getSelection() || "")) { tap = null; return; }
+    const now = Date.now();
+    if (tap && now - tap.t < 300 && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < 30) { tap = null; setZoom(v.zoom === 1 ? 2 : 1, { x: e.clientX, y: e.clientY }); }
+    else tap = { t: now, x: e.clientX, y: e.clientY };
+  }, { signal: sig });
 
   // ---- saving ----
   async function act(body) {
-    try { const r = await post("/api/docs/notes", { id: v.base, ...body }); v.d.notes = r.notes; v.err = null; v.paint(); return r; }
+    try { const r = await post("/api/docs/notes", { id: v.base, ...body }); v.d.notes = r.notes; v.err = null; v.paint(); docMetaRefresh(); return r; }
     catch (e) { v.err = "Couldn't save: " + e.message; v.paint(); throw e; }
   }
   async function add(c, text) {
@@ -338,14 +401,14 @@ function make(base) {
     const d = v.d, ns = ids.map(id => d.notes.find(n => n.id === id)).filter(n => n && n.status === "draft");
     if (!ns.length) return;
     const line = n => `#${n.n} ${n.p == null ? "whole document" : n.box ? `p.${n.p}, box at ${n.rects[0].map(Math.round).join(",")} pt` : `p.${n.p}, on "${clip(n.quote || "", 300)}"`}` + (n.rev !== d.rev ? ` (made on revision ${n.rev})` : "") + ` · ${KINDWORD[n.kind]}: ${n.text}`;
-    const text = `Notes on "${d.title}" (${d.id}, revision ${d.rev}), from the Documents page.\n\n` + ns.map(line).join("\n") +
+    const text = to() + `Notes on "${d.title}" (${d.id}, revision ${d.rev}), from ${v.side ? "the side panel in this conversation" : "the Documents page"}.\n\n` + ns.map(line).join("\n") +
       `\n\nHow to work these: projects/doc-review-view/AGENT.md. Every note, with where it sits: \`python3 ~/modules/dash/docs.py show ${d.id}\`.`;
     v.sending = true; v.paint();
     // Marked sent before the post goes, so an agent that answers at once never finds them still drafts; put back if the post fails.
     const ids2 = ns.map(n => n.id);
     try { await act({ do: "sent", note_ids: ids2 }); } catch (e) { v.sending = false; v.paint(); return; }
     try {
-      const r = await post("/api/post", { text, thread: d.thread });
+      const r = await post("/api/post", { text, thread: dest() });
       if (r && r.id) await act({ do: "stamp", note_ids: ids2, post: r.id }).catch(() => {});
     } catch (e) {
       await act({ do: "unsend", note_ids: ids2 }).catch(() => {});
@@ -353,63 +416,105 @@ function make(base) {
     }
     finally { v.sending = false; v.paint(); }
   }
+  // Beside a conversation, notes go to it and name the agent there: a plain post wakes only an agent waiting on the person.
+  const dest = () => (v.side ? v.side.thread : v.d.thread);
+  const to = () => {
+    if (!v.side) return "";
+    const th = v.side.thread, ps = (S.threads && S.threads.get(th) || { posts: [] }).posts;
+    const p = partner(th) || ps.slice().reverse().map(x => x.from).find(isAgent);
+    return p ? "@" + p + " " : "";
+  };
   async function reply(t, box) {
-    try { await post("/api/post", { text: t, thread: v.d.thread }); if (box && box.value.trim() === t) box.value = ""; v.err = null; } catch (e) { v.err = "Couldn't send: " + e.message; }
+    try { await post("/api/post", { text: to() + t, thread: dest() }); if (box && box.value.trim() === t) box.value = ""; v.err = null; } catch (e) { v.err = "Couldn't send: " + e.message; }
     v.paint();
   }
 
   // ---- the side panel ----
   v.paint = () => { v.drawMarks(); v.syncPanel(true); };
   v.syncPanel = force => {
-    const d = v.d, th = d && S.threads && S.threads.get(d.thread), posts = th ? th.posts.slice(-4) : [];
-    const sg = posts.map(p => p.id).join() + "|" + (d ? d.rev + d.notes.map(n => n.id + n.status + n.text.length).join() : "") + v.boxMode + v.err + v.banner + v.sending;
+    const d = v.d, th = d && !v.side && S.threads && S.threads.get(d.thread), posts = th ? th.posts.slice(-4) : [];
+    const sg = posts.map(p => p.id).join() + "|" + (d ? d.rev + d.notes.map(n => n.id + n.status + n.text.length).join() : "") + v.boxMode + v.err + v.banner + v.sending + v.tray + v.open + (v.rev || "");
     if (!force && sg === v.panelSig) return;
     v.panelSig = sg;
     mount(panelEl, panel(posts));
+    v.paintHead();
   };
+  function revPicker(d) {
+    const latest = d.revs[d.revs.length - 1], old = !!(v.rev && v.rev !== latest.rev);
+    return h("label", { class: "dv-revw", "data-old": old ? "" : null }, h("span", { class: "vh" }, "Revision"),
+      h("select", { class: "dv-rev", "data-key": "rev", onchange: e => { v.rev = e.target.value === latest.rev ? null : e.target.value; v.banner = null; load(v); } },
+        ...d.revs.map(r => h("option", { value: r.rev, selected: r.rev === d.rev || null },
+          r.rev === "next" ? "rev " + nextName(d) + " · being filed" : "rev " + r.rev + (old && r.rev === d.rev ? " · older" : "")))));
+  }
   function panel(posts) {
     const d = v.d;
     if (!d) return h("div", { class: "dv-pn" }, h("p", { class: "meta" }, v.err ? "Couldn't open this document: " + v.err : "Opening…"));
     const drafts = d.notes.filter(n => n.status === "draft"), sent = d.notes.filter(n => n.status === "sent"), done = d.notes.filter(n => n.status === "addressed");
-    const item = n => h("li", { class: "dv-item", "data-key": n.id, "data-kind": n.kind },
-      h("button", { type: "button", class: "dv-item-go", onclick: () => v.focusNote(n.id), disabled: n.p == null || null, title: n.p == null ? null : "Show it on the page" },
-        dot(n.n, n.kind), h("span", { class: "dv-item-t" }, h("span", { class: "dv-item-w" }, KINDWORD[n.kind] + " · " + where(n) + (n.status === "addressed" ? " · " + (n.addressedIn === "by hand" ? "done by hand" : "rev " + n.addressedIn) : "")),
-          n.quote ? h("span", { class: "dv-item-q" }, "“" + clip(n.quote, 70) + "”") : null, h("span", { class: "dv-item-x" }, n.text))),
-      n.status === "draft" ? h("button", { type: "button", class: "dv-mini", onclick: () => send([n.id]), disabled: v.sending || null }, "Send") : null,
-      n.status === "sent" ? h("button", { type: "button", class: "dv-mini", onclick: () => act({ do: "done", note_id: n.id }), title: "Mark it done yourself" }, "Done") : null,
-      n.status === "addressed" ? h("button", { type: "button", class: "dv-mini", onclick: () => act({ do: "reopen", note_id: n.id }) }, "Reopen") : null);
     const latest = d.revs[d.revs.length - 1];
+    const side = !!v.side, open = side ? v.tray : true, did = "dv-drawer-" + v.base;
+    const item = n => h("li", { class: "dv-item", "data-key": n.id, "data-kind": n.kind, "data-status": n.status, "data-on": v.open === n.id ? "" : null },
+      h("button", { type: "button", class: "dv-item-go", onclick: () => v.focusNote(n.id), disabled: n.p == null || null, title: n.p == null ? null : "Show it on the page" },
+        n.status === "addressed" ? h("span", { class: "dv-dot", "data-done": "" }, String(n.n)) : dot(n.n, n.kind),
+        h("span", { class: "dv-item-t" },
+          h("span", { class: "dv-item-x" }, n.text),
+          n.quote ? h("span", { class: "dv-item-q" }, "“" + clip(n.quote, 70) + "”") : null,
+          h("span", { class: "dv-item-w" },
+            n.status === "addressed" ? h("span", { class: "dv-item-st" }, icon("check"), n.addressedIn === "by hand" ? "Marked addressed by you" : "Addressed in rev " + n.addressedIn) : null,
+            n.status === "addressed" ? " · " : null,
+            KINDWORD[n.kind] + " · " + where(n) + (n.status === "sent" && n.sentAt ? " · sent " + ago(Date.parse(n.sentAt)) : "")))),
+      n.status === "draft" ? h("button", { type: "button", class: "dv-mini", onclick: () => send([n.id]), disabled: v.sending || null }, "Send") : null,
+      n.status === "draft" ? h("button", { type: "button", class: "dv-mini", "data-kind": "x", onclick: () => act({ do: "delete", note_id: n.id }), title: "Delete", "aria-label": `Delete note ${n.n}` }, icon("close")) : null,
+      n.status === "sent" ? h("button", { type: "button", class: "dv-mini", onclick: () => act({ do: "done", note_id: n.id }), title: "The agent handled it: mark it addressed yourself" }, icon("check"), "Mark addressed") : null,
+      n.status === "addressed" ? h("button", { type: "button", class: "dv-mini", onclick: () => act({ do: "reopen", note_id: n.id }) }, "Reopen") : null);
+    const flash = [
+      v.banner ? h("p", { class: "dv-note", "data-tone": "good", role: "status" }, h("span", null, v.banner), h("button", { type: "button", class: "dv-link", onclick: () => { v.banner = null; v.syncPanel(true); } }, "OK")) : null,
+      v.rev && v.rev !== latest.rev ? h("p", { class: "dv-note", "data-tone": "warn" }, h("span", null, `You're looking at rev ${v.rev}, an older revision.`), h("button", { type: "button", class: "dv-link", onclick: () => { v.rev = null; load(v); } }, "Show the latest")) : null,
+      latest.rev === "next" ? h("p", { class: "dv-note", "data-tone": "quiet", role: "status" }, h("span", null, `The agent is filing revision ${nextName(d)}. It shows here by itself.`)) : null,
+      v.err ? h("p", { class: "dv-note", "data-tone": "bad", role: "alert" }, h("span", null, v.err)) : null,
+    ].filter(Boolean);
+    const countKids = drafts.length ? [h("span", { class: "dv-num", "data-tone": "info" }, String(drafts.length)), h("span", { class: "dv-cw" }, "to send"), sent.length ? h("span", { class: "dv-cs" }, `${sent.length} with the agent`) : null]
+      : sent.length ? [h("span", { class: "dv-num" }, String(sent.length)), h("span", { class: "dv-cw" }, "with the agent")]
+      : [h("span", { class: "dv-cw" }, done.length ? "Notes · " + done.length + " addressed" : "Notes")];
+    const say = [drafts.length && `${drafts.length} to send`, sent.length && `${sent.length} with the agent`].filter(Boolean).join(", ") || "no notes yet";
+    const count = side
+      ? h("button", { type: "button", class: "dv-count", "data-key": "count", "aria-expanded": String(open), "aria-controls": did, "aria-label": `Notes: ${say}. ${open ? "Hide" : "Show"} the list`,
+          onclick: () => { v.tray = !v.tray; v.syncPanel(true); } }, ...countKids, icon("chevron-up"))
+      : h("span", { class: "dv-count", "data-key": "count" }, ...countKids);
+    const conversation = () => h("div", { class: "dv-sec dv-chat", "data-key": "chat" },
+      h("div", { class: "dv-sec-h" }, h("h2", null, "Conversation"), h("a", { href: threadHref(d.thread), class: "dv-link" }, posts.length ? "Open" : "")),
+      posts.length ? h("ul", { class: "dv-posts" }, ...posts.map(p => h("li", { "data-key": p.id }, h("b", null, p.from === "person" ? "You" : p.from), h("span", { class: "meta" }, " · " + ago(p.t * 1000 > 1e12 ? p.t * 1000 : Date.parse(p.t))), h("div", null, clip(p.text, 220)))))
+        : h("p", { class: "meta" }, "When you send notes, an agent picks them up here, edits the file and files the new revision in the library. It shows up on this page by itself."),
+      posts.length ? h("textarea", { class: "dv-gfield", "data-key": "reply", rows: "2", placeholder: "Reply to the agent", "aria-label": "Reply to the agent",
+        onkeydown: e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); const t = e.target.value.trim(); if (t) reply(t, e.target); } } }) : null);
     return h("div", { class: "dv-pn" },
-      h("div", { class: "dv-head" },
-        h("h1", { class: "dv-title" }, d.title),
-        h("div", { class: "dv-meta" }, h("span", null, d.id), h("label", null, "Revision ",
-          h("select", { class: "dv-rev", "data-key": "rev", "aria-label": "Revision", onchange: e => { v.rev = e.target.value === latest.rev ? null : e.target.value; v.banner = null; load(); } },
-            ...d.revs.map(r => h("option", { value: r.rev, selected: r.rev === d.rev || null }, r.rev === "next" ? "new, being filed" : r.rev + (r === latest ? " (latest)" : "")))))),
-        v.rev && v.rev !== latest.rev ? h("p", { class: "dv-note", "data-tone": "warn" }, "An older revision. ", h("button", { type: "button", class: "dv-link", onclick: () => { v.rev = null; load(); } }, "Show the latest")) : null,
-        v.banner ? h("p", { class: "dv-note", "data-tone": "good", role: "status" }, v.banner, " ", h("button", { type: "button", class: "dv-link", onclick: () => { v.banner = null; v.syncPanel(true); } }, "OK")) : null,
-        v.err ? h("p", { class: "dv-note", "data-tone": "bad", role: "alert" }, v.err) : null),
-      h("div", { class: "dv-tools" },
-        h("button", { type: "button", class: "dv-tool", "aria-pressed": String(v.boxMode), onclick: () => setBox(!v.boxMode), title: "Draw a box on the page (" + BOXKEY + ")" }, v.boxMode ? "Drawing: drag, or arrows + Enter · esc" : "Draw a box"),
-        h("span", { class: "dv-tip" }, "or select text on the page")),
-      h("div", { class: "dv-general" },
-        h("textarea", { class: "dv-gfield", "data-key": "gen", rows: "2", placeholder: "A note on the whole document", "aria-label": "A note on the whole document",
-          onkeydown: e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); const box = e.target, t = box.value.trim(); if (t) add({ kind: "comment", p: null }, t).then(() => { if (box.value.trim() === t) box.value = ""; }, () => {}); } } }),
-        h("div", { class: "dv-hint" }, "↵ add to the list")),
-      section("Not sent yet", drafts, item, drafts.length ? h("button", { type: "button", class: "dv-send", onclick: () => send(drafts.map(n => n.id)), disabled: v.sending || null }, v.sending ? "Sending…" : `Send all (${drafts.length})`) : null,
-        "Select text or draw a box, then press Enter: notes wait here until you send them."),
-      sent.length ? section("With the agent", sent, item, null) : null,
-      done.length ? h("details", { class: "dv-sec", "data-key": "done" }, h("summary", null, `Done (${done.length})`), h("ul", { class: "dv-list" }, ...done.map(item))) : null,
-      h("div", { class: "dv-sec dv-chat" },
-        h("div", { class: "dv-sec-h" }, h("h2", null, "Conversation"), h("a", { href: threadHref(d.thread), class: "dv-link" }, posts.length ? "Open" : "")),
-        posts.length ? h("ul", { class: "dv-posts" }, ...posts.map(p => h("li", { "data-key": p.id }, h("b", null, p.from === "person" ? "You" : p.from), h("span", { class: "meta" }, " · " + ago(p.t * 1000 > 1e12 ? p.t * 1000 : Date.parse(p.t))), h("div", null, clip(p.text, 220)))))
-          : h("p", { class: "meta" }, "When you send notes, an agent picks them up here, edits the file and files the new revision in the library. It shows up on this page by itself."),
-        posts.length ? h("textarea", { class: "dv-gfield", "data-key": "reply", rows: "2", placeholder: "Reply to the agent", "aria-label": "Reply to the agent",
-          onkeydown: e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); const t = e.target.value.trim(); if (t) reply(t, e.target); } } }) : null));
+      side ? null : h("div", { class: "dv-head", "data-key": "head" }, h("h1", { class: "dv-title" }, d.title),
+        h("div", { class: "dv-meta" }, h("span", null, d.id), revPicker(d), d.pages ? h("span", null, d.pages.length + (d.pages.length > 1 ? " pages" : " page")) : null)),
+      h("div", { class: "dv-drawer", id: did, "data-key": "drawer", hidden: !open || null, role: side ? "region" : null, "aria-label": side ? "Notes" : null },
+        drafts.length ? section("To send", drafts, item) : null,
+        sent.length ? section("With the agent", sent, item) : null,
+        done.length ? h("details", { class: "dv-sec", "data-key": "done" }, h("summary", null, `Addressed · ${done.length}`), h("ul", { class: "dv-list" }, ...done.map(item))) : null,
+        h("div", { class: "dv-general", "data-key": "general" }, h("textarea", { class: "dv-gfield", "data-key": "gen", rows: "1", placeholder: "Add a note on the whole document", "aria-label": "A note on the whole document",
+          onkeydown: e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); const box = e.target, t = box.value.trim(); if (t) add({ kind: "comment", p: null }, t).then(() => { if (box.value.trim() === t) box.value = ""; }, () => {}); } } })),
+        side ? null : conversation()),
+      flash.length ? h("div", { class: "dv-flash", "data-key": "flash" }, ...flash) : null,
+      h("div", { class: "dv-strip", "data-key": "strip" },
+        h("button", { type: "button", class: "dv-tool", "aria-pressed": String(v.boxMode), onclick: () => setBox(!v.boxMode), title: "Draw a box on the page (" + BOXKEY + ")" },
+          icon("marquee"), v.boxMode ? "Drawing · Esc" : "Box"),
+        count,
+        !drafts.length && !sent.length ? h("span", { class: "dv-tip" }, "Select text or draw a box to add a note." + (side ? " Notes go to this conversation when you send them." : "")) : null,
+        h("span", { class: "dv-sp" }),
+        h("span", { class: "vh", role: "status" }, drafts.length ? `${drafts.length} note${drafts.length > 1 ? "s" : ""} to send` : ""),
+        drafts.length ? h("button", { type: "button", class: "dv-send", disabled: v.sending || null, onclick: () => send(drafts.map(n => n.id)),
+          title: `Send ${drafts.length} note${drafts.length > 1 ? "s" : ""} to ${side ? "this conversation and its agent" : "the agent"}` }, icon("arrow-up"), v.sending ? "Sending…" : `Send ${drafts.length}`) : null));
   }
-  function section(title, ns, item, action, none) {
-    return h("div", { class: "dv-sec" }, h("div", { class: "dv-sec-h" }, h("h2", null, title + (ns.length ? ` (${ns.length})` : "")), action),
-      ns.length ? h("ul", { class: "dv-list" }, ...ns.map(item)) : h("p", { class: "meta" }, none));
+  function section(title, ns, item) {
+    return h("div", { class: "dv-sec", "data-key": "sec:" + title }, h("h2", null, `${title} · ${ns.length}`), h("ul", { class: "dv-list" }, ...ns.map(item)));
   }
   return v;
+}
+/** The letter after the last real revision: what the one being filed will be called. */
+function nextName(d) {
+  const real = d.revs.filter(r => r.rev !== "next"), last = real.length ? real[real.length - 1].rev : "";
+  return /^[A-Y]$/.test(last) ? String.fromCharCode(last.charCodeAt(0) + 1) : "next";
 }
 const clip = (s, n) => (s = String(s || "").replace(/\s+/g, " ").trim()).length > n ? s.slice(0, n - 1) + "…" : s;

@@ -827,16 +827,19 @@ function setRead(v) { try { localStorage.setItem("hive.cp.read", v); } catch (e)
 document.documentElement.dataset.read = readScale();
 const sizeWord = () => SIZES.find(s => s[0] === readScale())[1];
 
+// An agent the log hasn't reached yet (the first load reads only its tail, so an older conversation's agent isn't in S.agents) is still an agent:
+// without this the To button showed its bare code beside a "+" avatar, as if it were a new agent.
+const agentish = n => !!n && (isAgent(n) || (/^a[0-9a-f]{4}$/.test(n) && /\d/.test(n)));   // a code the log has not started yet (its start is past the first 600 kB) still reads as an agent; a word like "abcde" does not
 /** The To button: who this goes to, as an avatar and a name. Why (a reply, a name typed) is in its title. */
 function toChip(th, r) {
   const f = r.to && focusWord(r.to), n = r.who, btw = r.why === "btw";
   // The app look names no code (E10): an agent goes by its place in this conversation ("the agent", "Agent B"), or by agentLabel if it isn't in it; the code stays in the menu and on hover.
-  const nm = !n || n === "new" || !isAgent(n) || !(S.app && S.app.app) ? n : inConversation(th, () => agentLabel(n));
+  const nm = !n || n === "new" || !agentish(n) || !(S.app && S.app.app) ? n : inConversation(th, () => agentLabel(n));
   const label = btw ? "a new agent, on the side" : f ? focusName(focusById(f.id)) + (n && n !== "new" ? ` → ${nm}` : " → a new agent") : n === "new" ? "a new agent" : nm || "…";
   const why = { reply: "you're replying to it", named: "named in your message", chosen: "you chose it" }[r.why];
   return h("button", { type: "button", class: "cp-to", "aria-haspopup": "listbox", "aria-expanded": String(CP.menu === "to"),
     title: btw ? "A side question: it answers in its own thread, and this one's agent never sees it." : `Who this goes to${why ? ` (${why})` : ""}. Change it here, or type @ and a name.`, onclick: toggle("to") },
-    h("span", { class: "cp-hp" }, "To"), f ? av(null, "◆") : n && n !== "new" && isAgent(n) ? inConversation(th, () => av(n)) : av(null, "+"), h("b", null, label), icon("chevron"));
+    h("span", { class: "cp-hp" }, "To"), f ? av(null, "◆") : n && n !== "new" && agentish(n) ? inConversation(th, () => av(n)) : av(null, "+"), h("b", null, label), icon("chevron"));
 }
 function toMenu(th, r) {
   const d = draft(th), names = threadPeople(th).filter(isAgent), pick = n => { d.to = n; keep(d); CP.menu = false; refresh(); field(th)?.focus(); };
@@ -844,7 +847,7 @@ function toMenu(th, r) {
   const opt = (rr, glyph, label, sub) => h("button", { type: "button", role: "option", class: "menu-i cp-opt", "data-kind": rr.kind, "data-key": rr.word, "aria-selected": String(chosen === rr.word), onclick: () => pick(rr.word) },
     glyph ? av(null, glyph) : av(rr.word), h("span", { class: "menu-i-t" }, h("b", null, label), sub ? h("small", null, sub) : null));
   const agentOpt = n => { const a = agentRow(n), where = a.th && a.th !== th ? (a.title && a.title !== a.th ? a.title : a.th) : "";
-    return opt(a, null, n, [a.model, where, a.line, n === partner(th) ? "you've been talking to it" : ""].filter(Boolean).join(" · ")); };
+    return opt(a, null, Said(th, n), [a.model, where, a.line, n === partner(th) ? "you've been talking to it" : ""].filter(Boolean).join(" · ")); };   // the name the To button shows (E10), not the code
   return h("div", { class: "menu cp-menu", role: "listbox", "aria-label": "Send to", "data-side": "top-end", "data-w": "wide", "data-key": "menu" },
     menuHead("Send to"),
     names.map(agentOpt),
@@ -854,15 +857,15 @@ function toMenu(th, r) {
     menuSep("sep"),
     opt({ kind: "word", word: "btw" }, "+", "A new agent, on the side", "Answers in its own conversation; nobody here sees it"),
     h("p", { class: "cp-menu-n", "data-key": "note" }, r.why === "partner"
-      ? `${r.server} wrote here last, so a message with no name would wake it. You've been talking to ${r.who}, so Hive sends it there.`
+      ? `${Said(th, r.server)} wrote here last, so a message with no name would wake it. You've been talking to ${said(th, r.who)}, so Hive sends it there.`
       : "Typing @ in your message searches agents, focuses and conversations; a name there sends it to that agent instead."));
 }
 
 // ---- model: what the message starts (or moves) its agent on; the default, the picked one, or an @model typed in the text ----
 const MODELS = [["opus", "Opus 5.5", "Most capable, uses the most of your plan"], ["sonnet", "Sonnet 5.5", "Fast and capable, for most jobs"], ["haiku", "Haiku 5.5", "Quickest, for small jobs"], ["fable", "Fable 5.2", ""], ["astra", "Astra", ""]];
 // The app look says an agent's place in this conversation in its hover words too (E10); the developer look keeps the code.
-const said = (th, n) => (S.app && S.app.app && n && isAgent(n) ? inConversation(th, () => agentLabel(n)) : n);
-const Said = (th, n) => (S.app && S.app.app && n && isAgent(n) ? capId(said(th, n)) : n);
+const said = (th, n) => (S.app && S.app.app && n && agentish(n) ? inConversation(th, () => agentLabel(n)) : n);
+const Said = (th, n) => (S.app && S.app.app && n && agentish(n) ? capId(said(th, n)) : n);
 const capId = s => (/\d/.test(s || "") ? s : capFirst(s));   // "the agent" → "The agent", but an id (cd34e) keeps its case
 function modelPick(d, r, th) {
   // An agent already running stays on its model for this run; a pick here is kept by the starter and holds from its next run.
