@@ -234,6 +234,21 @@ def doc(base, rev=None):
             "path": r["path"], "sha": _key(r), "pages": _cached_words(r), "notes": _resolve_next(notes["notes"], revs, pend), "next": notes["next"]}
 
 
+_PRUNED = [0.0]
+
+
+def _prune_cache(days=14):
+    """Drop cached page images and word files nobody has read for `days` (old revisions); at most once an hour."""
+    now = time.time()
+    if now - _PRUNED[0] < 3600: return
+    _PRUNED[0] = now
+    for f in CACHE.glob("*"):
+        try:
+            if not f.name.startswith(".") and now - max(f.stat().st_atime, f.stat().st_mtime) > days * 86400: f.unlink()
+        except OSError:
+            pass
+
+
 def page_png(base, rev, p):
     """One page as PNG bytes (144 dpi), cached by the file's sha."""
     if not BASE.match(base or "") or not REV.match(rev or ""): raise ValueError("bad id")
@@ -244,6 +259,7 @@ def page_png(base, rev, p):
     CACHE.mkdir(parents=True, exist_ok=True)
     f = CACHE / f"{_key(r)}-{p}.png"
     if not f.exists():
+        _prune_cache()
         out = CACHE / f".{os.getpid()}-{threading.get_ident()}-{_key(r)}-{p}"   # each request thread its own name: two tabs, one page
         subprocess.run(["pdftoppm", "-r", "144", "-f", str(p), "-l", str(p), "-png", "-singlefile", str(HOME / r["path"]), str(out)],
                        capture_output=True, timeout=60, check=True)

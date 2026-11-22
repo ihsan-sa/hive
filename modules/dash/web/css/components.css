@@ -3687,5 +3687,8 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 @media (max-width:900px){
   .dv{grid-template-columns:minmax(0,1fr)}
   .dv-side{position:static;max-height:none}
+  .dv-sec-h:has(>.dv-send){position:sticky;bottom:0;z-index:4;padding:var(--s2) 0;margin-bottom:0;background:var(--bg,Canvas);box-shadow:0 -1px 0 var(--line)}   /* the Send bar stays on screen under the pages */
+  .dv-send{height:44px;padding:0 18px}
 }
+@media (forced-colors:active){.dv-card{border:2px solid CanvasText;background:Canvas;color:CanvasText}.dv-drawing{border-color:CanvasText}.dv-send,.dv-tool[aria-pressed=true]{forced-color-adjust:none;background:ButtonText;color:ButtonFace}.dv-pin:focus-visible{outline:2px solid Highlight}}
 @media (max-width:699px){ .dvp>.dv-back{display:none} }   /* the chat place's own back arrow is there on a phone */

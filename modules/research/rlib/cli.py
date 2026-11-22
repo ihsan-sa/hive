@@ -69,7 +69,7 @@ HUNT_EXAMPLE = '{"goal": "deans of AI programs", "orgs": ["Valencia College"], "
 
 
 HUNT_KEYS = ("goal (what the list is for); orgs (list) or discover (list of searches); target (rows wanted, 25); per_org (2); must (words near the person); function_words (the title or the person's own quote must name one of these); roles / exclude_roles (patterns); "
-             "org_pattern; domains ({org: site}, strict); angles (search templates with {org}); site_terms (words for the one site: search of an org with no lead, default the first two roles); sources; read_per_search (4); allow_secondary (true); "
+             "org_pattern; domains ({org: site}, strict); angles (search templates with {org}); allow_org_signal (list a head found on an org staff page whose signal word is on another of its pages); site_terms (words for the one site: search of an org with no lead, default the first two roles); sources; read_per_search (4); allow_secondary (true); "
              "pages ({org: url or [urls]}, read directly and tied to that org); allow_page_signal (false); max_age_years (3); stale_days (365: older pages get a departure search); workers (4, parallel orgs); max_seconds (1800); out")
 
 

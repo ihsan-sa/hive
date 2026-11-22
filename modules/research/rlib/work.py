@@ -200,7 +200,7 @@ def verify_csv(path, case, out=None, find=False, cols=None, domains=None, worker
     return {"rows": len(rows), "counts": dict(collections.Counter(r["check_status"] for r in rows)), "out": dest, "problems": [{"name": r.get(c["name"]), "status": r["check_status"], "note": r["check_note"]} for r in rows if r["check_status"] != "verified" or r["check_note"]]}
 
 
-HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles org_pattern domains angles site_terms sources read_per_search allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words".split())
+HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles org_pattern domains angles site_terms allow_org_signal sources read_per_search allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words".split())
 
 
 def _pattern(spec, key):
@@ -273,6 +273,7 @@ class Hunt:
         self.leads, self.near, self.log_rows, self.blocked, self.errors = {}, {}, [], {}, collections.Counter()
         self.state_file = case.root / "hunt.json"
         self.done_orgs, self.tried = {}, set()
+        self.org_signal = {}  # org -> (url, excerpt) of an official page where a `must` word appears
         self.learned = {}  # org -> site of an official page the hunt read, for orgs the spec gave no domains
         self.failed, self.answered, self.moved = set(), False, []  # failed lasts this run only: a rerun tries those again
         self.save_lock = threading.Lock()
@@ -404,7 +405,13 @@ class Hunt:
             self.learned.setdefault(org, people.registrable(people.domain_of(page.get("final_url") or page["url"])))
         if not people.names_org(org, text) and not is_official: return 0
         hit_terms = [m for m in self.must if people.term_regex(m).search(low)]
-        if self.must and not hit_terms: return 0
+        staff_sig = None
+        if hit_terms and is_official and org not in self.org_signal:
+            m = people.term_regex(hit_terms[0]).search(low)
+            self.org_signal[org] = (page.get("final_url") or page["url"], " ".join(clean[max(0, m.start() - 80):m.end() + 120].split()) if m else hit_terms[0])
+        if self.must and not hit_terms:
+            if not (angle.startswith("(site)") and is_official and org in self.org_signal): return 0
+            staff_sig = self.org_signal[org]  # the organisation's own staff page: the signal word is on another of its pages
         found_people = people.people_in(text, page["people_ld"])
         if not found_people and re.search(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\(?\b\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b", text): self.no_head.setdefault(org, page.get("final_url") or page["url"])  # read, and prints only a mailbox or phone
         if not found_people and org in self.no_head and not getattr(self, "_in_staff", False):
@@ -435,6 +442,10 @@ class Hunt:
             row = dict(name=per["name"], title=per["title"], organisation=org, official_site="yes" if res["official"] else "no", signal=sig, signal_near_person="yes" if close else "no", source_url=page.get("final_url") or page["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status=res["status"], check_quote=res["quote"], angle=angle, note=res["note"])
             self.dir_entry = per.get("how") == "directory"
             why = self.held_back(res, row, org, bool(hit_terms and not close), text)
+            if staff_sig:
+                row.update(signal=f"(the organisation's, from {staff_sig[0]}) {staff_sig[1]}", signal_near_person="no")
+                row["note"] = "; ".join(x for x in ("the signal is the organisation's, from another of its pages, not this person's", row.get("note")) if x)
+                if not why and not self.s.get("allow_org_signal"): why = "the signal is the organisation's, not this person's (set allow_org_signal to list such rows)"
             if not why and (res["status"] == "secondary" or self.old_page(res["page_date"])): why = self.left_elsewhere(per["name"], org)
             if why or len(self.leads) >= self.target or self.org_count(org) >= self.per_org:
                 if why: row["note"] = "; ".join(x for x in (f"not listed: {why}", row["note"]) if x)

@@ -191,7 +191,8 @@ function make(base) {
     t.addEventListener("keydown", e => {
       e.stopPropagation();
       if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); onEnter(t.value.trim()); }
-      else if (e.key === "Escape") { e.preventDefault(); onEsc(); }
+      else if (v.boxMode && !typing && !e.metaKey && !e.ctrlKey && !e.altKey && kbKey(e)) { e.preventDefault(); e.stopPropagation(); }
+    else if (e.key === "Escape") { e.preventDefault(); onEsc(); }
     });
     return t;
   }
@@ -279,19 +280,45 @@ function make(base) {
     const { page, b, box, ghost } = drag; drag = null; ghost.remove();
     if (!box || box[2] - box[0] < 12 || box[3] - box[1] < 12) return;
     const pg = page._pg, X = x => Math.round((x - b.left) / b.width * pg.w * 100) / 100, Y = y => Math.round((y - b.top) / b.height * pg.h * 100) / 100;
+    commitBox(page, [X(box[0]), Y(box[1]), X(box[2]), Y(box[3])]);
+  };
+  function commitBox(page, r) {
     setBox(false);
     v.open = null;
-    v.compose = { kind: "comment", p: +page.dataset.p, box: true, rects: [[X(box[0]), Y(box[1]), X(box[2]), Y(box[3])]], text: "" };
+    v.compose = { kind: "comment", p: +page.dataset.p, box: true, rects: [r], text: "" };
     v.drawMarks();
-  };
+  }
+  // A box by keyboard: arrows move it, Shift+arrows resize it, Enter opens the card. It starts 1/5 of the page in, on the page in view.
+  let kb = null;
+  function kbShow() {
+    kb.ghost.style.cssText = `left:${kb.r[0] / kb.pg.w * 100}%;top:${kb.r[1] / kb.pg.h * 100}%;width:${(kb.r[2] - kb.r[0]) / kb.pg.w * 100}%;height:${(kb.r[3] - kb.r[1]) / kb.pg.h * 100}%`;
+  }
+  function kbEnd() { if (kb) { kb.ghost.remove(); kb = null; } }
+  function kbKey(e) {
+    const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+    if (!dir && e.key !== "Enter") return false;
+    if (!kb) {
+      const pages = [...pagesEl.querySelectorAll(".dv-page")], vis = pages.find(p => p.getBoundingClientRect().bottom > innerHeight * .3) || pages[0];
+      if (!vis || !vis._pg) return false;
+      const pg = vis._pg; kb = { page: vis, pg, r: [pg.w * .2, pg.h * .2, pg.w * .5, pg.h * .3], ghost: h("div", { class: "dv-box dv-drawing" }) };
+      vis.querySelector(".dv-marks").append(kb.ghost);
+      if (e.key === "Enter") { kbShow(); return true; }
+    }
+    if (e.key === "Enter") { const { page, r } = kb; kbEnd(); commitBox(page, r.map(x => Math.round(x * 100) / 100)); return true; }
+    const st = 12, [dx, dy] = dir, r = kb.r, W = kb.pg.w, H = kb.pg.h;
+    if (e.shiftKey) { r[2] = Math.max(r[0] + 12, Math.min(W, r[2] + dx * st)); r[3] = Math.max(r[1] + 12, Math.min(H, r[3] + dy * st)); }
+    else { const mx = Math.max(-r[0], Math.min(W - r[2], dx * st)), my = Math.max(-r[1], Math.min(H - r[3], dy * st)); r[0] += mx; r[2] += mx; r[1] += my; r[3] += my; }
+    kbShow(); kb.ghost.scrollIntoView({ block: "nearest" }); return true;
+  }
   pagesEl.addEventListener("pointerup", endDrag, { signal: sig });
   pagesEl.addEventListener("pointercancel", () => { if (drag) { drag.ghost.remove(); drag = null; } }, { signal: sig });
 
-  function setBox(on) { v.boxMode = on; el.toggleAttribute("data-boxing", on); v.syncPanel(true); }
+  function setBox(on) { if (!on) kbEnd(); v.boxMode = on; el.toggleAttribute("data-boxing", on); v.syncPanel(true); }
   document.addEventListener("keydown", e => {
     if (!v.el.isConnected) return;
     const typing = e.target.closest && e.target.closest("textarea, input, select, [contenteditable]");
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "x" && !typing) { e.preventDefault(); setBox(!v.boxMode); }
+    else if (v.boxMode && !typing && !e.metaKey && !e.ctrlKey && !e.altKey && kbKey(e)) { e.preventDefault(); e.stopPropagation(); }
     else if (e.key === "Escape" && (v.boxMode || v.compose || v.open)) { e.preventDefault(); e.stopPropagation(); if (v.boxMode) setBox(false); v.compose = null; v.open = null; v.drawMarks(); }
   }, { signal: sig, capture: true });
 
@@ -362,7 +389,7 @@ function make(base) {
         v.banner ? h("p", { class: "dv-note", "data-tone": "good", role: "status" }, v.banner, " ", h("button", { type: "button", class: "dv-link", onclick: () => { v.banner = null; v.syncPanel(true); } }, "OK")) : null,
         v.err ? h("p", { class: "dv-note", "data-tone": "bad", role: "alert" }, v.err) : null),
       h("div", { class: "dv-tools" },
-        h("button", { type: "button", class: "dv-tool", "aria-pressed": String(v.boxMode), onclick: () => setBox(!v.boxMode), title: "Draw a box on the page (" + BOXKEY + ")" }, v.boxMode ? "Drawing: drag on the page · esc" : "Draw a box"),
+        h("button", { type: "button", class: "dv-tool", "aria-pressed": String(v.boxMode), onclick: () => setBox(!v.boxMode), title: "Draw a box on the page (" + BOXKEY + ")" }, v.boxMode ? "Drawing: drag, or arrows + Enter · esc" : "Draw a box"),
         h("span", { class: "dv-tip" }, "or select text on the page")),
       h("div", { class: "dv-general" },
         h("textarea", { class: "dv-gfield", "data-key": "gen", rows: "2", placeholder: "A note on the whole document", "aria-label": "A note on the whole document",
