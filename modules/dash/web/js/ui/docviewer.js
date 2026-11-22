@@ -118,12 +118,13 @@ function lineRects(ws) {
   return [...by.values()].map(r => r.map(v => Math.round(v * 100) / 100));
 }
 const isOpen = n => n.status === "draft" || n.status === "sent";
-/** The notes drawn on the revision shown: every open one, and the ones addressed on this very revision (faint). */
+/** The notes drawn on the revision shown: the open ones. An addressed note stays in the notes list but is not drawn: the person
+ *  read a faint box on the latest revision (an Ask answered with no new build) as still open (2026-11-22). */
 function placed(d) {
   const out = [];
   for (const n of d.notes) {
     if (n.p == null) continue;
-    if (!isOpen(n) && n.rev !== d.rev) continue;
+    if (!isOpen(n)) continue;
     const f = refind(d, n);
     if (f && f.p) out.push({ n, p: f.p, rects: f.rects, moved: false });
     else out.push({ n, p: n.p, rects: n.rects || [], moved: !!(f && f.gone) });
