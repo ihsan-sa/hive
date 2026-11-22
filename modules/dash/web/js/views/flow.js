@@ -4,7 +4,7 @@
 // for them is a mark; their own posts are their marks; right of now, the words for what comes next. Below, what moved since
 // they last spoke. Reads only what the hive already writes (sessions, posts, status bars, the summary): no new field, no
 // agent instruction. The only motion is time, at one speed. Design: projects/ui-redesign/flow-architecture.md.
-import { h, s } from "../core/dom.js";
+import { h, s, selecting } from "../core/dom.js";
 import { S, SYS, can } from "../core/store.js";
 import { loadNeedsYou, waitingOn } from "../core/needs.js";
 import { isRunning, sEnd, threadChildren, threadTitle, displayText } from "../core/model.js";
@@ -259,6 +259,7 @@ function tick() {
   if (!box.isConnected) return;  // not on the page yet (the app attaches a view after its render): keep the loop, leave() ends it
   // time is the only motion: one redraw per pixel of time (at least every 5 s), none while the tab is hidden or the screen is still (Settings)
   const t = now(), perPx = WIN[F.win] / F.pw;
+  if (selecting()) return;   // hold still while the person has text selected to copy, as app.js does; the redraw comes once it clears (churn walk, 2026-11-21)
   if (!document.hidden && ((t - F.last >= Math.max(5e3, perPx) && !document.documentElement.hasAttribute("data-still")) || F.ver !== S.ver || box.clientWidth !== F.w)) draw();
 }
 

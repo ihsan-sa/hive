@@ -962,9 +962,10 @@ function threadCost(th) {
 // A row's ⋯ (the person, 110812537bec): sits where the row's time is and shows on hover or keyboard focus. Its menu is put on <body>
 // with a fixed place, so the rail's scroll box can't clip it, and goes on a pick, Escape, a press outside, or a scroll.
 let rowM = null;
-function closeRowMenu() { if (!rowM) return; rowM.nodes.forEach(n => n.remove()); rowM.btn.setAttribute("aria-expanded", "false"); rowM.btn.removeAttribute("data-open"); document.removeEventListener("keydown", rowM.key, true); window.removeEventListener("scroll", rowM.scroll, true); rowM = null; }
+function closeRowMenu() { if (!rowM) return; rowM.nodes.forEach(n => n.remove()); for (const x of new Set([rowM.btn, ...document.querySelectorAll(".lr-more-b[data-open]")])) { x.setAttribute("aria-expanded", "false"); x.removeAttribute("data-open"); } document.removeEventListener("keydown", rowM.key, true); window.removeEventListener("scroll", rowM.scroll, true); rowM = null; }
 function rowMore(th, ctx) {
-  return h("button", { type: "button", class: "lr-more-b", "aria-haspopup": "true", "aria-expanded": "false", title: "Pin, mark important, archive", "aria-label": "Actions for this conversation",
+  const open = !!rowM && rowM.th === th;   // drawn from the open menu, so a poll's re-render of the row while it is open doesn't reset the button (churn walk, 390, 2026-11-21)
+  return h("button", { type: "button", class: "lr-more-b", "aria-haspopup": "true", "aria-expanded": open ? "true" : "false", "data-open": open ? "" : null, title: "Pin, mark important, archive", "aria-label": "Actions for this conversation",
     onclick: e => { e.preventDefault(); e.stopPropagation(); const b = e.target.closest(".lr-more-b"), was = rowM && rowM.btn === b; closeRowMenu(); if (!was) openRowMenu(b, th, ctx); } }, icon("more"));
 }
 function openRowMenu(b, th, ctx) {
@@ -982,7 +983,7 @@ function openRowMenu(b, th, ctx) {
   const top = r.bottom + 4 + mh > innerHeight - 8 ? Math.max(8, r.top - 4 - mh) : r.bottom + 4;
   Object.assign(m.style, { position: "fixed", top: top + "px", left: Math.max(8, Math.min(r.right - mw, innerWidth - mw - 8)) + "px" });
   b.setAttribute("aria-expanded", "true"); b.dataset.open = "";
-  rowM = { btn: b, nodes: [sc, m], key: e => { if (e.key === "Escape") { e.stopPropagation(); closeRowMenu(); b.focus(); } }, scroll: e => { if (!m.contains(e.target)) closeRowMenu(); } };
+  rowM = { btn: b, th, nodes: [sc, m], key: e => { if (e.key === "Escape") { e.stopPropagation(); closeRowMenu(); b.focus(); } }, scroll: e => { if (!m.contains(e.target)) closeRowMenu(); } };
   document.addEventListener("keydown", rowM.key, true); window.addEventListener("scroll", rowM.scroll, true);
   m.querySelector(".menu-i")?.focus();
 }
@@ -1050,7 +1051,8 @@ function places() {
     can("post") && needsN() ? link("Yours", "yours", href("yours", "waits"), needsN(), "What waits on you, newest first; every exchange you had is under it", "waiting on you") : link("Yours", "yours", href("yours"), 0, "Every exchange you had, newest first"),
     can("read") ? link("Inbox", "inbox", href("inbox"), IB.unread || 0, "Every message agents sent you; the count is unread messages, not what waits on you", "unread") : null,
     can("files") ? link("Mail", "mail", href("mail"), MN.n, MN.n ? "Mail since you last opened it" : "Your mail") : null,
-    link("Files", "file", href("made"), 0, "Files and links from your conversations")));
+    link("Files", "file", href("made"), 0, "Files and links from your conversations"),
+    can("files") ? link("Documents", "doc", href("docs"), 0, "The library's PDFs: comment on one and an agent revises it") : null));
 }
 TOPX.chat = () => app() ? places() : null;
 // The choices about the list, always open over it (the person, 110819287bb8, after 11071400de5b had put them behind one button):

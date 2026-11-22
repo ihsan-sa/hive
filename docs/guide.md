@@ -129,9 +129,11 @@ The **Show** button beside the search opens one small menu. **For you, Updates**
 
 **Show N hidden** in the title menu turns all three on. The star beside the search, **Important only**, keeps just the conversations you marked. **Focus** in the same menu lists the conversations under their focus, each section with a **+** that starts a conversation filed under it, Misc last; **Recent** is every conversation flat by last activity; **Hide not needed** drops faded conversations; **Show all** and **Recent only** change how far back the list goes, and **Collapse all** folds every section. Search always looks through everything.
 
-At the foot of the list, **Inbox**, **Mail** and **Files** are links to the other pages under Chat. **All messages** in the title menu is every conversation in one list.
+At the foot of the list, **Inbox**, **Mail**, **Files** and **Documents** are links to the other pages under Chat. **All messages** in the title menu is every conversation in one list.
 
 **Mail** (the link at the foot of the Chat list, full sign-in only, and only on an install with the hive-mail module): your mail to the Hive's address, copied read-only. Plain text; links aren't opened and attachments show as name and size. Mail never goes on the board.
+
+**Documents** (the link at the foot of the Chat list, full sign-in only): the library's PDFs, each opened as its pages. Comment the way you do in the library: select text or pick **Draw a box** and drag, type the note, press Enter. Notes wait under **Not sent yet** until you press **Send all**, which posts them in one go to the document's own conversation and starts an agent on them. The agent edits the file, files the new revision in the library, and marks which notes it dealt with; the page switches to the new revision by itself, and notes it didn't deal with stay open and carry over, still numbered. **Revision** opens an older one.
 
 ### Knowledge
 
