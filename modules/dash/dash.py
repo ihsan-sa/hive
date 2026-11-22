@@ -2958,12 +2958,20 @@ GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/subagents": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/export": "config", "/api/modules": "modules", "/api/connectors": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
-           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/kb/wipe": "files", "/api/kb/copies": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
-POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/kb/wipe": "files", "/api/kb/putback": "files", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
+           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/kb/wipe": "files", "/api/kb/copies": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files", "/api/docs": "files", "/api/docs/doc": "files", "/api/docs/page": "files"}
+POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/kb/wipe": "files", "/api/kb/putback": "files", "/api/docs/notes": "files", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/side-ask": "post", "/api/door": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/voice": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
+
+
+_DOCS = []
+def docs_mod():
+    """docs.py, loaded once: the Documents page's list, pages and notes."""
+    if not _DOCS:
+        spec = importlib.util.spec_from_file_location("h2_docs", Path(__file__).resolve().with_name("docs.py")); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); _DOCS.append(m)
+    return _DOCS[0]
 
 
 def word_shell():
@@ -6612,6 +6620,14 @@ def serve(port):
                 self.send_kb_raw(q.get("path", [""])[0], q.get("view") == ["1"])
             elif u.path == "/api/mail":
                 self.send(json.dumps(mail_view()).encode(), J)
+            elif u.path in ("/api/docs", "/api/docs/doc", "/api/docs/page"):   # Documents (docs.py): the library's PDFs with the person's notes
+                try:
+                    if u.path == "/api/docs": self.send(json.dumps(docs_mod().documents()).encode(), J)
+                    elif u.path == "/api/docs/doc": self.send(json.dumps(docs_mod().doc(q.get("id", [""])[0], q.get("rev", [""])[0] or None)).encode(), J)
+                    else: self.send(docs_mod().page_png(q.get("id", [""])[0], q.get("rev", [""])[0], q.get("p", ["1"])[0]), "image/png", cache="private, max-age=86400")
+                except KeyError: return self.deny(404, "no such document")
+                except ValueError as e: return self.deny(400, str(e))
+                except (OSError, subprocess.SubprocessError) as e: return self.deny(502, str(e))
             elif u.path == "/api/plans":
                 self.send(json.dumps(plans_view()).encode(), J)
             elif u.path == "/api/secrets":
@@ -6789,6 +6805,10 @@ def serve(port):
                 try: return self.send(door_call(d.get("door"), d.get("path"), d.get("body")), J)
                 except KeyError: return self.send_error(404)
                 except (ValueError, OSError) as e: return self.deny(502, str(e))
+            if u.path == "/api/docs/notes":
+                try: return self.send(json.dumps(docs_mod().notes_do(d)).encode(), J)
+                except KeyError as e: return self.deny(404, str(e))
+                except (ValueError, TypeError) as e: return self.deny(400, str(e))
             if u.path == "/api/work-tiers":
                 try: return self.send(json.dumps(work_tier_change(d)).encode(), J)
                 except ValueError as e: return self.deny(400, str(e))

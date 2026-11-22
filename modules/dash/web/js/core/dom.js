@@ -73,8 +73,8 @@ export function morph(a, b) {
   const own = b.hasAttribute("data-own"), sigChanged = own && a.getAttribute("data-sig") !== b.getAttribute("data-sig");
   // data-keep="style data-w": attributes the element's own code sets by hand (the composer's Markdown layer copies the box's font and width), kept through a re-render.
   const keep = b.getAttribute("data-keep"), kept = keep ? keep.split(" ") : null;
-  for (const { name } of [...a.attributes]) if (!b.hasAttribute(name) && !(kept && kept.includes(name)) && name !== "data-ok" && name !== "data-fail" && name !== "data-shut") a.removeAttribute(name);   // a copy button's moment of feedback and an Escape-closed agent list (refs.js), set by hand: a poll's re-render mustn't wipe them
-  for (const { name, value } of b.attributes) if (a.getAttribute(name) !== value) a.setAttribute(name, value);
+  for (const { name } of [...a.attributes]) if (!b.hasAttribute(name) && !(kept && kept.includes(name)) && !(name === "open" && a._pend) && name !== "data-ok" && name !== "data-fail" && name !== "data-shut") a.removeAttribute(name);   // a copy button's moment of feedback and an Escape-closed agent list (refs.js), set by hand: a poll's re-render mustn't wipe them
+  for (const { name, value } of b.attributes) if (a.getAttribute(name) !== value && !(name === "open" && a._pend)) a.setAttribute(name, value);
   a._on = b._on;
   if (b._v !== undefined && document.activeElement !== a && a.value !== b._v) a.value = b._v;
   // A box shows the app's state even with focus (a click leaves it focused), so one turned off another way, or refused, shows off;
@@ -131,6 +131,11 @@ function live(n) {
 // ---- events: one delegated listener per type; handlers live on nodes as _on and survive morph ----
 const TYPES = ["click", "input", "change", "keydown", "submit", "paste", "dragstart", "dragend", "dragover", "dragleave", "drop", "focusout", "toggle", "pointerdown", "dblclick"];
 export function delegate(root = document) {
+  // A fold opened or shut by a click changes at once, but its toggle event (where every view saves the state) comes a task later. A
+  // re-render in that gap (a poll) used to put the old state back and undo the click (preview sweep 2026-11-21, then drive_app_churn
+  // found it on Now, Agents' Filters and Settings' folds). So a <details> is "pending" from its summary's click to its toggle event,
+  // and morph leaves its open attribute alone meanwhile. Registered before the handlers, so a toggle handler's re-render sees it cleared.
+  root.addEventListener("toggle", ev => { ev.target._pend = false; }, true);
   for (const type of TYPES) root.addEventListener(type, ev => {
     for (let n = ev.target; n && n !== root; n = n.parentNode) {
       const f = n._on && n._on[type];
@@ -152,6 +157,13 @@ export function delegate(root = document) {
       }
     }
   }, type === "toggle"); // toggle doesn't bubble, so catch it on the way down
+  // After the handlers, so one that cancels the click (no toggle will come) is seen; capped, so a lost toggle can't pin a fold for good.
+  root.addEventListener("click", ev => {
+    if (ev.defaultPrevented || !ev.target.closest) return;
+    const sm = ev.target.closest("summary"), d = sm && sm.parentElement;
+    if (!d || d.tagName !== "DETAILS" || d.querySelector(":scope>summary") !== sm) return;
+    d._pend = true; clearTimeout(d._pendT); d._pendT = setTimeout(() => { d._pend = false; }, 1000);
+  });
 }
 
 /** True while the person has text selected on the page: views hold still so the selection isn't lost. */

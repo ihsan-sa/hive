@@ -200,7 +200,7 @@ def verify_csv(path, case, out=None, find=False, cols=None, domains=None, worker
     return {"rows": len(rows), "counts": dict(collections.Counter(r["check_status"] for r in rows)), "out": dest, "problems": [{"name": r.get(c["name"]), "status": r["check_status"], "note": r["check_note"]} for r in rows if r["check_status"] != "verified" or r["check_note"]]}
 
 
-HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles org_pattern domains angles sources read_per_search allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words".split())
+HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles org_pattern domains angles site_terms sources read_per_search allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words".split())
 
 
 def _pattern(spec, key):
@@ -273,6 +273,7 @@ class Hunt:
         self.leads, self.near, self.log_rows, self.blocked, self.errors = {}, {}, [], {}, collections.Counter()
         self.state_file = case.root / "hunt.json"
         self.done_orgs, self.tried = {}, set()
+        self.learned = {}  # org -> site of an official page the hunt read, for orgs the spec gave no domains
         self.failed, self.answered, self.moved = set(), False, []  # failed lasts this run only: a rerun tries those again
         self.save_lock = threading.Lock()
         self.discovered = []
@@ -399,6 +400,8 @@ class Hunt:
         clean = people.without_events(people.without_boilerplate(text))
         low = fold(clean)
         is_official = people.official(org, page.get("final_url") or page["url"], self.domains, text)
+        if is_official and not self.domains.get(org) and not self.domains.get(people.org_core(org)):
+            self.learned.setdefault(org, people.registrable(people.domain_of(page.get("final_url") or page["url"])))
         if not people.names_org(org, text) and not is_official: return 0
         hit_terms = [m for m in self.must if people.term_regex(m).search(low)]
         if self.must and not hit_terms: return 0
@@ -446,17 +449,18 @@ class Hunt:
 
     def official_recheck(self, row, org):
         """A lead read on another site gets one search for the person on the organisation's own domain; it is upgraded when `check` verifies them there."""
-        d = self.domains.get(org) or self.domains.get(people.org_core(org)) if isinstance(self.domains, dict) else None
+        d = self.domains.get(org) or self.domains.get(people.org_core(org)) or self.learned.get(org)
         d = d[0] if isinstance(d, (list, tuple)) and d else d
         q = f'site:{d} "{people.clean_name(row["name"])}"' if isinstance(d, str) else f'"{people.clean_name(row["name"])}" "{org}"'
+        doms = self.domains if (self.domains.get(org) or self.domains.get(people.org_core(org))) or not isinstance(d, str) else {**self.domains, org: d}
         try: hits, _ = engines.search(q, self.sources, n=6, case=self.case)
         except Exception: return False
         seen = 0
         for h in hits:
-            if h["url"] == row["source_url"] or not people.official(org, h["url"], self.domains): continue
+            if h["url"] == row["source_url"] or not people.official(org, h["url"], doms): continue
             seen += 1
             if seen > 3: break
-            res = people.check(fetcher.fetch(h["url"], self.case), row["name"], row["title"], org, self.domains)
+            res = people.check(fetcher.fetch(h["url"], self.case), row["name"], row["title"], org, doms)
             if res["status"] == "verified":
                 note = f"was {row['check_status']} on {row['source_url']}; verified on the organisation's own site"
                 row.update(official_site="yes", source_url=h["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status="verified", check_quote=res["quote"], note="; ".join(x for x in (note, row.get("note")) if x))
@@ -495,6 +499,26 @@ class Hunt:
             self.tried.add((org, angle))
             self.log_rows.append({"org": org, "angle": angle, "hits": len(hits), "read": read, "found": found, "secs": round(time.monotonic() - t0, 2), "at": now()})
             self._save()
+        self.site_angle(org)
+
+    def site_angle(self, org):
+        """An organisation with no lead yet and a known site gets one search on that site alone, for its heads: the unscoped angles return news and program pages, which name nobody."""
+        d = self.domains.get(org) or self.domains.get(people.org_core(org)) or self.learned.get(org)
+        d = d[0] if isinstance(d, (list, tuple)) and d else d
+        if not isinstance(d, str) or self.org_count(org) or time.monotonic() > self.deadline: return
+        words = [w for w in (re.sub(r"[^a-z ]", "", x.lower()).strip() for x in str(self.s.get("roles") or "dean|director").split("|")) if w][:2]
+        q = f'site:{d} {self.s.get("site_terms") or " ".join(words)}'  # plain words: the engines return one page for OR and quotes, and staff pages for "career services director"
+        if (org, "(site) " + q) in self.tried: return
+        hits, errs = engines.search(q, self.sources, n=8, case=self.case)
+        if len(errs) >= len(self.sources): return
+        found = 0
+        for h in hits[:self.read]:
+            if h["relevance"] < 0.2: continue
+            found += self.weigh(org, fetcher.fetch(h["url"], self.case), "(site) " + q)
+            if self.org_count(org) >= self.per_org: break
+        self.tried.add((org, "(site) " + q))
+        self.log_rows.append({"org": org, "angle": "(site) " + q, "hits": len(hits), "read": self.read, "found": found, "at": now()})
+        self._save()
 
     def discover(self, q):
         """New organisations from a discovery search: names in result titles and snippets."""

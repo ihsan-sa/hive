@@ -25,6 +25,7 @@ import knowledge from "./knowledge.js";
 import kbtime from "./kbtime.js";
 import design from "./design.js";
 import made from "./made.js";
+import docs from "./docs.js";
 import progress from "./progress.js";
 import page from "./page.js";   // an html file full screen (the file panel's Open on a phone)
 
@@ -46,6 +47,7 @@ export default [
   inbox,
   mail,
   made,
+  docs,
   secrets,
   settings,
   knowledge,
