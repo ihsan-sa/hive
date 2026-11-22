@@ -209,6 +209,7 @@ def title_core(title):
     return core if len(core) >= 20 else ""
 NAV_AI = re.compile(r"\b(?:skip to )?ai search\b|\bask ai\b|\bai chat\b|\bai assistant\b", re.I)
 DEV_HOST = re.compile(r"(?:^|[.])(?:www-)?(?:dev|staging|stage|test|qa|uat|preview|sandbox)(?:[.-]|$)", re.I)
+JOB_BOARD = re.compile(r"(?:^|\.)(?:indeed|glassdoor|ziprecruiter|simplyhired|monster|linkedin|careerbuilder|higheredjobs)\.", re.I)
 JOB_POSTING = re.compile(r"/(?:job|jobs|requisition|vacancy|posting)s?/\d", re.I)
 
 
@@ -228,6 +229,17 @@ def _pattern(spec, key):
 
 
 LEAD_COLS = ["name", "title", "organisation", "official_site", "signal", "signal_near_person", "source_url", "via", "page_date", "read_on", "check_status", "check_quote", "angle", "note"]
+
+
+COPYRIGHT_YEAR = re.compile(r"(?:©|\(c\)|copyright)[^\n]{0,40}?(?:19|20)\d\d(?:\s*[-–]\s*(?:19|20)\d\d)?", re.I)
+DATED_URL = re.compile(r"/(?:19|20)\d\d(?:/|-|$)|/(?:news|newsroom|press|blog|stories|articles?)/", re.I)
+
+
+def current_despite_date(text, url):
+    """A staff page whose CMS meta date is years old (alamo.edu leadership: 2018) can still be live: its text names this year or last (Fall 2026 enrolment). Such a page isn't refused on its date; old_page() still sends its people to the departure search. A copyright line doesn't count (templates update it), nor a dated or news URL (an old article with a fresh sidebar)."""
+    if not text or DATED_URL.search(urllib.parse.urlsplit(url or "").path): return False
+    y = dt.date.today().year
+    return bool(re.search(rf"\b(?:{y}|{y - 1})\b", COPYRIGHT_YEAR.sub(" ", text)))
 
 
 class Hunt:
@@ -373,7 +385,7 @@ class Hunt:
         if people.EVENT_URL.search(row["source_url"]) and not people.org_near(text, row["name"], org): return "an event page that doesn't tie them to this organisation: may be a guest"
         other = people.elsewhere(row["title"], org)
         if other: return f"the title points elsewhere ({other})"
-        if self.max_age and row["page_date"]:
+        if self.max_age and row["page_date"] and not current_despite_date(text, row["source_url"]):
             try:
                 if (dt.date.today() - dt.date.fromisoformat(row["page_date"])).days > self.max_age * 365: return f"the page is from {row['page_date']}"
             except ValueError: pass
@@ -430,9 +442,12 @@ class Hunt:
         hit_terms = [m for m in self.must if people.term_regex(m).search(NAV_AI.sub(" ", low))]
         staff_sig = None
         if hit_terms and is_official and org not in self.org_signal and not weak_signal_url(page.get("final_url") or page["url"]):
-            body = low.replace(title_core(page.get("title")), " ") if title_core(page.get("title")) else low  # the headline is also in the body: its careers word says nothing about the sentences around the AI word
+            tc = title_core(page.get("title"))
+            body = low.replace(tc, " " * len(tc)) if tc else low  # the headline is also in the body: its careers word says nothing about the sentences around the AI word (blanked to its own length, so offsets still line up)
+            flat = " ".join(clean.split())  # fold() collapses whitespace: cut the excerpt from text with the same spacing, or it comes from the wrong place
+            if len(flat) != len(low): flat = low
             m = next((x for x in people.term_regex(hit_terms[0]).finditer(body) if CAREER_NEAR.search(body[max(0, x.start() - 300):x.end() + 300])), None)  # the word beside a careers or workforce word: AI research news (UT) is not a careers signal
-            excerpt = " ".join(clean[max(0, m.start() - 80):m.end() + 120].split()) if m else ""
+            excerpt = flat[max(0, m.start() - 80):m.end() + 120].strip() if m else ""
             nav = NAV_AI.sub(" ", excerpt)  # "Skip to AI Search" is the site's own menu, not a statement
             words = re.findall(r"[A-Za-z]+", nav)
             if words and sum(w[0].isupper() for w in words) / len(words) >= 0.85: nav = ""  # a run of Capitalised Menu Items (BU, Howard, American), not a sentence
@@ -442,7 +457,7 @@ class Hunt:
             if not (angle.startswith("(site)") and is_official and org in self.org_signal): return 0
             staff_sig = self.org_signal[org]  # the organisation's own staff page: the signal word is on another of its pages
         found_people = people.people_in(text, page["people_ld"])
-        if not found_people and re.search(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\(?\b\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b", text): self.no_head.setdefault(org, page.get("final_url") or page["url"])  # read, and prints only a mailbox or phone
+        if not found_people and not JOB_BOARD.search(people.domain_of(page.get("final_url") or page["url"])) and re.search(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\(?\b\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b", text): self.no_head.setdefault(org, page.get("final_url") or page["url"])  # read, and prints only a mailbox or phone
         if not found_people and org in self.no_head and not getattr(self, "_in_staff", False):
             for u in self.staff_links(page):  # the unit page prints a mailbox; its "Meet the Team" link prints the people
                 self._in_staff = True

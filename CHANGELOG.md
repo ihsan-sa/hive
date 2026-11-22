@@ -10,6 +10,8 @@ A release can ship several times a day. A Hive installs each one as soon as it's
 - Reminders now honor `--to NAME` immediately after the time; previously those words could become message text and the reminder went to the person.
 - The hourly grader no longer drafts notes that merely restate a code fix or contain dates and other day-bound numbers.
 - hivelab.ca has an `llms.txt` guide to the site for AI tools.
+- A pause with no same-day clock deadline no longer expires on its own after a fixed number of days.
+- A message of yours to an agent no longer gets a pointer to weak knowledge-base matches that nobody opened.
 
 ## New module: inquiry
 
