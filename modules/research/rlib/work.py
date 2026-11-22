@@ -1,7 +1,7 @@
 """The long jobs: crawl a site, dig a question recursively, verify a list, hunt a list to its target, analyse what came back."""
 import collections, concurrent.futures as cf, csv, datetime as dt, json, os, re, shlex, statistics as st, subprocess, threading, time, urllib.parse
 from pathlib import Path
-from . import engines, fetcher, net, people
+from . import engines, extract, fetcher, net, people
 from .extract import canonical, domain_of, fold, registrable
 from .store import now, safe_row
 
@@ -288,7 +288,29 @@ JOB_POSTING = re.compile(r"/(?:job|jobs|requisition|vacancy|posting)s?/\d", re.I
 def weak_signal_url(url):
     """An org signal must not come from a course catalog, a vendor training host, a LibGuide, a directory or a jobs page: those carry the AI word without saying anything about careers or workforce."""
     u = urllib.parse.urlsplit(url)
-    return bool(DEV_HOST.search(u.hostname or "") or WEAK_SIGNAL_HOST.search(u.hostname or "") or WEAK_SIGNAL_PATH.search(u.path or ""))
+    return bool(DEV_HOST.search(u.hostname or "") or WEAK_SIGNAL_HOST.search(u.hostname or "") or WEAK_SIGNAL_PATH.search(u.path or "") or search_results_url(url))
+
+
+SEARCH_PATH = re.compile(r"/(?:search|results|site-?search|searchresults?)(?:\.\w+)?/?$", re.I)
+SEARCH_QUERY = re.compile(r"(?:^|&)(?:q|query|s|search|keys|keywords|term|searchtext|k)=", re.I)
+
+
+OWN_SIGNAL_NOTE = re.compile(r"the person's own signal is from (\S+)")
+
+
+def stored_signal_url(r):
+    """Where a stored row's signal came from, when it isn't the row's own page: the org's page named in the signal, or the person's own page named in the note (a stored row keeps no `signal_url`)."""
+    if r.get("signal_url") and r["signal_url"] != r.get("source_url"): return r["signal_url"]
+    m = re.match(r"\(the organisation's, from (\S+)\)", str(r.get("signal") or ""))
+    if m: return m.group(1)
+    m = OWN_SIGNAL_NOTE.search(str(r.get("note") or "")) if r.get("signal_near_person") == "yes" else None
+    return m.group(1) if m else ""
+
+
+def search_results_url(url):
+    """A site's own search page prints back what was searched for ('Results for "... NAWAL BENMOUNA INTERIM VICE PRESIDENT WORKFORCE AI"', fnwords51): its words are ours, not the organisation's."""
+    u = urllib.parse.urlsplit(url)
+    return bool(SEARCH_QUERY.search(u.query or "") and (SEARCH_PATH.search(u.path or "") or u.path in ("", "/")))
 
 VENDOR_TOOL = r"(?:jobscan|vmock|big ?interview|quinncia|yoodli|interview ?stream|candid ?career|careerspots|focus ?2|resume ?worded|kickresume|rezi|hirevue|symplicity)"
 SIGNAL_VENDOR = re.compile(r"\b" + VENDOR_TOOL + r"\b(?:'s)?(?:,[^,.;]{1,60},)?\s+(?:uses|is|offers|provides|helps|lets|gives|scans|analy[sz]es|reviews|scores|checks|matches|features|can|will)\b|\b(?:powered by|log ?in to|sign up for|access|try) " + VENDOR_TOOL + r"\b|\b\w+ uses (?:ai|artificial intelligence)(?: and machine learning)? to give job seekers\b", re.I)  # the tool is what the sentence is about ("Jobscan, FREE for all students, offers ... AI"); a sentence that only names one ("we no longer use HireVue; our coaches teach AI") is the college's, and a college that sells degrees (Purdue Global) is not a vendor (review 112215240022)
@@ -296,6 +318,8 @@ SIGNAL_COURSE_URL = re.compile(r"(?:^|[./])(?:microcred\w*|ce|continuing\w*|onli
 STAFF_PATH = re.compile(r"/(?:[\w-]*-)?(?:directory|staff|personnel|people|faculty|administration|contacts?|team|bios?|profiles?)(?:-[\w-]+)?(?:[/.]|$)", re.I)  # a staff page on a catalog or continuing-education host is still a staff page (catalog.morainepark.edu/directory, review 112215240022); a "course" path segment is a short one (/ai-courses/, /course-catalog/), not a news slug or /discourse/
 SIGNAL_COURSE_TEXT = re.compile(r"\b(?:certificate of achievement|course description|related courses|search courses|course fee|contact hours|credit hours?|\d+[- ]credit(?:[- ]hours?)?)\b", re.I)  # words a course page prints and a sentence does not; header buttons ("Request Info", "Register now") and sentences ("earn a degree", "earn CEUs") are on every kind of page (Germanna's header, review 112215240022)
 SIGNAL_ADVERT = re.compile(r"\bEarn (?:a|an|[Yy]our) (?:[A-Z][\w&-]* ){0,2}(?:Degree|Certificate|Diploma)\b|\b100% Online\b|\bA\.A\.S\.|\bB\.A\.S\.|\bAssociate (?:in|of) (?:Applied )?(?:Arts|Science)\b|^\s*[A-Z]{2,5}[- ]\d{3}[A-Z]?\s+[-–:]\s")  # case-sensitive: a program advert's button ("Earn a Degree in Data Science & AI 100% Online", Alamo) a course code heading ("ITI-524 - Intro to Generative AI") or a degree's name ("Artificial Intelligence, A.A.S."); a sentence's "earn a degree" is not one
+SIGNAL_DEGREE = re.compile(r"\b(?:master|bachelor|ph\.?d|doctoral|doctorate)(?:'?s)?(?: of (?:science|arts))?(?: degree| program| programme)?(?: in|:)\s+(?:[\w&,-]+ ){0,3}?(?:artificial intelligence|ai)\b", re.I)  # a degree in AI on a department or research page ("master's program in artificial intelligence", cs.sdsu.edu; "master of science in artificial intelligence degree program", UT research news; "PhD: Computational Science & Artificial Intelligence", American's CAS nav, fnwords51): the university teaches AI, which is a course signal, not a statement about careers or workforce
+BREADCRUMB = re.compile(r"\b(?:you are here|show navigation|toggle navigation|skip to (?:main )?content)\b", re.I)  # site chrome quoted into an excerpt: the page's menu, whatever its words
 MENU_SMALL = frozenset("a an and or the of in for to on at by with from as".split())
 SENTENCE_VERB = re.compile(r"\b(?:is|are|was|were|has|have|had|will|would|can|could|may|serves?|served|said|says|spoke|speaks|helps?|helped|uses?|used|offers?|offered|provides?|provided|teach(?:es)?|taught|leads?|led|joined|joins|works?|worked|announced|launched|received|lands?|expands?|wants?|needs?|makes?|made|gives?|gave|shows?|showed)\b")  # lowercase only: a sentence has a lowercase verb, a menu has none
 MENU_HEADLINE = re.compile(r"\b(?:Launches|Launched|Announces|Announced|Announcing|Expands|Expanded|Receives|Received|Unveils|Celebrates|Joins|Lands|Earns|Selects|Selected|Appoints|Introduces|Debuts|Wins|Awarded|Brings|Takes|Named (?:to|as)|Partners [Ww]ith|(?<!Tips )(?<!How )(?<!Ways )(?<!Steps )(?<!Guide )(?<!Need )(?<!Want )(?<!Learn )(?<!Time )to (?:Launch|Expand|Lead|Build|Create|Develop|Advance|Offer|Host|Open|Support|Provide|Bring|Train|Meet))\b")  # a headline's verb; not HEADLINE_VERB, whose "Partners", "Awards" and "Plans" are menu items too
@@ -313,8 +337,8 @@ def signal_kind(signal, source_url=""):
     url, text = (m.group(1), signal[m.end():]) if m else (source_url or "", signal)
     if SIGNAL_VENDOR.search(text): return "vendor"
     u = urllib.parse.urlsplit(url)
-    if (not STAFF_PATH.search(u.path) and SIGNAL_COURSE_URL.search(u.netloc + u.path)) or SIGNAL_COURSE_TEXT.search(text) or SIGNAL_ADVERT.search(text): return "course"  # a staff page on a catalog or continuing-education host is not a course (review 112215240022)
-    if m and menu_like(text): return "menu"  # a menu is the organisation's site linking to a page; a person's signal in Title Case is a headline or a job title about them (Healey's taskforce, Dallas College's grant; review 112215240022)
+    if (not STAFF_PATH.search(u.path) and SIGNAL_COURSE_URL.search(u.netloc + u.path)) or SIGNAL_COURSE_TEXT.search(text) or SIGNAL_ADVERT.search(text) or (m and SIGNAL_DEGREE.search(text)): return "course"  # a staff page on a catalog or continuing-education host is not a course (review 112215240022)
+    if m and (menu_like(text) or BREADCRUMB.search(text)): return "menu"  # a menu is the organisation's site linking to a page; a person's signal in Title Case is a headline or a job title about them (Healey's taskforce, Dallas College's grant; review 112215240022)
     return "statement"
 
 HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms allow_org_signal person_signal official_recheck sources read_per_search allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words signal_kinds menu_statement".split())
@@ -483,9 +507,11 @@ class Hunt:
         elif self.signal_kinds and signal_kind(r.get("signal"), r.get("source_url")) not in self.signal_kinds: why = f"the signal rests on a {signal_kind(r.get('signal'), r.get('source_url'))} page, and signal_kinds asks for {', '.join(self.signal_kinds)}"
         elif self.function_words and not self.function_fit(r.get("title", ""), f"{r.get('signal', '')} {r.get('check_quote') or ''} " + urllib.parse.urlparse(r.get("source_url", "")).path.replace("-", " ").replace("/", " ")): why = "no function word in the title or the person's own quote"  # the URL path always counts here: whether the row came from a directory isn't stored
         elif self.must and not any(people.term_regex(m).search(fold(self._stored_text(r))) for m in self.must): why = "the spec's must words aren't on its page"
-        elif self.max_age and r["page_date"] and not self._current_stored(r):  # judged as a live run judges it (held_back)
+        elif weak_signal_url(stored_signal_url(r)): why = f"the signal's page is not one the module now takes as a signal ({stored_signal_url(r)})"  # a site's own search page echoing our query (Benmouna, fnwords51)
+        elif self.max_age and (r["page_date"] or extract.url_date(r["source_url"])) and not self._current_stored(r):  # judged as a live run judges it (held_back); a row stored before url_date read the folder date stays undated otherwise (Linley White's 2011 uploads chart, fnwords51)
+            d = r["page_date"] or extract.url_date(r["source_url"])
             try:
-                if (dt.date.today() - dt.date.fromisoformat(r["page_date"])).days > self.max_age * 365: why = f"the page is from {r['page_date']}"
+                if (dt.date.today() - dt.date.fromisoformat(d)).days > self.max_age * 365: why = f"the page is from {d}"
             except ValueError: pass
         return why
 
@@ -678,7 +704,7 @@ class Hunt:
             pg = fetcher.fetch(h["url"], self.case)
             if pg.get("status") != "ok": continue
             url = pg.get("final_url") or pg["url"]
-            if JOB_POSTING.search(urllib.parse.urlsplit(url).path or ""): continue
+            if JOB_POSTING.search(urllib.parse.urlsplit(url).path or "") or search_results_url(url) or search_results_url(h["url"]): continue  # a search page echoes our own query back
             if not (people.official(org, url, self.domains, pg["text"]) or people.names_org(org, pg["text"])): continue  # a namesake at another place
             sents = [" ".join(x.split()) for x in re.split(r"(?<=[.!?])\s+|\n+", people.without_events(people.without_boilerplate(pg["text"]))) if x.strip()]
             for i, sn in enumerate(sents):
@@ -878,11 +904,11 @@ class Hunt:
             if not close and hit_terms:
                 reach = 300  # a heading further off is about the site, not this person (a UTEP research-assessment director under a tech-transfer banner)
                 lines = [fold(x) for x in clean.split("\n") if x.strip()]
-                for k, ln in enumerate(lines):
+                for li, ln in enumerate(lines):  # not `k`: that is the row's key, and an int key filed the row under a line number (two rows overwrote each other, and worst_lead's max() met int beside str: fnwords51 crashed)
                     m = near.search(ln)
                     if not m: continue
                     # before the name only the line just above counts (a label); a unit heading higher up is not this person's job (Francis, Toledo)
-                    ctx = (lines[k - 1][-reach:] if k else "") + " " + ln[max(0, m.start() - reach):m.end() + reach] + " " + " ".join(lines[k + 1:k + 5])[:reach]  # the next few lines are the person's block; further down is the next unit
+                    ctx = (lines[li - 1][-reach:] if li else "") + " " + ln[max(0, m.start() - reach):m.end() + reach] + " " + " ".join(lines[li + 1:li + 5])[:reach]  # the next few lines are the person's block; further down is the next unit
                     if any(people.term_regex(t).search(ctx) for t in hit_terms): close = True; break
             if not close and hit_terms and per.get("how") == "directory" and any(people.term_regex(t).search(fold(page.get("title") or "")) for t in hit_terms): close = True  # a contact block on a page titled for the signal: the listed head is the program's contact
             if hit_terms and not sig and not res["official"]: close = False  # only a menu says it, as on a namesake's site
@@ -981,8 +1007,14 @@ class Hunt:
                 return True
         return False
 
-    def try_org(self, org):
-        """Given pages first, then angles one by one, until this org has given all it may."""
+    def has_work(self, org, upto=None):
+        """Whether this org has a given page, one of its first `upto` angles, or its site search still to run."""
+        return (any((org, "(page) " + u) not in self.tried for u in self.pages.get(org, []))
+                or any((org, a) not in self.tried and (org, a) not in self.failed for a in self.angles[:upto])
+                or self.site_due(org))
+
+    def try_org(self, org, upto=None):
+        """Given pages first, then angles one by one (the first `upto` of them, or all), until this org has given all it may."""
         for u in self.pages.get(org, []):
             if len(self.leads) >= self.target or not self.wants_more(org) or time.monotonic() > self.deadline: return
             if (org, "(page) " + u) in self.tried: continue
@@ -990,7 +1022,7 @@ class Hunt:
             self.tried.add((org, "(page) " + u))
             self.log_rows.append({"org": org, "angle": "(page) " + u, "hits": 1, "read": 1, "found": found, "at": now()})
             self._save()
-        for angle in self.angles:
+        for angle in self.angles[:upto]:
             if len(self.leads) >= self.target or not self.wants_more(org) or time.monotonic() > self.deadline: return
             if (org, angle) in self.tried or (org, angle) in self.failed: continue
             q = angle.format(org=org)
@@ -1081,14 +1113,15 @@ class Hunt:
         if self.stored_readmits(): self._save()
         self.stored_departures()
         self.stored_person_signals()
+        upto = 1  # breadth first: every org's first angle and site search, then discovery, then the later angles. Depth first, a fresh case of 91 orgs spent its whole 1200 s pass on three angles each and never reached discovery, while the site searches found 12 of the 17 verified rows and the angles after the first found 3 of 324 searches (fnwords51)
         while len(self.leads) < self.target and time.monotonic() < self.deadline:
-            todo = [o for o in self.orgs if self.wants_more(o) and (any((o, a) not in self.tried and (o, a) not in self.failed for a in self.angles) or any((o, "(page) " + u) not in self.tried for u in self.pages.get(o, [])) or self.site_due(o))]  # an org whose angles all ran on an earlier run still gets its site search
-            if not todo:
-                if not discover: break
-                self.discover(discover.pop(0))
-                continue
-            with cf.ThreadPoolExecutor(max_workers=workers) as ex:
-                list(ex.map(self.try_org, todo[:workers]))
+            todo = [o for o in self.orgs if self.wants_more(o) and self.has_work(o, upto)]  # an org whose angles all ran on an earlier run still gets its site search
+            if todo:
+                with cf.ThreadPoolExecutor(max_workers=workers) as ex:
+                    list(ex.map(lambda o: self.try_org(o, upto), todo[:workers]))
+            elif discover: self.discover(discover.pop(0))  # its new orgs get their first round before anyone's later angles
+            elif upto < len(self.angles): upto += 1
+            else: break
         self.finish_menu_rows()
         if len(self.leads) >= self.target: self.stop_reason = f"reached the target of {self.target}"
         elif time.monotonic() >= self.deadline: self.stop_reason = "ran out of time: run it again on this case to carry on"

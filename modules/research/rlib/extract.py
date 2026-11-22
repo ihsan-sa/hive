@@ -101,6 +101,18 @@ def parse_date(s):
     return ""
 
 
+def url_date(url):
+    """A date the address itself gives: /2024/03/15/ in a news path, or the month folder of an upload (/wp-content/uploads/2011/05/Jul08_OrganizationalChart.pdf is a file put up in May 2011: fnwords51 'verified' a dean from it). A PDF has no other date, so this is what marks an old one."""
+    path = urllib.parse.urlsplit(url).path
+    m = re.search(r"/(20\d\d)[/-](\d\d?)[/-](\d\d?)(?:/|-|$)", path)
+    if m:
+        try: return dt.date(*map(int, m.groups())).isoformat()
+        except ValueError: pass
+    m = re.search(r"/uploads/(?:sites/\d+/)?((?:19|20)\d\d)/(\d\d)/", path)
+    if m and 1 <= int(m.group(2)) <= 12: return f"{m.group(1)}-{m.group(2)}-01"
+    return ""
+
+
 def page_date(url, meta, ld_items, text):
     """When the page says it was published, and how it knows. A copyright line is not a date."""
     if "wikipedia.org" in url: return "", ""  # the first date there is from the article's subject (an infobox's founding year)
@@ -111,10 +123,8 @@ def page_date(url, meta, ld_items, text):
         for k in ("datePublished", "dateModified"):
             d = parse_date(str(it.get(k, "")))
             if d: return d, "meta"
-    m = re.search(r"/(20\d\d)[/-](\d\d?)[/-](\d\d?)(?:/|-|$)", urllib.parse.urlsplit(url).path)
-    if m:
-        try: return dt.date(*map(int, m.groups())).isoformat(), "url"
-        except ValueError: pass
+    d = url_date(url)
+    if d: return d, "url"
     d = parse_date(text[:1500])
     return (d, "text") if d else ("", "")
 
