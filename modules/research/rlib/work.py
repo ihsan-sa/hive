@@ -213,6 +213,7 @@ def sentence_at(text, start, end):
     a = max(text.rfind(c, 0, start) for c in ".!?\n") + 1
     b = min([i for i in (text.find(c, end) for c in ".!?\n") if i >= 0] or [len(text)])
     return text[a:b]
+BELOW_HEAD = re.compile(r"\b(?:assistant|associate|deputy)\s+director\b|\bassistant\s+(?:dean|vice\s+(?:president|chancellor|provost))\b", re.I)  # a post under the unit's head: an assistant director of career education is not the head of career services (Lindsey under Meares, fnwords44)
 NAV_AI = re.compile(r"\b(?:skip to )?ai search\b|\bask ai\b|\bai chat\b|\bai assistant\b", re.I)
 DEV_HOST = re.compile(r"(?:^|[.])(?:www-)?(?:dev|staging|stage|test|qa|uat|preview|sandbox)(?:[.-]|$)", re.I)
 JOB_BOARD = re.compile(r"(?:^|\.)(?:indeed|glassdoor|ziprecruiter|simplyhired|monster|linkedin|careerbuilder|higheredjobs)\.", re.I)
@@ -366,7 +367,18 @@ class Hunt:
         self.errors.update(d.get("errors", {}))
         spec_orgs = set(self.orgs)
         self.no_head.update({o: u for o, u in d.get("no_head", {}).items() if o in spec_orgs or not not_an_org(o)})
+        self.seed_from_rows()
         self.recheck_stored()
+
+    def seed_from_rows(self):
+        """What a run learns from the pages it reads lasts that run only: a stored case gets it back from its own rows. Hudson County's angles had all run, so the next run knew neither its site nor its signal, and its site search read associate dean Valcarcel's profile and kept nothing (fnwords46)."""
+        for r in self.leads.values():
+            org = r.get("organisation")
+            if not org: continue
+            if r.get("official_site") == "yes" and r.get("source_url") and not self.domains.get(org) and not self.domains.get(people.org_core(org)):
+                self.learned.setdefault(org, people.registrable(people.domain_of(r["source_url"])))
+            m = re.match(r"\(the organisation's, from (\S+)\) (.*)", str(r.get("signal") or ""), re.S)
+            if m: self.org_signal.setdefault(org, (m.group(1), m.group(2)))
 
     def recheck_stored(self):
         """Rows found under an earlier spec have to pass this one too. Those that don't become near misses, and the report says how many."""
@@ -395,7 +407,7 @@ class Hunt:
 
     FULL_NOTE = "the organisation is full"
     SPEC_FILTERS = ("the title does not name the role focus", "no function word in the title", "the role doesn't fit the spec", "the signal rests on a ", "the spec's must words aren't on its page", "the signal is the organisation's, not this person's")
-    READ_AGAIN = ("the page puts them at ",)  # the module's own reading of the page: a fix to it (a greeting read as an employer, fnwords41) must reach the stored rows too
+    READ_AGAIN = ("the page puts them at ", "the page is from ", "a search result says they left")  # the module's own reading of the page: a fix to it (a greeting read as an employer, fnwords41; a 2018 CMS date on a staff page whose text names Fall 2026, fnwords44; a namesake's retirement, fnwords44) must reach the stored rows too
 
     def stored_readmits(self):
         """A near miss held back only by a spec filter (role focus, function words, roles, signal kinds, must words, org signal), or by the module's reading of who employs them, is judged again on its stored page, as a live run judges it, and comes back when the spec as it now stands passes it and its organisation has room. One the spec passes at a full organisation gets the note 'not listed: the organisation is full' in place of the older spec's reason, and comes back on a later run once a slot frees. Without this a wider spec on a stored case brings nobody back (fnwords35/36). Returns how many came back."""
@@ -405,7 +417,7 @@ class Hunt:
             org = r["organisation"]
             if len(self.leads) >= self.target: break
             if any(x["organisation"] == org and people.same_person(r["name"], x["name"]) for x in self.leads.values()): continue
-            no_room = self.org_count(org) >= self.per_org
+            no_room = not self.room_for(org, r.get("title", ""))
             page = self.case.page(r["source_url"])
             if not page or page.get("status") != "ok": continue
             res = people.check(page, r["name"], r["title"], org, self.domains)
@@ -416,10 +428,11 @@ class Hunt:
             if not why and row.get("signal_near_person") != "yes" and str(row.get("signal", "")).startswith("(the organisation's") and not self.s.get("allow_org_signal"): why = "the signal is the organisation's"
             if not why and no_room:
                 why, full = f"{self.FULL_NOTE} ({self.per_org} rows, the per_org cap)", full + 1  # the spec passes them; only the cap holds them, and a freed slot brings them back
-            if not why and (res["status"] == "secondary" or self.old_page(res["page_date"])): why = self.left_elsewhere(r["name"], org)
+            if not why and (res["status"] == "secondary" or self.old_page(res["page_date"])): why, row["departure_read"] = self.left_elsewhere(r["name"], org), dt.date.today().isoformat()
             if why:
                 self.near[k] = dict(row, note="; ".join(x for x in (f"not listed: {why}", row["note"]) if x))  # the reason as the spec now stands, not the one an older spec gave
                 continue
+            self.make_room(org, row.get("title", ""))
             self.leads[k] = row
             del self.near[k]
             back += 1
@@ -465,6 +478,34 @@ class Hunt:
         except re.error: return 0  # a pattern with groups of its own has no simple order
         return next((i for i, x in enumerate(parts) if x.search(t)), len(parts))
 
+    def post_rank(self, t):
+        """Lower is more wanted: the spec's role order first, then a unit head before a post under one (an assistant or associate director)."""
+        return (self.role_rank(t), 1 if BELOW_HEAD.search(fold(t)) else 0)
+
+    def worst_lead(self, org):
+        """The key of the organisation's least wanted lead, or None."""
+        at = [(self.post_rank(r.get("title", "")), k) for k, r in self.leads.items() if r["organisation"] == org]
+        return max(at)[1] if at else None
+
+    def room_for(self, org, title):
+        """The organisation has a free slot, or its least wanted lead ranks below this title, which would take that slot."""
+        if self.org_count(org) < self.per_org: return True
+        w = self.worst_lead(org)
+        return w is not None and self.post_rank(title) < self.post_rank(self.leads[w].get("title", ""))
+
+    def make_room(self, org, title):
+        """A full organisation's least wanted lead gives its slot to a higher post and becomes a near miss, 'the organisation is full'."""
+        if self.org_count(org) < self.per_org: return
+        w = self.worst_lead(org)
+        r = self.leads.pop(w)
+        self.near[w] = dict(r, note="; ".join(x for x in (f"not listed: {self.FULL_NOTE} ({self.per_org} rows, the per_org cap); a higher post took the slot: {title}", r.get("note")) if x))
+        if r["name"] in self.readmitted: self.readmitted.remove(r["name"])
+        self.log(f"  - {r['name']} — {str(r.get('title', ''))[:70]} ({org}) gives the slot to a higher post: {title[:70]}")
+
+    def wants_more(self, org):
+        """An organisation is searched while it has a free slot, or while one of its leads holds a post under a unit head: a head found later takes that slot (Meares, fnwords44)."""
+        return self.org_count(org) < self.per_org or any(r["organisation"] == org and BELOW_HEAD.search(fold(r.get("title", ""))) for r in self.leads.values())
+
     def function_fit(self, title, signal=""):
         """A verified title is not buyer fit: the title or the person's own quote must name the function (career, workforce...)."""
         low = fold(f"{title} {signal}")
@@ -506,6 +547,7 @@ class Hunt:
         for h in hits[:4]:
             t = f"{h['title']} . {h['snippet']}"
             if people.name_regex(name).search(fold(t)) is None: continue  # a result that doesn't print the name says nothing about this person
+            if not people.org_words_in(t, org) and not people.official(org, h["url"], self.domains): continue  # a namesake: "Julie Jones is retiring" on American Solutions for Business's LinkedIn held American University's Julie Jones (fnwords44); Harper's staff newsletter says "Harper", not "Harper College"
             said = people.departed(t, name)
             if not said:  # headlines name the event: "retirement of X", "X announces retirement"
                 nm = "(?:" + people.name_regex(name).pattern + ")"  # the pattern has a top-level "|": ungrouped, the bare name alone matched and held Eric Muth
@@ -513,6 +555,26 @@ class Hunt:
                 if m: said = " ".join(m.group(0).split())
             if said: return f"a search result says they left: {said} ({h['url']})"
         return ""
+
+    DEPARTURE_DAYS = 30
+
+    def stored_departures(self):
+        """Stored rows that would get the departure search on a live run (another site's page, or an old or undated one) get it again when they have none from the last DEPARTURE_DAYS days, side by side. Without this a row admitted by an older reading keeps its place: a namesake guard too strict for "Harper" readmitted Harper's retiring dean Joanne Ivory, and the fixed reading never saw her again (fnwords44). Returns how many moved out."""
+        cut = (dt.date.today() - dt.timedelta(days=self.DEPARTURE_DAYS)).isoformat()
+        todo = [(k, r) for k, r in self.leads.items() if (r.get("check_status") == "secondary" or self.old_page(r.get("page_date"))) and str(r.get("departure_read") or "") < cut]
+        if not todo: return 0
+        t0 = time.monotonic()
+        with cf.ThreadPoolExecutor(max_workers=self.workers) as ex: why = list(ex.map(lambda kr: self.left_elsewhere(kr[1]["name"], kr[1]["organisation"]), todo))
+        out = 0
+        for (k, r), w in zip(todo, why):
+            r["departure_read"] = dt.date.today().isoformat()
+            if not w: continue
+            self.near[k] = dict(r, note="; ".join(x for x in (f"not listed: {w}", r.get("note")) if x))
+            del self.leads[k]
+            self.moved.append(r["name"]); out += 1
+        self.log(f"departures: searched again for {len(todo)} stored rows on another site's or an old page, {out} of them left ({time.monotonic() - t0:.0f}s)")
+        self._save()
+        return out
 
     def person_signal(self, row, org):
         """A row whose signal is the organisation's (or only somewhere on its page) gets one plain search for the person with the first `must` word. A page that names the organisation and prints that word in the person's own sentence, or the one beside it, gives the row a signal of its own. Marks the row so a rerun doesn't search again. `"person_signal": false` in the spec switches it off."""
@@ -660,14 +722,17 @@ class Hunt:
                 row.update(signal=f"(the organisation's, from {staff_sig[0]}) {staff_sig[1]}", signal_near_person="no")
                 row["note"] = "; ".join(x for x in ("the signal is the organisation's, from another of its pages, not this person's", row.get("note")) if x)
                 if not why and not self.s.get("allow_org_signal"): why = "the signal is the organisation's, not this person's (set allow_org_signal to list such rows)"
+            if why.startswith("the page is from ") and row["check_status"] != "verified" and row.get("signal_near_person") == "yes" and self.s.get("official_recheck") is not False and len(self.leads) < self.target and self.room_for(org, row["title"]) and self.official_recheck(row, org):
+                why = ""  # the date was the last thing against it, and the organisation's own site has them now: listed in this run, not at the start of the next (Parks, fnwords44 and fnwords45)
             kind = signal_kind(row.get("signal"), row["source_url"])
             if not why and self.signal_kinds and kind not in self.signal_kinds: why = f"the signal rests on a {kind} page, and signal_kinds asks for {', '.join(self.signal_kinds)}"
-            if not why and (res["status"] == "secondary" or self.old_page(res["page_date"])): why = self.left_elsewhere(per["name"], org)
-            if why or len(self.leads) >= self.target or self.org_count(org) >= self.per_org:
+            if not why and (res["status"] == "secondary" or self.old_page(res["page_date"])): why, row["departure_read"] = self.left_elsewhere(per["name"], org), dt.date.today().isoformat()
+            if why or (len(self.leads) >= self.target and self.org_count(org) < self.per_org) or not self.room_for(org, row["title"]):
                 if why: row["note"] = "; ".join(x for x in (f"not listed: {why}", row["note"]) if x)
                 if not self.near_twin(per["name"], org, k): self.near.setdefault(k, row)
                 continue
             self.near.pop(k, None)
+            self.make_room(org, row["title"])
             if row["check_status"] != "verified": self.official_recheck(row, org)
             if row["signal_near_person"] != "yes": self.person_signal(row, org)
             self.leads[k] = row
@@ -745,14 +810,14 @@ class Hunt:
     def try_org(self, org):
         """Given pages first, then angles one by one, until this org has given all it may."""
         for u in self.pages.get(org, []):
-            if len(self.leads) >= self.target or self.org_count(org) >= self.per_org or time.monotonic() > self.deadline: return
+            if len(self.leads) >= self.target or not self.wants_more(org) or time.monotonic() > self.deadline: return
             if (org, "(page) " + u) in self.tried: continue
             found = self.weigh(org, fetcher.fetch(u, self.case), "(page) " + u)
             self.tried.add((org, "(page) " + u))
             self.log_rows.append({"org": org, "angle": "(page) " + u, "hits": 1, "read": 1, "found": found, "at": now()})
             self._save()
         for angle in self.angles:
-            if len(self.leads) >= self.target or self.org_count(org) >= self.per_org or time.monotonic() > self.deadline: return
+            if len(self.leads) >= self.target or not self.wants_more(org) or time.monotonic() > self.deadline: return
             if (org, angle) in self.tried or (org, angle) in self.failed: continue
             q = angle.format(org=org)
             t0 = time.monotonic()
@@ -770,27 +835,41 @@ class Hunt:
                 p = fetcher.fetch(h["url"], self.case)
                 read += 1
                 found += self.weigh(org, p, angle)
-                if self.org_count(org) >= self.per_org: break
+                if not self.wants_more(org): break
             self.tried.add((org, angle))
             self.log_rows.append({"org": org, "angle": angle, "hits": len(hits), "read": read, "found": found, "secs": round(time.monotonic() - t0, 2), "at": now()})
             self._save()
         self.site_angle(org)
 
-    def site_angle(self, org):
-        """An organisation with no lead yet and a known site gets one search on that site alone, for its heads: the unscoped angles return news and program pages, which name nobody."""
+    def site_query(self, org):
+        """The one search on an organisation's known site, or None when its site isn't known."""
         d = self.domains.get(org) or self.domains.get(people.org_core(org)) or self.learned.get(org)
         d = d[0] if isinstance(d, (list, tuple)) and d else d
-        if not isinstance(d, str) or self.org_count(org) or time.monotonic() > self.deadline: return
+        if not isinstance(d, str): return None
         words = [w for w in (re.sub(r"[^a-z ]", "", x.lower()).strip() for x in str(self.s.get("roles") or "dean|director").split("|")) if w][:2]
-        q = f'site:{d} {self.s.get("site_terms") or " ".join(words)}'  # plain words: the engines return one page for OR and quotes, and staff pages for "career services director"
-        if (org, "(site) " + q) in self.tried: return
+        return f'(site) site:{d} {self.s.get("site_terms") or " ".join(words)}'  # plain words: the engines return one page for OR and quotes, and staff pages for "career services director"
+
+    def site_due(self, org):
+        a = self.site_query(org)
+        return bool(a) and (org, a) not in self.tried and (org, a) not in self.failed
+
+    def site_angle(self, org):
+        """An organisation with room left and a known site gets one search on that site alone, for its heads: the unscoped angles return news and program pages, which name nobody. It runs below the cap, not only at no lead: Hudson County's first row filled from an angle, and associate dean Valcarcel was only on its site search (fnwords44)."""
+        a = self.site_query(org)
+        if not a or not self.wants_more(org) or time.monotonic() > self.deadline or not self.site_due(org): return
+        q = a[len("(site) "):]
         hits, errs = engines.search(q, self.sources, n=8, case=self.case)
-        if len(errs) >= len(self.sources): return
+        for s, e in errs.items(): self.errors[f"{s}: {e[:70]}"] += 1
+        if len(errs) >= len(self.sources):  # nobody answered: retried on the next run, not looped on in this one
+            self.failed.add((org, a))
+            self._save()
+            return
+        self.answered = True
         found = 0
         for h in hits[:self.read]:
             if h["relevance"] < 0.2: continue
             found += self.weigh(org, fetcher.fetch(h["url"], self.case), "(site) " + q)
-            if self.org_count(org) >= self.per_org: break
+            if not self.wants_more(org): break  # GMU's site search printed assistant director Lindsey, then Bradshaw's staff page, and director Meares fourth (fnwords45)
         self.tried.add((org, "(site) " + q))
         self.log_rows.append({"org": org, "angle": "(site) " + q, "hits": len(hits), "read": self.read, "found": found, "at": now()})
         self._save()
@@ -825,9 +904,10 @@ class Hunt:
         workers = self.workers
         self.stored_official_rechecks()
         if self.stored_readmits(): self._save()
+        self.stored_departures()
         self.stored_person_signals()
         while len(self.leads) < self.target and time.monotonic() < self.deadline:
-            todo = [o for o in self.orgs if self.org_count(o) < self.per_org and (any((o, a) not in self.tried and (o, a) not in self.failed for a in self.angles) or any((o, "(page) " + u) not in self.tried for u in self.pages.get(o, [])))]
+            todo = [o for o in self.orgs if self.wants_more(o) and (any((o, a) not in self.tried and (o, a) not in self.failed for a in self.angles) or any((o, "(page) " + u) not in self.tried for u in self.pages.get(o, [])) or self.site_due(o))]  # an org whose angles all ran on an earlier run still gets its site search
             if not todo:
                 if not discover: break
                 self.discover(discover.pop(0))

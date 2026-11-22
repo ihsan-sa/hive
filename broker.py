@@ -309,7 +309,8 @@ def remind(name, req):
     if thread.startswith("step-") and run_of(name).get("thread") != thread: return {"err": "a step-... thread is its judge's alone"}
     if thread and not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,100}", thread): return {"err": "remind: bad thread"}
     if any(x.split("=", 1)[0] == "--thread" and "step-" in x for x in args) or any(args[i] == "--thread" and args[i + 1:i + 2] and args[i + 1].startswith("step-") for i in range(len(args))): return {"err": "a step-... thread is its judge's alone"}
-    r = subprocess.run([sys.executable, "-I", str(CORE / "remind.py"), *args], text=True, capture_output=True, timeout=60, env={**post_env(name), **({"HIVE_THREAD": thread} if thread else {})})
+    if any(x.split("=", 1)[0] == "--if" for x in args): return {"err": "remind: --if runs its check outside the sandbox, so it can't be set from inside one"}
+    r = subprocess.run([sys.executable, "-I", str(CORE / "remind.py"), *args], text=True, capture_output=True, timeout=60, env={**post_env(name), "HIVE_REMIND_NO_IF": "1", **({"HIVE_THREAD": thread} if thread else {})})
     return {"out": r.stdout.strip()[-4000:], "err_out": r.stderr.strip()[-2000:], "rc": r.returncode}
 
 def memory(name, req):

@@ -398,21 +398,21 @@ function unmark() { if (P.mk) { P.mk.stop(); P.mk = null; } }
 function showDoc(it) {
   P.root.setAttribute("aria-label", tr("Mark up " + it.name)); P.root.dataset.kind = "doc";
   P.foot.hidden = true;
-  // One row: the title and the revision picker, then zoom, open on the Documents page, full width, close. The viewer fills the
+  // One row: the title and the revision picker, then zoom, download, open on the Documents page, full width, close. The viewer fills the
   // title, mounts the picker in the slot and wires the zoom button (ui/docviewer.js sideViewer).
   const title = h("span", { class: "pv-fn", title: it.name }, it.name), rev = h("span", { class: "pv-revslot" });
-  const zoom = button("Fit", () => {}, { kind: "quiet", size: "s", cls: "pv-zoom" });
+  const zoom = button("Fit", () => {}, { kind: "quiet", size: "s", cls: "pv-zoom" }), dl = h("span", { class: "pv-dlslot" });
   P.head.replaceChildren(
     h("div", { class: "pv-t" },
       button("All files", openFiles, { kind: "icon", icon: "folder", size: "s", cls: "pv-files" }),
       h("b", { class: "pv-badge", "data-kind": "pdf" }, "DOC"),
       h("div", { class: "pv-n pv-n1" }, title, rev),
       h("span", { class: "pv-tools" },
-        zoom,
+        zoom, dl,
         h("a", { class: "btn", "data-kind": "icon", "data-size": "s", href: href("docs", it.doc), title: tr("Open on the Documents page"), "aria-label": tr("Open on the Documents page") }, icon("open")),
         fullBtn(),
         button("Close (Esc)", closePreview, { kind: "icon", icon: "close", size: "s", cls: "pv-x" }))));
-  P.body.replaceChildren(sideViewer(it.doc, it.thread, { title, rev, zoom }));
+  P.body.replaceChildren(sideViewer(it.doc, it.thread, { title, rev, zoom, dl }));
   P.body.scrollTop = 0;
   mark();
 }
