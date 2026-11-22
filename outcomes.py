@@ -11,7 +11,8 @@ Every run the starter logs (~/log.jsonl start/end) gets a grade in ~/outcomes.js
   not_run    it hit a provider's usage limit and exited non-zero within a minute, posting nothing (no model): it never ran, so it is no bad work
              either (R30, 2026-11-14: Codex at its limit read as 29.6% delivered when the runs that did run delivered 70%, i0203)
 A run the starter stopped because the person edited the message it was answering (or asked for another answer) is not_asked by rule too (marked
-`superseded`): the run resumed on the new version carries the ask.
+`superseded`): the run resumed on the new version carries the ask. So is a run the person told to pause or stop mid-run that then stopped and did no
+more work (marked `person_pause`; person_paused has the conditions, rsi-lab 11212112c6ed).
 A model or effort switch (`hive model X`) splits one piece of work over two runs: the run that only switched is not_asked by rule (marked `switch`), and the
 run that resumed on the switch post is graded against the post that woke the first one (`origin`), so the work is counted once, against what was asked.
 Every run woken by the person is graded; of the rest, whole chains: a fixed share of roots (ROOT_PCT) has every run handed on from it graded, so a chain's rate means a chain.
@@ -159,6 +160,50 @@ def superseded(run, log, by_id):
         if r.get("event") == "woken" and r.get("name") == run["name"] and r.get("session") == run.get("session") and run["started"] <= r.get("at", "") <= run["ended"]:
             sup = [i for i in r.get("posts") or [] if (q := by_id.get(i)) and str(q.get("from", "")).lower() == "person" and (q.get("edit_of") or q.get("retry_of"))]
             if sup: return any(x.get("event") == "start" and x.get("name") == run["name"] and set(sup) & set(x.get("woke") or [x.get("post")]) for x in log)
+    return False
+
+PAUSE_ASK = re.compile(r"\b(pause|stop|hold off|halt)\b", re.I)
+PAUSE_ACK = re.compile(r"\bpaus|\bstopp|\bstop(ping)? now|\bholding\b|\bon hold\b|\bparked\b|\bhalt", re.I)
+WORK_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+COMMIT = re.compile(r"\bgit\b[^\n|;&]*\b(commit|push)\b|\bgh pr (create|merge)\b")
+TRANSCRIPTS = str(HOME / ".claude*" / "projects" / "*" / "{session}.jsonl")   # one session can sit under several login dirs
+
+def worked_after(session, t0, t1):
+    """Did the session edit a file, commit or push between t0 and t1 (transcript tool calls)? None when no transcript is found."""
+    import glob
+    files = glob.glob(TRANSCRIPTS.format(session=session)) if session else []
+    if not files: return None
+    a, b = dt.datetime.fromisoformat(t0), dt.datetime.fromisoformat(t1)
+    for f in files:
+        try:
+            for ln in open(f, errors="replace"):
+                if '"tool_use"' not in ln: continue
+                try: r = json.loads(ln); ts = dt.datetime.fromisoformat(r["timestamp"].replace("Z", "+00:00"))
+                except (ValueError, KeyError, TypeError): continue
+                if not a < ts <= b: continue
+                for c in (r.get("message") or {}).get("content") or []:
+                    if not isinstance(c, dict) or c.get("type") != "tool_use": continue
+                    if c.get("name") in WORK_TOOLS or (c.get("name") == "Bash" and COMMIT.search(str((c.get("input") or {}).get("command", "")))): return True
+        except OSError: continue
+    return False
+
+def person_pauses(posts):
+    """The person's posts asking to pause or stop: only the person's word parks a run, not an agent's."""
+    return [p for p in posts if str(p.get("from", "")).lower() == "person" and PAUSE_ASK.search(str(p.get("text", "")))]
+
+def person_paused(run, mine, pauses):
+    """The person told the run to pause or stop while it worked, and it stopped (ae868 for rsi-lab, 11212112c6ed; hive-meta's 11-21 table:
+    a56bb and aeb53 paused 2 minutes in and graded partial against the ask the pause overrode). All must hold: a person post asking to pause or
+    stop, in the run's thread or naming its agent, after the run started and before its last post; the last post after it says it paused,
+    stopped, parked or holds; and no edit, commit or push after the pause (transcript; no transcript, no rule). The ask stays with the run
+    that resumes. `pauses`: the person's posts that match PAUSE_ASK, filtered once per grading pass."""
+    if not mine: return False
+    last = max(mine, key=lambda p: p.get("at", ""))
+    if not PAUSE_ACK.search(str(last.get("text", ""))): return False
+    for q in pauses:
+        if not run["started"] < q.get("at", "") < last.get("at", ""): continue
+        if q.get("thread") != run.get("thread") and f"@{run['name']}" not in str(q.get("text", "")): continue
+        return worked_after(run.get("session"), q["at"], run["ended"]) is False
     return False
 
 NOTICE_MAX = 300   # a job-done notice is short: "heavy: `cmd` finished rc 0 after 76m13s.", "PR 357 CI finished: test=success, ..."
@@ -401,19 +446,20 @@ def cmd_grade(a):
     if a.limit: todo = todo[:a.limit]
     graded, model_runs, cost, ticks, drafts, limited = 0, [], 0.0, ticked_rungs(), 0, False
     root, lims, nexts = roots(log, by_id), limit_times(log), launches()
+    pauses = person_pauses(posts)
     for r in todo:
         post, mine, after = posts_of(r, posts, by_id)
         ask = origin(r, post, log, by_id) if post and carried(post, r["name"]) else post   # resumed after a switch or woken by its own job notice: graded on the ask carried over
         if (cont := continued(r, ask, by_id, nexts)): ask = cont; r = {**r, "continued": True}
         r = {**r, **({"root": root[r["key"]]} if root.get(r["key"], r["key"]) != r["key"] else {}), **({"completion_wake": True} if completion_wake(r, by_id, mine, ticks) else {}), **({"self_wake": True} if post and self_wake(r, post) else {}), **({"round": True} if ask and ROUND.search(str((post if ask is not post and job_notice(post, r["name"]) else ask).get("text", ""))[:80]) else {})}   # marks for the spot-check and the step-up; the grade doesn't look at them
-        sw = switch_only(r, mine, log); sup = not sw and superseded(r, log, by_id)
+        sw = switch_only(r, mine, log); sup = not sw and superseded(r, log, by_id); pz = not (sw or sup) and person_paused(r, mine, pauses)
         if parked(r, log): r = {**r, "parked": True}
         post = ask
-        g = "not_asked" if sw or sup else "not_run" if not_run(r, mine, lims) else mechanical(r, post, mine)
+        g = "not_asked" if sw or sup or pz else "not_run" if not_run(r, mine, lims) else mechanical(r, post, mine)
         if g:
-            why = "only switched model or effort; the run it resumed as carries the ask" if sw else "stopped for the person's edit or retry; the run it resumed as carries the ask" if sup else "hit a usage limit and exited within a minute; resumed at the reset" if g == "not_run" \
+            why = "only switched model or effort; the run it resumed as carries the ask" if sw else "stopped for the person's edit or retry; the run it resumed as carries the ask" if sup else "the person paused it mid-run and it stopped; the run that resumes carries the ask" if pz else "hit a usage limit and exited within a minute; resumed at the reset" if g == "not_run" \
                 else "the post asked nothing" if g == "not_asked" else "posted nothing" + (" though named" if g == "silent" else "")
-            if not a.dry: append(LEDGER, {**r, **({"switch": True} if sw else {}), **({"superseded": True} if sup else {}), **tag, "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
+            if not a.dry: append(LEDGER, {**r, **({"switch": True} if sw else {}), **({"superseded": True} if sup else {}), **({"person_pause": True} if pz else {}), **tag, "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
             graded += 1
         else: model_runs.append((r, post, mine, after))
     chosen = pick(model_runs, a.sample, root=root) if not (a.all or other or back) else model_runs

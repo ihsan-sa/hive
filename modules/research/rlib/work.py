@@ -200,6 +200,15 @@ def verify_csv(path, case, out=None, find=False, cols=None, domains=None, worker
     return {"rows": len(rows), "counts": dict(collections.Counter(r["check_status"] for r in rows)), "out": dest, "problems": [{"name": r.get(c["name"]), "status": r["check_status"], "note": r["check_note"]} for r in rows if r["check_status"] != "verified" or r["check_note"]]}
 
 
+WEAK_SIGNAL_HOST = re.compile(r"^(?:careertraining|ed2go|libguides|catalog|bulletin|courses?)\b|\.(?:ed2go|libguides)\.|^ed2go", re.I)
+WEAK_SIGNAL_PATH = re.compile(r"/(?:catalog|courses?|course-?descriptions?|coursesoffered|programs?/all|academic-programs|leadership|directory|faculty-staff|jobs|employment|c\.php)\b|(?:ai|artificial-intelligence)-(?:ce|programs?)/", re.I)
+NAV_AI = re.compile(r"\b(?:skip to )?ai search\b|\bask ai\b|\bai chat\b|\bai assistant\b", re.I)
+DEV_HOST = re.compile(r"(?:^|[.])(?:www-)?(?:dev|staging|stage|test|qa|uat|preview|sandbox)(?:[.-]|$)", re.I)
+def weak_signal_url(url):
+    """An org signal must not come from a course catalog, a vendor training host, a LibGuide, a directory or a jobs page: those carry the AI word without saying anything about careers or workforce."""
+    u = urllib.parse.urlsplit(url)
+    return bool(DEV_HOST.search(u.hostname or "") or WEAK_SIGNAL_HOST.search(u.hostname or "") or WEAK_SIGNAL_PATH.search(u.path or ""))
+
 HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles org_pattern domains angles site_terms allow_org_signal sources read_per_search allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words".split())
 
 
@@ -404,11 +413,14 @@ class Hunt:
         if is_official and not self.domains.get(org) and not self.domains.get(people.org_core(org)):
             self.learned.setdefault(org, people.registrable(people.domain_of(page.get("final_url") or page["url"])))
         if not people.names_org(org, text) and not is_official: return 0
-        hit_terms = [m for m in self.must if people.term_regex(m).search(low)]
+        hit_terms = [m for m in self.must if people.term_regex(m).search(NAV_AI.sub(" ", low))]
         staff_sig = None
-        if hit_terms and is_official and org not in self.org_signal:
+        if hit_terms and is_official and org not in self.org_signal and not weak_signal_url(page.get("final_url") or page["url"]):
             m = people.term_regex(hit_terms[0]).search(low)
-            self.org_signal[org] = (page.get("final_url") or page["url"], " ".join(clean[max(0, m.start() - 80):m.end() + 120].split()) if m else hit_terms[0])
+            excerpt = " ".join(clean[max(0, m.start() - 80):m.end() + 120].split()) if m else ""
+            nav = NAV_AI.sub(" ", excerpt)  # "Skip to AI Search" is the site's own menu, not a statement
+            if re.search(r"(?<!\w)" + re.escape(hit_terms[0]) + r"(?!\w)", nav, re.I):  # the word must be in the excerpt we keep, not just in the folded text
+                self.org_signal[org] = (page.get("final_url") or page["url"], excerpt)
         if self.must and not hit_terms:
             if not (angle.startswith("(site)") and is_official and org in self.org_signal): return 0
             staff_sig = self.org_signal[org]  # the organisation's own staff page: the signal word is on another of its pages
