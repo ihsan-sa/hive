@@ -586,7 +586,8 @@ def reaped_signalled(log, posts, t0, t1):
 
 # the person finding a problem before the hive did: a chase ("hello?", "status?"), a thing not working or not showing, a "why is X not".
 # Plain "still" and "why is" matched ordinary feedback and design questions (13 of 29 matches on 2026-11-04), so they need a negative with them.
-NOTICED = re.compile(r"\b(?:hello\?|status\?|not seeing|noticed|isn.t working|broken|nothing happen|why am i not|still (?:not|no|isn|doesn|waiting|nothing|broken|missing)\b|why (?:is|are|does|do)\b[^?.!\n]{0,60}?\b(?:not|no|isn.t|doesn.t|don.t|only|gap|wrong|missing)\b)", re.I)
+# Bare "noticed" was 3 of 3 noise 11-08..11-22 (outreach drafts "I noticed you write...", "dig into my neck i noticed"), so it is gone.
+NOTICED = re.compile(r"\b(?:hello\?|status\?|not seeing|isn.t working|broken|nothing happen|why am i not|still (?:not|no|isn|doesn|waiting|nothing|broken|missing)\b|why (?:is|are|does|do)\b[^?.!\n]{0,60}?\b(?:not|no|isn.t|doesn.t|don.t|only|gap|wrong|missing)\b)", re.I)
 
 def board_in(posts, t0, t1):
     ps = [p for p in posts if t0 <= p.get("at", "") <= t1]
