@@ -68,8 +68,8 @@ def c_verify(a):
 HUNT_EXAMPLE = '{"goal": "deans of AI programs", "orgs": ["Valencia College"], "angles": ["\\"{org}\\" dean artificial intelligence"], "target": 1, "max_seconds": 300, "out": "hunt-out"}'
 
 
-HUNT_KEYS = ("goal (what the list is for); orgs (list) or discover (list of searches); target (rows wanted, 25); per_org (2); must (words near the person); function_words (the title or the person's own quote must name one of these); role_focus (the title alone must name one of these); roles / exclude_roles (patterns); "
-             "org_pattern; domains ({org: site}, strict); angles (search templates with {org}); allow_org_signal (list a head found on an org staff page whose signal word is on another of its pages); site_terms (words for the one site: search of an org with no lead, default the first two roles); sources; read_per_search (4); allow_secondary (true); "
+HUNT_KEYS = ("goal (what the list is for); orgs (list) or discover (list of searches); target (rows wanted, 25); per_org (2); must (words near the person); function_words (the title or the person's own quote must name one of these); signal_kinds (keep only rows whose signal is one of statement, course, vendor; the rest go to the near misses); role_focus (the title alone must name one of these); roles / exclude_roles (patterns); "
+             "org_pattern; domains ({org: site}, strict); angles (search templates with {org}); allow_org_signal (list a head found on an org staff page whose signal word is on another of its pages); person_signal (true: such a row, or one whose signal is only somewhere on its page, gets one search for the person with the first must word, and a page with that word in their own sentence gives the row its own signal); official_recheck (true: a row whose signal is the person's own but whose page is another site's, or too old, gets one search for the name on the organisation's site, guessed from one search for its name when domains has none; verified there, it keeps the quote as its signal); site_terms (words for the one site: search of an org with no lead, default the first two roles); sources; read_per_search (4); allow_secondary (true); "
              "pages ({org: url or [urls]}, read directly and tied to that org); allow_page_signal (false); max_age_years (3); stale_days (365: older pages get a departure search); workers (4, parallel orgs); max_seconds (1800); out")
 
 
@@ -162,14 +162,14 @@ def c_hunt(a):
     if kept: _log("hunt: kept earlier leads for " + ", ".join(kept) + ", not in this spec")
     r = h.run()
     if a.text:
-        print(f"{r['leads']} leads ({r['verified']} verified) of {r['target']}, {r['status']}; {r['near']} near misses, {r['departure_searches']} departure searches")
+        print(f"{r['leads']} leads ({r['verified']} verified" + (f": {r['verified_kinds']}" if r.get("verified_kinds") else "") + f") of {r['target']}, {r['status']}; {r['near']} near misses, {r['departure_searches']} departure searches" + (f", {r['person_signal_found']} of {r['person_signal_searches']} person-signal searches found the person's own signal" if r.get("person_signal_searches") else "") + (f", {r['official_upgrades']} rows confirmed on the organisation's own site ({r['domain_searches']} domain searches)" if r.get("official_upgrades") or r.get("domain_searches") else ""))
         for l in r.get("lead_list") or []: print(f"{l['name']} | {l['title']} | {l['organisation']} | {l['check_status']}")
         for e in r.get("no_named_head") or []: print(f"no named head: {e['org']} {e.get('url','')}".rstrip())
         if r["status"] != "reached" and r.get("stopped"): print(f"stopped: {r['stopped']}")
         if r.get("out"): print(f"out: {r['out']}")
     else: _out(r)
     left = sum(1 for o in h.orgs for g in h.angles if (o, g) not in h.tried) + sum(1 for q in (h.s.get("discover") or []) if ("(discover)", q) not in h.tried)
-    _log(f"hunt: {r['leads']} leads ({r['verified']} verified) of {r['target']}, {r['status']}" + (f" ({left} searches left)" if r["status"] != "reached" and left else "") + (f", {full0} org{'' if full0 == 1 else 's'} already full at the start" if full0 else "") + f", out {r['out']}" + (f"; no named head: {', '.join(e['org'] for e in r['no_named_head'])}" if r.get("no_named_head") else ""))
+    _log(f"hunt: {r['leads']} leads ({r['verified']} verified" + (f": {r['verified_kinds']}" if r.get("verified_kinds") else "") + f") of {r['target']}, {r['status']}" + (f" ({left} searches left)" if r["status"] != "reached" and left else "") + (f", {full0} org{'' if full0 == 1 else 's'} already full at the start" if full0 else "") + f", out {r['out']}" + (f"; no named head: {', '.join(e['org'] for e in r['no_named_head'])}" if r.get("no_named_head") else ""))
     if r["status"] != "reached": sys.exit(3)
 
 

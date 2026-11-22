@@ -12,7 +12,7 @@ Ladders (2026-11-06, thread focus-ladders): a `## Ladder` section in a goals.md 
 with a thin brief re-read "nothing left" and repeated it. `hive goals --brief THREAD` hands a round its rung, and `hive goals --rounds` counts how
 many rounds did work rather than report a wait.
 """
-import argparse, datetime as dt, importlib.util, json, re, subprocess, sys, zlib
+import argparse, datetime as dt, importlib.util, json, re, subprocess, sys, time, zlib
 from collections import Counter
 from pathlib import Path
 
@@ -428,19 +428,33 @@ def last_nothing(to, thread):
 
 CARD_KINDS = ("past date", "to-do off the list", "says today", "hidden ask", "long bullet", "long lead")   # the lint findings a ladder agent can clear in a minute
 
+_FSTATE = {"at": 0.0, "st": None}
+
 def _focus_id(thread):
     """The focus a thread is in, by tag first (focus.focus_of). HA-4 2026-11-19: matching only a focus's own thread or id left hive-meta's ladder
     threads (meta-load, meta-reflect ...) with no focus, so their card flags never reached a brief and card_pile_due never fired."""
     try:
         sys.path.insert(0, str(Path(__file__).parent)); import focus
-        return focus.focus_of(focus.state(), thread)
+        if _FSTATE["st"] is None or time.time() - _FSTATE["at"] > LINT_TTL_S: _FSTATE.update(at=time.time(), st=focus.state())   # 1.3 s a build, once per ladder per starter pass before (112210364131)
+        return focus.focus_of(_FSTATE["st"], thread)
     except Exception: return None
+
+_LINT = {"at": 0.0, "items": None}
+LINT_TTL_S = 300
+
+def _lint_items():
+    """`hive focus lint --json`, run at most once per LINT_TTL_S. The starter's floor calls card_mine for every gated ladder on each 3 s pass;
+    uncached, ~30 lint runs of 1.5 s each made a pass take ~50 s, and a person's post to a sleeping agent waited for it (the person, 112210364131).
+    Card flags change on a scale of hours (a round every PILE_EVERY_H), so five minutes old is fresh enough."""
+    if _LINT["items"] is None or time.time() - _LINT["at"] > LINT_TTL_S:
+        items = json.loads(subprocess.run(["hive", "focus", "lint", "--json"], capture_output=True, text=True, timeout=30).stdout)
+        _LINT.update(at=time.time(), items=items)
+    return _LINT["items"]
 
 def card_mine(thread, run=None):
     """(focus id, the card's own clearable lint findings) for a thread; (None, []) when lint cannot run."""
     try:
-        out = (run or (lambda: subprocess.run(["hive", "focus", "lint", "--json"], capture_output=True, text=True, timeout=30).stdout))()
-        items = json.loads(out)
+        items = json.loads(run()) if run else _lint_items()
         fid = thread if run else _focus_id(thread)
     except Exception: return None, []
     return fid, [i for i in items if i.get("focus") == fid and i.get("kind") in CARD_KINDS]

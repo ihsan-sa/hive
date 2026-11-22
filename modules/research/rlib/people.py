@@ -82,7 +82,7 @@ def people_in(text, ld=()):
             add(m.group("name"), title, "prose")
     lines = [l.strip() for l in text.split("\n") if l.strip()]
     for a, b in zip(lines, lines[1:]):
-        if re.fullmatch(HONOR + NAME + SUFFIX, a) and _LINE_ROLE.match(b) and len(b) < 120 and "directory" not in b.lower(): add(a, b, "directory")
+        if re.fullmatch(HONOR + NAME + SUFFIX, a) and _LINE_ROLE.match(b) and len(b) < 160 and "directory" not in b.lower(): add(a, b, "directory")  # 160: UF's "Associate Vice President for ... and Executive Director of the ... Center" is 120
     return list(out.values())
 
 
@@ -342,6 +342,8 @@ def title_slot(text, name, title, org=""):
             cut = re.fullmatch(r"[\w&'’ -]{1,60}?(?:\s(?:at|of|with)\s+(?:the\s+)?([\w&'’ -]+?))?\.?", tail)
             if len(title) >= 100 and cut and cut.group(1) and _own(org, cut.group(1)): return True
             if len(title) >= 100 and org and re.fullmatch(r"[\w&'’ -]{1,60}\.?", tail) and set(re.findall(r"[a-z0-9]+", tail)) <= set(re.findall(r"[a-z0-9]+", fold(org))): return True
+            # ... or just the rest of the post's own words: "... Executive Director of the Career" + " Connections Center" (UF's directory, fnwords30). Words that name an employer are not the post.
+            if len(title) >= 100 and re.fullmatch(r"[\w&'’ -]{1,40}\.?", tail) and len(tail.split()) <= 4 and not re.search(r"\b(?:at|with|from|university|college|school|institute|inc|llc|ltd|corp|company|group|foundation|formerly|previously)\b", tail): return True
             acr = re.fullmatch(r"\(([a-z&]{2,10})\)\.?", tail)  # "Information Technology Services (ITS)": the initials of the post's last words
             if acr and "".join(w[0] for w in re.findall(r"[a-z]+", candidate[:m.end()]) if w not in ("of", "and", "the", "for"))[-len(acr.group(1).replace("&", "")):] == acr.group(1).replace("&", ""): return True
             if re.fullmatch(r",?\s*(?:at|on)\s+(?:\+?[\d(][\d ().-]{6,}\d|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)(?:\s+or\s+\S+)?\.?", tail): return True
@@ -497,7 +499,16 @@ def elsewhere(title, org):
         last = parts[-1]
         names_employer = re.search(rf"\b{_ORG_END}\.?$", last) or not any(fold(w) in POST_WORDS for w in re.findall(r"[A-Za-z][\w&-]*", last))
         if names_employer and foreign(last): return foreign(last)
+    # Another university's acronym anywhere in the title: "director of the CSU San Marcos Career Center" filed under San Diego State.
+    # Only acronyms shaped like a university's (SDSU, GMU, UCLA), not a system (CUNY): a donor-named "Magner Career Center" is a plain word and stays.
+    for acr in re.findall(r"\b(?:[A-Z]{1,4}U|U[A-Z]{1,4})\b", title):
+        low = acr.lower()
+        if acr in UNI_ACRONYM_NOT or low in own or (initials and (initials.startswith(low) or low.startswith(initials))): continue
+        return acr
     return ""
+
+
+UNI_ACRONYM_NOT = {"UX", "UI", "US", "USA", "UK", "UN", "UAV", "UAS", "GUI", "EU", "ESU"}
 
 
 GENERIC_EMPLOYER = {"organization", "organisation", "employer", "company", "webinars", "webinar", "events", "summit"}  # a heading or label, not a body
