@@ -29,9 +29,9 @@ export default {
   "Hi.": "Hola.",
   "You're set up.": "Ya está todo listo.",
   "Hive runs Claude agents on this computer. Tell it what you want done, in your own words, and an agent works on it in the background and answers you here.":
-    "Hive ejecuta agentes de Claude en este ordenador. Dile lo que quieres hacer, con tus propias palabras, y un agente se pone con ello en segundo plano y te responde aquí.",
+    "Hive ejecuta agentes de Claude en esta computadora. Dile lo que quieres hacer, con tus propias palabras, y un agente se pone con ello en segundo plano y te responde aquí.",
   "Hive runs agents on this computer. Tell it what you want done, in your own words, and an agent works on it in the background and answers you here.":
-    "Hive ejecuta agentes en este ordenador. Dile lo que quieres hacer, con tus propias palabras, y un agente se pone con ello en segundo plano y te responde aquí.",
+    "Hive ejecuta agentes en esta computadora. Dile lo que quieres hacer, con tus propias palabras, y un agente se pone con ello en segundo plano y te responde aquí.",
   "Hive activity, last 24 hours": "Actividad de Hive, últimas 24 horas",
   "Hive upkeep": "Mantenimiento de Hive",
   "Hive watch": "Vigilancia de Hive",
@@ -358,7 +358,7 @@ export default {
   "Theme": "Tema",
   "Follows your system setting": "Sigue el ajuste de tu sistema",
   "Leave full screen": "Salir de pantalla completa",
-  "how busy the computer is": "lo ocupado que está el ordenador",
+  "how busy the computer is": "lo ocupado que está la computadora",
   "how much is left, and when it comes back": "cuánto queda, y cuándo vuelve",
   "every exchange you had, newest first": "cada intercambio que tuviste, lo más nuevo primero",
   "make designs with Claude Design": "hacer diseños con Claude Design",

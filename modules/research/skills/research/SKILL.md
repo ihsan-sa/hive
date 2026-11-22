@@ -6,6 +6,7 @@ description: Use for web research: finding or checking people, companies or fact
 Use `research` instead of searching and reading pages by hand, and before you state that anything is verified. `README.md` in this module has every command.
 
 - A list: `research hunt spec.json` runs to the target and never pads. Don't stop at the first thin round: run it again on the same case with more orgs or angles until it reaches the target or says why it can't.
+- A list for one function (career-services buyers, say): put `function_words` (title or the person's own quote names it) in the spec, and `role_focus` (the title alone must name it) when `roles` lets whole classes of heads through, such as provosts. Both leave the rest as near misses.
 - A list you already have, whoever made it: `research verify list.csv --find`. Say "verified" only for rows it marks verified, and report the others by their status.
 - `verified` means a pattern matched the name beside the title on what looks like the org's own page, not that a person is sure, and not that they still hold the post. Open the quote and read the note before you repeat a row. If a report says sources failed, run it again later: failed searches get retried.
 - An open question: `research dig "question" --out REPORT.md`, then open the pages behind what you state. Names on several sites are corroborated only as names.

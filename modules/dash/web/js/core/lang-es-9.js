@@ -101,7 +101,7 @@ export default {
   "No modules listed.": "No hay módulos en la lista.",
   "Reach the Hive from Slack": "Habla con el Hive desde Slack",
   "You make a small Slack app of your own, so messages go only between your Slack and this computer. You write to it in its Messages tab, or in a channel.":
-    "Creas una pequeña app de Slack propia, así que los mensajes van solo entre tu Slack y este ordenador. Le escribes en su pestaña Mensajes o en un canal.",
+    "Creas una pequeña app de Slack propia, así que los mensajes van solo entre tu Slack y esta computadora. Le escribes en su pestaña Mensajes o en un canal.",
   "Make the Slack app": "Crea la app de Slack",
   "Slack's page opens with this app text filled in: pick your workspace, then Next and Create. If the box is empty, choose From a manifest and paste this:":
     "La página de Slack se abre con el texto de esta app ya puesto: elige tu espacio de trabajo y luego Next y Create. Si el cuadro está vacío, elige From a manifest y pega esto:",
@@ -133,7 +133,7 @@ export default {
   "A bigger step comes to you first, and the agent waits for your answer.": "Un paso mayor te llega primero a ti, y el agente espera tu respuesta.",
   "A warden decides": "Decide un guardián",
   "A warden decides, I hear afterwards": "Decide un guardián, y me entero después",
-  "This can only be changed on this computer.": "Esto solo se puede cambiar en este ordenador.",
+  "This can only be changed on this computer.": "Esto solo se puede cambiar en esta computadora.",
   "Finishing setup": "Terminando la configuración",
   "Setup finished": "Configuración terminada",
   "Turning the sandbox off": "Desactivando el aislamiento",
@@ -175,17 +175,17 @@ export default {
     "Una dirección compatible con Anthropic, como https://api.deepseek.com/anthropic. La clave toma el nombre de su sitio.",
   "Add key": "Añadir clave",
   "This computer account can use sudo without a password, so the Hive won't run Codex or API-key models on it: an outside model must not share an account with root. Claude logins still work. Give the Hive an account without sudo to use the others.":
-    "Esta cuenta del ordenador puede usar sudo sin contraseña, así que el Hive no ejecutará en ella Codex ni modelos con clave de API: un modelo de fuera no debe compartir cuenta con root. Las cuentas de Claude siguen funcionando. Da al Hive una cuenta sin sudo para usar los demás.",
+    "Esta cuenta de la computadora puede usar sudo sin contraseña, así que el Hive no ejecutará en ella Codex ni modelos con clave de API: un modelo de fuera no debe compartir cuenta con root. Las cuentas de Claude siguen funcionando. Da al Hive una cuenta sin sudo para usar los demás.",
   "Mac": "Mac",
   "Windows": "Windows",
   "To install it, run one of these in a terminal on the computer the Hive runs on, then run gh auth login there and reload this page. Other systems:":
-    "Para instalarlo, ejecuta uno de estos en una terminal del ordenador donde funciona el Hive, luego ejecuta gh auth login allí y recarga esta página. Otros sistemas:",
+    "Para instalarlo, ejecuta uno de estos en una terminal de la computadora donde funciona el Hive, luego ejecuta gh auth login allí y recarga esta página. Otros sistemas:",
   "gh isn't signed in to GitHub, so failures go to the makers' receiver instead. Run gh auth login in a terminal to sign in.":
     "gh no tiene la sesión iniciada en GitHub, así que los fallos van al receptor de los creadores. Ejecuta gh auth login en una terminal para iniciar sesión.",
   "gh is signed in. Issues go to": "gh tiene la sesión iniciada. Las incidencias van a",
   "the Hive project": "el proyecto Hive",
   "Approved. It waits until gh is installed and signed in on the computer the Hive runs on: without it nothing goes to GitHub.":
-    "Aprobado. Espera hasta que gh esté instalado y con la sesión iniciada en el ordenador donde funciona el Hive: sin él no va nada a GitHub.",
+    "Aprobado. Espera hasta que gh esté instalado y con la sesión iniciada en la computadora donde funciona el Hive: sin él no va nada a GitHub.",
   "Approved. It goes on the next report run, within a few hours.": "Aprobado. Sale en el próximo envío de informes, en unas horas.",
   "Discarded. Nothing was sent.": "Descartado. No se envió nada.",
   "An agent drafted a fix. Read it: this is exactly what would go.": "Un agente redactó un arreglo. Léelo: esto es exactamente lo que se enviaría.",
@@ -214,16 +214,16 @@ export default {
   // views/start.js: first run
   "Add an account": "Añadir una cuenta",
   "Hive runs agents on this computer: you say what you want done, and they work on it in the background. First, the account they run on.":
-    "Hive ejecuta agentes en este ordenador: dices lo que quieres que se haga y ellos trabajan en ello en segundo plano. Primero, la cuenta con la que funcionan.",
+    "Hive ejecuta agentes en esta computadora: dices lo que quieres que se haga y ellos trabajan en ello en segundo plano. Primero, la cuenta con la que funcionan.",
   "Whether anything goes to Hive's developer. You can change this in Settings any time.": "Si se envía algo al desarrollador de Hive. Puedes cambiarlo en Ajustes cuando quieras.",
   "How much power": "Cuántos permisos",
-  "How much agents may do on this computer without asking. You can change this in Settings any time.": "Cuánto pueden hacer los agentes en este ordenador sin preguntar. Puedes cambiarlo en Ajustes cuando quieras.",
+  "How much agents may do on this computer without asking. You can change this in Settings any time.": "Cuánto pueden hacer los agentes en esta computadora sin preguntar. Puedes cambiarlo en Ajustes cuando quieras.",
   "Your Hive is a helper you talk to. First, the account it works through.": "Tu Hive es un ayudante con el que hablas. Primero, la cuenta con la que trabaja.",
   "Your Hive isn't ready yet": "Tu Hive aún no está listo",
   "The person setting it up still has a step to finish. There's nothing for you to do here. Check back soon.": "A quien lo está configurando aún le falta un paso. Aquí no tienes nada que hacer. Vuelve pronto.",
-  "Finish this on the Hive's computer": "Termina esto en el ordenador del Hive",
+  "Finish this on the Hive's computer": "Termina esto en la computadora del Hive",
   "Setup is only done on this computer, because it decides what the Hive may do. Open the app there to finish it.":
-    "La configuración solo se hace en este ordenador, porque decide lo que puede hacer el Hive. Abre la app allí para terminarla.",
+    "La configuración solo se hace en esta computadora, porque decide lo que puede hacer el Hive. Abre la app allí para terminarla.",
   "Getting ready": "Preparando",
   "The report module isn't installed here, so nothing can be sent, whatever you choose.": "El módulo de informes no está instalado aquí, así que no se puede enviar nada, elijas lo que elijas.",
   "Nothing": "Nada",
@@ -271,7 +271,7 @@ export default {
   "Then restart this app:": "Luego reinicia esta app:",
   "First, sign in to Claude. Agents run on your Claude subscription and use its limits. You can use API billing instead, which charges per use.":
     "Primero, inicia sesión en Claude. Los agentes funcionan con tu suscripción de Claude y usan sus límites. Puedes usar la facturación por API, que cobra por uso.",
-  "This connection can't sign in. Open the app on this computer.": "Esta conexión no puede iniciar sesión. Abre la app en este ordenador.",
+  "This connection can't sign in. Open the app on this computer.": "Esta conexión no puede iniciar sesión. Abre la app en esta computadora.",
   "Start over": "Empezar de nuevo",
   "Your account is ready.": "Tu cuenta está lista.",
   "The part of Hive that starts agents isn't running, so nothing you say would start one.": "La parte de Hive que arranca los agentes no está en marcha, así que nada de lo que digas arrancaría uno.",
@@ -279,11 +279,11 @@ export default {
   "The Hive is running": "El Hive está en marcha",
   "Once you're signed in, you can say what you want done.": "Cuando hayas iniciado sesión, podrás decir lo que quieres que se haga.",
   "Hide what's good to know": "Ocultar lo que conviene saber",
-  "What agents may do on this computer, and whether the sandbox works here, is under Power in Settings.": "Lo que pueden hacer los agentes en este ordenador, y si el aislamiento funciona aquí, está en Permisos, en Ajustes.",
-  "Agents can do anything this computer account can do, so give Hive an account of its own.": "Los agentes pueden hacer todo lo que puede hacer esta cuenta del ordenador, así que da a Hive una cuenta propia.",
+  "What agents may do on this computer, and whether the sandbox works here, is under Power in Settings.": "Lo que pueden hacer los agentes en esta computadora, y si el aislamiento funciona aquí, está en Permisos, en Ajustes.",
+  "Agents can do anything this computer account can do, so give Hive an account of its own.": "Los agentes pueden hacer todo lo que puede hacer esta cuenta de la computadora, así que da a Hive una cuenta propia.",
   "They use your account's limits on their own. New agents stop at a usage line you set in Settings. With API billing, set a spending limit in the Anthropic Console too.":
     "Usan los límites de tu cuenta por su cuenta. Los agentes nuevos se detienen en una línea de uso que fijas en Ajustes. Con facturación por API, fija también un límite de gasto en la Anthropic Console.",
-  "This page answers only on this computer, and only to a browser that opened the address from": "Esta página solo responde en este ordenador, y solo a un navegador que abrió la dirección desde",
+  "This page answers only on this computer, and only to a browser that opened the address from": "Esta página solo responde en esta computadora, y solo a un navegador que abrió la dirección desde",
 
   // views/system.js: the design-system page
   "Design system": "Sistema de diseño",

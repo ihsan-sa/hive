@@ -170,11 +170,11 @@ export default {
 
   // Settings › Power and sandbox
   "who decides what agents may do, and what holds them to it; changes save as you make them": "quién decide qué pueden hacer los agentes, y qué los obliga a cumplirlo; los cambios se guardan al hacerlos",
-  "Agents run in a sandbox on this machine. This sets who decides when one needs a step outside it, like installing something or changing a file elsewhere on this computer.": "Los agentes se ejecutan en un entorno aislado en esta máquina. Esto fija quién decide cuando uno necesita un paso fuera de él, como instalar algo o cambiar un archivo en otra parte de este ordenador.",
+  "Agents run in a sandbox on this machine. This sets who decides when one needs a step outside it, like installing something or changing a file elsewhere on this computer.": "Los agentes se ejecutan en un entorno aislado en esta máquina. Esto fija quién decide cuando uno necesita un paso fuera de él, como instalar algo o cambiar un archivo en otra parte de esta computadora.",
   "1. Ask me first": "1. Pregúntame primero",
   "Agents work inside the sandbox on their own. A step that has to leave the sandbox comes to you, and waits for your answer.": "Los agentes trabajan solos dentro del entorno aislado. Un paso que tenga que salir de él te llega a ti y espera tu respuesta.",
   "2. A warden decides": "2. Decide un guardián",
-  "A warden, an agent whose only job is judging these steps, approves the step and it runs as your computer account. A step that's hard to undo needs more than one opinion.": "Un guardián, un agente cuyo único trabajo es juzgar estos pasos, aprueba el paso y este se ejecuta con tu cuenta del ordenador. Un paso difícil de deshacer necesita más de una opinión.",
+  "A warden, an agent whose only job is judging these steps, approves the step and it runs as your computer account. A step that's hard to undo needs more than one opinion.": "Un guardián, un agente cuyo único trabajo es juzgar estos pasos, aprueba el paso y este se ejecuta con tu cuenta de la computadora. Un paso difícil de deshacer necesita más de una opinión.",
   "3. A warden decides, I hear afterwards": "3. Decide un guardián y me entero después",
   "A warden settles it without you, and you're told what happened afterwards.": "Un guardián lo resuelve sin ti, y después se te cuenta qué pasó.",
   "At every level, these stay your call:": "En todos los niveles, esto sigue siendo decisión tuya:",
@@ -265,7 +265,7 @@ export default {
 
   // Settings › Access from outside
   "only changeable from this machine": "solo se puede cambiar desde esta máquina",
-  "Only this computer can open this Hive. You need this only to reach it from a phone or another machine.": "Solo este ordenador puede abrir este Hive. Esto solo hace falta para llegar a él desde un móvil u otra máquina.",
+  "Only this computer can open this Hive. You need this only to reach it from a phone or another machine.": "Solo esta computadora puede abrir este Hive. Esto solo hace falta para llegar a él desde un celular u otra máquina.",
   "How access works": "Cómo funciona el acceso",
   "Opening a name takes a Cloudflare tunnel and an Access policy, set up in Cloudflare. If you name people below, each gets limited (read, chat, kill agents) or full (everything here, from signing in until 30 minutes without using the app), and the ticks don't apply. Anyone else is refused, and emptying both lists afterwards refuses everyone. Type addresses here yourself: an agent's tools can refuse your account's address. From this machine, the secret gets everything. Through a tunnel, each request must carry a token signed by Cloudflare Access, and it can do only what's ticked here.": "Abrir un nombre requiere un túnel de Cloudflare y una política de Access, configurados en Cloudflare. Si nombras personas abajo, cada una tiene acceso limitado (leer, chatear, parar agentes) o completo (todo lo de aquí, desde que inicia sesión hasta 30 minutos sin usar la aplicación), y las casillas no se aplican. A cualquier otra persona se le rechaza, y vaciar las dos listas después rechaza a todo el mundo. Escribe tú mismo las direcciones aquí: las herramientas de un agente pueden rechazar la dirección de tu cuenta. Desde esta máquina, el secreto lo puede todo. A través de un túnel, cada petición debe llevar un token firmado por Cloudflare Access, y solo puede hacer lo que esté marcado aquí.",
   "Set it up": "Configurarlo",
@@ -340,11 +340,11 @@ export default {
   "Write what went wrong first.": "Escribe primero qué salió mal.",
   "This goes back to what the list in kb/priorities.md says.": "Esto vuelve a lo que dice la lista de kb/priorities.md.",
 
-  "The topic your phone follows stops working. You'd subscribe to the new one on your phone.": "El tema que sigue tu móvil deja de funcionar. Tendrías que suscribirte al nuevo en el móvil.",
-  "New topic. Subscribe to it on your phone; the old one is dead.": "Tema nuevo. Suscríbete a él en el móvil; el antiguo ya no sirve.",
+  "The topic your phone follows stops working. You'd subscribe to the new one on your phone.": "El tema que sigue tu celular deja de funcionar. Tendrías que suscribirte al nuevo en el celular.",
+  "New topic. Subscribe to it on your phone; the old one is dead.": "Tema nuevo. Suscríbete a él en el celular; el antiguo ya no sirve.",
   "Stop the Hive?": "¿Detener el Hive?",
   "Agents finish their turn, and nothing new starts until you start it again here.": "Los agentes terminan su turno, y nada nuevo empieza hasta que lo vuelvas a iniciar aquí.",
-  "The Hive stops answering in Slack and deletes its two Slack tokens from this computer. You can connect again from this row.": "El Hive deja de responder en Slack y borra sus dos tokens de Slack de este ordenador. Puedes volver a conectarlo desde esta fila.",
+  "The Hive stops answering in Slack and deletes its two Slack tokens from this computer. You can connect again from this row.": "El Hive deja de responder en Slack y borra sus dos tokens de Slack de esta computadora. Puedes volver a conectarlo desde esta fila.",
   "This ends the run right away. Type the code to enable the button.": "Esto termina la ejecución en el acto. Escribe el código para activar el botón.",
   "End this session?": "¿Terminar esta sesión?",
   "Claude stops working here. You can start a new session afterwards.": "Claude deja de trabajar aquí. Después puedes empezar una sesión nueva.",

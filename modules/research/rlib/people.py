@@ -12,7 +12,7 @@ _PARTICLE = r"(?:de|del|della|di|du|la|le|van|von|der|den|ter|bin|ibn|al|el|da|d
 NAME = rf"{_W}(?:{_SP}[A-Z]\.)*(?:{_SP}(?:{_PARTICLE}{_SP})*{_W}){{1,2}}"
 SUFFIX = r"(?:,?\s+(?:Jr\.?|Sr\.?|II|III|IV|Ph\.?\s?D\.?|Ed\.?\s?D\.?|M\.?D\.?|J\.?D\.?|MBA|M\.?S\.?|DBA|Esq\.?))*"
 HONOR = r"(?:(?:Dr|Prof|Mr|Ms|Mrs|Mx)\.?\s+)?"
-NOT_NAME = set("""has officially stepped steps expect compensation analysis by blvd boulevard ave avenue road rd drive highway parkway suite log copy position profile vertically integrated projects effectiveness governor senator congressman representative act acts report reports offices hub directory services resources contact contacts apply news events calendar careers staff faculty students alumni tech university college community center centre office department school institute program programs campus board foundation technology artificial intelligence data science workforce president vice dean director chief associate assistant executive senior interim the news read more contact student students services academic affairs human resources learn click home about our staff faculty new state national american united north south east west county city district education learning development innovation career careers business engineering computer health online division professional continuing leadership team trustees chancellor provost professor manager coordinator chair head email phone view all meet his her their this that these those when where with from for and page press release media event events research strategic planning economic public relations information systems digital cyber security machine ai it us january february march april may june july august september october november december monday tuesday wednesday thursday friday saturday sunday he she we they you read share follow privacy policy site map search menu working title property management job jobs salary posting vacancy vacancies opening openings""".split())
+NOT_NAME = set("""has officially stepped steps expect compensation analysis by blvd boulevard ave avenue road rd drive highway parkway suite log copy position profile vertically integrated projects effectiveness governor senator congressman representative act acts report reports offices hub directory services resources contact contacts apply news events calendar careers staff faculty students alumni tech university college community center centre office department school institute program programs campus board foundation technology artificial intelligence data science workforce president vice dean director chief associate assistant executive senior interim the news read more contact student students services academic affairs human resources learn click home about our staff faculty new state national american united north south east west county city district education learning development innovation career careers business engineering computer health online division professional continuing leadership team trustees chancellor provost professor manager coordinator chair head email phone view all meet his her their this that these those when where with from for and page press release media event events research strategic planning economic public relations information systems digital cyber security machine ai it us january february march april may june july august september october november december monday tuesday wednesday thursday friday saturday sunday he she we they you read share follow privacy policy site map search menu working title property management job jobs salary posting vacancy vacancies opening openings breakfast club summit webinar webinars technical pathway pathways academy academies initiative initiatives partnerships solutions""".split())
 _LINE_ROLE = re.compile(rf"^(?:the\s+)?(?:(?:program|project|center|centre|department|unit|division|regional|operations|office|workforce|career|academic|student|campus|site|general)[ \t]+){{0,2}}(?:{ROLE})\b", re.I)
 
 
@@ -500,6 +500,9 @@ def elsewhere(title, org):
     return ""
 
 
+GENERIC_EMPLOYER = {"organization", "organisation", "employer", "company", "webinars", "webinar", "events", "summit"}  # a heading or label, not a body
+
+
 def employer_after(text, name, org, window=120):
     """The outside body the page gives right after this person's post ("Jamie Atchison, senior director at ASPPH"), or ''."""
     own = set(re.findall(r"[a-z0-9]+", fold(org)))
@@ -515,7 +518,7 @@ def employer_after(text, name, org, window=120):
         # "Ilya Sutskever at the Mathematics Genealogy Project" (a reference title) gives no post, so no employer.
         if not _ROLE_RE.search(tail[:at.start()]): continue
         words = [fold(w) for w in at.group(1).split()]
-        if at.group(1).lower() == initials or set(words) & (own - ORG_NOISE): continue
+        if at.group(1).lower() == initials or set(words) & (own - ORG_NOISE) or set(words) <= GENERIC_EMPLOYER: continue
         # "at the College", "at Downtown Campus": a place within, not another employer.
         if set(words) & {"campus", "center", "centre", "school", "office", "department"} or all(w in ORG_NOISE or w in POST_WORDS for w in words): continue
         return at.group(1)
@@ -554,7 +557,7 @@ def employer_listed(text, name, org):
         words = label.split()
         if not 1 <= len(words) <= 5 or not words[0][0].isupper() or label.lower() == initials: return ""
         low = set(re.findall(r"[a-z0-9]+", fold(label)))
-        if low and low <= POST_WORDS | ORG_NOISE | {"counsel"}: return ""  # the person's own unit or second post: "Technology Transfer", "Associate General Counsel"
+        if low and low <= POST_WORDS | ORG_NOISE | GENERIC_EMPLOYER | {"counsel"}: return ""  # the person's own unit or second post: "Technology Transfer", "Associate General Counsel"
         if _SCHOOL.search(fold(label)) and not names_org(org, label) and not low <= POST_WORDS: return label
         if not low or low & own or _ROLE_RE.search(label) or _NOT_EMPLOYER.search(label) or re.search(r"\d|@", label) or low <= NOT_NAME | ORG_NOISE: return ""
         return "" if plausible_name(label) and len(words) in (2, 3) and not re.search(r"\b(?:Inc|LLC|Ltd|Corp|Corporation|Company|Group|Bank|Partners)\b", label) else label
