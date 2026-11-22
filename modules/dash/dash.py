@@ -2961,7 +2961,7 @@ GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/kb/wipe": "files", "/api/kb/copies": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files", "/api/docs": "files", "/api/docs/doc": "files", "/api/docs/page": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/kb/wipe": "files", "/api/kb/putback": "files", "/api/docs/notes": "files", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/side-ask": "post", "/api/door": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
-            "/api/module": "modules", "/api/voice": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
+            "/api/module": "modules", "/api/voice": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/kb/save": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
 
@@ -4065,8 +4065,60 @@ def kb_open(rel):
     kind = kb_kind(p, head[:8192])
     res.update(type=kind, size=st.st_size, linked=kb_linked(p.name, rel) if rel.startswith(("kb/", "modules/", "core/")) else [])
     if kind in ("md", "text"):
-        res.update(text=redact(head.decode(errors="replace")), truncated=st.st_size > KB_TEXT_MAX)
+        raw = head.decode(errors="replace")
+        res.update(text=redact(raw), truncated=st.st_size > KB_TEXT_MAX, version=str(st.st_mtime_ns))
+        if st.st_size <= KB_TEXT_MAX and kb_editable(rel, p, head): res["editable"] = True
     return res
+
+
+KB_EDIT_ROOTS, KB_EDIT_EXT = ("kb", "projects", "investigations", "modules"), (".md", ".markdown", ".txt")
+
+
+def kb_editable(rel, p, data):
+    """Whether the preview may write this file back: a whole UTF-8 Markdown or text file in notes, projects, investigations or a
+    module's docs, reached by no link on the way, with nothing redact() would hide (the page only ever has the redacted text, so
+    saving it would lose the secret). data is the file's bytes."""
+    try:
+        real = p.resolve().relative_to(HOME.resolve()).parts
+        raw = data.decode("utf-8")   # strict: a file in another encoding would be rewritten wrong
+        q = HOME   # kb_path has already followed links, so look at the name asked for, part by part
+        for part in str(rel or "").strip("/").split("/"):
+            q = q / part
+            if q.is_symlink(): return False
+    except (OSError, ValueError, RuntimeError): return False
+    return (real[0] in KB_EDIT_ROOTS and p.suffix.lower() in KB_EDIT_EXT and len(data) <= KB_TEXT_MAX
+            and os.access(p, os.W_OK) and redact(raw) == raw)
+
+
+KB_SAVE_NOTED = {}
+
+
+def kb_save(rel, text, version, signer):
+    """Write a file the preview's Edit tab changed, refusing if it changed on disk since the page read it: agents edit these too."""
+    rel = str(rel or "").strip("/"); p = kb_path(rel)
+    if not p or not p.is_file(): raise KeyError(rel)
+    if not isinstance(text, str): raise ValueError("there's no text to save")
+    if len(text.encode()) > KB_TEXT_MAX: raise ValueError("a file can be up to 512 KB here")
+    if p.stat().st_size > KB_TEXT_MAX: raise ValueError("this file is too big to edit here")
+    with p.open("rb") as src: data = src.read(KB_TEXT_MAX + 1)
+    if not kb_editable(rel, p, data): raise ValueError("this file can't be edited here (a link, code, not UTF-8, too big, or it holds something hidden)")
+    if str(p.stat().st_mtime_ns) != str(version): raise ValueError("this file changed since you opened it. Your text is kept: copy it, reload, and try again")
+    if redact(text) != text: raise ValueError("that text looks like it holds a key or password; it isn't saved through the web app")
+    fd, t = tempfile.mkstemp(dir=p.parent, prefix="." + p.name + ".")   # never a name an agent could have put a link at
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as o: os.fchmod(fd, p.stat().st_mode & 0o777); o.write(text)
+        os.replace(t, p)
+    except BaseException:
+        try: os.unlink(t)
+        except OSError: pass
+        raise
+    st = p.stat()
+    now = time.time()   # one board note per file per 10 minutes: Ctrl+S every few seconds isn't news each time
+    if now - KB_SAVE_NOTED.get(rel, 0) > 600:
+        KB_SAVE_NOTED[rel] = now
+        try: dash_note(f"`~/{rel}` edited by {signer or 'this machine'} in the web app's file preview.", "kb-edits")
+        except Exception: pass   # the file is saved; a note that didn't go out mustn't say otherwise
+    return {"ok": True, "version": str(st.st_mtime_ns), "t": int(st.st_mtime), "size": st.st_size}
 
 
 def kb_walk(rel, depth, room):
@@ -6793,7 +6845,7 @@ def serve(port):
                 if not 0 < n <= LOGO_MAX: return self.deny(413, "a logo can be up to 2 MB")
                 try: return self.send(json.dumps(set_logo(self.rfile.read(n))).encode(), "application/json")
                 except (ValueError, OSError) as e: return self.deny(400, str(e))
-            if not 0 < n < ({"/api/post": 2**20, "/api/feedback": 2**20, "/api/issue-link": 2**16, "/api/plan": 2**19, "/api/secret": 2**18, "/api/door": 2**18, "/api/focus": 2**15}.get(u.path) or (4096 if self.route != "open" else 1024)): return self.send_error(403)
+            if not 0 < n < ({"/api/post": 2**20, "/api/feedback": 2**20, "/api/issue-link": 2**16, "/api/plan": 2**19, "/api/kb/save": 2**20, "/api/secret": 2**18, "/api/door": 2**18, "/api/focus": 2**15}.get(u.path) or (4096 if self.route != "open" else 1024)): return self.send_error(403)
             try: d = json.loads(self.rfile.read(n))
             except ValueError: return self.send_error(400)
             if not isinstance(d, dict): return self.send_error(400)
@@ -6805,6 +6857,11 @@ def serve(port):
                 try: return self.send(door_call(d.get("door"), d.get("path"), d.get("body")), J)
                 except KeyError: return self.send_error(404)
                 except (ValueError, OSError) as e: return self.deny(502, str(e))
+            if u.path == "/api/kb/save":   # the file preview's Edit tab (web/js/preview/edit.js): a note or project text file, written back
+                try: return self.send(json.dumps(kb_save(d.get("path"), d.get("text"), d.get("version"), self.signer)).encode(), J)
+                except KeyError: return self.deny(404, "that isn't here, or isn't shown")
+                except ValueError as e: return self.deny(409 if str(e).startswith("this file changed") else 400, str(e))
+                except OSError as e: return self.deny(500, "couldn't write the file: " + (e.strerror or "error"))
             if u.path == "/api/docs/notes":
                 try: return self.send(json.dumps(docs_mod().notes_do(d)).encode(), J)
                 except KeyError as e: return self.deny(404, str(e))

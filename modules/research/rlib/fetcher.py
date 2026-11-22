@@ -1,7 +1,7 @@
 """Read a page by whichever honest route works: plain request, then a real browser, then the Internet Archive's copy.
 It goes no further than that: no proxies or challenge solving. A page it can't read comes back as blocked, never as content."""
-import json, re, shutil, subprocess, tempfile, urllib.parse
-from . import net
+import json, re, shutil, subprocess, tempfile, unicodedata, urllib.parse
+from . import net, pdfboxes
 from .extract import domain_of, parse_html
 from .store import now
 
@@ -28,8 +28,19 @@ def _pdf_text(body):
     if not exe: return None
     with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
         f.write(body); f.flush()
-        try: return subprocess.run([exe, "-layout", f.name, "-"], capture_output=True, timeout=60).stdout.decode("utf-8", "replace")
+        try: text = subprocess.run([exe, "-layout", f.name, "-"], capture_output=True, timeout=60).stdout.decode("utf-8", "replace")
         except (OSError, subprocess.TimeoutExpired): return None
+        try: boxes = pdfboxes.org_chart_pages(subprocess.run([exe, "-bbox", f.name, "-"], capture_output=True, timeout=60).stdout.decode("utf-8", "replace"))
+        except (OSError, subprocess.TimeoutExpired): boxes = {}
+    return pdf_pages(text, boxes)
+
+
+def pdf_pages(text, boxes):
+    """The layout reading, with each org-chart page swapped for its boxes (`pdfboxes`), and ligatures undone: "Ofﬁcer" isn't a role to a regex."""
+    pages = text.split("\f")
+    for i, t in boxes.items():
+        if i < len(pages): pages[i] = t + "\n"
+    return unicodedata.normalize("NFKC", "\f".join(pages))
 
 
 def _ok(url, final, via, http, parsed, **more):
