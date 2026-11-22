@@ -20,6 +20,7 @@ _LINE_ROLE = re.compile(rf"^(?:the\s+)?(?:(?:program|project|center|centre|depar
 
 # Office and abstract nouns that head a label ("Property Management", "Grants Administration"). Shape rule: a label whose every word is one of these, or ends like an abstract noun, is a heading. Nothing here is a common given name or surname.
 _COMMON = set("""property management grants grant administration accounting finance financial payroll procurement purchasing facilities operations planning compliance records admissions registrar marketing communications recruiting recruitment hiring employment benefits policy policies safety risk legal audit budget budgets assets inventory transportation parking housing dining library libraries athletics counseling advising tutoring outreach engagement partnerships partnership commercialization licensing patents patent transfer entrepreneurship ventures venture incubator accelerator sponsored programs project projects intellectual rights general main front desk senior junior full part time remote staff positions application applications requirements qualifications responsibilities description summary overview details location department division unit sector industry sciences studies arts humanities""".split())
+_LETTER_LABEL = set("""plan phase title section option part level type tier class grade unit building room lot area zone wing gate hall suite floor exhibit appendix schedule form model series vitamin team group fund funds funding services support project projects program programs office center centre lab labs street avenue road hall""".split())  # words that come before or after a lone letter in a label, not a name
 _ABSTRACT = re.compile(r"(?:ment|tion|sion|ness|ship|ance|ence|ity|ics|ings?)s?$", re.I)
 
 
@@ -32,6 +33,8 @@ def plausible_name(n):
     toks = [t.strip(".,'’") for t in n.split()]
     if not 2 <= len(toks) <= 4 or len(n) > 45: return False
     if _heading_like(toks): return False
+    if any(len(t) == 1 and t.isupper() for t in n.split()[1:-1]) and (toks[0].lower() in _LETTER_LABEL or toks[-1].lower() in _COMMON or toks[-1].lower() in _LETTER_LABEL or (len(toks[-1]) > 6 and _ABSTRACT.search(toks[-1]))):
+        return False  # a dotless initial, as a chart prints "Marittza M Adame", but "Plan B Funding", "Title V Grant", "Building C Services" are labels (review 112215240022)
     if any(t.lower() in NOT_NAME for t in toks) or n.rstrip().endswith("-"): return False  # "Tunjarnika Coleman-": a PDF cell cut the name
     # BizTUCSON: capitals in the middle of a word make a brand. McDonald, DeShawn and O'Brien have just one.
     if any(re.search(r"[a-z].*[A-Z].*[A-Z]", part) for t in toks for part in re.split(r"[-'’]", t)): return False
@@ -65,7 +68,7 @@ _PATS = [
 ]
 
 
-_LAST_FIRST = re.compile(r"([A-Z][\w'’]+(?:-[A-Z][\w'’]+)?),\s+([A-Z][a-z][\w'’-]*(?:\s+[A-Z](?:\.|[a-z][\w'’-]*))?)")
+_LAST_FIRST = re.compile(r"([A-Z][\w'’]+(?:-[A-Z][\w'’]+)?),\s+((?:[A-Z][a-z][\w'’-]*|[A-Z]\.)(?:\s+(?:[A-Z]\.?|[A-Z][a-z][\w'’-]*))?)")  # "Seado, Christina", "Garcia-Lopez, Ana M", "Lee, J. R." (review 112215240022)
 
 
 def _cell_name(cell, flip=False):
@@ -132,15 +135,19 @@ def people_in(text, ld=()):
         if re.fullmatch(HONOR + LINE_NAME + SUFFIX, a) and _LINE_ROLE.match(b) and len(b) < 160 and "directory" not in b.lower(): add(a, b, "directory")  # 160: UF's "Associate Vice President for ... and Executive Director of the ... Center" is 120
     # A table row at the margin, "Interim Associate Vice President ...      Dr. Holly Bennett      Bennett, Holly": post and name side by side in the first two cells. An indented row is an org chart's boxes, where the cells beside each other are different people's.
     # A staff list whose section header holds the post, "Title: Dean,      Name      Email to:" (Palm Beach State): each row under it gives the unit, then the name ("Health Sciences, LW      Dr. Alphonso Baldwin"). A header ending in a comma wants the unit after it; without one the post is whole.
-    head = None
+    head, email, prev = None, False, ""
     for line in text.split("\n"):
         cells = _GAP.split(line.strip()) if line[:1] not in " \t\u00a0" else []
+        if len(cells) == 1 and not prev.strip(): head = None  # a lone heading after a blank line ("Campus Contacts") ends the section: the rows after it are not the header's post (review 112215240022). Blank lines and lone wrapped words ("Groves") also fall inside a section, so neither alone ends it.
+        prev = line
         if any(x.lower() == "name" for x in cells[1:3]):  # the header row (`_plain` has already dropped its "Title:" label)
             first = re.sub(r"^title\s*:\s*", "", cells[0], flags=re.I)  # a header on the page's first line keeps its label
             head = first if _LINE_ROLE.match(first) else None
+            email = any(x.lower().startswith("email") for x in cells[2:4])
             continue
         if head and len(cells) >= 2 and not _LINE_ROLE.match(cells[0]) and not _cell_name(cells[0])[0]:
             at = next((i for i, x in enumerate(cells[1:3], 1) if _cell_name(x, True)[0]), None)
+            if at and email and not any(_LAST_FIRST.fullmatch(x.strip()) for x in cells[at:at + 2]): at = None  # under an "Email to:" header each row prints "Last, First" beside the name; a row without it ("Main Campus  John Carter  561-555-1212") is no longer the header's list
             if at:
                 name, interim = _cell_name(cells[at], True)
                 post = head.rstrip(", ") + (", " + cells[0] if head.endswith(",") else "")
@@ -156,8 +163,8 @@ def people_in(text, ld=()):
             # The unit cell has words: "Registrar's Office      1522      105 ATLC REG      Upward Bound      4853" is a phone list of offices (Cincinnati State).
             if len(names) == 1 and _LINE_ROLE.match(cells[0]) and len(cells[0]) < 160 and not any(_cell_name(x)[0] for x in cells[:2]) and re.search(r"[A-Za-z]{2}", cells[1]) and not re.match(r"\d", cells[1]):
                 post = cells[0]
-                inv = re.fullmatch(r"([^,]+),\s+([A-Z][a-z]+)", post)  # "Director, Associate", "Registrar, College": a list sorted by the post word
-                if inv and _ROLE_RE.fullmatch(inv.group(1)) and not _ROLE_RE.search(inv.group(2)): post = inv.group(2) + " " + inv.group(1)
+                inv = re.fullmatch(r"([^,]+),\s+(Associate|Assistant|Vice|Executive|Senior|Deputy|Interim|Acting|Managing)", post)  # "Director, Associate": a list sorted by the post word. Only a rank word turns round; "Dean, Students" stays as printed, not "Students Dean" (review 112215240022)
+                if inv and _ROLE_RE.fullmatch(inv.group(1)): post = inv.group(2) + " " + inv.group(1)
                 if (_ROLE_RE.fullmatch(post) or len(post.split()) <= 2) and not _LINE_ROLE.match(cells[1]) and not re.fullmatch(r"[A-Z]{2,6}(?:,\s*[A-Z]{2,6})*", cells[1]): post += ", " + cells[1].rstrip(" &,-–")  # "Director      eLearning": the unit cell says director of what (not a code like "CCE")
                 add(names[0], post, "directory")
     return list(out.values())

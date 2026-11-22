@@ -201,7 +201,7 @@ def verify_csv(path, case, out=None, find=False, cols=None, domains=None, worker
 
 
 WEAK_SIGNAL_HOST = re.compile(r"^(?:careertraining|ed2go|libguides|catalog|bulletin|courses?)\b|\.(?:ed2go|libguides)\.|^ed2go", re.I)
-WEAK_SIGNAL_PATH = re.compile(r"/(?:catalog|courses?|course-?descriptions?|coursesoffered|programs?/all|academic-programs|leadership|directory|faculty-staff|jobs|employment|c\.php|policies|policy|academics|list-of-programs|presidential-search|search-committee|bios?|profiles?|people|about-the-president)\b|(?:ai|artificial-intelligence)-(?:ce|programs?)/", re.I)
+WEAK_SIGNAL_PATH = re.compile(r"/(?:catalog|courses?|course-?descriptions?|coursesoffered|programs?/all|academic-programs|leadership|directory|faculty-staff|jobs|employment|c\.php|policies|policy|academics|list-of-programs|channels|presidential-search|search-committee|bios?|profiles?|people|about-the-president)\b|(?:ai|artificial-intelligence)-(?:ce|programs?)/", re.I)
 CAREER_NEAR = re.compile(r"career|workforce|\bjobs?\b|employ|student success|skills|internship|apprentice|job", re.I)
 def title_core(title):
     """The page title without the site suffix ("Headline | Site"), folded; "" when too short to be a headline."""
@@ -290,14 +290,21 @@ def weak_signal_url(url):
     u = urllib.parse.urlsplit(url)
     return bool(DEV_HOST.search(u.hostname or "") or WEAK_SIGNAL_HOST.search(u.hostname or "") or WEAK_SIGNAL_PATH.search(u.path or ""))
 
-SIGNAL_VENDOR = re.compile(r"\b(?:jobscan|vmock|big ?interview|quinncia|yoodli|interview ?stream|candid ?career|careerspots|focus ?2|resume ?worded|kickresume|rezi|hirevue|symplicity|purdue global)\b|\b\w+ uses (?:ai|artificial intelligence)(?: and machine learning)? to give job seekers\b", re.I)
-SIGNAL_COURSE_URL = re.compile(r"(?:^|[./])(?:microcred\w*|ce|continuing\w*|onlineworkforce|\w*careertraining|mylearning|ed2go)\.|/(?:[\w-]*courses?[\w-]*|training-programs?|workforce-training|certificates?|microcredentials?|search/publiccourse\w*|category/programstream)(?:[/.]|$)", re.I)
-SIGNAL_COURSE_TEXT = re.compile(r"\b(?:certificate of achievement|course description|related courses|search courses|course fee|contact hours|register now|enroll now|ceus?)\b", re.I)
+VENDOR_TOOL = r"(?:jobscan|vmock|big ?interview|quinncia|yoodli|interview ?stream|candid ?career|careerspots|focus ?2|resume ?worded|kickresume|rezi|hirevue|symplicity)"
+SIGNAL_VENDOR = re.compile(r"\b" + VENDOR_TOOL + r"\b(?:'s)?(?:,[^,.;]{1,60},)?\s+(?:uses|is|offers|provides|helps|lets|gives|scans|analy[sz]es|reviews|scores|checks|matches|features|can|will)\b|\b(?:powered by|log ?in to|sign up for|access|try) " + VENDOR_TOOL + r"\b|\b\w+ uses (?:ai|artificial intelligence)(?: and machine learning)? to give job seekers\b", re.I)  # the tool is what the sentence is about ("Jobscan, FREE for all students, offers ... AI"); a sentence that only names one ("we no longer use HireVue; our coaches teach AI") is the college's, and a college that sells degrees (Purdue Global) is not a vendor (review 112215240022)
+SIGNAL_COURSE_URL = re.compile(r"(?:^|[./])(?:microcred\w*|ce|continuing\w*|onlineworkforce|\w*careertraining|mylearning|ed2go|\w*catalog\w*)\.|/preview_(?:program|course)\.php|/(?:(?:[a-z0-9]+-){0,2}courses?(?:-(?:catalog|list|search|schedule|descriptions?|offerings?))?|training-programs?|workforce-training|certificates?|microcredentials?|search/publiccourse\w*|category/programstream)(?:[/.]|$)", re.I)
+STAFF_PATH = re.compile(r"/(?:[\w-]*-)?(?:directory|staff|personnel|people|faculty|administration|contacts?|team|bios?|profiles?)(?:-[\w-]+)?(?:[/.]|$)", re.I)  # a staff page on a catalog or continuing-education host is still a staff page (catalog.morainepark.edu/directory, review 112215240022); a "course" path segment is a short one (/ai-courses/, /course-catalog/), not a news slug or /discourse/
+SIGNAL_COURSE_TEXT = re.compile(r"\b(?:certificate of achievement|course description|related courses|search courses|course fee|contact hours|credit hours?|\d+[- ]credit(?:[- ]hours?)?)\b", re.I)  # words a course page prints and a sentence does not; header buttons ("Request Info", "Register now") and sentences ("earn a degree", "earn CEUs") are on every kind of page (Germanna's header, review 112215240022)
+SIGNAL_ADVERT = re.compile(r"\bEarn (?:a|an|[Yy]our) (?:[A-Z][\w&-]* ){0,2}(?:Degree|Certificate|Diploma)\b|\b100% Online\b|\bA\.A\.S\.|\bB\.A\.S\.|\bAssociate (?:in|of) (?:Applied )?(?:Arts|Science)\b|^\s*[A-Z]{2,5}[- ]\d{3}[A-Z]?\s+[-–:]\s")  # case-sensitive: a program advert's button ("Earn a Degree in Data Science & AI 100% Online", Alamo) a course code heading ("ITI-524 - Intro to Generative AI") or a degree's name ("Artificial Intelligence, A.A.S."); a sentence's "earn a degree" is not one
 MENU_SMALL = frozenset("a an and or the of in for to on at by with from as".split())
+SENTENCE_VERB = re.compile(r"\b(?:is|are|was|were|has|have|had|will|would|can|could|may|serves?|served|said|says|spoke|speaks|helps?|helped|uses?|used|offers?|offered|provides?|provided|teach(?:es)?|taught|leads?|led|joined|joins|works?|worked|announced|launched|received|lands?|expands?|wants?|needs?|makes?|made|gives?|gave|shows?|showed)\b")  # lowercase only: a sentence has a lowercase verb, a menu has none
+MENU_HEADLINE = re.compile(r"\b(?:Launches|Launched|Announces|Announced|Announcing|Expands|Expanded|Receives|Received|Unveils|Celebrates|Joins|Lands|Earns|Selects|Selected|Appoints|Introduces|Debuts|Wins|Awarded|Brings|Takes|Named (?:to|as)|Partners [Ww]ith|(?<!Tips )(?<!How )(?<!Ways )(?<!Steps )(?<!Guide )(?<!Need )(?<!Want )(?<!Learn )(?<!Time )to (?:Launch|Expand|Lead|Build|Create|Develop|Advance|Offer|Host|Open|Support|Provide|Bring|Train|Meet))\b")  # a headline's verb; not HEADLINE_VERB, whose "Partners", "Awards" and "Plans" are menu items too
 def menu_like(text):
-    """A run of Capitalised Menu Items, not a sentence: American's career-center menu ("Self-Assessment & Exploration Online Resources ... AI in Your Career Development", fnwords45) was 22 of 26 words capitalised and passed as a statement. Small words like "in" and "for" count neither way."""
-    words = [w for w in re.findall(r"[A-Za-z]+", text or "") if w.lower() not in MENU_SMALL]
-    return len(words) >= 6 and sum(w[0].isupper() for w in words) / len(words) >= 0.85
+    """A run of Capitalised Menu Items, not a sentence: American's career-center menu ("Self-Assessment & Exploration Online Resources ... AI in Your Career Development", fnwords45) was 22 of 26 words capitalised and passed as a statement. Small words like "in" and "for" count neither way, nor do ALL-CAPS words (an acronym, or a sentence in capitals, which case can't tell from a menu). It takes ten or more words, so a short headline or a job title ("Associate Vice President for Digital Learning, AI, and Emerging Technologies") is not a menu, and none of: a lowercase verb ("He serves on the ... Taskforce"), a headline verb ("GRCC Launches Applied AI Degree, Capstone Course With Support From ..."), or a lowercase word ending a sentence (review 112215240022). A menu in lowercase text reads as a statement: case is the only sign."""
+    t = text or ""
+    if SENTENCE_VERB.search(t) or MENU_HEADLINE.search(t) or re.search(r"\b[a-z]{2,}[.!?](?:\s|$)", t): return False
+    words = [w for w in re.findall(r"[A-Za-z]+", t) if w.lower() not in MENU_SMALL and not (len(w) > 1 and w.isupper())]
+    return len(words) >= 10 and sum(w[0].isupper() for w in words) / len(words) >= 0.85
 
 def signal_kind(signal, source_url=""):
     """What a lead's signal rests on: `vendor` (a third-party tool blurb, Jobscan on a career site), `course` (a course, certificate or catalog page), `menu` (a run of the site's own menu or link titles, such as "AI in Your Career Development": the site links to it but says nothing in a sentence) or `statement` (the organisation or person says it). "" when there is no signal."""
@@ -305,11 +312,12 @@ def signal_kind(signal, source_url=""):
     m = re.match(r"\(the organisation's, from (\S+)\)\s*", signal)
     url, text = (m.group(1), signal[m.end():]) if m else (source_url or "", signal)
     if SIGNAL_VENDOR.search(text): return "vendor"
-    if SIGNAL_COURSE_URL.search(urllib.parse.urlsplit(url).netloc + urllib.parse.urlsplit(url).path) or SIGNAL_COURSE_TEXT.search(text): return "course"
-    if menu_like(text): return "menu"
+    u = urllib.parse.urlsplit(url)
+    if (not STAFF_PATH.search(u.path) and SIGNAL_COURSE_URL.search(u.netloc + u.path)) or SIGNAL_COURSE_TEXT.search(text) or SIGNAL_ADVERT.search(text): return "course"  # a staff page on a catalog or continuing-education host is not a course (review 112215240022)
+    if m and menu_like(text): return "menu"  # a menu is the organisation's site linking to a page; a person's signal in Title Case is a headline or a job title about them (Healey's taskforce, Dallas College's grant; review 112215240022)
     return "statement"
 
-HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms allow_org_signal person_signal official_recheck sources read_per_search allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words signal_kinds".split())
+HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms allow_org_signal person_signal official_recheck sources read_per_search allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words signal_kinds menu_statement".split())
 
 
 HEADLINE_VERB = re.compile(r"\b(?:Expands|Launches|Announces|Receives|Wins|Opens|Partners|Celebrates|Hosts|Unveils|Offers|Adds|Joins|Awards|Welcomes|Honors|Signs|Approves|Plans|Seeks|Cuts|Raises|Earns|Debuts|Introduces|Selects|Appoints|Hires|Names|Breaks|Boosts|Makes|Takes|Gets|Says|Calls|Visits|Tours|Funds|Backs|Unveiled|Announced|Launched|Expanded|Awarded)\b")
@@ -423,6 +431,7 @@ class Hunt:
         self.stop_reason = ""
         self.departure_searches = 0
         self.person_signal_searches, self.person_signal_found = 0, 0
+        self.menu_statement_searches, self.menu_statement_found = 0, 0
         self.guessed, self.domain_searches, self.official_upgrades = {}, 0, 0  # org -> site found by one search for its name ('' when none passed)
         self.no_head = {}  # org -> page that was read and names nobody
         if self.state_file.exists(): self._load()
@@ -451,6 +460,9 @@ class Hunt:
                 self.learned.setdefault(org, people.registrable(people.domain_of(r["source_url"])))
             m = re.match(r"\(the organisation's, from (\S+)\) (.*)", str(r.get("signal") or ""), re.S)
             if m: self.org_signal.setdefault(org, (m.group(1), m.group(2)))
+        for r in self.near.values():  # an organisation whose only rows are near misses (held for a menu, say) gets its signal back too, after the rows', so its menu search can run (review 112215240022)
+            m = re.match(r"\(the organisation's, from (\S+)\) (.*)", str(r.get("signal") or ""), re.S)
+            if m and r.get("organisation"): self.org_signal.setdefault(r["organisation"], (m.group(1), m.group(2)))
 
     def recheck_stored(self):
         """Rows found under an earlier spec have to pass this one too. Those that don't become near misses, and the report says how many."""
@@ -724,6 +736,103 @@ class Hunt:
             if rank is not None: out.append((rank, u))
         return [u for _, u in sorted(out)[:n]]
 
+    @staticmethod
+    def signal_excerpt(page, clean, low, term):
+        """The text around the first `term` that sits beside a careers or workforce word, or ''."""
+        tc = title_core(page.get("title"))
+        body = low.replace(tc, " " * len(tc)) if tc else low  # the headline is also in the body: its careers word says nothing about the sentences around the AI word (blanked to its own length, so offsets still line up)
+        flat = " ".join(clean.split())  # fold() collapses whitespace: cut the excerpt from text with the same spacing, or it comes from the wrong place
+        if len(flat) != len(low): flat = low
+        m = next((x for x in people.term_regex(term).finditer(body) if CAREER_NEAR.search(body[max(0, x.start() - 300):x.end() + 300]) and not EARLIER_JOB.search(sentence_at(body, x.start(), x.end()))), None)  # the word beside a careers or workforce word: AI research news (UT) is not a careers signal; nor a leader bio on an AI degree at an earlier employer (SLCC president, fnwords23)
+        return flat[max(0, m.start() - 80):m.end() + 120].strip() if m else ""
+
+    def menu_statement(self, org):
+        """An organisation whose signal is only its site's menu gets one search on its own site for a `must` word with the spec's first function word, and the first official page that says it in a sentence becomes its signal, on its rows and near misses too. A stored case reads no new pages, so AU's, BHCC's and Alamo's rows kept a menu (fnwords48). Marked in `tried`, so a rerun doesn't search again. Returns True when a statement was found."""
+        old = self.org_signal.get(org)
+        if not self.must or not old or not menu_like(old[1]) or self.s.get("menu_statement") is False: return False
+        spec = self.domains.get(org) or self.domains.get(people.org_core(org))
+        spec = spec[0] if isinstance(spec, (list, tuple)) and spec else spec
+        own = registrable(domain_of(old[0])) if str(old[0]).startswith("http") else ""
+        d = spec or own or self.org_domain(org)  # the menu page's own site was already judged official; a guessed domain may not be (review 112215240022)
+        if not d: return False
+        fw = (self.function_words or [""])[0]
+        q = " ".join(x for x in (f"site:{d}", f'"{self.must[0]}"', fw) if x)  # quoted: an unquoted "AI" matches any page of the site
+        a = "(statement) " + q
+        with self.save_lock:
+            if (org, a) in self.tried or (org, a) in self.failed: return False
+        doms = self.domains if spec else {**self.domains, org: d}
+        t0 = time.monotonic()
+        try: hits, errs = engines.search(q, self.sources, n=8, case=self.case)
+        except Exception:
+            with self.save_lock: self.failed.add((org, a))  # not searched again on every run
+            return False
+        if len(errs) >= len(self.sources):
+            with self.save_lock: self.failed.add((org, a))
+            return False
+        with self.save_lock:
+            self.tried.add((org, a)); self.menu_statement_searches += 1
+        read = 0
+        for h in hits:
+            if read >= 3 or time.monotonic() >= self.deadline: break
+            if h["url"].rstrip("/") == old[0].rstrip("/") or not people.official(org, h["url"], doms) or weak_signal_url(h["url"]): continue  # another site's page is not the organisation's statement
+            read += 1
+            pg = fetcher.fetch(h["url"], self.case)
+            if pg.get("status") != "ok": continue
+            url = pg.get("final_url") or pg["url"]
+            if not people.official(org, url, doms, pg["text"]) or weak_signal_url(url) or JOB_POSTING.search(urllib.parse.urlsplit(url).path or ""): continue
+            clean = people.without_events(people.without_boilerplate(pg["text"]))
+            low = fold(clean)
+            term = next((m for m in self.must if people.term_regex(m).search(NAV_AI.sub(" ", low))), None)
+            if not term: continue
+            excerpt = self.signal_excerpt(pg, clean, low, term)
+            nav = NAV_AI.sub(" ", excerpt)
+            if not re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", nav, re.I) or menu_like(nav): continue
+            if self.function_words and not any(people.term_regex(w).search(fold(excerpt)) for w in self.function_words): continue  # CAREER_NEAR passes on "skills" or "employ": the statement must name the office's own function (review 112215240022)
+            sig = f"(the organisation's, from {url}) {excerpt}"
+            if signal_kind(sig) != "statement": continue
+            with self.save_lock:
+                self.org_signal[org] = (url, excerpt)
+                self.refresh_menu_rows(org, "a search of its site found a statement")
+                self.menu_statement_found += 1
+                self.log_rows.append({"org": org, "angle": a, "hits": len(hits), "read": read, "found": 0, "secs": round(time.monotonic() - t0, 2), "at": now()})
+            self.log(f"  menu signal: {org} now rests on a statement from {url}")
+            return True
+        with self.save_lock: self.log_rows.append({"org": org, "angle": a, "hits": len(hits), "read": read, "found": 0, "secs": round(time.monotonic() - t0, 2), "at": now()})
+        return False
+
+    def refresh_menu_rows(self, org=None, how="a later page of its site says it in a sentence"):
+        """Rows and near misses that carry their organisation's menu signal take the organisation's newer one once it is no longer a menu. Without this a row saved before `weigh` found a statement kept the menu for good, and `menu_statement` never ran for it (UF's Garib and Carr, Howard's Jackson in fnwords49; review 112215240022). Call under save_lock or before threads start. Returns how many rows changed."""
+        n = 0
+        for r in list(self.leads.values()) + list(self.near.values()):
+            o = r.get("organisation")
+            if (org is not None and o != org) or o not in self.org_signal or not str(r.get("signal") or "").startswith("(the organisation's, from ") or signal_kind(r.get("signal")) != "menu": continue
+            u, ex = self.org_signal[o]
+            if menu_like(NAV_AI.sub(" ", ex)): continue
+            m = re.match(r"\(the organisation's, from (\S+)\)", r["signal"])
+            r["signal"] = f"(the organisation's, from {u}) {ex}"
+            if "signal_kind" in r: r["signal_kind"] = signal_kind(r["signal"], r.get("source_url"))
+            r["note"] = "; ".join(x for x in (str(r.get("note") or ""), f"the organisation's signal was its site's menu ({m.group(1) if m else ''}); {how}") if x)
+            n += 1
+        return n
+
+    def stored_menu_statements(self):
+        """Organisations whose rows or near misses rest on a menu signal get menu_statement, side by side. Runs before the near misses are judged again, so a row held back only for its menu comes back. Rows whose organisation already has a better signal take it first, with no search. Returns how many rows or organisations changed."""
+        with self.save_lock: fixed = self.refresh_menu_rows()
+        if fixed: self.log(f"menu signal: {fixed} rows took their organisation's newer signal in place of its menu")
+        orgs = sorted({r["organisation"] for r in list(self.leads.values()) + list(self.near.values()) if r.get("organisation") in self.org_signal and signal_kind(r.get("signal"), r.get("source_url")) == "menu"})
+        if not orgs or not self.must or self.s.get("menu_statement") is False:
+            if fixed: self._save()
+            return fixed
+        t0, f0, s0 = time.monotonic(), self.menu_statement_found, self.menu_statement_searches
+        with cf.ThreadPoolExecutor(max_workers=self.workers) as ex: list(ex.map(self.menu_statement, orgs))
+        self.log(f"menu signal: searched the sites of {self.menu_statement_searches - s0} of {len(orgs)} organisations resting on a menu, found a statement for {self.menu_statement_found - f0} ({time.monotonic() - t0:.0f}s)")
+        self._save()
+        return fixed + self.menu_statement_found - f0
+
+    def finish_menu_rows(self):
+        """At the end of a run: rows found in this run on a menu signal get the menu search, and a near miss held back only for its menu comes back now, not on the next run (review 112215240022)."""
+        if self.stored_menu_statements() and self.stored_readmits(): self._save()
+
     def weigh(self, org, page, angle):
         """Every person on this page who fits becomes a row, a near miss, or nothing."""
         got = 0
@@ -741,12 +850,7 @@ class Hunt:
         hit_terms = [m for m in self.must if people.term_regex(m).search(NAV_AI.sub(" ", low))]
         staff_sig = None
         if hit_terms and is_official and (org not in self.org_signal or menu_like(self.org_signal[org][1])) and not weak_signal_url(page.get("final_url") or page["url"]):
-            tc = title_core(page.get("title"))
-            body = low.replace(tc, " " * len(tc)) if tc else low  # the headline is also in the body: its careers word says nothing about the sentences around the AI word (blanked to its own length, so offsets still line up)
-            flat = " ".join(clean.split())  # fold() collapses whitespace: cut the excerpt from text with the same spacing, or it comes from the wrong place
-            if len(flat) != len(low): flat = low
-            m = next((x for x in people.term_regex(hit_terms[0]).finditer(body) if CAREER_NEAR.search(body[max(0, x.start() - 300):x.end() + 300]) and not EARLIER_JOB.search(sentence_at(body, x.start(), x.end()))), None)  # the word beside a careers or workforce word: AI research news (UT) is not a careers signal; nor a leader bio on an AI degree at an earlier employer (SLCC president, fnwords23)
-            excerpt = flat[max(0, m.start() - 80):m.end() + 120].strip() if m else ""
+            excerpt = self.signal_excerpt(page, clean, low, hit_terms[0])
             nav = NAV_AI.sub(" ", excerpt)  # "Skip to AI Search" is the site's own menu, not a statement
             if menu_like(nav) and org in self.org_signal: nav = ""  # a run of Capitalised Menu Items (BU, Howard, American) is kept only while nothing better is known, as a `menu` signal; a statement takes its place, a menu never takes a statement's
             if re.search(r"(?<!\w)" + re.escape(hit_terms[0]) + r"(?!\w)", nav, re.I):  # the word must be in the excerpt we keep, not just in the folded text
@@ -973,6 +1077,7 @@ class Hunt:
         discover = list(self.s.get("discover", []))
         workers = self.workers
         self.stored_official_rechecks()
+        self.stored_menu_statements()
         if self.stored_readmits(): self._save()
         self.stored_departures()
         self.stored_person_signals()
@@ -984,6 +1089,7 @@ class Hunt:
                 continue
             with cf.ThreadPoolExecutor(max_workers=workers) as ex:
                 list(ex.map(self.try_org, todo[:workers]))
+        self.finish_menu_rows()
         if len(self.leads) >= self.target: self.stop_reason = f"reached the target of {self.target}"
         elif time.monotonic() >= self.deadline: self.stop_reason = "ran out of time: run it again on this case to carry on"
         elif self.failed and not self.answered: self.stop_reason = f"no source answered any of {len(self.failed)} searches, so this says nothing about the organisations: run it again on this case once they are back"
@@ -1003,13 +1109,13 @@ class Hunt:
             w = csv.DictWriter(f, fieldnames=LEAD_COLS, extrasaction="ignore"); w.writeheader(); w.writerows(map(safe_row, self.near.values()))
         n_ver = sum(r["check_status"] == "verified" for r in rows)
         kc = collections.Counter(r["signal_kind"] for r in rows if r["check_status"] == "verified")
-        kinds = ", ".join(f"{kc[k]} {k}" for k in ("statement", "course", "vendor") if kc[k]) + (f", {kc['']} with no signal" if kc[""] else "")  # what the verified rows rest on: a list of course pages is not a list of statements
+        kinds = ", ".join(f"{kc[k]} {k}" for k in ("statement", "course", "vendor", "menu") if kc[k]) + (f", {kc['']} with no signal" if kc[""] else "")  # what the verified rows rest on: a list of course pages is not a list of statements
         n_near = sum(r["check_status"] == "verified" and r.get("signal_near_person") == "yes" for r in rows)
         n_sought = sum(r["check_status"] == "verified" and r.get("signal_near_person") != "yes" and bool(r.get("person_signal_tried")) for r in rows)
         if kinds: kinds += "; the signal is next to the person on " + (f"all {n_ver}" if n_near == n_ver else "none" if not n_near else f"{n_near} of {n_ver}") + (f" (a search for the person's own found none for {'all ' if n_sought == n_ver - n_near else ''}{n_sought} of the rest)" if n_sought else "")  # the rest rest on another page of the organisation's: "statement" alone overstates them (fnwords26: 1 of 17)
         status = "reached" if len(rows) >= self.target else "SHORT"
         orgs = collections.Counter(r["organisation"] for r in rows)
-        untried = [o for o in self.orgs if not any(t[0] == o for t in self.tried)]
+        untried = [o for o in self.orgs if not any(t[0] == o and not str(t[1]).startswith("(statement) ") for t in self.tried)]  # a menu search alone is not a try for leads
         lines = [f"# Hunt: {self.s.get('goal', '')}", "", f"**{status}: {len(rows)} of {self.target}** ({n_ver} on the organisation's own site{': ' + kinds if kinds else ''}; {len(rows) - n_ver} on another site). Stopped: {self.stop_reason}.", "", "Every row is backed by a saved page: `check_quote` is the text next to the name on `source_url`. It says what the page says on the day it was read, not that the person still holds the post. No addresses were inferred.", "",
                  f"{sum(1 for l in self.log_rows if l['org'] != '(discover)')} org-and-angle searches over {len(orgs)} organisations with leads, of {len(self.orgs)} considered; {len(self.near)} near misses in `near_misses.csv`; {len(self.blocked)} pages unread.", ""]
         if self.moved: lines += ["## Moved out by this spec", f"- {len(self.moved)} rows from an earlier run on this case don't pass the spec as it now stands and are now near misses: {', '.join(self.moved[:20])}.", ""]
@@ -1017,8 +1123,9 @@ class Hunt:
         if self.errors: lines += ["## Sources that failed (all runs on this case)", "Historical failures are retained here; an entry does not mean the source failed on this run.", *[f"- {e} (×{n})" for e, n in self.errors.most_common(10)], ""]
         ang = collections.Counter(); 
         for l in self.log_rows:
-            if l["org"] != "(discover)": ang[l["angle"]] += l["found"]
-        lines += ["## What each angle found", *[f"- {n}: `{a}`" for a, n in ang.most_common()], ""]
+            if l["org"] != "(discover)" and not str(l["angle"]).startswith("(statement) "): ang[l["angle"]] += l["found"]
+        ms = sum(1 for l in self.log_rows if str(l["angle"]).startswith("(statement) "))
+        lines += ["## What each angle found", *[f"- {n}: `{a}`" for a, n in ang.most_common()], *([f"- {ms} searches of an organisation's own site for a statement in place of a menu signal (all runs on this case); {self.menu_statement_found} found one on this run."] if ms else []), ""]
         if self.blocked: lines += ["## Pages that couldn't be read", *[f"- {u} — {w}" for u, w in list(self.blocked.items())[:20]], ""]
         far = sum("signal isn't near" in r.get("note", "") for r in self.near.values())
         if far and self.must: lines += ["## Held back", f"- {far} near misses are only held because the `must` words aren't close to the person. If those words describe the organisation rather than the person, set `\"allow_page_signal\": true` in the spec.", ""]
@@ -1026,7 +1133,7 @@ class Hunt:
         if nh: lines += ["## No named head", "The office page was read and prints only a mailbox or phone, no person. This is a gap in the source, not a miss by the search:", *[f"- {o} — [{u}]({u})" for o, u in nh.items()], ""]
         if untried: lines += ["## Organisations not tried", *[f"- {o}" for o in untried[:30]], ""]
         (out_dir / "REPORT.md").write_text("\n".join(lines) + "\n")
-        return {"status": status, "leads": len(rows), "verified": n_ver, "verified_kinds": kinds, "verified_near_person": n_near, "target": self.target, "near": len(self.near), "out": str(out_dir.resolve()), "stopped": self.stop_reason, "departure_searches": self.departure_searches, "person_signal_searches": self.person_signal_searches, "person_signal_found": self.person_signal_found, "domain_searches": self.domain_searches, "official_upgrades": self.official_upgrades, "lead_list": [{k: r.get(k, "") for k in ("name", "title", "organisation", "check_status", "source_url", "signal")} for r in rows], "no_named_head": [{"org": o, "url": nh[o]} for o in sorted(nh)]}
+        return {"status": status, "leads": len(rows), "verified": n_ver, "verified_kinds": kinds, "verified_near_person": n_near, "target": self.target, "near": len(self.near), "out": str(out_dir.resolve()), "stopped": self.stop_reason, "departure_searches": self.departure_searches, "person_signal_searches": self.person_signal_searches, "person_signal_found": self.person_signal_found, "menu_statement_searches": self.menu_statement_searches, "menu_statement_found": self.menu_statement_found, "domain_searches": self.domain_searches, "official_upgrades": self.official_upgrades, "lead_list": [{k: r.get(k, "") for k in ("name", "title", "organisation", "check_status", "source_url", "signal")} for r in rows], "no_named_head": [{"org": o, "url": nh[o]} for o in sorted(nh)]}
 
 
 def analyze_pages(pages, today=None):
