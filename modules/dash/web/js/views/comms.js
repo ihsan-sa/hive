@@ -228,6 +228,23 @@ function lineRow(p, sh, ctx) {
     h("button", { type: "button", class: "cm-one-b", "aria-label": tr("Open the whole message") + ": " + tr(lt), title: "Open the whole message", onclick: open }, h("span", { class: "cm-one-t" }, lt)),
     (sh.also || []).map(a => h("p", { class: "cm-one-also meta" }, labelCodes(a))));
 }
+// Notes sent from a document's viewer (ui/docviewer.js) or a file preview (preview/markup.js) are the app's words, not the person's:
+// the chat draws them as one line, "Comments on DOC sent", opened in full on a click; only what the person typed shows as their message (the person, 112211212a89).
+const NOTES_RE = /^(?:\([^)\n]*\)\s*)?(?:@[\w-]+\s+)*Notes on (?:"([^"\n]+)"|([^\n]+?)) \([^)\n]*\), from (?:the side panel in this conversation|the Documents page|the file preview in this conversation)\.\s*\n/;
+export function docNotes(p) {
+  if (!p || p.ev || p.from !== "person") return null;
+  const t = String(p.text || ""), m = NOTES_RE.exec(t);
+  if (!m) return null;
+  const n = (t.slice(m[0].length).match(/^(?:#\d+ |\d+\. )/gm) || []).length;
+  return { title: m[1] || m[2], n };
+}
+function notesRow(p, dn) {
+  const line = tr("Comments on") + " “" + dn.title + "” " + tr("sent") + (dn.n > 1 ? " · " + dn.n + " " + tr("notes") : "");
+  const open = () => { OPENED.add(p.id); L.rebuild = true; L.keep = true; L.ctx && L.ctx.update(); };
+  return h("div", { class: "cm-oneline cm-notes", "data-key": p.id, "data-show": "you", role: "note" },
+    h("button", { type: "button", class: "cm-one-b", "aria-label": tr("Open the whole message") + ": " + line, title: "Open the whole message", onclick: open },
+      icon("doc"), h("span", { class: "cm-one-t" }, line), h("span", { class: "meta" }, " · " + clock(p.t || Date.parse(p.at)))));
+}
 function evRow(e) {
   return h("div", { class: "cm-ev", "data-key": e.key, "data-tone": status(e.tone).tone, role: "note" }, statusDot(e.tone), h("b", null, e.text), h("span", { class: "meta" }, clock(e.t) + " · " + e.sub));
 }
@@ -246,7 +263,7 @@ function versioned(items) {
   const out = starts.size ? walk(items, starts) : items;
   if (!V.old) {   // Edit on your last message (its files go with the edit); Retry on the last reply once nothing of yours follows it.
     // Either works while the reply is still being written: the starter stops that run and hands the agent the new ask (E12d).
-    const posts = out.filter(p => !p.ev && !p.retry_of), li = posts.findLastIndex(p => p.from === "person"), lastMe = posts[li];
+    const posts = out.filter(p => !p.ev && !p.retry_of), li = posts.findLastIndex(p => p.from === "person" && !docNotes(p)), lastMe = posts[li];   // notes from a document aren't a message to edit
     V.edit = lastMe && !pageEdit(lastMe) ? lastMe.id : null;   // a page edited by hand is changed with the page's own Edit (E43)
     const after = posts.slice(li + 1).filter(p => isAgent(p.from)), lastAg = after.at(-1);
     if (lastAg && !V.wait) { V.retry = lastAg.id; V.retryRoot = (V.info.get(after[0].id) || {}).root || after[0].id; }
@@ -281,12 +298,15 @@ function rows(items) {
     if (p.ev) { out.push(evRow(p)); L.prev = null; continue; }
     const sh = shownOf(p);
     if (sh && sh.show === "hidden") continue;
+    const dn = !OPENED.has(p.id) && docNotes(p);
+    if (dn) { out.push(notesRow(p, dn)); L.prev = null; continue; }
     if (sh && sh.show === "line" && sh.line && !OPENED.has(p.id)) { out.push(lineRow(p, sh)); L.prev = null; continue; }
     L.names.add(p.from); for (const m of p.men) L.names.add(m);
     if (!L.opts.showThread && L.helpers) { const hs = helperFolds(p.th, p.t, L.helpers, L.opts); if (hs.length) { out.push(...hs); L.prev = null; } }   // helper conversations fold where they began (R7)
     if (p.id === L.newId) { out.push(h("p", { class: "msg-new", role: "separator", "aria-label": "New messages", "data-key": "new:" + p.id }, "New")); L.prev = null; }
     const q = L.prev, cont = !!q && q.from === p.from && q.th === p.th && !p.reply_to && p.t - q.t < GROUP && sameTo(q, p) && sameSource(q, p);
-    const a = message(p, { ...L.opts, cont, ...verOpts(p) }); a.dataset.show = KIND_NAME[postKind(p)] || ""; if (a.dataset.show === "you" && asksQuestion(p)) a.dataset.ask = "";   // For you, Updates or Agent comms, marked in the list (11040113eacf)
+    const pm = docNotes(p) ? { ...p, text: p.text.replace(/\n(?=(?:#\d+ |\d+\. ))/g, "\n\n") } : p;   // opened notes: one paragraph per comment, not one run-on block
+    const a = message(pm, { ...L.opts, cont, ...verOpts(p) }); a.dataset.show = KIND_NAME[postKind(p)] || ""; if (a.dataset.show === "you" && asksQuestion(p)) a.dataset.ask = "";   // For you, Updates or Agent comms, marked in the list (11040113eacf)
     L.prev = p; a._head = L.heads; L.io.observe(a); out.push(a);
   }
   return out;

@@ -1108,7 +1108,7 @@ body[data-pv-drag] .pv-frame{pointer-events:none}
 /* Expanded: the file takes the whole window, the chat waits under it (Expand in the header; again to go back to the side). */
 body[data-pv-full] .pv{left:8px;width:auto}
 body[data-pv-full] .pv-grip{display:none}
-body[data-pv-full]:not(:has(.pv[data-kind=files])) .pv-s>:not(.pv-frame,.pv-img,.pv-media){max-width:900px;margin-inline:auto}
+body[data-pv-full]:not(:has(.pv[data-kind=files])) .pv-s>:not(.pv-frame,.pv-img,.pv-media,.pv-pg,.pv-ed){max-width:900px;margin-inline:auto}
 body[data-pv-full] :is(#top,#main){margin-right:0}
 .pv-full[aria-pressed=true]{background:var(--sunken);color:var(--ink)}
 .pv-link[data-ok]{color:var(--accent)}
@@ -3050,7 +3050,7 @@ input.fp-box:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .mf-row>.lr-x{grid-column:3;grid-row:1;margin:0;font-size:var(--fs-meta);color:var(--ink-3);white-space:nowrap}
 .mf-row>.lr-s{grid-column:2/4;grid-row:2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* The preview's action row on a phone: one line, so Open no longer wraps onto a line of its own (review of step 5, the head at 390) */
-@media (max-width:520px){.pv-a{flex-wrap:nowrap;gap:2px}.pv-a>.btn[data-size=s]{padding-inline:7px}.pv-a>.btn .ic{display:none}.pv-tabs{flex:none}.pv-tab{padding-inline:8px}}
+@media (max-width:520px){.pv-a{flex-wrap:wrap;gap:4px 2px}.pv-a>.pv-live{display:none}.pv-a>.btn[data-size=s]{padding-inline:7px}.pv-a>.btn .ic{display:none}.pv-tabs{flex:none}.pv-tab{padding-inline:8px}}
 
 /* R11: the composer's Focus and Model pills share one look: a small label, the value, a chevron; the native select stays under it */
 .cp-fpick{position:relative;display:inline-flex;align-items:center;gap:4px;height:28px;margin:0 2px;padding:0 6px;border-radius:var(--r-m);color:var(--ink-3);font-size:var(--fs-meta);cursor:pointer;min-width:0}
@@ -3478,6 +3478,9 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .cm-one-b{all:unset;box-sizing:border-box;display:block;width:100%;cursor:pointer;min-height:28px;padding:4px 6px;border-radius:var(--r-s,6px);color:var(--ink-2,inherit);font-size:var(--fs-meta,.85em);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cm-one-b:hover,.cm-one-b:focus-visible{background:var(--hover,rgba(127,127,127,.12))}
 .cm-one-b:focus-visible{outline:2px solid var(--focus,currentColor);outline-offset:-2px}
+.cm-notes .cm-one-b{display:flex;align-items:center;justify-content:flex-end;gap:6px}
+.cm-notes .cm-one-b .ic{width:14px;height:14px;flex:none}
+.cm-notes .cm-one-t{overflow:hidden;text-overflow:ellipsis}
 .cm-one-also{margin:0 0 2px 6px;white-space:pre-wrap}
 .cm-showall[aria-pressed="true"]{background:var(--hover,rgba(127,127,127,.18))}
 @media (max-width:640px){.cm-one-b{min-height:44px;display:flex;align-items:center}}
@@ -3873,3 +3876,65 @@ a.ref[data-kind=doc][data-pv-on]{background:color-mix(in oklab,var(--accent) 16%
 .dv[data-side] .dv-page{width:calc(var(--z) * 100%)}
 .pv-zoom{min-width:44px;font-variant-numeric:tabular-nums}
 .dv:not([data-side]) .dv-general{position:static}   /* full page: the Conversation section follows it in the same column */
+/* ---- a note as printed pages (js/preview/paged.js): Letter sheets on a grey desk, paper stays paper in dark mode ---- */
+.pv-pg{min-height:100%;padding:20px 0 28px;background:color-mix(in srgb,var(--sunken) 80%,var(--ink) 6%);box-sizing:border-box}
+.pv-pg[data-paging]{min-height:60vh}
+.pv-pg>.pv-cut{text-align:center}
+.pg-sheets{display:flex;flex-direction:column;align-items:center;gap:20px;width:816px;margin:0 auto}
+.pg-measure{position:absolute;left:-12000px;top:0;visibility:hidden;pointer-events:none}
+.pg-sheet{position:relative;flex:none;width:816px;height:1056px;padding:72px;box-sizing:border-box;background:#fff;color:#1d1d1f;color-scheme:light;
+  border-radius:2px;box-shadow:0 1px 2px rgb(0 0 0/.12),0 4px 18px rgb(0 0 0/.10);overflow:hidden}
+.pg-sheet[data-tall]{height:auto;min-height:1056px}
+.pg-n{position:absolute;left:0;right:0;bottom:30px;text-align:center;font:11px/1 ui-sans-serif,system-ui,sans-serif;color:#8a8a8e;letter-spacing:.04em}
+.pg-c{position:relative;display:flow-root;height:912px;font:13.5px/1.5 Charter,"Bitstream Charter","Sitka Text",Cambria,Georgia,serif;font-kerning:normal;
+  font-variant-ligatures:common-ligatures;hyphens:auto;overflow-wrap:break-word}
+.pg-sheet[data-tall] .pg-c{height:auto}
+.pg-c>:first-child{margin-top:0!important}
+.pg-c :is(p,li,td,th,blockquote){white-space:normal}
+.pg-c p{margin:0 0 .7em}
+.pg-c :is(h2,h3,h4,h5,h6){font-family:inherit;color:#111;line-height:1.25;break-after:avoid}
+.pg-c .md-h1{font-size:25px;font-weight:700;letter-spacing:-.01em;margin:0 0 .35em}
+.pg-c .md-h2{font-size:16.5px;font-weight:700;margin:1.25em 0 .45em;padding-bottom:.18em;border-bottom:1px solid #c9c9cc}
+.pg-c .md-h3{font-size:14.5px;font-weight:700;margin:1em 0 .3em}
+.pg-c :is(.md-h4,.md-h5,.md-h6){font-size:13.5px;font-weight:700;font-style:italic;margin:.9em 0 .25em}
+.pg-c :is(ul,ol){margin:0 0 .7em;padding-left:1.35em}
+.pg-c li{margin:.18em 0}
+.pg-c li>p{margin:0}
+.pg-c li>:is(ul,ol){margin:.15em 0}
+.pg-c li::marker{color:#555}
+.pg-c a{color:#1a4f8a;text-decoration:underline;text-decoration-thickness:.06em;text-underline-offset:.15em}
+.pg-c hr{border:0;border-top:1px solid #c9c9cc;margin:1em 0}
+.pg-c blockquote{margin:.8em 0;padding:0 0 0 1em;border-left:2px solid #c9c9cc;color:#444}
+.pg-c code{font:12px/1.4 ui-monospace,"SF Mono",Menlo,Consolas,monospace;background:#f2f2f4;padding:.05em .3em;border-radius:3px;color:#222}
+.pg-c pre,.pg-c [data-rich] pre{background:#f6f6f8;color:#222;border:1px solid #e3e3e6;border-radius:4px;padding:8px 10px;white-space:pre-wrap;font-size:12px}
+.pg-c .md-tw{margin:.6em 0 .9em;overflow:hidden}
+.pg-c table{border-collapse:collapse;width:100%;font-size:12.5px}
+.pg-c :is(th,td){border:0;border-bottom:1px solid #dcdce0;padding:4px 8px;text-align:left;vertical-align:top;background:none;color:inherit}
+.pg-c th{border-bottom:1.5px solid #999;font-weight:700}
+.pg-c img{max-width:100%}
+.pg-c :is(button,.rc-copy){display:none}
+/* boxes drawn on a page (markup.js) */
+.pv-s[data-boxing] .pg-sheet{cursor:crosshair;touch-action:none;user-select:none;-webkit-user-select:none}
+.pv-s[data-boxing] .pg-box{pointer-events:none}
+.pg-box{position:absolute;z-index:2;border:2px solid #C2552C;border-radius:3px;box-sizing:border-box;background:rgb(194 85 44/.06);padding:0;cursor:pointer;font:inherit}
+.pg-box[data-draft]{border-style:dashed;background:rgb(194 85 44/.1)}
+.pg-box>b{position:absolute;left:-2px;top:-20px;min-width:18px;height:18px;padding:0 5px;border-radius:9px 9px 9px 2px;background:#C2552C;color:#fff;font:600 11px/18px ui-sans-serif,system-ui,sans-serif;text-align:center;box-sizing:border-box}
+.pg-box:hover,.pg-box:focus-visible{background:rgb(194 85 44/.14);outline:none}
+.pv-mk-box[aria-pressed=true]{background:var(--accent-soft);color:var(--accent-ink)}
+.pv-mk-box{display:inline-flex;align-items:center;gap:4px}
+.pv-mk-hint{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (forced-colors:active){.pg-box{border:2px solid CanvasText!important}.pg-sheet{border:1px solid CanvasText}}
+@media print{.pv-pg{background:none;padding:0}.pg-sheet{box-shadow:none}}
+/* ---- the Edit tab (js/preview/edit.js): the text, and its pages beside it when wide ---- */
+.pv-s:has(>.pv-ed){overflow:hidden;display:flex;flex-direction:column}
+.pv-ed{flex:1;min-height:0;display:flex;flex-direction:column}
+.pv-ed-bar{flex:none;display:flex;align-items:center;gap:var(--s2);padding:6px 10px 6px 14px;border-bottom:1px solid var(--line);background:var(--surface)}
+.pv-ed-st{min-width:0}.pv-ed-st[data-k=ok]{color:var(--good,var(--ink-3))}.pv-ed-st[data-k=err],.pv-ed-st[data-k=conflict]{color:var(--bad,#b3261e);white-space:normal}
+.pv-ed-over[hidden]{display:none}
+.pv-ed-two{flex:1;min-height:0;display:flex}
+.pv-ed-in{flex:1;min-width:0;margin:0;padding:16px 18px;border:0;resize:none;outline:none;background:var(--bg,var(--surface));color:var(--ink);
+  font:13px/1.6 ui-monospace,"SF Mono",Menlo,Consolas,monospace;tab-size:2;white-space:pre-wrap}
+.pv-ed-in:focus-visible{box-shadow:inset 0 0 0 2px var(--accent-soft)}
+.pv-ed-pv{display:none}
+.pv-ed[data-wide] .pv-ed-pv{display:block;flex:1;min-width:0;overflow:auto;border-left:1px solid var(--line)}
+.pv-ed[data-wide] .pv-ed-in{flex:0 0 44%}

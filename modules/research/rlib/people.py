@@ -3,16 +3,18 @@ import re
 import unicodedata
 from .extract import fold, registrable, domain_of
 
-ROLE = r"(?:(?:Senior |Associate |Assistant |Deputy |Interim |Acting |Executive |Founding |Vice |Co-?)*(?:President|Vice President|Vice Chancellor|Chancellor|Provost|Dean|Director|Chief [A-Z][a-z]+(?: [A-Z][a-z]+)* Officer|C[EOTFI]O|Chair(?:person|woman|man)?|Professor|Head|Manager|Coordinator|Superintendent|Founder|Partner|Principal|Lead|Secretary|Commissioner|Faculty|Instructor|Lecturer|Fellow|Officer|Editor|Researcher|Scientist|Engineer|Advisor|Adviser))"
+ROLE = r"(?:(?:Senior |Associate |Assistant |Deputy |Interim |Acting |Executive |Founding |Vice |Co-?)*(?:President|Vice President|Vice Chancellor|Chancellor|Provost|Dean|Director|Chief [A-Z][a-z]+(?: [A-Z][a-z]+)* Officer|C[EOTFI]O|Chair(?:person|woman|man)?|Professor|Head|Manager|Coordinator|Superintendent|Founder|Partner|Principal|Lead|Secretary|Commissioner|Faculty|Instructor|Lecturer|Fellow|Officer|Editor|Researcher|Scientist|Engineer|Advisor|Adviser|Chief of Staff|General Counsel|Special Assistant|Comptroller|Controller|Registrar|Treasurer|Ombuds(?:person|man)?))"
 _ROLE_RE = re.compile(r"\b" + ROLE + r"\b", re.I)
 IROLE = f"(?i:{ROLE})"
 _W = r"[A-ZÀ-Þ][\w'’-]+"
-_SP = r"[ \t\u00a0]+"  # a name stays on one line: across lines it's a menu
+_SP = r"[ \u00a0]{1,2}(?![ \t\u00a0])"  # a name stays on one line (across lines it's a menu) and in one cell: a tab or 3 spaces is a PDF column gap, "Connection      Jim Bayne" (fnwords42)
+_GAP = re.compile(r"\t+|[ \u00a0]{3,}")
 _PARTICLE = r"(?:de|del|della|di|du|la|le|van|von|der|den|ter|bin|ibn|al|el|da|dos|das)"  # Jean de la Verpilliere
 NAME = rf"{_W}(?:{_SP}[A-Z]\.)*(?:{_SP}(?:{_PARTICLE}{_SP})*{_W}){{1,2}}"
+LINE_NAME = NAME.replace(r"[A-Z]\.", r"[A-Z]\.?", 1)  # a line or cell that is only a name may drop the initial's dot, "Marittza M Adame" (South Texas's chart); in prose "Plan B Funding" would pass
 SUFFIX = r"(?:,?\s+(?:Jr\.?|Sr\.?|II|III|IV|Ph\.?\s?D\.?|Ed\.?\s?D\.?|M\.?D\.?|J\.?D\.?|MBA|M\.?S\.?|DBA|Esq\.?))*"
 HONOR = r"(?:(?:Dr|Prof|Mr|Ms|Mrs|Mx)\.?\s+)?"
-NOT_NAME = set("""has officially stepped steps expect compensation analysis by blvd boulevard ave avenue road rd drive highway parkway suite log copy position profile vertically integrated projects effectiveness governor senator congressman representative act acts report reports offices hub directory services resources contact contacts apply news events calendar careers staff faculty students alumni tech university college community center centre office department school institute program programs campus board foundation technology artificial intelligence data science workforce president vice dean director chief associate assistant executive senior interim the news read more contact student students services academic affairs human resources learn click home about our staff faculty new state national american united north south east west county city district education learning development innovation career careers business engineering computer health online division professional continuing leadership team trustees chancellor provost professor manager coordinator chair head email phone view all meet his her their this that these those when where with from for and page press release media event events research strategic planning economic public relations information systems digital cyber security machine ai it us january february march april may june july august september october november december monday tuesday wednesday thursday friday saturday sunday he she we they you read share follow privacy policy site map search menu working title property management job jobs salary posting vacancy vacancies opening openings breakfast club summit webinar webinars technical pathway pathways academy academies initiative initiatives partnerships solutions""".split())
+NOT_NAME = set("""has officially stepped steps expect compensation analysis by blvd boulevard ave avenue road rd drive highway parkway suite log copy position profile vertically integrated projects effectiveness governor senator congressman representative act acts report reports offices hub directory services resources contact contacts apply news events calendar careers staff faculty students alumni tech university college community center centre office department school institute program programs campus board foundation technology artificial intelligence data science workforce president vice dean director chief associate assistant executive senior interim the news read more contact student students services academic affairs human resources learn click home about our staff faculty new state national american united north south east west county city district education learning development innovation career careers business engineering computer health online division professional continuing leadership team trustees chancellor provost professor manager coordinator chair head email phone view all meet his her their this that these those when where with from for and page press release media event events research strategic planning economic public relations information systems digital cyber security machine ai it us january february march april may june july august september october november december monday tuesday wednesday thursday friday saturday sunday he she we they you read share follow privacy policy site map search menu working title property management job jobs salary posting vacancy vacancies opening openings breakfast club summit webinar webinars technical pathway pathways academy academies initiative initiatives partnerships solutions lab labs designer librarian librarians sciences trades skills service aid nursing room rooms auditorium criminal therapy assisting recruit officer officers counsel excellence access equitable success audit internal institutional advancement organizational chart police lieutenant technologies assist""".split())
 _LINE_ROLE = re.compile(rf"^(?:the\s+)?(?:(?:program|project|center|centre|department|unit|division|regional|operations|office|workforce|career|academic|student|campus|site|general)[ \t]+){{0,2}}(?:{ROLE})\b", re.I)
 
 
@@ -30,7 +32,7 @@ def plausible_name(n):
     toks = [t.strip(".,'’") for t in n.split()]
     if not 2 <= len(toks) <= 4 or len(n) > 45: return False
     if _heading_like(toks): return False
-    if any(t.lower() in NOT_NAME for t in toks): return False
+    if any(t.lower() in NOT_NAME for t in toks) or n.rstrip().endswith("-"): return False  # "Tunjarnika Coleman-": a PDF cell cut the name
     # BizTUCSON: capitals in the middle of a word make a brand. McDonald, DeShawn and O'Brien have just one.
     if any(re.search(r"[a-z].*[A-Z].*[A-Z]", part) for t in toks for part in re.split(r"[-'’]", t)): return False
     # CARES Act, NOVA Offices: one shouted word among ordinary ones is a label, not a name.
@@ -48,18 +50,41 @@ def clean_name(n):
 
 def clean_title(t):
     t = t.split("\n")[0]
-    # Where the post ends: "CEO of Nexeon, said:", "..., Dr Alex Groombridge, CTO" (the next person), "CEO, spearheads the ...".
-    t = re.split(r"(?<![A-Z])[.;:|•]\s|\s[–—-]\s|\s(?:said|says|who|and has|has|is|was|will|at|in|on|to)\s|[\"“”(]|,\s+(?:sees|see|feels|believes|notes|adds|hopes|expects|thinks|wants|plans|looks|knows|argues|stresses)\b|,?\s(?:said|says|added|explained)\b|,\s+(?:Dr|Prof|Mr|Ms|Mrs)\.?\s|,\s+[a-z]+s\s+(?:the|a|an|its)\b|,\s+the\s+[a-z]|,\s+(?:where|which|whose|when)\b|\suntil\s|\sand\s+(?:highly|widely|also|one)\b", t)[0].strip(" ,.")
+    # Where the post ends ("Special Assistant to the President" goes on past its "to"): "CEO of Nexeon, said:", "..., Dr Alex Groombridge, CTO" (the next person), "CEO, spearheads the ...".
+    t = re.split(r"(?<![A-Z])(?<!Assist)(?<!Asst)(?<!Assoc)(?<!Exec)(?<!Coord)(?<!Dept)(?<!aka)[.;:|•]\s|\s[–—-]\s|\s(?:said|says|who|and has|has|is|was|will|at|in|on)\s|(?<![Aa]ssistant)\sto\s|[\"“”(]|,\s+(?:sees|see|feels|believes|notes|adds|hopes|expects|thinks|wants|plans|looks|knows|argues|stresses)\b|,?\s(?:said|says|added|explained)\b|,\s+(?:Dr|Prof|Mr|Ms|Mrs)\.?\s|,\s+[a-z]+s\s+(?:the|a|an|its)\b|,\s+the\s+[a-z]|,\s+(?:where|which|whose|when)\b|\suntil\s|\sand\s+(?:highly|widely|also|one)\b", t)[0].strip(" ,.")
     t = re.sub(r"\b((?:co-?)?founder)\s+of\s+[a-z][a-z -]*(?:,.*)?$", r"\1", t, flags=re.I)  # "co-founder of advanced materials supplier"
     if len(t) > 110: t = t[:110].rsplit(" ", 1)[0].strip(" ,")  # whole words only: a cut "Inno" read as another employer
     return t
 
 
+# The title sits in a lookahead: a match takes only the name, so the 90-character tail can't swallow the next "Sam Roe, director ..." in the same paragraph (fnwords41).
 _PATS = [
-    re.compile(rf"(?P<name>{HONOR}{NAME}){SUFFIX}\s*(?:,|\s[–—|-]\s)\s*(?:the\s+|an?\s+|[A-Z][\w&.-]*['’]s\s+)?(?P<title>(?:[A-Z][\w&'-]*\s+|of\s+|for\s+|and\s+){{0,3}}{IROLE}\b[^\n]{{0,90}})"),
-    re.compile(rf"(?P<name>{HONOR}{NAME}){SUFFIX}\s+(?:is|was|serves as|served as|has been named|was named|was appointed|has been appointed|became|joined as)\s+(?:the\s+|an?\s+|as\s+)*(?:new\s+)?(?P<title>(?:[A-Z][\w&'-]*\s+|of\s+|for\s+|and\s+){{0,3}}{IROLE}\b[^\n]{{0,90}})"),
+    re.compile(rf"(?P<name>{HONOR}{NAME}){SUFFIX}\s*(?:,|\s[–—|-]\s)\s*(?:the\s+|an?\s+|[A-Z][\w&.-]*['’]s\s+)?(?=(?P<title>(?:[A-Z][\w&'-]*\s+|of\s+|for\s+|and\s+){{0,3}}{IROLE}\b[^\n]{{0,90}}))"),
+    re.compile(rf"(?P<name>{HONOR}{NAME}){SUFFIX}\s+(?:is|was|serves as|served as|has been named|was named|was appointed|has been appointed|became|joined as)\s+(?:the\s+|an?\s+|as\s+)*(?:new\s+)?(?=(?P<title>(?:[A-Z][\w&'-]*\s+|of\s+|for\s+|and\s+){{0,3}}{IROLE}\b[^\n]{{0,90}}))"),
     re.compile(rf"(?<![A-Za-z] )(?P<title>{ROLE}(?:{_SP}(?:of|for){_SP}[A-Z][\w&'-]*(?:{_SP}(?:and{_SP})?[A-Z][\w&'-]*){{0,4}})?){_SP}(?P<name>(?:Dr\.\s+)?{NAME})\b(?!\s+(?:of|for)\b)"),
 ]
+
+
+_LAST_FIRST = re.compile(r"([A-Z][\w'’]+(?:-[A-Z][\w'’]+)?),\s+([A-Z][a-z][\w'’-]*(?:\s+[A-Z](?:\.|[a-z][\w'’-]*))?)")
+
+
+def _cell_name(cell, flip=False):
+    """(name, interim) when a table cell is just a person: "Richard White, Interim", "Dr. Deborah Copeland,". ("", False) otherwise.
+    flip: the cell sits in a staff list's name column, where "Seado, Christina" is Christina Seado (Palm Beach State)."""
+    if flip and (m := _LAST_FIRST.fullmatch(cell.strip())) and m.group(2).lower() != "interim": cell = m.group(2) + " " + m.group(1)
+    bare = re.sub(r",?\s*interim\b.*$", "", cell, flags=re.I).strip(" ,")
+    if bare and re.fullmatch(HONOR + LINE_NAME + SUFFIX, bare) and plausible_name(clean_name(bare)): return bare, bare != cell.strip(" ,")
+    return "", False
+
+
+def _row_names_another(text, m):
+    """A "Role Name" match inside one cell of a margin table row whose own name sits in another cell: "Vice President Growth Expan, Provost ...      Dr. Maria Vallejo"."""
+    a = text.rfind("\n", 0, m.start()) + 1
+    line = text[a:text.find("\n", a) if "\n" in text[a:] else len(text)]
+    if line[:1] in " \t\u00a0": return False
+    cells = _GAP.split(line.strip())
+    own = clean_name(m.group("name"))
+    return len(cells) >= 2 and any(_cell_name(x)[0] and clean_name(_cell_name(x)[0]) != own for x in cells)
 
 
 def people_in(text, ld=()):
@@ -72,17 +97,69 @@ def people_in(text, ld=()):
         k = fold(name)
         if k not in out or len(title) > len(out[k]["title"]): out[k] = {"name": name, "title": title, "how": how}
     for p in ld: add(p["name"], p["title"], "structured")
-    for pat in _PATS:
-        for m in pat.finditer(text):
+    found = [m for pat in _PATS for m in pat.finditer(text)]
+    # Where another person begins: "Sam Roe, ..." or "Dean Jayant Anand". A title stops there, and one that opens on it ("Monica Erling, Dean Jayant Anand, Associate Dean ...") is that person's, not this one's (fnwords41).
+    def begins(m):  # a person really starts here: "Dean Jayant Anand," counts, "Professor Diagnostic Medical Imaging Radiography" and "Faculty Success System Administrator/" don't
+        if not plausible_name(clean_name(m.group("name"))): return False
+        if m.start("name") < m.start("title"): return True
+        return not _ROLE_RE.search(m.group("name")) and re.match(r"\s*(?:[,.;:)]|\band\b|\n|$)", text[m.end("name"):]) is not None
+    starts = {}
+    for m in found:
+        if begins(m): starts[min(m.start("name"), m.start("title"))] = max(starts.get(min(m.start("name"), m.start("title")), 0), m.end("name"))
+    for m in found:
+        t0, t1 = m.span("title")
+        if t0 < m.start("name"):  # "Role Name": the title is the person's own lead-in
             title = m.group("title")
+        else:
+            end = t0 + len(m.group("title").rstrip(" \t\n.,;:)"))
+            cut = next((x for x in sorted(starts) if t0 <= x < end and not (x == t0 and starts[x] >= end)), None)  # "Director of Educational Opportunity Fund" read whole as "Role Name" is no other person
+            if cut == t0: continue
+            title = text[t0:cut].rstrip(" \t\n;,:|–—-") if cut else m.group("title")
             # A title the page wrapped: "dean of Career and\nTechnical Programs".
-            if re.search(r"\b(?:and|of|for|&)\s*$", title):
-                more = re.match(r"\s*\n[ \t]*([A-Z][^\n]{0,60})", text[m.end():])
+            if not cut and re.search(r"\b(?:and|of|for|&)\s*$", title):
+                more = re.match(r"\s*\n[ \t]*([A-Z][^\n]{0,60})", text[t1:])
                 if more: title = title.rstrip() + " " + more.group(1)
-            add(m.group("name"), title, "prose")
-    lines = [l.strip() for l in text.split("\n") if l.strip()]
+        if t0 < m.start("name") and _row_names_another(text, m): continue
+        add(m.group("name"), title, "prose")
+    lines = [l for l in text.split("\n") if l.strip()]
     for a, b in zip(lines, lines[1:]):
-        if re.fullmatch(HONOR + NAME + SUFFIX, a) and _LINE_ROLE.match(b) and len(b) < 160 and "directory" not in b.lower(): add(a, b, "directory")  # 160: UF's "Associate Vice President for ... and Executive Director of the ... Center" is 120
+        margin, a, b = a[:1] not in " \t\u00a0", a.strip(), b.strip()
+        # A PDF table row: the name is the one cell that is a name ("Connection | Jim Bayne", "Bernadette Russell | Russell"), the post the first cell under it.
+        row = _GAP.split(a)
+        if margin and len(row) > 1 and any(_LINE_ROLE.match(x) for x in row): continue  # a table row that holds its own post: the line under it is the next person's
+        cells = [x for x in row if re.fullmatch(HONOR + LINE_NAME + SUFFIX, x)]
+        a, b = cells[0] if len(cells) == 1 else a, _GAP.split(b)[0]
+        if re.fullmatch(HONOR + LINE_NAME + SUFFIX, a) and _LINE_ROLE.match(b) and len(b) < 160 and "directory" not in b.lower(): add(a, b, "directory")  # 160: UF's "Associate Vice President for ... and Executive Director of the ... Center" is 120
+    # A table row at the margin, "Interim Associate Vice President ...      Dr. Holly Bennett      Bennett, Holly": post and name side by side in the first two cells. An indented row is an org chart's boxes, where the cells beside each other are different people's.
+    # A staff list whose section header holds the post, "Title: Dean,      Name      Email to:" (Palm Beach State): each row under it gives the unit, then the name ("Health Sciences, LW      Dr. Alphonso Baldwin"). A header ending in a comma wants the unit after it; without one the post is whole.
+    head = None
+    for line in text.split("\n"):
+        cells = _GAP.split(line.strip()) if line[:1] not in " \t\u00a0" else []
+        if any(x.lower() == "name" for x in cells[1:3]):  # the header row (`_plain` has already dropped its "Title:" label)
+            first = re.sub(r"^title\s*:\s*", "", cells[0], flags=re.I)  # a header on the page's first line keeps its label
+            head = first if _LINE_ROLE.match(first) else None
+            continue
+        if head and len(cells) >= 2 and not _LINE_ROLE.match(cells[0]) and not _cell_name(cells[0])[0]:
+            at = next((i for i, x in enumerate(cells[1:3], 1) if _cell_name(x, True)[0]), None)
+            if at:
+                name, interim = _cell_name(cells[at], True)
+                post = head.rstrip(", ") + (", " + cells[0] if head.endswith(",") else "")
+                add(name, ("Interim " if interim else "") + post, "directory")
+        if len(cells) >= 2:
+            for a, b in (cells[:2], cells[1::-1]):
+                if re.fullmatch(HONOR + LINE_NAME + SUFFIX, a) and _LINE_ROLE.match(b) and len(b) < 160: add(a, b, "directory")
+            # "Controller      Finance      James Duffie      Duffie, James      District @ LW": the post first, a unit between, and one cell further on the only name (Palm Beach State's staff list).
+            # "Chief Information Officer      Information Technology      Libutti, Kenneth      Libutti, Kenneth": the name column may print "Last, First", and the email column repeats it.
+            # A unit cell can have a name's shape ("Information Technology"), so the first two cells are checked as people, not by shape.
+            # A "Last, First" cell counts only where no cell prints the name the plain way: "Jamie Smith      Smith, James" is one person.
+            names = list(dict.fromkeys(clean_name(n) for n in (_cell_name(x)[0] for x in cells[2:]) if n)) or list(dict.fromkeys(clean_name(n) for n in (_cell_name(x, True)[0] for x in cells[2:]) if n))
+            # The unit cell has words: "Registrar's Office      1522      105 ATLC REG      Upward Bound      4853" is a phone list of offices (Cincinnati State).
+            if len(names) == 1 and _LINE_ROLE.match(cells[0]) and len(cells[0]) < 160 and not any(_cell_name(x)[0] for x in cells[:2]) and re.search(r"[A-Za-z]{2}", cells[1]) and not re.match(r"\d", cells[1]):
+                post = cells[0]
+                inv = re.fullmatch(r"([^,]+),\s+([A-Z][a-z]+)", post)  # "Director, Associate", "Registrar, College": a list sorted by the post word
+                if inv and _ROLE_RE.fullmatch(inv.group(1)) and not _ROLE_RE.search(inv.group(2)): post = inv.group(2) + " " + inv.group(1)
+                if (_ROLE_RE.fullmatch(post) or len(post.split()) <= 2) and not _LINE_ROLE.match(cells[1]) and not re.fullmatch(r"[A-Z]{2,6}(?:,\s*[A-Z]{2,6})*", cells[1]): post += ", " + cells[1].rstrip(" &,-–")  # "Director      eLearning": the unit cell says director of what (not a code like "CCE")
+                add(names[0], post, "directory")
     return list(out.values())
 
 
@@ -109,8 +186,13 @@ def person_key(name):
 
 
 def term_regex(term):
-    """A term as whole words in folded text, so AI doesn't match training or villain."""
-    return re.compile(rf"(?<![\w]){re.escape(fold(term))}(?![\w])")
+    """A term as whole words in folded text, so AI doesn't match training or villain. A last word of 3 or more letters also takes its plural: career finds Careers, internship finds Internships, agency finds agencies (fnwords36: Director of Careers failed role_focus career). Short acronyms stay exact."""
+    t = fold(term)
+    m = re.search(r"([a-z]{3,})$", t)
+    if not m: return re.compile(rf"(?<![\w]){re.escape(t)}(?![\w])")
+    stem = t[:-1] if t.endswith("y") and t[-2:-1] not in "aeiou" else t
+    tail = "(?:y|ies)" if stem != t else ("(?:es)?" if t.endswith(("s", "x", "z", "ch", "sh")) else "s?")
+    return re.compile(rf"(?<![\w]){re.escape(stem)}{tail}(?![\w])")
 
 
 def named_not_person(text, name):
@@ -276,7 +358,7 @@ _VERB_AFTER = re.compile(r",\s*(?:spoke|said|says|leads|runs|opened|told|wrote|a
 
 def _alone_name(line):
     """A line that is just someone's name, as on a staff card."""
-    m = re.fullmatch(rf"\s*{HONOR}({NAME}){SUFFIX}\s*", line)
+    m = re.fullmatch(rf"\s*{HONOR}({LINE_NAME}){SUFFIX}\s*", line)
     return bool(m) and plausible_name(m.group(1))
 
 
@@ -558,15 +640,20 @@ def employer_before(text, name, org, window=90):
 _NOT_EMPLOYER = re.compile(r"\b(?:e-?mail|phone|tel|fax|contact|bio|biography|read more|view|profile|website|office|hours|campus|department|dept|division|college|school|center|centre|institute|program|programs|services|affairs|admissions|registrar|finance|marketing|communications|advancement|athletics|library|operations|administration|enrollment|development|education|research|studies|sciences|arts|engineering|business|law|medicine|nursing|students?|faculty|staff|board|team|committee|council|emeritus|emerita)\b", re.I)
 
 
+GREETING = re.compile(r"(?:Meet|About|Contact|Email|E-mail|Message|Call|Book|Schedule|Connect with|Read more about|Learn more about|More about|View|See|Visit|Chat with)\b", re.I)
+SITE_NOTICE = re.compile(r"(?:Attention|Notice|Alert|Warning|Important|Note|Reminder|Announcement|Update|Please Note)s?\s*[!:.]*", re.I)
 def employer_listed(text, name, org):
     """The other body printed straight after a person's name and post: "Mike Pettit / Senior Vice President / Wabash" on three lines, or "Jane Doe, Vice President, Intel". Offices and departments of the org don't count."""
     own = set(re.findall(r"[a-z0-9]+", fold(org))) - ORG_NOISE
     initials = "".join(t[0] for t in re.findall(r"[a-z0-9]+", fold(org)) if t not in ("the", "of", "and", "at", "for", "in"))
     rx = re.compile(name_regex(name).pattern, re.I)
+    own_name = {t for t in re.findall(r"[a-z]+", fold(clean_name(name))) if len(t) > 2}
     def foreign(label):
         label = label.strip(" ,.;:|-–—")
         words = label.split()
         if not 1 <= len(words) <= 5 or not words[0][0].isupper() or label.lower() == initials: return ""
+        if SITE_NOTICE.fullmatch(label): return ""  # a browser banner under the last staff entry (Broward: "Attention!")
+        if GREETING.match(label) or set(re.findall(r"[a-z]+", fold(label))) & own_name: return ""  # a link to the person's own profile: "Meet Gabriel", "Email Robin", "Robin's calendar" (Kogod staff page)
         low = set(re.findall(r"[a-z0-9]+", fold(label)))
         if low and low <= POST_WORDS | ORG_NOISE | GENERIC_EMPLOYER | {"counsel"}: return ""  # the person's own unit or second post: "Technology Transfer", "Associate General Counsel"
         if _SCHOOL.search(fold(label)) and not names_org(org, label) and not low <= POST_WORDS: return label
@@ -583,11 +670,20 @@ def employer_listed(text, name, org):
     return ""
 
 
+def same_first_name(a, b):
+    """Jacqui and Jacqueline, Chris and Christopher, Jenny and Jennifer: the short form, without a pet ending (-i, -ie, -y), starts the long one. A plain cut needs 3 letters more (Dan, Daniel), so Jane and Janet, Paul and Paula stay two people."""
+    if a == b: return True
+    s, l = sorted((a, b), key=len)
+    stem = re.sub(r"(?:ie|ey|i|y)$", "", s)
+    if stem != s and len(stem) >= 3 and l.startswith(stem) and len(l) > len(s): return True
+    return len(s) >= 3 and l.startswith(s) and len(l) - len(s) >= 3
+
+
 def same_person(a, b):
-    """Antonio Delgado and Antonio Delgado Fornaguera: same first name, and all of the shorter name is in the longer one."""
+    """Antonio Delgado and Antonio Delgado Fornaguera: same first name, and all of the shorter name is in the longer one. The first name may be a short form of the other (Jacqui and Jacqueline Stackhouse, fnwords36)."""
     x, y = ([t for t in fold(clean_name(n)).split() if len(t.strip(".")) > 1] for n in (a, b))
-    if len(x) < 2 or len(y) < 2 or x[0] != y[0]: return False
-    return set(x) <= set(y) or set(y) <= set(x)
+    if len(x) < 2 or len(y) < 2 or not same_first_name(x[0], y[0]): return False
+    return set(x[1:]) <= set(y[1:]) or set(y[1:]) <= set(x[1:])
 
 
 BOILERPLATE = re.compile(r"live chat|powered by|was used for|ai[- ]generated|generated (?:by|with)|chatbot|cookies?\b|this site|this website", re.I)

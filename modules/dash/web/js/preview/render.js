@@ -33,7 +33,7 @@ async function textOf(it, signal) {
     if (!r.ok) throw new Error(r.status === 404 ? "it isn't there any more, or isn't shown" : r.status === 403 ? "this sign-in can't read project files" : said(r.status));
     const d = await r.json();
     if (d.type !== "md" && d.type !== "text") return { bin: true, t: "", all: "" };
-    return { t: d.text || "", cut: !!d.truncated, all: d.truncated ? null : d.text || "" };
+    return { t: d.text || "", cut: !!d.truncated, all: d.truncated ? null : d.text || "", ver: d.version, editable: !!d.editable && !d.truncated };
   }
   const t = await (await fetchOk(it, signal)).text();
   return t.length > SHOW_MAX ? { t: t.slice(0, SHOW_MAX), cut: true, all: t } : { t, cut: false, all: t };
@@ -184,7 +184,7 @@ function tableSize(t, ext, cut) {
   return h("p", { class: "meta pv-dim" }, `${cut ? "At least " : ""}${rows} row${rows === 1 ? "" : "s"} · ${cols} column${cols === 1 ? "" : "s"}`);
 }
 
-export async function render(it, { source, signal } = {}) {
+export async function render(it, { source, mode, signal } = {}) {
   let k = kindOf(it.name);
   if (it.kb) {   // the Knowledge API gives images and PDFs as bytes and everything else as text, so the rest shows as text
     if (k === "pdf") return noPreview(it, "A project's PDF opens in Knowledge or downloads; it doesn't show in this panel.");
@@ -207,9 +207,15 @@ export async function render(it, { source, signal } = {}) {
   if (tx.bin || (k === "other" && /[\0-\x08\x0e-\x1a]/.test(tx.t.slice(0, 4096)))) return noPreview(it, "There's no preview for this kind of file.");
   const text = tx.all != null && tx.all.length <= 4 * 1048576 ? tx.all : null;
   const rich = (node) => ({ node, source: true, text });
+  if (source && k === "md") return { node: asCode(langOf(it.name), it.name, tx), source: true, text, md: true, editable: tx.editable, version: tx.ver };   // keeps the note's Page/Text/Edit tabs
   if (source || k === "svg" || k === "html") return { node: asCode(langOf(it.name), it.name, tx), source: k !== "code" && k !== "text" && k !== "other" && k !== "diff", text };
   switch (k) {
-    case "md": return rich(wrap(h("div", { class: "pv-md" }, markdown(tx.t)), tx.cut ? cutNote() : null));
+    case "md": {   // three ways to see a note (ui/preview.js header): as pages (the default), as flowing text, and to edit when it may be
+      const r = { source: true, text, md: true, editable: tx.editable, version: tx.ver };
+      if (mode === "edit" && tx.editable) return { ...r, node: (await import("./edit.js")).editor(it, tx.t, tx.ver) };
+      if (mode === "text") return { ...r, node: wrap(h("div", { class: "pv-md" }, markdown(tx.t)), tx.cut ? cutNote() : null) };
+      return { ...r, node: (await import("./paged.js")).paged(tx.t, { cut: tx.cut }) };
+    }
     case "table": return rich(wrap(grid(tx.t, extOf(it.name), it.name), tableSize(tx.t, extOf(it.name), tx.cut), tx.cut ? cutNote() : null));
     case "mermaid": return rich(wrap(fenceBlock("mermaid", tx.t)));
     case "latex": {   // \includegraphics finds pictures sent in the same message

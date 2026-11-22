@@ -344,7 +344,7 @@ class Hunt:
         self.done_orgs, self.tried = {}, set()
         self.org_signal = {}  # org -> (url, excerpt) of an official page where a `must` word appears
         self.learned = {}  # org -> site of an official page the hunt read, for orgs the spec gave no domains
-        self.failed, self.answered, self.moved = set(), False, []  # failed lasts this run only: a rerun tries those again
+        self.failed, self.answered, self.moved, self.readmitted = set(), False, [], []  # failed lasts this run only: a rerun tries those again
         self.save_lock = threading.Lock()
         self.discovered = []
         self.stop_reason = ""
@@ -359,6 +359,7 @@ class Hunt:
         except ValueError as e: raise ValueError(f"{self.state_file} isn't readable ({e}). Move it aside to start the hunt over: saved pages and searches stay in the case")
         self.leads, self.near, self.log_rows = {people.person_key(r["name"]): r for r in d["leads"]}, {people.person_key(r["name"]): r for r in d["near"]}, d["log"]
         self.tried = {tuple(t) for t in d["tried"]}
+        self.merge_near()
         # Names an older run discovered pass today's test too: a headline found then is dropped now.
         self.discovered = [o for o in d.get("discovered", []) if not not_an_org(o)]
         self.orgs = list(dict.fromkeys(self.orgs + self.discovered))
@@ -370,22 +371,62 @@ class Hunt:
     def recheck_stored(self):
         """Rows found under an earlier spec have to pass this one too. Those that don't become near misses, and the report says how many."""
         for k, r in list(self.leads.items()):
-            why = ""
-            if not self.good_role(r["title"]): why = "the role doesn't fit the spec as it now stands"
-            elif r["check_status"] == "secondary" and not self.allow_secondary: why = "only on another site"
-            elif self.role_focus and not any(people.term_regex(w).search(fold(r.get("title", ""))) for w in self.role_focus): why = "the title does not name the role focus"
-            elif people.elsewhere(r.get("title", ""), r.get("organisation", "")): why = f"the title points elsewhere ({people.elsewhere(r.get('title', ''), r.get('organisation', ''))})"
-            elif self.signal_kinds and signal_kind(r.get("signal"), r.get("source_url")) not in self.signal_kinds: why = f"the signal rests on a {signal_kind(r.get('signal'), r.get('source_url'))} page, and signal_kinds asks for {', '.join(self.signal_kinds)}"
-            elif self.function_words and not self.function_fit(r.get("title", ""), f"{r.get('signal', '')} {r.get('check_quote') or ''} " + urllib.parse.urlparse(r.get("source_url", "")).path.replace("-", " ").replace("/", " ")): why = "no function word in the title or the person's own quote"  # the URL path always counts here: whether the row came from a directory isn't stored
-            elif self.must and not any(people.term_regex(m).search(fold(self._stored_text(r))) for m in self.must): why = "the spec's must words aren't on its page"
-            elif self.max_age and r["page_date"] and not self._current_stored(r):  # judged as a live run judges it (held_back)
-                try:
-                    if (dt.date.today() - dt.date.fromisoformat(r["page_date"])).days > self.max_age * 365: why = f"the page is from {r['page_date']}"
-                except ValueError: pass
+            why = self.stored_why(r)
             if why:
                 self.near[k] = dict(r, note="; ".join(x for x in (f"not listed: {why}", r.get("note")) if x))
                 del self.leads[k]
                 self.moved.append(r["name"])
+
+    def stored_why(self, r):
+        """Why a stored row doesn't pass the spec as it now stands, or ''."""
+        why = ""
+        if not self.good_role(r["title"]): why = "the role doesn't fit the spec as it now stands"
+        elif r["check_status"] == "secondary" and not self.allow_secondary: why = "only on another site"
+        elif self.role_focus and not any(people.term_regex(w).search(fold(r.get("title", ""))) for w in self.role_focus): why = "the title does not name the role focus"
+        elif people.elsewhere(r.get("title", ""), r.get("organisation", "")): why = f"the title points elsewhere ({people.elsewhere(r.get('title', ''), r.get('organisation', ''))})"
+        elif self.signal_kinds and signal_kind(r.get("signal"), r.get("source_url")) not in self.signal_kinds: why = f"the signal rests on a {signal_kind(r.get('signal'), r.get('source_url'))} page, and signal_kinds asks for {', '.join(self.signal_kinds)}"
+        elif self.function_words and not self.function_fit(r.get("title", ""), f"{r.get('signal', '')} {r.get('check_quote') or ''} " + urllib.parse.urlparse(r.get("source_url", "")).path.replace("-", " ").replace("/", " ")): why = "no function word in the title or the person's own quote"  # the URL path always counts here: whether the row came from a directory isn't stored
+        elif self.must and not any(people.term_regex(m).search(fold(self._stored_text(r))) for m in self.must): why = "the spec's must words aren't on its page"
+        elif self.max_age and r["page_date"] and not self._current_stored(r):  # judged as a live run judges it (held_back)
+            try:
+                if (dt.date.today() - dt.date.fromisoformat(r["page_date"])).days > self.max_age * 365: why = f"the page is from {r['page_date']}"
+            except ValueError: pass
+        return why
+
+    FULL_NOTE = "the organisation is full"
+    SPEC_FILTERS = ("the title does not name the role focus", "no function word in the title", "the role doesn't fit the spec", "the signal rests on a ", "the spec's must words aren't on its page", "the signal is the organisation's, not this person's")
+    READ_AGAIN = ("the page puts them at ",)  # the module's own reading of the page: a fix to it (a greeting read as an employer, fnwords41) must reach the stored rows too
+
+    def stored_readmits(self):
+        """A near miss held back only by a spec filter (role focus, function words, roles, signal kinds, must words, org signal), or by the module's reading of who employs them, is judged again on its stored page, as a live run judges it, and comes back when the spec as it now stands passes it and its organisation has room. One the spec passes at a full organisation gets the note 'not listed: the organisation is full' in place of the older spec's reason, and comes back on a later run once a slot frees. Without this a wider spec on a stored case brings nobody back (fnwords35/36). Returns how many came back."""
+        cand = [(k, r) for k, r in self.near.items() if str(r.get("note", "")).startswith("not listed: ") and str(r["note"])[12:].startswith(self.SPEC_FILTERS + self.READ_AGAIN + (self.FULL_NOTE,))]
+        back, full, self.dir_entry = 0, 0, False
+        for k, r in sorted(cand, key=lambda kr: self.role_rank(kr[1].get("title", ""))):
+            org = r["organisation"]
+            if len(self.leads) >= self.target: break
+            if any(x["organisation"] == org and people.same_person(r["name"], x["name"]) for x in self.leads.values()): continue
+            no_room = self.org_count(org) >= self.per_org
+            page = self.case.page(r["source_url"])
+            if not page or page.get("status") != "ok": continue
+            res = people.check(page, r["name"], r["title"], org, self.domains)
+            if res["status"] not in ("verified", "secondary") and not res.get("left") and not res.get("other_employer") and not res.get("stale"): continue
+            row = dict(r, check_status=res["status"], check_quote=res["quote"], page_date=res["page_date"], read_on=res["as_of"], official_site="yes" if res["official"] else "no",
+                       note="; ".join(x for x in [n for n in str(r.get("note", "")).split("; ") if n.startswith("the signal is the organisation's")] + [res["note"]] if x))
+            why = self.held_back(res, row, org, False, page.get("text", ""), page.get("links")) or self.stored_why(row)
+            if not why and row.get("signal_near_person") != "yes" and str(row.get("signal", "")).startswith("(the organisation's") and not self.s.get("allow_org_signal"): why = "the signal is the organisation's"
+            if not why and no_room:
+                why, full = f"{self.FULL_NOTE} ({self.per_org} rows, the per_org cap)", full + 1  # the spec passes them; only the cap holds them, and a freed slot brings them back
+            if not why and (res["status"] == "secondary" or self.old_page(res["page_date"])): why = self.left_elsewhere(r["name"], org)
+            if why:
+                self.near[k] = dict(row, note="; ".join(x for x in (f"not listed: {why}", row["note"]) if x))  # the reason as the spec now stands, not the one an older spec gave
+                continue
+            self.leads[k] = row
+            del self.near[k]
+            back += 1
+            self.readmitted.append(r["name"])
+            self.log(f"  + {r['name']} — {r['title'][:70]} ({org}) [{res['status']}, back from the near misses: the spec as it now stands passes them]")
+        if cand: self.log(f"near misses: judged {len(cand)} held back by a spec filter or an employer reading again on their stored pages, {back} back on the list" + (f", {full} pass but their organisation is full" if full else ""))
+        return back
 
     def _current_stored(self, r):
         p = self.case.page(r["source_url"]) or {}
@@ -402,6 +443,19 @@ class Hunt:
             tmp = self.state_file.with_name(f"{self.state_file.name}.{os.getpid()}.tmp")
             tmp.write_text(json.dumps(state, indent=0))
             os.replace(tmp, self.state_file)
+
+    def near_twin(self, name, org, k=None):
+        """The key of a stored row (lead or near miss) at this organisation that is this person under another form of the name, or None."""
+        for d in (self.leads, self.near):
+            for k2, r in d.items():
+                if k2 != k and r["organisation"] == org and people.same_person(name, r["name"]): return k2
+        return None
+
+    def merge_near(self):
+        """One person under two forms of a name (Jacqui and Jacqueline Stackhouse) is one row: a near miss whose person is already a lead, or already a near miss under the longer name, goes."""
+        for k, r in sorted(self.near.items(), key=lambda kr: -len(kr[1]["name"])):
+            if k in self.near and self.near_twin(r["name"], r["organisation"], k) is not None and (any(x["organisation"] == r["organisation"] and people.same_person(r["name"], x["name"]) for x in self.leads.values()) or any(k2 != k and x["organisation"] == r["organisation"] and people.same_person(r["name"], x["name"]) and len(x["name"]) >= len(r["name"]) for k2, x in self.near.items())):
+                del self.near[k]
 
     def org_count(self, org): return sum(1 for r in self.leads.values() if r["organisation"] == org)
 
@@ -611,7 +665,7 @@ class Hunt:
             if not why and (res["status"] == "secondary" or self.old_page(res["page_date"])): why = self.left_elsewhere(per["name"], org)
             if why or len(self.leads) >= self.target or self.org_count(org) >= self.per_org:
                 if why: row["note"] = "; ".join(x for x in (f"not listed: {why}", row["note"]) if x)
-                self.near.setdefault(k, row)
+                if not self.near_twin(per["name"], org, k): self.near.setdefault(k, row)
                 continue
             self.near.pop(k, None)
             if row["check_status"] != "verified": self.official_recheck(row, org)
@@ -770,6 +824,7 @@ class Hunt:
         discover = list(self.s.get("discover", []))
         workers = self.workers
         self.stored_official_rechecks()
+        if self.stored_readmits(): self._save()
         self.stored_person_signals()
         while len(self.leads) < self.target and time.monotonic() < self.deadline:
             todo = [o for o in self.orgs if self.org_count(o) < self.per_org and (any((o, a) not in self.tried and (o, a) not in self.failed for a in self.angles) or any((o, "(page) " + u) not in self.tried for u in self.pages.get(o, [])))]
@@ -808,6 +863,7 @@ class Hunt:
         lines = [f"# Hunt: {self.s.get('goal', '')}", "", f"**{status}: {len(rows)} of {self.target}** ({n_ver} on the organisation's own site{': ' + kinds if kinds else ''}; {len(rows) - n_ver} on another site). Stopped: {self.stop_reason}.", "", "Every row is backed by a saved page: `check_quote` is the text next to the name on `source_url`. It says what the page says on the day it was read, not that the person still holds the post. No addresses were inferred.", "",
                  f"{sum(1 for l in self.log_rows if l['org'] != '(discover)')} org-and-angle searches over {len(orgs)} organisations with leads, of {len(self.orgs)} considered; {len(self.near)} near misses in `near_misses.csv`; {len(self.blocked)} pages unread.", ""]
         if self.moved: lines += ["## Moved out by this spec", f"- {len(self.moved)} rows from an earlier run on this case don't pass the spec as it now stands and are now near misses: {', '.join(self.moved[:20])}.", ""]
+        if self.readmitted: lines += ["## Back from the near misses", f"- {len(self.readmitted)} near misses from an earlier run on this case, held back then by a spec filter, pass the spec as it now stands on their stored pages and are on the list again: {', '.join(self.readmitted[:20])}.", ""]
         if self.errors: lines += ["## Sources that failed (all runs on this case)", "Historical failures are retained here; an entry does not mean the source failed on this run.", *[f"- {e} (×{n})" for e, n in self.errors.most_common(10)], ""]
         ang = collections.Counter(); 
         for l in self.log_rows:

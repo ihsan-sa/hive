@@ -401,7 +401,7 @@ function make(base, side = null) {
     const d = v.d, ns = ids.map(id => d.notes.find(n => n.id === id)).filter(n => n && n.status === "draft");
     if (!ns.length) return;
     const line = n => `#${n.n} ${n.p == null ? "whole document" : n.box ? `p.${n.p}, box at ${n.rects[0].map(Math.round).join(",")} pt` : `p.${n.p}, on "${clip(n.quote || "", 300)}"`}` + (n.rev !== d.rev ? ` (made on revision ${n.rev})` : "") + ` · ${KINDWORD[n.kind]}: ${n.text}`;
-    const text = to() + `Notes on "${d.title}" (${d.id}, revision ${d.rev}), from ${v.side ? "the side panel in this conversation" : "the Documents page"}.\n\n` + ns.map(line).join("\n") +
+    const text = to() + `Notes on "${d.title}" (${d.id}, revision ${d.rev}), from ${v.side ? "the side panel in this conversation" : "the Documents page"}.\n\n` + ns.map(line).join("\n\n") +
       `\n\nHow to work these: projects/doc-review-view/AGENT.md. Every note, with where it sits: \`python3 ~/modules/dash/docs.py show ${d.id}\`.`;
     v.sending = true; v.paint();
     // Marked sent before the post goes, so an agent that answers at once never finds them still drafts; put back if the post fails.

@@ -63,7 +63,7 @@ export function threadFiles() {
 const fsize = n => (n == null ? "" : n >= 1048576 ? fix((n / 1048576), 1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
 
 // ---- the panel ----
-const WMIN = 340, KEY = "pv.w", MODE = new Map();   // MODE: file key -> "src" when the person asked for the source
+const WMIN = 340, KEY = "pv.w", MODE = new Map();   // MODE: file key -> "src" (the source), or for a note "text" or "edit"; none is the usual view
 const maxW = () => Math.max(WMIN, innerWidth - 320);
 const clampW = w => Math.max(WMIN, Math.min(maxW(), Math.round(w)));
 function setW(w, save) { w = clampW(w); document.documentElement.style.setProperty("--pv-w", w + "px"); if (save) try { localStorage.setItem(KEY, String(w)); } catch (e) {} return w; }
@@ -93,18 +93,24 @@ function mark() {
   dispatchEvent(new CustomEvent("previewchange", { detail: k }));   // a pinned Python box folds or comes back in the chat (pybox.js)
 }
 
+// The Edit tab with unsaved text: anything that would replace or close it asks first (and a reload or a closed tab, the browser's own question).
+const editing = () => { const ed = P.body && P.body.querySelector(".pv-ed"); return ed && ed._ed && ed._ed.dirty() ? ed : null; };
+const leaveOk = () => !editing() || confirm(tr("Leave without saving? Your changes to this file will be lost."));
+addEventListener("beforeunload", e => { if (editing()) { e.preventDefault(); e.returnValue = ""; } });
+
 /** Open items[i] in the panel. Opening while it's open just switches the file. */
 export function openPreview(items, i = 0) {
   items = (items || []).filter(x => x && (x.id || x.kb || x.doc) && x.name);
-  if (!items.length) return;
+  if (!items.length || !leaveOk()) return;
   shell();
   P.items = items; P.list = false;
-  show(i);
+  show(i, true);
   P.root.focus({ preventScroll: true });
 }
 
 /** The Files list in the panel: this conversation's files and a project's folders. */
 export function openFiles(auto) {
+  if (!leaveOk()) return;
   if (auto !== true) { try { localStorage.removeItem(AUTO); } catch (e) {} }   // opened by hand: it opens by itself again
   shell();
   P.list = true; P.seq++; clearTimeout(P.live); P.ctl && P.ctl.abort(); P.ctl = null; sideLeave(); unmark();
@@ -183,7 +189,7 @@ function shell() {
 }
 
 export function closePreview() {
-  if (!P.root) return;
+  if (!P.root || !leaveOk()) return;
   P.ctl && P.ctl.abort(); clearTimeout(P.live); sideLeave(); unmark();
   P.root.remove(); P.grip.remove(); document.body.removeAttribute("data-pv"); document.body.removeAttribute("data-pv-full");
   if (P.blob) { URL.revokeObjectURL(P.blob); P.blob = null; }
@@ -208,17 +214,21 @@ function header(it, r) {
   if (P.blob) URL.revokeObjectURL(P.blob); P.blob = dl && dl.startsWith("blob:") ? dl : null;
   // Preview (and Source when the file has one), then "All files here · N": this conversation's files, in the same panel.
   const here = it.kb ? 0 : threadFiles().length;
+  // A note (Markdown) shows as pages, as flowing text, or (a note or project file this sign-in may change) in an editor: Page · Text · Edit.
+  const views = r && r.md ? [["", "Page"], ["text", "Text"], r.editable ? ["edit", "Edit"] : ["src", "Source"]] : r && r.source ? [["", "Preview"], ["src", "Source"]] : [["", "Preview"]];
+  const cur = views.some(v => v[0] === (MODE.get(k) || "")) ? MODE.get(k) || "" : "";
   const tabs = r && r.source || here > 1 ? h("div", { class: "pv-tabs", role: "group", "aria-label": "Show" },
-    (r && r.source ? ["Preview", "Source"] : ["Preview"]).map((t, j) => h("button", { type: "button", class: "pv-tab", "aria-pressed": String((j === 1) === src), onclick: () => {
-      if ((j === 1) === (MODE.get(k) === "src")) return;
-      if (j) MODE.set(k, "src"); else MODE.delete(k); show(P.i);
+    views.map(([m, t]) => h("button", { type: "button", class: "pv-tab", "data-v": m || "page", "aria-pressed": String(m === cur), onclick: () => {
+      if (m === (MODE.get(k) || "")) return;
+      if (!leaveOk()) return;
+      if (m) MODE.set(k, m); else MODE.delete(k); show(P.i, true);
     } }, t)),
     here > 1 ? h("button", { type: "button", class: "pv-tab pv-here", "aria-pressed": "false", title: "This conversation's files", onclick: () => openFiles() }, `All files here · ${here}`) : null) : null;
   // The footer: where the file is, in mono, and Copy path.
   const path = it.kb ? "~/" + it.kb : `files/${it.id}/${it.name}`;
   P.foot.hidden = false;
   P.foot.replaceChildren(h("code", { class: "pv-path", title: path }, path), button("Copy path", (e, b) => copyPress(b, path), { size: "s", kind: "quiet", icon: "copy", cls: "pv-cp" }));
-  const copy = r && r.text != null ? button("Copy", (e, b) => copyPress(b, r.text), { size: "s", kind: "quiet", icon: "copy", title: "Copy the text" }) : null;
+  const copy = r && r.text != null ? button("Copy", (e, b) => copyPress(b, textNow(r)), { size: "s", kind: "quiet", icon: "copy", title: "Copy the text" }) : null;
   P.head.replaceChildren(
     h("div", { class: "pv-t" },
       button("All files", openFiles, { kind: "icon", icon: "folder", size: "s", cls: "pv-files" }),
@@ -235,22 +245,29 @@ function header(it, r) {
       fullBtn(),
       button("Close (Esc)", closePreview, { kind: "icon", icon: "close", size: "s", cls: "pv-x" })),
     h("div", { class: "pv-a" }, tabs, it.kb ? h("span", { class: "meta pv-live", title: "This panel shows the file's newest version and updates itself" }, "") : null, h("span", { class: "pv-sp" }), copy, saveAs(it, r),
-      dl ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: dl, download: it.name, title: "Download " + it.name }, "Download") : null,
+      dl ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: dl, download: it.name, title: "Download " + it.name, onclick: e => {   // after an edit, the text as it stands now
+        const ed = P.body.querySelector(".pv-ed"); if (!ed || !ed._ed || !P.blob) return;
+        URL.revokeObjectURL(P.blob); P.blob = e.currentTarget.href = URL.createObjectURL(new Blob([ed._ed.text()], { type: "text/plain" }));
+      } }, "Download") : null,
       it.kb && kindOf(it.name) !== "html" ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: "#knowledge/" + encodeURIComponent(it.kb), title: "Open in Knowledge" }, "Open")   // a page opens running, like an attached one; Knowledge would show its code
         : kindOf(it.name) === "html" && matchMedia("(max-width:699px)").matches ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: href("page", viewHref(it)), title: "Open full screen" }, "Open")   // a phone: full screen inside the app, with a way back (views/page.js); a new tab there has none
         : h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: viewHref(it), target: "_blank", rel: "noopener noreferrer", title: "Open in a new tab" }, "Open")));
 }
 
+// The file's text as it stands: the editor's when the Edit tab shows, so Copy, Download and Save as take your edits.
+const textNow = r => { const ed = P.body && P.body.querySelector(".pv-ed"); return ed && ed._ed ? ed._ed.text() : r.text; };
+
 // Save as: Markdown (the text as shown), Word and PDF (the rendered document). Only for a shown Markdown or text file.
 function saveAs(it, r) {
   if (!r || r.text == null || !["md", "text"].includes(kindOf(it.name)) && !/\.(md|markdown|txt)$/i.test(it.name)) return null;
-  const doc = () => P.body.querySelector(".pv-md") || P.body.querySelector(".pv-doc") || P.body;
-  const go = f => e => { e.currentTarget.closest("details").open = false; import("../preview/docexport.js").then(m => f(m)); };
+  let md = null;   // a note exports from its text, whichever view shows (pages, text or the editor)
+  const doc = () => md ? md(textNow(r)) : P.body.querySelector(".pv-md") || P.body.querySelector(".pv-doc") || P.body;
+  const go = f => e => { e.currentTarget.closest("details").open = false; Promise.all([import("../preview/docexport.js"), r.md ? import("./markdown.js") : null]).then(([m, x]) => { md = x && x.markdown; f(m); }); };
   const item = (label, f) => h("button", { type: "button", class: "pv-mi", role: "button", onclick: go(f) }, label);
   return h("details", { class: "pv-save" },
     h("summary", { class: "btn", "data-size": "s", "data-kind": "quiet", title: "Save this document" }, icon("download"), h("span", null, "Save as")),
     h("div", { class: "pv-menu pv-sv", role: "group" },
-      item("PDF", m => m.savePdf(it.name, doc())), item("Word (.doc)", m => m.saveWord(it.name, doc())), item("Markdown (.md)", () => import("../preview/docexport.js").then(m => m.saveMarkdown(it.name, r.text)))));
+      item("PDF", m => m.savePdf(it.name, doc())), item("Word (.doc)", m => m.saveWord(it.name, doc())), item("Markdown (.md)", () => import("../preview/docexport.js").then(m => m.saveMarkdown(it.name, textNow(r))))));
 }
 
 // A project file stays live: while it is open the panel asks for it again every few seconds and redraws when it changed,
@@ -271,10 +288,15 @@ function live(it, my, known) {
         const d = await r.json();
         if (known.t && (d.t !== known.t || d.size !== known.size)) {
           Object.assign(known, { t: d.t, size: d.size });
+          const ed = P.body.querySelector(".pv-ed");   // the Edit tab: your own save, or a change under clean text, updates it in place
+          if (ed && ed._ed) {
+            if (d.version !== ed._ed.version() && !ed._ed.reload(d.text || "", d.version)) { const w4 = P.head.querySelector(".pv-live"); if (w4) w4.textContent = tr("changed on disk while you edit"); }
+            P.live = setTimeout(tick, LIVE_MS); return;
+          }
           const top = P.body.scrollTop, m = await import("../preview/render.js");
-          const x = await m.render(it, { source: MODE.get(keyOf(it)) === "src" });
+          const x = await m.render(it, { source: MODE.get(keyOf(it)) === "src", mode: MODE.get(keyOf(it)) });
           if (my !== P.seq || !P.root || P.list) return;
-          header(it, x); P.body.replaceChildren(x.node); P.body.scrollTop = top;
+          header(it, x); P.body.replaceChildren(x.node); P.body.scrollTop = top; P.mk && P.mk.refresh && P.mk.refresh();
           const w2 = P.head.querySelector(".pv-live"); if (w2) { w2.textContent = tr("changed just now"); w2.dataset.fresh = ""; setTimeout(() => w2.isConnected && delete w2.dataset.fresh, 4000); }
         } else if (!known.t) { Object.assign(known, { t: d.t, size: d.size }); const w3 = P.head.querySelector(".pv-live"); if (w3) w3.textContent = tr("changed " + ago(d.t * 1000)); }
       }
@@ -323,7 +345,8 @@ function switcher(it) {
   return h("span", { class: "pv-swb pop" }, b, sc, menu);
 }
 
-async function show(k) {
+async function show(k, sure) {
+  if (!sure && !leaveOk()) return;
   const n = P.items.length; P.i = ((k % n) + n) % n;
   const it = P.items[P.i], my = ++P.seq;
   P.ctl && P.ctl.abort(); P.ctl = new AbortController(); clearTimeout(P.live);
@@ -339,7 +362,7 @@ async function show(k) {
   let r;
   try {
     const m = await import("../preview/render.js");
-    r = await m.render(it, { source: MODE.get(keyOf(it)) === "src", signal: P.ctl.signal });
+    r = await m.render(it, { source: MODE.get(keyOf(it)) === "src", mode: MODE.get(keyOf(it)), signal: P.ctl.signal });
   } catch (e) {
     if (e && e.name === "AbortError") return;
     r = { node: h("div", { class: "pv-err" }, h("p", null, tr("Couldn't show this file") + ": " + tr(String(e && e.message || e))),
@@ -348,7 +371,7 @@ async function show(k) {
   if (my !== P.seq || !P.root || P.list) return;
   header(it, r);
   P.body.replaceChildren(r.node);
-  marks(it, r);
+  marks(it, r); P.mk && P.mk.refresh && P.mk.refresh();
   live(it, my, { t: 0, size: 0 });
 }
 
@@ -402,9 +425,11 @@ export function openDoc(id, name, thread = hashThread()) { if (thread) openPrevi
 addEventListener("keydown", e => {
   if (e.key !== "Escape" || !P.root || document.querySelector("dialog[open]") || document.querySelector("aside.panel") || document.querySelector(".rc-fig[data-full]")) return;   // a full-screen figure is on top: its own Escape handler closes it first
   if (document.fullscreenElement) return;
+  if (e.target.closest && e.target.closest(".pv-ed")) return;   // in the editor: Escape is the editor's (it never closes the panel over your text)
+  if (P.root.querySelector("[data-boxing]")) return;   // a box being drawn: markup.js's Escape stops drawing first
   if (P.root.querySelector(".dv-card,.dv[data-boxing],.dv[data-side] .dv-count[aria-expanded=true]")) return;   // a note being written or a box being drawn: the viewer's Escape cancels that first
   const mc = P.root.querySelector(".pv-mk-card:not([hidden])"), mg = P.root.querySelector(".pv-mk-go:not([hidden])");
-  if (mc || mg) { e.stopPropagation(); if (mc) { mc.hidden = true; } else { mg.hidden = true; getSelection().removeAllRanges(); } return; }   // a file note being written, or the Note button up: Escape drops that first
+  if (mc || mg) { e.stopPropagation(); if (mc) { if (mc._shut) mc._shut(); else mc.hidden = true; } else { mg.hidden = true; getSelection().removeAllRanges(); } return; }   // a file note being written, or the Note button up: Escape drops that first
   e.stopPropagation();
   const m = P.root.querySelector(".pv-menu:not([hidden]):not(.pv-sv)");
   if (m) m._shut(); else closePreview();
