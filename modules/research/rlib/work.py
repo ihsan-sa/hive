@@ -213,6 +213,71 @@ def sentence_at(text, start, end):
     a = max(text.rfind(c, 0, start) for c in ".!?\n") + 1
     b = min([i for i in (text.find(c, end) for c in ".!?\n") if i >= 0] or [len(text)])
     return text[a:b]
+def split_top(pat, sep="|"):
+    """Split a regex on `sep` outside groups and character classes: 'a(b|c)|d' gives ['a(b|c)', 'd']."""
+    out, cur, depth, cls, i = [], "", 0, False, 0
+    while i < len(pat):
+        c = pat[i]
+        if c == "\\":
+            cur += pat[i:i + 2]; i += 2; continue
+        if cls: cls = c != "]"
+        elif c == "[": cls = True
+        elif c == "(": depth += 1
+        elif c == ")": depth -= 1
+        elif c == sep and depth == 0:
+            out.append(cur); cur = ""; i += 1; continue
+        cur += c; i += 1
+    return out + [cur]
+
+
+def top_groups(alt):
+    """The (start, end) spans of the groups at the top level of one alternative, parentheses included."""
+    spans, depth, cls, start, i = [], 0, False, 0, 0
+    while i < len(alt):
+        c = alt[i]
+        if c == "\\": i += 2; continue
+        if cls: cls = c != "]"
+        elif c == "[": cls = True
+        elif c == "(":
+            if depth == 0: start = i
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0: spans.append((start, i + 1))
+        i += 1
+    return spans
+
+
+@__import__("functools").lru_cache(maxsize=32)
+def role_order(pat):
+    """[(rank, compiled)] for a `roles` pattern, and the rank of a title it doesn't match. Top-level alternatives rank in
+    the order written; one whose only group lists alternatives, as in '\\b(vice president|dean|director)\\b', ranks those in
+    turn; one with the same groups as an earlier one in another word order ('(career).*(dean)|(dean).*(career)', fnwords45)
+    shares its rank, so 'Career Services Director' and 'Director of Career Services' tie. A pattern that doesn't compile ranks all 0."""
+    entries, seen, rank = [], {}, 0
+    try:
+        for alt in split_top(pat):
+            spans = top_groups(alt)
+            if len(spans) == 1:
+                a, b = spans[0]
+                inner = alt[a + 1:b - 1]
+                if inner.startswith("?:"): inner = inner[2:]
+                elif inner.startswith("?"): inner = None  # a lookaround or flag group is not a list of roles
+                subs = split_top(inner) if inner is not None else []
+                if len(subs) > 1:
+                    for x in subs:
+                        entries.append((rank, re.compile(alt[:a] + "(?:" + x + ")" + alt[b:], re.I))); rank += 1
+                    continue
+            key = tuple(sorted(alt[a:b] for a, b in spans)) if len(spans) > 1 else None
+            if key in seen:
+                entries.append((seen[key], re.compile(alt, re.I))); continue
+            if key: seen[key] = rank
+            entries.append((rank, re.compile(alt, re.I))); rank += 1
+    except re.error:
+        return (), 0
+    return tuple(entries), rank
+
+
 BELOW_HEAD = re.compile(r"\b(?:assistant|associate|deputy)\s+director\b|\bassistant\s+(?:dean|vice\s+(?:president|chancellor|provost))\b", re.I)  # a post under the unit's head: an assistant director of career education is not the head of career services (Lindsey under Meares, fnwords44)
 NAV_AI = re.compile(r"\b(?:skip to )?ai search\b|\bask ai\b|\bai chat\b|\bai assistant\b", re.I)
 DEV_HOST = re.compile(r"(?:^|[.])(?:www-)?(?:dev|staging|stage|test|qa|uat|preview|sandbox)(?:[.-]|$)", re.I)
@@ -228,13 +293,20 @@ def weak_signal_url(url):
 SIGNAL_VENDOR = re.compile(r"\b(?:jobscan|vmock|big ?interview|quinncia|yoodli|interview ?stream|candid ?career|careerspots|focus ?2|resume ?worded|kickresume|rezi|hirevue|symplicity|purdue global)\b|\b\w+ uses (?:ai|artificial intelligence)(?: and machine learning)? to give job seekers\b", re.I)
 SIGNAL_COURSE_URL = re.compile(r"(?:^|[./])(?:microcred\w*|ce|continuing\w*|onlineworkforce|\w*careertraining|mylearning|ed2go)\.|/(?:[\w-]*courses?[\w-]*|training-programs?|workforce-training|certificates?|microcredentials?|search/publiccourse\w*|category/programstream)(?:[/.]|$)", re.I)
 SIGNAL_COURSE_TEXT = re.compile(r"\b(?:certificate of achievement|course description|related courses|search courses|course fee|contact hours|register now|enroll now|ceus?)\b", re.I)
+MENU_SMALL = frozenset("a an and or the of in for to on at by with from as".split())
+def menu_like(text):
+    """A run of Capitalised Menu Items, not a sentence: American's career-center menu ("Self-Assessment & Exploration Online Resources ... AI in Your Career Development", fnwords45) was 22 of 26 words capitalised and passed as a statement. Small words like "in" and "for" count neither way."""
+    words = [w for w in re.findall(r"[A-Za-z]+", text or "") if w.lower() not in MENU_SMALL]
+    return len(words) >= 6 and sum(w[0].isupper() for w in words) / len(words) >= 0.85
+
 def signal_kind(signal, source_url=""):
-    """What a lead's signal rests on: `vendor` (a third-party tool blurb, Jobscan on a career site), `course` (a course, certificate or catalog page) or `statement` (the organisation or person says it). "" when there is no signal."""
+    """What a lead's signal rests on: `vendor` (a third-party tool blurb, Jobscan on a career site), `course` (a course, certificate or catalog page), `menu` (a run of the site's own menu or link titles, such as "AI in Your Career Development": the site links to it but says nothing in a sentence) or `statement` (the organisation or person says it). "" when there is no signal."""
     if not (signal or "").strip(): return ""
     m = re.match(r"\(the organisation's, from (\S+)\)\s*", signal)
     url, text = (m.group(1), signal[m.end():]) if m else (source_url or "", signal)
     if SIGNAL_VENDOR.search(text): return "vendor"
     if SIGNAL_COURSE_URL.search(urllib.parse.urlsplit(url).netloc + urllib.parse.urlsplit(url).path) or SIGNAL_COURSE_TEXT.search(text): return "course"
+    if menu_like(text): return "menu"
     return "statement"
 
 HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms allow_org_signal person_signal official_recheck sources read_per_search allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words signal_kinds".split())
@@ -308,8 +380,8 @@ class Hunt:
         self.role_focus = list(rf)
         sk = spec.get("signal_kinds") or []
         if isinstance(sk, str): sk = [sk]
-        if not isinstance(sk, list) or not sk or not set(sk) <= {"statement", "course", "vendor"}:
-            if spec.get("signal_kinds") is not None: raise ValueError('spec signal_kinds is a list of "statement", "course", "vendor"')
+        if not isinstance(sk, list) or not sk or not set(sk) <= {"statement", "course", "vendor", "menu"}:
+            if spec.get("signal_kinds") is not None: raise ValueError('spec signal_kinds is a list of "statement", "course", "vendor", "menu"')
         self.signal_kinds = list(sk)
         self.role, self.exclude = _pattern(spec, "roles"), _pattern(spec, "exclude_roles")
         for k in ("angles", "orgs", "discover"):
@@ -474,9 +546,8 @@ class Hunt:
 
     def role_rank(self, t):
         """Roles are listed most wanted first: an org's cap should go to its CTO, not to whoever a page prints first."""
-        try: parts = [re.compile(x, re.I) for x in (self.s.get("roles") or "").split("|")]
-        except re.error: return 0  # a pattern with groups of its own has no simple order
-        return next((i for i, x in enumerate(parts) if x.search(t)), len(parts))
+        parts, n = role_order(self.s.get("roles") or "")
+        return next((i for i, x in parts if x.search(t)), n)
 
     def post_rank(self, t):
         """Lower is more wanted: the spec's role order first, then a unit head before a post under one (an assistant or associate director)."""
@@ -669,7 +740,7 @@ class Hunt:
         if not people.names_org(org, text) and not is_official: return 0
         hit_terms = [m for m in self.must if people.term_regex(m).search(NAV_AI.sub(" ", low))]
         staff_sig = None
-        if hit_terms and is_official and org not in self.org_signal and not weak_signal_url(page.get("final_url") or page["url"]):
+        if hit_terms and is_official and (org not in self.org_signal or menu_like(self.org_signal[org][1])) and not weak_signal_url(page.get("final_url") or page["url"]):
             tc = title_core(page.get("title"))
             body = low.replace(tc, " " * len(tc)) if tc else low  # the headline is also in the body: its careers word says nothing about the sentences around the AI word (blanked to its own length, so offsets still line up)
             flat = " ".join(clean.split())  # fold() collapses whitespace: cut the excerpt from text with the same spacing, or it comes from the wrong place
@@ -677,8 +748,7 @@ class Hunt:
             m = next((x for x in people.term_regex(hit_terms[0]).finditer(body) if CAREER_NEAR.search(body[max(0, x.start() - 300):x.end() + 300]) and not EARLIER_JOB.search(sentence_at(body, x.start(), x.end()))), None)  # the word beside a careers or workforce word: AI research news (UT) is not a careers signal; nor a leader bio on an AI degree at an earlier employer (SLCC president, fnwords23)
             excerpt = flat[max(0, m.start() - 80):m.end() + 120].strip() if m else ""
             nav = NAV_AI.sub(" ", excerpt)  # "Skip to AI Search" is the site's own menu, not a statement
-            words = re.findall(r"[A-Za-z]+", nav)
-            if words and sum(w[0].isupper() for w in words) / len(words) >= 0.85: nav = ""  # a run of Capitalised Menu Items (BU, Howard, American), not a sentence
+            if menu_like(nav) and org in self.org_signal: nav = ""  # a run of Capitalised Menu Items (BU, Howard, American) is kept only while nothing better is known, as a `menu` signal; a statement takes its place, a menu never takes a statement's
             if re.search(r"(?<!\w)" + re.escape(hit_terms[0]) + r"(?!\w)", nav, re.I):  # the word must be in the excerpt we keep, not just in the folded text
                 if not self.signal_kinds or signal_kind(f"(the organisation's, from {page.get('final_url') or page['url']}) {excerpt}") in self.signal_kinds:  # a course page is not kept as the org's signal when the spec wants statements: a later statement page can take the place
                     self.org_signal[org] = (page.get("final_url") or page["url"], excerpt)
