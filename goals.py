@@ -72,8 +72,9 @@ def section(txt, m, heading, t=None):
         rungs.append({"state": state, "text": text.strip(), "after": a.group(1) if a else None, "checked": "check:" in text})
     due = [r for r in rungs if r["state"] == " " and r["checked"] and (not r["after"] or r["after"] <= (today if len(r["after"]) == 10 else t.strftime("%Y-%m-%dT%H:%M")))]
     nxt = due[0] if due else None
-    p = PARKED.search(body); parked = None
-    if p and today < p.group(1) <= (t.date() + dt.timedelta(days=PARK_MAX_D)).isoformat(): parked = {"until": p.group(1), "why": p.group(2).strip()}
+    # every park line counts, not just the first: a lapsed line above a fresh one left fellows-prep unparked and woke a1f59 three times in 90 min on 11-22 (ad388)
+    live = [p for p in PARKED.finditer(body) if today < p.group(1) <= (t.date() + dt.timedelta(days=PARK_MAX_D)).isoformat()]
+    p = max(live, key=lambda m: m.group(1), default=None); parked = {"until": p.group(1), "why": p.group(2).strip()} if p else None
     return {"thread": th.group(1).lower() if th else None, "rungs": rungs, "next": nxt, "parked": parked, "done": sum(r["state"] == "x" for r in rungs),
             "due_more": [r["text"] for r in due[1:]], "left": sum(r["state"] == " " for r in rungs), "no_check": sum(r["state"] == " " and not r["checked"] for r in rungs)}
 

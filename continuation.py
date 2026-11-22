@@ -314,11 +314,33 @@ def not_before(line, t=None):
     launched on a Next that named a later after-date; graded, 5 of 8 delivered (93% for the rest), with 15 more graded not asked and 3 quiet (aceaa, R58).
     "on DATE" counts too: "Next: on 2026-11-24 run ..." launched meta-person 3 times a day on 11-19..22 to find it not due (ac89a)."""
     t = t or now().timestamp()
-    m = NEXT_AFTER.search(re.split(r"check:", line, maxsplit=1, flags=re.I)[0]) or G.CHECK_ON.search(line)
-    if not m: return None
+    step = re.split(r"check:", line, maxsplit=1, flags=re.I)[0]
+    m = NEXT_AFTER.search(step) or G.CHECK_ON.search(line)
+    if not m: return short_date(step, t)
     try: when = dt.datetime.fromisoformat(f"{m.group(1)}T{(m.group(2) if m.re is NEXT_AFTER and m.group(2) else '00:00')}+00:00").timestamp()
     except ValueError: return None
     return min(when, t + DEFER_MAX_D * 86400) if when > t else None
+
+MONTHS = {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
+SHORT_DATE = re.compile(r"\b(?:after:?|on or after|not before|until|on)\s*(?:(\d{4}-\d{2}-\d{2})|(\d{2})-(\d{2})(?![\d-])|([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?!\d)|(\d{1,2})\s+([a-z]{3})[a-z]*\b)", re.I)
+def short_date(step, t):
+    """not_before's second reading, for the step's words only: "until 2026-11-23", "on 11-24", "after Nov 28", "after 24 Nov" (a yearless date counts only if it falls
+    within 30 days back to 60 days ahead of t, so "after 3-5 rungs" is no date). 5 launches on 11-14..11-21 named a later day in these forms and woke early: a4698 "on 11-16",
+    a12a7 "on 11-24", a51fe "after 11-21" and "after 11-27", a5fef "after Nov 28" (ad388, time-invariance.md 2026-11-22 table)."""
+    for m in SHORT_DATE.finditer(step):
+        try:
+            if m.group(1): when = dt.datetime.fromisoformat(m.group(1) + "T00:00+00:00")
+            else:
+                mo, d = (int(m.group(2)), int(m.group(3))) if m.group(2) else (MONTHS.get(m.group(4).lower()), int(m.group(5))) if m.group(4) else (MONTHS.get(m.group(7).lower()), int(m.group(6)))
+                if not mo: continue
+                y = dt.datetime.fromtimestamp(t, dt.timezone.utc).year
+                near = [w for w in (dt.datetime(y + k, mo, d, tzinfo=dt.timezone.utc) for k in (-1, 0, 1)) if t - 30 * 86400 < w.timestamp() < t + 60 * 86400]
+                if not near: continue   # "after 3-5 rungs" is not a March date: a yearless date counts only within 30 days back to 60 ahead
+                when = near[0]
+        except ValueError: continue
+        when = when.timestamp()
+        return min(when, t + DEFER_MAX_D * 86400) if when > t else None
+    return None
 
 def chain_of(r, post):
     """(chain, hop) for a step: the chain of the launch this run came from, else a new one named for its thread and first post."""
@@ -433,13 +455,22 @@ def ladder_brief(thread):
     project, path, txt = got
     return G.brief(G.with_ladder({"name": project, "thread": thread}, {"path": str(path), "ladder": G.ladder(txt)})).removeprefix("@new ")
 
+def ladder_path(thread):
+    """The goals.md this thread's ladder lives in, written from home, or "the project's goals.md" when none is found. A resumed run used
+    to get only the words "the project's goals.md" (the ladder brief goes to heirs alone); hive-meta time-invariance.md section 6."""
+    got = enabled(thread)
+    if not got: return "the project's goals.md"
+    try: return "~/" + str(Path(got[1]).resolve().relative_to(Path.home().resolve()))
+    except (ValueError, OSError): return str(got[1])
+
 def wake_note(k, thread, heir):
     if (j := k.get("judge")): return judge_note(k, j, thread, heir)
     head = (f"\n\nThis is a continuation (chain {k['chain']}, hop {k['hop']}). " + ("The agent before you" if heir else "Your last step") + f" (post {k['post']}) ended on: {k['line']}\n"
             "That line is your job: do the step and run its check, unless the thread shows it was overtaken, in which case say so and stop. "
             "End your result post with the next `Next: <one concrete step, with its check>` if there is one you can take, or with a `Done:`, `Blocked:`, `Needs the person:` or `Waiting:` line if not; when that post is your last act, send it with `hive post --end` so the run stops there.\n"
-            "Before you write that line, re-read the ladder in the project's goals.md against what you just learned: tick what is done, and add, split or strike rungs if the goal "
-            "has moved (the person, 2026-10-14 and k0492: goals get re-evaluated as work gets done, by the agent that did it, not by a round that comes later). Say in the post which rungs changed.")
+            f"Before you write that line, re-read the ladder in {ladder_path(thread)} against what you just learned: tick what is done, and add, split or strike rungs if the goal "
+            "has moved (the person, 2026-10-14 and k0492: goals get re-evaluated as work gets done, by the agent that did it, not by a round that comes later). "
+            "Say in the post which rungs changed, on a line starting `Rungs:` (`Rungs: none changed, because ...` when none did).")
     return head + (f"\n\nThe ladder this thread works from, for what comes after that step:\n{b}" if heir and (b := ladder_brief(thread)) else "")
 
 def judge_note(k, j, thread, heir):

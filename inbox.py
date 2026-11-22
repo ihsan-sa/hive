@@ -516,35 +516,89 @@ def stop_gate(name, rec, t=None):
             "If none holds (a step is finished but the goal has a next one you can take, or the work got hard or long), don't stop: "
             "take the next step, and give the reason when one is true.")
 
+NO_RUNG = "The ladder has no rung you can take"
+def no_rung_goals(rec):
+    """The goals file named by this run's keeper brief when the brief said "The ladder has no rung you can take", else None. Scans
+    only board lines holding those words, so a call costs a read of the board, not a parse of it."""
+    ids = ({rec.get("post")} | {s.get("id") for s in rec.get("slept") or [] if isinstance(s, dict)}) - {None}
+    if not ids: return None
+    try:
+        with BOARD.open(errors="replace") as fh:
+            for ln in fh:
+                if NO_RUNG not in ln: continue
+                try: p = json.loads(ln)
+                except ValueError: continue
+                if p.get("id") not in ids or NO_RUNG not in (p.get("text") or ""): continue
+                m = re.search(r"section of (\S+?): read that whole file", p["text"])
+                if not m: continue
+                path = Path(os.path.expanduser(m.group(1)))
+                return path if path.is_absolute() else HOME / path
+    except OSError: pass
+    return None
+
+def _run_key(name, rec): return f"{name}-{re.sub(r'[^0-9A-Za-z]', '', str(rec.get('at', '')))}"
+
+def rungs_base(name, rec):
+    """First tool call of a run: if its keeper brief said there was no rung to take, keep the goals file as it stands, so
+    rungs_owed can tell a new rung from an edit (projects/ is not in the ~ backup, so there is no earlier copy to read).
+    Once a run; an empty marker for any other run."""
+    if os.environ.get("HIVE_DOOR") or not rec.get("at"): return
+    d = STATE / "rungs-base"; f = d / _run_key(name, rec)
+    if f.exists(): return
+    d.mkdir(parents=True, exist_ok=True)
+    path = no_rung_goals(rec); text = ""
+    try: text = json.dumps({"goals": str(path), "text": path.read_text()}) if path else ""
+    except OSError: pass
+    f.write_text(text)
+    cut = time.time() - 3 * 86400
+    for old in d.iterdir():
+        try:
+            if old.stat().st_mtime < cut: old.unlink()
+        except OSError: pass
+
+RUNG_KEY = lambda l: re.sub(r"\s+", " ", re.sub(r"after:\S+\s*", "", l.strip()))[:80]
+def gained_rung(path, since, old=None, now=None):
+    """Did the goals file gain an open rung, or a `Weighed` line, since the run woke? Judged against the copy rungs_base kept
+    (`old`), so an edit that only re-dates, ticks, [!]-marks or parks is not a new rung (the 11-22 table: keeper no-rung rounds
+    passed the old any-edit test that way; ad388, time-invariance.md section 3). No kept copy: the old test (edited since, and
+    holds an open rung)."""
+    now = path.read_text() if now is None else now
+    if old is None: return path.stat().st_mtime > since and "- [ ]" in now
+    had = {RUNG_KEY(l) for l in old.splitlines()}
+    opened = [l for l in now.splitlines() if l.lstrip().startswith("- [ ]") and RUNG_KEY(l) not in had]
+    weighed = [l for l in now.splitlines() if re.match(r"\s*Weighed \d{4}-\d{2}-\d{2}", l) and l.strip() not in {x.strip() for x in old.splitlines()}]
+    return bool(opened or weighed)
+
 def rungs_owed(name, rec):
     """Once per run, at Stop: a keeper brief that said "The ladder has no rung you can take" asks the run to write the next 3 to 5
-    rungs; a run whose goals file was not touched since it woke is sent back once to write them (hive-meta R11e: such runs graded
-    "nothing" stopped without a rung). The file's path is read from the brief itself; a missing file counts as untouched."""
+    rungs or a `Weighed` line; a run whose goals file gained neither since it woke (gained_rung) is sent back once to write them
+    (hive-meta R11e: such runs graded "nothing" stopped without a rung). The file's path is read from the brief itself; a missing
+    file counts as untouched."""
     if os.environ.get("HIVE_DOOR") or not rec.get("at") or WARDEN.fullmatch(name): return None
     f = STATE / "rungs-asked" / name
     try:
         if f.read_text().strip() == rec["at"]: return None
     except OSError: pass
     try:
-        import focus
-        ids = {rec.get("post")} | {s.get("id") for s in rec.get("slept") or [] if isinstance(s, dict)}
-        brief = next((p.get("text") or "" for p in focus.board_posts() if p.get("id") in ids - {None}
-                      and "The ladder has no rung you can take" in (p.get("text") or "")), None)
-        if not brief: return None
-        m = re.search(r"section of (\S+?): read that whole file", brief)
-        if not m: return None
-        path = Path(os.path.expanduser(m.group(1)))
-        if not path.is_absolute(): path = HOME / path
+        path = no_rung_goals(rec)
+        if not path: return None
         at = dt.datetime.fromisoformat(rec["at"]); since = (at if at.tzinfo else at.replace(tzinfo=dt.timezone.utc)).timestamp()
+        old = None
         try:
-            if path.stat().st_mtime > since and "- [ ]" in path.read_text(): return None
+            b = json.loads((STATE / "rungs-base" / _run_key(name, rec)).read_text() or "{}")
+            if b.get("goals") == str(path): old = b.get("text")
+        except (OSError, ValueError): pass
+        try:
+            if gained_rung(path, since, old): return None
         except OSError: pass
         f.parent.mkdir(parents=True, exist_ok=True); f.write_text(rec["at"])
-        with (STATE / "rungs-asked.jsonl").open("a") as lg: lg.write(json.dumps({"at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "name": name, "run": rec["at"], "goals": str(path)}) + "\n")
+        with (STATE / "rungs-asked.jsonl").open("a") as lg: lg.write(json.dumps({"at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "name": name, "run": rec["at"], "goals": str(path), "base": old is not None}) + "\n")
     except Exception: return None
     return (f"Your keeper brief said the ladder had no rung you could take, and {path} has no new open rung since you woke. "
             "Before you stop, write the next 3 to 5 rungs there (`- [ ] ... check: ...`, from the measure in that file), do the first one, "
-            "and post the result. If the ladder is truly finished, say so in the thread and why. Asked once; the next stop goes on.")
+            "and post the result. Re-dating, ticking, parking or noting an existing rung is not a new one. If you weighed real candidates "
+            "and none would move the measure (every way left needs the person, say which), write one `Weighed YYYY-MM-DD: ...` line under "
+            "the rungs instead. Asked once; the next stop goes on.")
 
 def focus_nudge(name, rec):
     """A reminder at Stop when the run posted a result in a thread that is in a focus whose summary is older than that result
@@ -754,6 +808,9 @@ def main():
     if ps:
         with f.open("a") as fh: fh.write("".join(p["id"] + "\n" for p in ps) + f"@{int(time.time())}\n")
     done()
+    if event == "PostToolUse":  # keep a no-rung keeper run's goals file as it woke to it, for rungs_owed at Stop
+        try: rungs_base(name, rec)
+        except Exception: pass
     first = first_line(name, rec) if event != "Stop" else None
     check = model_check(name, rec) if event != "Stop" else None
     if event == "PostToolUse":  # a served dash file that no longer parses blanks the person's page: say so to the editor at once
