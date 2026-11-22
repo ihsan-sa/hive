@@ -6,7 +6,7 @@
 // One live element per document, kept across the app's redraws: views/docs.js returns a bare stand-in (data-own) carrying _real.
 // sideViewer(base, thread): the same viewer in the chat's side panel (ui/preview.js), its notes and replies sent to that conversation
 // and its agent rather than doc-<id> (the person, 112122559e33).
-import { h, mount, selecting } from "../core/dom.js";
+import { h, mount, selecting, tr } from "../core/dom.js";
 import { S, jget, post } from "../core/store.js";
 import { ago } from "../core/format.js";
 import { threadHref } from "../core/router.js";
@@ -359,8 +359,8 @@ function make(base, side = null) {
   }
   function paintZoom() {
     const b = v.slots && v.slots.zoom; if (!b) return;
-    b.textContent = v.zoom === 1 ? "Fit" : Math.round(v.zoom * 100) + "%";
-    b.title = v.zoom >= 2 ? "Zoom: fit the width" : "Zoom in"; b.setAttribute("aria-label", b.title);
+    b.textContent = v.zoom === 1 ? tr("Fit") : Math.round(v.zoom * 100) + "%";
+    b.title = tr(v.zoom >= 2 ? "Zoom: fit the width" : "Zoom in"); b.setAttribute("aria-label", b.title);
   }
   v.wire = slots => {
     if (!slots) return;
