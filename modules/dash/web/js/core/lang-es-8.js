@@ -145,7 +145,7 @@ export default {
   "This browser can't record audio.": "Este navegador no puede grabar audio.",
   "The microphone isn't available: allow it for this page and try again.": "El micrófono no está disponible: permítelo para esta página y vuelve a intentarlo.",
   "This computer's phone service needs a restart before it can turn speech into text, so the recording is attached as a voice memo instead. Send it, or remove it.":
-    "El servicio de teléfono de este ordenador necesita reiniciarse antes de poder pasar la voz a texto, así que la grabación se adjunta como nota de voz. Envíala o quítala.",
+    "El servicio de teléfono de esta computadora necesita reiniciarse antes de poder pasar la voz a texto, así que la grabación se adjunta como nota de voz. Envíala o quítala.",
   "not the enrolled voice": "no es la voz registrada",
   "That didn't sound like your enrolled voice, so no words were added.": "Eso no sonó como tu voz registrada, así que no se añadió ninguna palabra.",
   "No words were heard in that recording.": "No se oyó ninguna palabra en esa grabación.",
@@ -197,10 +197,10 @@ export default {
   "Effort:": "Esfuerzo:",
   "Saving a secret needs full mode, which ends after 30 minutes without using the app. Press \"Limited · sign in for full\" at the top, then press the lock again.":
     "Guardar un secreto necesita el modo completo, que termina tras 30 minutos sin usar la app. Pulsa «Limitado · entra para el completo» arriba y luego vuelve a pulsar el candado.",
-  "The microphone needs https, or this computer": "El micrófono necesita https, o este ordenador",
+  "The microphone needs https, or this computer": "El micrófono necesita https, o esta computadora",
   "Add to the message": "Añadir al mensaje",
   "Your words go in the box to edit": "Tus palabras van al cuadro para editarlas",
-  "Transcribed on this computer": "Transcrito en este ordenador",
+  "Transcribed on this computer": "Transcrito en esta computadora",
   "A new agent picks up, reads this conversation and talks with you": "Un agente nuevo contesta, lee esta conversación y habla contigo",
   "Talk with the Hive": "Hablar con el Hive",
   "is working:": "está trabajando:",

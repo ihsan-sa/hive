@@ -2,7 +2,7 @@
 // Same rules as lang-es.js: exact English keys, __patterns for a line with a number or a name. Merged in lang.js.
 const pl = (n, one, many) => (n === "1" ? one : many);
 const OWNER = { "Big jobs in the queue": "Trabajos grandes en la cola", "What the agents are running": "Lo que corren los agentes", "The agents themselves": "Los propios agentes",
-  "Everything else on the computer": "Todo lo demás en el ordenador", "Queue jobs": "Trabajos de la cola", "Agents' work outside the queue": "Trabajo de los agentes fuera de la cola", "Everything else": "Todo lo demás" };
+  "Everything else on the computer": "Todo lo demás en la computadora", "Queue jobs": "Trabajos de la cola", "Agents' work outside the queue": "Trabajo de los agentes fuera de la cola", "Everything else": "Todo lo demás" };
 export default {
   // Now
   "No agents are working right now.": "Ningún agente está trabajando ahora.",
@@ -144,7 +144,7 @@ export default {
   "Replay this window": "Repetir esta ventana",
   "Replay time": "Tiempo de repetición",
   // This machine
-  "The computer": "El ordenador",
+  "The computer": "La computadora",
   "how busy the machine is now": "qué tan ocupada está la máquina ahora",
   "Waiting on disk": "Esperando al disco",
   "Load": "Carga",
@@ -167,7 +167,7 @@ export default {
   "The agents themselves": "Los propios agentes",
   "Agents' work outside the queue": "Trabajo de los agentes fuera de la cola",
   "Queue jobs": "Trabajos de la cola",
-  "Everything else on the computer": "Todo lo demás en el ordenador",
+  "Everything else on the computer": "Todo lo demás en la computadora",
   "What the agents are running": "Lo que corren los agentes",
   "Everything else": "Todo lo demás",
   "Cores": "Núcleos",
@@ -277,14 +277,14 @@ export default {
     [/^(\d+) in the last hour$/, "$1 en la última hora"],
     [/^The last agent, (.+), ended (.+) ago on (.+)\. (\d+) agents? ran in the last (\d+) hours\.$/, (_, a, t, th, n, h) => `El último agente, ${a}, terminó hace ${t} en ${th}. ${n} ${pl(n, "agente corrió", "agentes corrieron")} en las últimas ${h} horas.`],
     // This machine
-    [/^The computer has room: (\S+) CPU in use, (\S+ \S+) of memory free\.$/, "El ordenador tiene sitio: $1 de CPU en uso, $2 de memoria libre."],
+    [/^The computer has room: (\S+) CPU in use, (\S+ \S+) of memory free\.$/, "La computadora tiene sitio: $1 de CPU en uso, $2 de memoria libre."],
     [/^Updated (.+)$/, "Actualizado $1"],
     [/^(\d+)% programs, (\d+)% system$/, "$1% programas, $2% sistema"],
     [/^of (\S+ [KMGT]?B)$/, "de $1"],
     [/^(CPU: )?(\S+) of (\S+) cores$/, (_, c, a, b) => `${c || ""}${a} de ${b} núcleos`],
     [/^(\S+ [KMGT]?B) of (\S+ [KMGT]?B)$/, "$1 de $2"],
     [/^(\d+) of (\d+)$/, "$1 de $2"],
-    [/^The computer is busy: (\S+) CPU, (\S+ \S+) of memory free\. Agents may be slow\.$/, "El ordenador está ocupado: $1 de CPU, $2 de memoria libre. Los agentes pueden ir lentos."],
+    [/^The computer is busy: (\S+) CPU, (\S+ \S+) of memory free\. Agents may be slow\.$/, "La computadora está ocupado: $1 de CPU, $2 de memoria libre. Los agentes pueden ir lentos."],
     [/^(\d+) tasks? blocked now, (\S+) fully stalled$/, "$1 tareas bloqueadas ahora, $2 paradas del todo"],
     [/^on (\d+) cores$/, "en $1 núcleos"],
     [/^of (\S+ GB), (\S+) fully stalled$/, "de $1, $2 parada del todo"],

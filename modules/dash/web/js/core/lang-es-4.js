@@ -296,7 +296,7 @@ export default {
   "search, filter, by focus": "buscar, filtrar, por foco",
   "Later or not needed": "Después o no hace falta",
   "All agents": "Todos los agentes",
-  "This computer": "Este ordenador",
+  "This computer": "Esta computadora",
   "Design": "Diseño",
   "Help and look": "Ayuda y aspecto",
   "Colour theme: Auto": "Tema de color: automático",
