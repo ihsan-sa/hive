@@ -57,9 +57,11 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["current-pct"]: print(current_pct()); sys.exit(0)
     ts_ = stale()
     if not ts_: sys.exit(0)
-    brief = ("Refresh thread status bars. For each thread below: `hive read --thread T -n 12` (and the existing bar with `hive status T --read`), then set it with "
-             "`hive status T <<'X'` and exactly two short lines: line 1 what the thread is about; line 2 the current state (done / in progress and who / blocked on what or whom, "
-             "and any thread it depends on). Plain words, under 160 chars a line. Keep the old wording if nothing changed. A line 2 starting Done:, Blocked:, Needs the person:, Waiting: or Told to stop: is an agent's own reason for stopping: keep it word for word unless a later post shows the work has moved on. Don't post in those threads. "
+    brief = ("Refresh thread status bars. For each thread below: `hive read --thread T` (the whole thread, not just the newest posts; add `--since` only if it is very long) and the existing bar with `hive status T --read`, then set it with "
+             "`hive status T <<'X'`: line 1 what the thread is about; line 2 the current state (done / in progress and who / blocked on what or whom, "
+             "and any thread it depends on), under 160 chars each; then up to four short detail lines (the folded part) that carry what was finished and found (results, merged work, fixes, figures with their dates) "
+             "and the method and progress of every side line the thread opened, so a question about where it stands can be answered from the bar. A newer figure replaces an older one of the same thing. Plain words. "
+             "Keep the old wording if nothing changed. A line 2 starting Done:, Blocked:, Needs the person:, Waiting: or Told to stop: is an agent's own reason for stopping: keep it word for word unless a later post shows the work has moved on. Don't post in those threads. "
              "Finish by posting one line in this thread saying how many you set.\nThreads: " + " ".join(ts_))
     subprocess.run(["hive", "post", "--thread", "thread-status", "--to", "new", "--model", "haiku"], input=brief, text=True,
                    env={**os.environ, "HIVE_NAME": "status-timer"})

@@ -81,6 +81,13 @@ export default {
   "the board's answer to its remote line": "la respuesta de la placa a su línea remota",
   "the Hive gave no answer in": "el Hive no respondió en",
   "a signed-in tab": "una pestaña con sesión iniciada",
+  // E111b: Now's panel of processes no board agent started (ui/helpers.js looseGroup, core subagents.py's type and desc), 2026-11-22
+  "process": "proceso",
+  "claude session": "sesión de claude",
+  "warm agent": "agente precalentado",
+  "booted ahead for the next new agent; waits for its first post": "arrancado de antemano para el próximo agente nuevo; espera su primer mensaje",
+  "starting": "arrancando",
+  "(no task given)": "(sin tarea indicada)",
   __patterns: [
     // the board's bridge held by a page that went quiet (views/board.js, 2026-11-20)
     [/^A page \((.+)\) that hasn't been heard from for (\d+) s still holds the bridge, most likely one that closed\. The run starts once that hold lapses, within (\d+) s\.$/, (_, w, q, l) => `Una página (${w === "a signed-in tab" ? "una pestaña con sesión iniciada" : w}) de la que no se sabe nada desde hace ${q} s aún tiene el puente; lo más probable es que se cerrara. La ejecución empieza cuando esa reserva caduque, en ${l} s como mucho.`],
@@ -110,7 +117,15 @@ export default {
     [/^(is|are) finishing for (.+), which has ended(?: \((.+)\))?(\.?)$/, (_, v, who, a, dot) => `${v === "is" ? "está terminando" : "están terminando"} para ${who === "an agent" ? "un agente" : who}, que ya acabó${a ? " (" + a + ")" : ""}${dot}`],
     [/^No agent on the board started this, so there is nobody to write to about it\. (.+) runs it\.$/, (_, w) => `Ningún agente del tablero inició esto, así que no hay nadie a quien escribir sobre ello. Lo ejecuta ${w === "Something outside the board" ? "algo fuera del tablero" : w === "the Hive" ? "el Hive" : w}.`],
     [/^(\d+) agents? and (\d+) helpers? finished in the last 24 hours\.$/, (_, a, n) => `${a} ${pl(a, "agente", "agentes")} y ${help(n)} terminaron en las últimas 24 horas.`],
-    [/^ not started by an agent (is|are) also running\.$/, (_, v) => ` sin que los iniciara un agente ${v === "is" ? "también está en marcha" : "también están en marcha"}.`],
+    [/^not started by an agent (is|are) also running\.$/, (_, v) => `sin que los iniciara un agente ${v === "is" ? "también está en marcha" : "también están en marcha"}.`],
     [/^(\d+) process(es)?$/, (_, n) => `${n} ${pl(n, "proceso", "procesos")}`],
-  ],
+      // E111b: Now's panel of outside processes, a helper's calls, and Usage's range buttons ("Last 24h")
+    [/^(\d+) process(es)? · Claude Code or Codex run by a session or program outside the board$/, (_, n) => `${n} ${pl(n, "proceso", "procesos")} · Claude Code o Codex ejecutado por una sesión o un programa fuera del tablero`],
+    [/^tmux session (.+)$/, "sesión de tmux $1"],
+    [/^(\d+) helpers? working for (.+)$/, (_, n, o) => `${help(n)} trabajando para ${o}`],
+    [/^(\d+) calls? so far$/, (_, n) => `${n} ${pl(n, "llamada", "llamadas")} hasta ahora`],
+    [/^(\d+) calls?$/, (_, n) => `${n} ${pl(n, "llamada", "llamadas")}`],
+    [/^Last (\d+)(h|d)$/, (_, n, u) => u === "h" ? pl(n, "Última hora", `Últimas ${n} h`) : pl(n, "Último día", `Últimos ${n} días`)],
+    [/^5 hours (none open|reset, not read since)$/, (_, x) => `5 horas: ${x === "none open" ? "ninguna abierta" : "reiniciado, sin leer desde entonces"}`],
+],
 };

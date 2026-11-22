@@ -50,8 +50,13 @@ export const helperChip = n => (n ? h("span", { class: "sa-chip", title: plural(
 const OPEN = new Set();   // owners whose "N more helpers" is open, so a poll's redraw keeps it open
 const byType = rows => { const m = new Map(); for (const r of rows) m.set(r.type || "helper", (m.get(r.type || "helper") || 0) + 1); return [...m].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${v} ${k}`).join(", "); };
 const chev = () => s("svg", { viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", "stroke-width": 1.5, "aria-hidden": "true" }, s("path", { d: "M3 4.5l3 3 3-3" }));
-const what = r => h("span", { class: "sa-what" }, hx(r), helperTag(r), h("span", { class: "sa-type" }, r.type || "helper"),
-  h("a", { class: "sa-desc", href: "#", title: r.desc || null, onclick: e => { e.preventDefault(); openHelper(r); } }, r.desc || "(no task given)"));
+// Its task is what it was told (an agent's prompt, "Read ~/BUILD.md and do it."): content, so it skips the language table, where a
+// pattern ("Read X") would turn half of it (E111b). The starter's warm agent's line is the app's own words (core subagents.py), so it goes through.
+const said = r => !!r.desc && r.type !== "warm agent";
+const task = r => (said(r) ? document.createTextNode(r.desc) : r.desc || "(no task given)");
+/** The task link: its title set after h(), which would look a title up in the table. */
+const taskLink = r => { const a = h("a", { class: "sa-desc", href: "#", title: said(r) ? null : r.desc || null, onclick: e => { e.preventDefault(); openHelper(r); } }, task(r)); if (said(r)) a.setAttribute("title", r.desc); return a; };
+const what = r => h("span", { class: "sa-what" }, hx(r), helperTag(r), h("span", { class: "sa-type" }, r.type || "helper"), taskLink(r));
 /** One running helper as a row. dev: the developer table's cells (who, what it is doing, time); else the app table's (who, mode, model, calls, time). */
 function kid(r, dev) {
   const calls = r.calls ? `${plural(r.calls, "call")} so far` : "starting";
@@ -100,7 +105,7 @@ export function helperList(owner, rows, { update } = {}) {
     shown.map(r => h("div", { class: "sa-li", role: "row", "data-depth": (r.depth || 1) > 1 ? "2" : null, "data-key": helperKey(r) },
       h("span", { class: "sa-l-st", role: "cell" }, helperState(r)),
       h("span", { class: "sa-l-type", role: "cell" }, h("span", { class: "sa-who" }, hx(r), h("span", { class: "sa-type" }, r.type || "helper"))),
-      h("span", { class: "sa-task", role: "cell" }, (r.depth || 1) > 1 ? helperTag(r) : null, h("a", { href: "#", class: "sa-desc", title: r.desc || null, onclick: e => { e.preventDefault(); openHelper(r); } }, r.desc || "(no task given)")),
+      h("span", { class: "sa-task", role: "cell" }, (r.depth || 1) > 1 ? helperTag(r) : null, taskLink(r)),
       h("span", { class: "sa-l-line", role: "cell" }, [r.type, hModel(r), modeWord(r), tookText(r)].filter(Boolean).join(" · ")),
       h("span", { class: "sa-l-model sa-meta", role: "cell" }, hModel(r)), h("span", { class: "sa-l-mode sa-meta", role: "cell" }, modeWord(r)),
       h("span", { class: "sa-l-took num", role: "cell" }, tookText(r)), h("span", { class: "sa-l-calls num", role: "cell" }, r.calls != null ? int(r.calls) : "–"),
@@ -117,7 +122,7 @@ export function openHelper(r) {
   const dlg = h("dialog", { class: "sa-drawer", "aria-label": (own ? "Helper: " : "Process: ") + (r.desc || r.type || "") },
     h("div", { class: "sa-drawer-b" }, hx(r), helperTag(r), r.type || "helper", button("Close", () => dlg.close(), { kind: "quiet", size: "s" })),
     h("div", { class: "sa-drawer-in" },
-      h("div", null, h("h2", null, r.desc || "(no task given)"), h("p", { class: "sa-line" }, helperState(r), h("span", { class: "meta" }, r.state === "running" ? `started ${ago(T(r.start))}` : r.end ? `ended ${ago(T(r.end))}` : ""))),
+      h("div", null, h("h2", null, task(r)), h("p", { class: "sa-line" }, helperState(r), h("span", { class: "meta" }, r.state === "running" ? `started ${ago(T(r.start))}` : r.end ? `ended ${ago(T(r.end))}` : ""))),
       h("div", { class: "sa-cant" }, s("svg", { viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", "stroke-width": 1.5, "aria-hidden": "true" }, s("circle", { cx: 8, cy: 8, r: 6.5 }), s("path", { d: "M8 7v4M8 4.8v.2" })),
         own ? [h("p", { style: "margin:0" }, r.kind === "process" ? `You can't message this process. ${r.agent} started it and reads what it prints. To change what it does, write to ${r.agent}.` : `You can't message a helper. It works for ${r.agent}, inside ${r.agent}'s own run, and reports only to it. To change what it does, write to ${r.agent}.`),
           h("div", { class: "btn-row" }, button("Open " + r.agent, () => dlg.close(), { size: "s", href: agentHref(r.agent) }), r.agent_thread ? button("Open conversation", () => dlg.close(), { size: "s", kind: "quiet", href: threadHref(r.agent_thread) }) : null)]
