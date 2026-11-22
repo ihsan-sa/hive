@@ -917,6 +917,8 @@ def asked_only(thread):
     """An "Ask the Hive" conversation answers a question from the notes: it can be filed under a focus, but no work moved, so its answer owes the card nothing (ad775, 2026-11-09; R34)."""
     return str(thread).startswith("kb-ask-")
 
+SUMMARY_SLACK_S = 600   # tidy.SUMMARY_SLACK_S: without it a run that set its card and then ended with `hive post --end` was held to set it again (ad388, 11-22)
+
 def nudge(name, thread, since, posts=None, own=None):
     """For the inbox hook: one line when `name` posted a result in `thread` since `since` and the thread's focus has an older summary (or none). None otherwise.
     `own` is the run's own thread: any other thread is named in the line, since "this thread" would point the agent at the wrong card."""
@@ -928,14 +930,15 @@ def nudge(name, thread, since, posts=None, own=None):
     t, p = newest_result({thread}, mine)
     if not p: return None
     s = f.get("summary")
-    if s and float(s.get("at") or 0) >= t: return None
+    if s and float(s.get("at") or 0) >= t - SUMMARY_SLACK_S: return None   # the tidy's rule: a card set just before the result (the Stop order, then `hive post --end`) is current
     lead = f.get("lead")
     short = (f"Then read In short against the lines as you left them (now: \"{lead['text'][:200]}\") and rewrite it if it is no longer the verdict: hive focus lead {f['id']} \"On track: …\"" if lead else
              f"Then give it its In short, which the person reads first and often alone, in one or two sentences (is the focus on track against its aim, and the one thing that matters now): hive focus lead {f['id']} \"On track: …\" (it opens with {VERDICTS})")
     return (f"{'This thread' if own in (None, thread) else f'#{thread}, where you posted a result,'} is in the focus \"{f['name']}\" and its summary is {'older than your result' if s else 'not written yet'}. The person reads the focus card, "
             f"not the thread, so update it now, in plain words: what is being done and what changed, each line opening with its topic and a colon, with @agent and #thread where they help. "
             f"Run hive focus show {f['id']} first and keep the others' lines; anything only the person can do goes under ## Needs you, never inside a Now line:\n"
-            f"hive focus set {f['id']} <<'X'\n## Now\n- Topic: …\n## Lately\n- …\nX\n{short}.\n" + reader(f, posts))
+            f"hive focus set {f['id']} <<'X'\n## Now\n- Topic: …\n## Lately\n- …\nX\n{short}.\n"
+            f"If you read the card and your result changes nothing it says, don't rewrite it: hive focus set {f['id']} --still \"why\".\n" + reader(f, posts))
 
 FILE_ASKED = STATE / "file-asked.jsonl"     # {thread, name, at, file, title}: which agent was asked to file or title which conversation
 META, RENAMED = STATE / "thread-meta.json", STATE / "renamed.jsonl"
@@ -1020,7 +1023,7 @@ def main(argv=None):
     p = sp.add_parser("tag"); p.add_argument("thread"); p.add_argument("focus", nargs="?"); p.add_argument("--off", action="store_true")
     p = sp.add_parser("link"); p.add_argument("a"); p.add_argument("b"); p.add_argument("--off", action="store_true")
     p = sp.add_parser("relate"); p.add_argument("focus"); p.add_argument("what", choices=RELATE); p.add_argument("target"); p.add_argument("--why", default=""); p.add_argument("--off", action="store_true")
-    p = sp.add_parser("set"); p.add_argument("focus")
+    p = sp.add_parser("set"); p.add_argument("focus"); p.add_argument("--still", metavar="WHY", help="the card is still right after your result: stamp it as checked now without rewriting it, and say why (a keeper round that changed nothing on it)")
     p = sp.add_parser("show"); p.add_argument("focus")
     p = sp.add_parser("reader"); p.add_argument("focus")
     p = sp.add_parser("lead", help="In short: the one or two sentences the person reads first"); p.add_argument("focus"); p.add_argument("text", nargs="*"); p.add_argument("--off", action="store_true")
@@ -1136,6 +1139,14 @@ def main(argv=None):
             print("\n".join(x for x in (f"## In short\n{cur['text']}\n" if cur else "", s["text"] if s else "" if cur else "(no summary yet)") if x)); return
         if a.cmd == "keeper": print(keeper(f, board_posts()) or "nobody"); return
         if a.cmd == "reader": print(reader(f, board_posts())); return
+        if getattr(a, "still", None) is not None:   # rsi-lab pickups: a truthful "the card already says this" was still a tidy miss (a1f59 on 11-22)
+            why = " ".join(a.still.split())[:200]
+            s = f.get("summary")
+            if not s: sys.exit(f"hive focus set --still: {f['id']} has no summary yet; write one (hive focus set {f['id']} <<'X' ... X)")
+            if len(why) < 8: sys.exit("hive focus set --still \"WHY\": say in a few words why your result changes nothing the card says")
+            append({"kind": "summary", "focus": f["id"], "text": s["text"], "still": why})
+            print(f"summary on {f['id']} checked and left as it was (written {days(s['at'])} ago by {s.get('from')}); if your result did change what is being done, set the lines instead")
+            return
         if sys.stdin.isatty(): sys.exit("hive focus set: the summary comes on stdin, a quoted heredoc with ## Now and ## Lately bullets")
         lead, raw = split_lead(sys.stdin.read()); text = raw[:MAX_SUMMARY]
         if len(raw) > MAX_SUMMARY: print(f"hive focus set: {len(raw)} characters, the card keeps {MAX_SUMMARY}: the end was CUT OFF. Shorten it (fewer bullets, higher level) and set it again.", file=sys.stderr)

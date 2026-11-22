@@ -151,6 +151,38 @@ def parked(run, log):
     return run.get("exit") not in (0, None) and any(r.get("event") == "woken" and r.get("name") == run["name"] and r.get("session") == run.get("session")
                                                     and run["started"] <= r.get("at", "") <= run["ended"] for r in log)
 
+RESUME_S = 120   # the starter restarts a reaped agent on the same post within seconds (ab5b4 01:55:30 -> 01:55:32, 2026-11-22)
+
+def reap_resumed(run, log):
+    """The starter reaped this run while it sat idle on a background shell, then started the same agent again on the same post (its resume after
+    the shell ends). The ask runs on in that next run, which is graded with this run's posts as well (`reap_origin`), so this one is outside the
+    score: graded alone, ab5b4's run read as partial ("only posted that it was taking the rung") and its resume as delivered for one ask, 2026-11-22
+    (10 of the reap-then-resume runs from 11-14 to 11-22 were partial or nothing). Returns the resumed run's start time, or None."""
+    t1 = dt.datetime.fromisoformat(run["ended"])
+    if not any(r.get("event") == "reaped" and r.get("name") == run["name"] and r.get("session") == run.get("session")
+               and run["started"] <= r.get("at", "") <= run["ended"] for r in log): return None
+    for r in log:
+        if r.get("event") == "start" and r.get("name") == run["name"] and r.get("at", "") >= run["ended"] \
+                and (r.get("woke") or [r.get("post")])[0] == run["post"] and (dt.datetime.fromisoformat(r["at"]) - t1).total_seconds() <= RESUME_S:
+            return r["at"]
+    return None
+
+def reap_origin(run, log):
+    """The start of the earliest run in a reap-and-resume chain ending in this one, or None if this run wasn't a resume after a reap."""
+    first, cur = None, run
+    for _ in range(10):
+        prev = None
+        for e in log:
+            if e.get("event") == "end" and e.get("name") == cur["name"] and e.get("at", "") <= cur["started"] \
+                    and (dt.datetime.fromisoformat(cur["started"]) - dt.datetime.fromisoformat(e["at"])).total_seconds() <= RESUME_S:
+                s = next((x for x in log if x.get("event") == "start" and (x.get("session"), x.get("pid")) == (e.get("session"), e.get("pid"))), None)
+                if s and (s.get("woke") or [s.get("post")])[0] == cur["post"]:
+                    cand = {"name": cur["name"], "session": s.get("session"), "post": cur["post"], "started": s.get("at"), "ended": e["at"]}
+                    if reap_resumed(cand, log) == cur["started"]: prev = cand
+        if not prev: break
+        first, cur = prev["started"], prev
+    return first
+
 def superseded(run, log, by_id):
     """The person edited the message this run was answering, or asked for another answer, and the starter stopped the run for it and resumed the
     agent on the new version (starter overtakes, everyday E12d). The resumed run carries the ask, so this one is outside the score: graded by the
@@ -452,14 +484,17 @@ def cmd_grade(a):
         ask = origin(r, post, log, by_id) if post and carried(post, r["name"]) else post   # resumed after a switch or woken by its own job notice: graded on the ask carried over
         if (cont := continued(r, ask, by_id, nexts)): ask = cont; r = {**r, "continued": True}
         r = {**r, **({"root": root[r["key"]]} if root.get(r["key"], r["key"]) != r["key"] else {}), **({"completion_wake": True} if completion_wake(r, by_id, mine, ticks) else {}), **({"self_wake": True} if post and self_wake(r, post) else {}), **({"round": True} if ask and ROUND.search(str((post if ask is not post and job_notice(post, r["name"]) else ask).get("text", ""))[:80]) else {})}   # marks for the spot-check and the step-up; the grade doesn't look at them
+        if (ro := reap_origin(r, log)):   # resumed after a reap: the reaped run's posts are this run's too, the ask counted once
+            r = {**r, "reap_of": ro}; post, mine, after = posts_of({**r, "started": ro}, posts, by_id)
         sw = switch_only(r, mine, log); sup = not sw and superseded(r, log, by_id); pz = not (sw or sup) and person_paused(r, mine, pauses)
+        rp = not (sw or sup or pz) and bool(reap_resumed(r, log))
         if parked(r, log): r = {**r, "parked": True}
         post = ask
-        g = "not_asked" if sw or sup or pz else "not_run" if not_run(r, mine, lims) else mechanical(r, post, mine)
+        g = "not_asked" if sw or sup or pz or rp else "not_run" if not_run(r, mine, lims) else mechanical(r, post, mine)
         if g:
-            why = "only switched model or effort; the run it resumed as carries the ask" if sw else "stopped for the person's edit or retry; the run it resumed as carries the ask" if sup else "the person paused it mid-run and it stopped; the run that resumes carries the ask" if pz else "hit a usage limit and exited within a minute; resumed at the reset" if g == "not_run" \
+            why = "only switched model or effort; the run it resumed as carries the ask" if sw else "reaped on a background wait and resumed on the same post; that run carries the ask" if rp else "stopped for the person's edit or retry; the run it resumed as carries the ask" if sup else "the person paused it mid-run and it stopped; the run that resumes carries the ask" if pz else "hit a usage limit and exited within a minute; resumed at the reset" if g == "not_run" \
                 else "the post asked nothing" if g == "not_asked" else "posted nothing" + (" though named" if g == "silent" else "")
-            if not a.dry: append(LEDGER, {**r, **({"switch": True} if sw else {}), **({"superseded": True} if sup else {}), **({"person_pause": True} if pz else {}), **tag, "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
+            if not a.dry: append(LEDGER, {**r, **({"switch": True} if sw else {}), **({"superseded": True} if sup else {}), **({"person_pause": True} if pz else {}), **({"reap_resumed": True} if rp else {}), **tag, "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
             graded += 1
         else: model_runs.append((r, post, mine, after))
     chosen = pick(model_runs, a.sample, root=root) if not (a.all or other or back) else model_runs

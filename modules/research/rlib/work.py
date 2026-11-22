@@ -201,7 +201,8 @@ def verify_csv(path, case, out=None, find=False, cols=None, domains=None, worker
 
 
 WEAK_SIGNAL_HOST = re.compile(r"^(?:careertraining|ed2go|libguides|catalog|bulletin|courses?)\b|\.(?:ed2go|libguides)\.|^ed2go", re.I)
-WEAK_SIGNAL_PATH = re.compile(r"/(?:catalog|courses?|course-?descriptions?|coursesoffered|programs?/all|academic-programs|leadership|directory|faculty-staff|jobs|employment|c\.php)\b|(?:ai|artificial-intelligence)-(?:ce|programs?)/", re.I)
+WEAK_SIGNAL_PATH = re.compile(r"/(?:catalog|courses?|course-?descriptions?|coursesoffered|programs?/all|academic-programs|leadership|directory|faculty-staff|jobs|employment|c\.php|presidential-search|search-committee|bios?|profiles?|people|about-the-president)\b|(?:ai|artificial-intelligence)-(?:ce|programs?)/", re.I)
+CAREER_NEAR = re.compile(r"career|workforce|\bjobs?\b|employ|student success|skills|internship|apprentice|job", re.I)
 NAV_AI = re.compile(r"\b(?:skip to )?ai search\b|\bask ai\b|\bai chat\b|\bai assistant\b", re.I)
 DEV_HOST = re.compile(r"(?:^|[.])(?:www-)?(?:dev|staging|stage|test|qa|uat|preview|sandbox)(?:[.-]|$)", re.I)
 def weak_signal_url(url):
@@ -416,7 +417,7 @@ class Hunt:
         hit_terms = [m for m in self.must if people.term_regex(m).search(NAV_AI.sub(" ", low))]
         staff_sig = None
         if hit_terms and is_official and org not in self.org_signal and not weak_signal_url(page.get("final_url") or page["url"]):
-            m = people.term_regex(hit_terms[0]).search(low)
+            m = next((x for x in people.term_regex(hit_terms[0]).finditer(low) if CAREER_NEAR.search(low[max(0, x.start() - 300):x.end() + 300])), None)  # the word beside a careers or workforce word: AI research news (UT) is not a careers signal
             excerpt = " ".join(clean[max(0, m.start() - 80):m.end() + 120].split()) if m else ""
             nav = NAV_AI.sub(" ", excerpt)  # "Skip to AI Search" is the site's own menu, not a statement
             if re.search(r"(?<!\w)" + re.escape(hit_terms[0]) + r"(?!\w)", nav, re.I):  # the word must be in the excerpt we keep, not just in the folded text
