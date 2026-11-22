@@ -118,7 +118,7 @@ export default {
   "Everyday": "Dia a dia",
   "Accounts": "Contas",
   "Work tiers": "Níveis de trabalho",
-  "Power and sandbox": "Permissões e isolamento",
+  "Power and sandbox": "Permissões e ambiente isolado",
   "Data sharing": "Compartilhamento de dados",
   "Secrets": "Segredos",
   "This device": "Este dispositivo",
@@ -283,7 +283,7 @@ export default {
 
   // Settings › Work tiers
   "what may start new work, and until when": "o que pode começar trabalho novo, e até quando",
-  "Every focus, thread and timer sits in a tier. Pause a tier and nothing new in it starts; what is already running finishes. A pause with an end lifts by itself. To move several, tick them, or drag a row onto another tier.": "Cada foco, conversa e temporizador está em um nível. Pause um nível e nada novo começa nele; o que já está em andamento termina. Uma pausa com fim se levanta sozinha. Para mover vários, marque-os ou arraste uma linha para outro nível.",
+  "Every focus, thread and timer sits in a tier. Pause a tier and nothing new in it starts; what is already running finishes. A pause with an end lifts by itself. To move several, tick them, or drag a row onto another tier.": "Cada foco, conversa e temporizador está em um nível. Pause um nível e nada novo começa nele; o que já está em andamento termina. Uma pausa com data de fim termina sozinha. Para mover vários, marque-os ou arraste uma linha para outro nível.",
   "Runs until your accounts reach their own limits.": "Roda até suas contas chegarem aos próprios limites.",
   "Stop point, name and more": "Ponto de parada, nome e mais",
   "Make default": "Tornar padrão",
@@ -588,8 +588,8 @@ export default {
     [/^Week (\d+)% · 5 hours (\d+)%$/, "Semana $1% · 5 horas $2%"],
     [/^(\S+) at list prices, last 24 hours$/, "$1 a preços de tabela, últimas 24 horas"],
     [/^(\S+) an hour lately$/, "$1 por hora ultimamente"],
-    [/^([\d.,]+) agent-hours?, last 24 hours$/, "$1 horas de agente, últimas 24 horas"],
-    [/^([\d,]+) posts?, last 24 hours$/, "$1 mensagens, últimas 24 horas"],
+    [/^([\d.,]+) agent-hours?, last 24 hours$/, (_, n) => `${n} ${n === "1" ? "hora" : "horas"} de agente, últimas 24 horas`],
+    [/^([\d,]+) posts?, last 24 hours$/, (_, n) => `${n} ${n === "1" ? "mensagem" : "mensagens"}, últimas 24 horas`],
     [/^output, all of it; (\S+) plain input$/, "saída, tudo; $1 de entrada simples"],
     [/^(\d+)% of this week used; stop line at (\d+)%(: stop line at \d+%)?$/, "$1% desta semana usado; linha de parada em $2%"],
     [/^(\d+)% of this 5 hours used$/, "$1% destas 5 horas usado"],
@@ -632,7 +632,7 @@ export default {
     // E18zb: the other names agentLabel gives (the warden, the Hive, "Agent B"), as the stop button and its window say them
     [/^Stop (the warden|the Hive|the agent|an agent|Agent [A-Z]{1,2})( now)?(\?)?$/, (_, x, now, q) => `Parar ${now ? "agora " : ""}${({ "the warden": "o guardião", "the Hive": "o Hive", "the agent": "o agente", "an agent": "um agente" })[x] || "o " + x.replace("Agent", "agente")}${q || ""}`],
     [/^Stop (.+)\?$/, "Parar $1?"],
-    [/^Nothing was (stopped|killed)$/, "Nada foi parado"],
+    [/^Nothing was (stopped|killed)$/, (_, w) => w === "killed" ? "Nada foi encerrado" : "Nada foi parado"],
     [/^Doing now: (.+)$/s, "Fazendo agora: $1"],
   ],
 };

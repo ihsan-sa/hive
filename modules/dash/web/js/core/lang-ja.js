@@ -268,7 +268,7 @@ export default {
   "Add another account": "アカウントを追加",
   "Sign in to it": "サインインする",
   "A second subscription gives the Hive more room: new agents go to whichever has the most left. Adding one signs in, checks it isn't one you already have, and makes one short test run.": "2つ目のサブスクリプションでHiveに余裕が生まれます。新しいエージェントは残りが最も多いほうに割り当てられます。追加すると、サインインし、すでにあるものと重複していないか確認して、短いテスト実行を1回行います。",
-  "with a ChatGPT login": "ChatGPTのログイン",
+  "with a ChatGPT login": "ChatGPTのログインで",
   "not signed in": "未サインイン",
   "Sign in": "サインイン",
   "API keys": "APIキー",
@@ -284,7 +284,7 @@ export default {
 
   // Settings › Work tiers
   "what may start new work, and until when": "新しい作業を始められるものと、その期限",
-  "Every focus, thread and timer sits in a tier. Pause a tier and nothing new in it starts; what is already running finishes. A pause with an end lifts by itself. To move several, tick them, or drag a row onto another tier.": "すべてのフォーカス、スレッド、タイマーはいずれかのティアに属します。ティアを一時停止すると新しい作業は始まらず、実行中のものは終了します。終了時刻のある一時停止は自動で解除されます。複数を移すには、チェックを入れるか、行を別のティアにドラッグします。",
+  "Every focus, thread and timer sits in a tier. Pause a tier and nothing new in it starts; what is already running finishes. A pause with an end lifts by itself. To move several, tick them, or drag a row onto another tier.": "すべてのフォーカス、スレッド、タイマーはいずれかのティアに属します。ティアを一時停止すると新しい作業は始まらず、実行中のものは最後まで続きます。終了時刻のある一時停止は自動で解除されます。複数を移すには、チェックを入れるか、行を別のティアにドラッグします。",
   "Runs until your accounts reach their own limits.": "アカウント自体の上限に達するまで動きます。",
   "Stop point, name and more": "停止位置、名前など",
   "Make default": "既定にする",
@@ -612,13 +612,13 @@ export default {
     [/^Tier for (.+)$/, "$1のティア"],
     [/^Removing (.+)$/, "$1を削除中"],
     [/^(\S+) runs on this account too, and pausing here doesn't stop \1\.$/, "$1もこのアカウントで動いており、ここで一時停止しても$1は止まりません。"],
-    [/^Pause (.+): nothing new in it starts; what is running finishes$/, "$1を一時停止: 新しい作業は始まらず、実行中のものは終了します"],
+    [/^Pause (.+): nothing new in it starts; what is running finishes$/, "$1を一時停止: 新しい作業は始まらず、実行中のものは最後まで続きます"],
     [/^Pause (.+)$/, "$1を一時停止"],
     [/^Stop point for (.+)$/, "$1の停止位置"],
     [/^Name of (.+)$/, "$1の名前"],
     [/^Remove (.+)\?$/, "$1を削除しますか？"],
     // Settings › Set once
-    [/^Spent today: (\S+) at API prices \(UTC day\)\. Empty means no cap\. A cap holds new agents from starting once a day's spend reaches it; running ones finish\.$/, "本日の支出: API価格で$1（UTCの日付）。空欄は上限なしです。1日の支出が上限に達すると新しいエージェントは起動せず、実行中のものは終了します。"],
+    [/^Spent today: (\S+) at API prices \(UTC day\)\. Empty means no cap\. A cap holds new agents from starting once a day's spend reaches it; running ones finish\.$/, "本日の支出: API価格で$1（UTCの日付）。空欄は上限なしです。1日の支出が上限に達すると新しいエージェントは起動せず、実行中のものは最後まで続きます。"],
     // Settings › Modules
     [/^Browse all (\d+) public modules$/, "公開モジュール$1件をすべて見る"],
     [/^About (.+)$/, "$1について"],
@@ -632,7 +632,7 @@ export default {
     // E18zb: the other names agentLabel gives (the warden, the Hive, "Agent B"), as the stop button and its window say them
     [/^Stop (the warden|the Hive|the agent|an agent|Agent [A-Z]{1,2})( now)?(\?)?$/, (_, x, now, q) => `${({ "the warden": "監視役", "the Hive": "Hive", "the agent": "エージェント", "an agent": "エージェント" })[x] || x.replace("Agent", "エージェント")}を${now ? "今すぐ" : ""}停止${q ? "しますか？" : ""}`],
     [/^Stop (.+)\?$/, "$1を停止しますか？"],
-    [/^Nothing was (stopped|killed)$/, "停止されたものはありません"],
+    [/^Nothing was (stopped|killed)$/, (_, k) => k === "killed" ? "強制終了されたものはありません" : "停止されたものはありません"],
     [/^Doing now: (.+)$/s, "実行中: $1"],
   ],
 };

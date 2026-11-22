@@ -166,7 +166,7 @@ export default {
   "of it": "のうち",
   "of work in 24h": "の作業(24時間)",
   "open request": "未対応の依頼",
-  "quiet, moved today": "静か、今日動きあり",
+  "quiet, moved today": "静止中、今日動きあり",
   "running for": "実行時間:",
   "sin, cos, tan and atan work in degrees here.": "ここでは sin、cos、tan、atan は度で計算されます。",
   "sin, cos, tan and atan work in radians here.": "ここでは sin、cos、tan、atan はラジアンで計算されます。",

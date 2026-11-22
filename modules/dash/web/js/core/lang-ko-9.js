@@ -122,7 +122,7 @@ export default {
     [/^Downloading (.+) first, so (their Flash buttons go|its Flash goes) straight to the board\.$/, (_, l) => `먼저 ${l}을(를) 다운로드하는 중입니다. 플래시는 보드로 바로 전달됩니다.`],
     [/^ (is|are) working (for it|for all of them|for (\S+) of them)$/, (_, v, w, k) => ` ${w === "for it" ? "이를 위해 작업 중입니다" : w === "for all of them" ? "모두를 위해 작업 중입니다" : k + "건을 위해 작업 중입니다"}`],
     [/^(is|are) finishing for agents that have ended\.?$/, (m) => `종료된 에이전트를 위해 마무리 중입니다${m.endsWith(".") ? "." : ""}`],
-    [/^(is|are) finishing for (.+), which has ended(?: \((.+)\))?(\.?)$/, (_, v, who, a, dot) => `종료된 ${who === "an agent" ? "에이전트" : who}${a ? " (" + a + ")" : ""}를 위해 마무리 중입니다${dot ? "." : ""}`],
+    [/^(is|are) finishing for (.+), which has ended(?: \((.+)\))?(\.?)$/, (_, v, who, a, dot) => `종료된 ${who === "an agent" ? "에이전트" : who}${a ? " (" + a + ")" : ""}을(를) 위해 마무리 중입니다${dot ? "." : ""}`],
     [/^No agent on the board started this, so there is nobody to write to about it\. (.+) runs it\.$/, (_, w) => `게시판의 에이전트가 시작한 것이 아니므로 이에 대해 연락할 상대가 없습니다. 실행 주체는 ${w === "Something outside the board" ? "게시판 밖의 무언가" : w === "the Hive" ? "Hive" : w}입니다.`],
     [/^(\d+) agents? and (\d+) helpers? finished in the last 24 hours\.$/, (_, a, n) => `최근 24시간 동안 에이전트 ${a}개와 도우미 ${n}개가 종료되었습니다.`],
     [/^not started by an agent (is|are) also running\.$/, () => `에이전트가 시작하지 않은 것도 실행 중입니다.`],

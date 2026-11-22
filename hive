@@ -225,6 +225,26 @@ def remind_asks(pid, thread):
         print(f"If this post delivers one: hive asks done ID --evidence {pid}; next time hive post --done ID; or hive asks hold|person|drop ID --why ...", flush=True)
     except Exception: pass
 
+def remind_own(thread, now=None):
+    """The one-shot reminders this agent set for itself in the thread it just posted in, up to 3: a run woken earlier by a Next: line or a post often
+    does the step a reminder was set for, and the reminder still fired and woke a run with nothing to do (ac009 11-22 06:11: "that reminder was
+    overtaken", graded nothing; 5 such in 11-08..22). Shown after a post so the agent can remove one its work covered. Never holds up a post."""
+    me = os.environ.get("HIVE_NAME", "").lower()
+    if not HASH_NAME.fullmatch(me): return
+    try:
+        import datetime as _dt
+        now = now or _dt.datetime.now()
+        items = json.loads((Path.home() / ".hive" / "remind" / "reminders.json").read_text())
+        mine = [i for i in items if i.get("by", "").lower() == me and i.get("to") == me and not i.get("cron") and i.get("thread") == thread]
+        mine = sorted(mine, key=lambda i: i.get("due", ""))[:3]
+        if not mine: return
+        for i in mine:
+            due = _dt.datetime.fromisoformat(i["due"]); mins = round((due - now).total_seconds() / 60)
+            when = f"in {mins} min" if 0 <= mins < 120 else ("now" if mins < 0 else f"at {due:%m-%d %H:%M}")
+            print(f"Your reminder {i['id']} here fires {when}: " + " ".join(str(i.get("text")).split())[:100])
+        print("If this post already did what it asks, remove it (hive remind rm ID): else it wakes you to find nothing to do.", flush=True)
+    except Exception: pass
+
 NOBODY = {"warden", "all", "here", "person", "phone"}
 
 def places(words, me=""):
@@ -470,6 +490,7 @@ def cmd_post(a):
     if getattr(a, "done", None):  # a closed ask's durable part goes in the kb, linked back to this post, so the focus page can list it
         print(f"Filed? Put what should outlast this thread in the kb, linked back: kb file \"TITLE\" --from {pid} <<'X' ... X", flush=True)
     if not a.as_: remind_asks(pid, p["thread"])
+    if not a.as_: remind_own(p["thread"])
     receipt(list(dict.fromkeys(to)), ignored, ext, me)
     if not a.as_ and (w := held_tier_note(to, ext, me, p["thread"])): print(w, file=sys.stderr, flush=True)
     if (w := effort_hint(to, a)): print(w, file=sys.stderr)

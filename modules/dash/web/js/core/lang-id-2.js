@@ -63,7 +63,7 @@ export default {
   "Earlier": "Sebelumnya",
   "Later": "Berikutnya",
   "Show only the agents running now, and the rows they're on": "Tampilkan hanya agen yang berjalan sekarang dan barisnya",
-  "Upkeep rows (status notes, the keeper, the watchdog) are one line each; this shows every run on them": "Baris pemeliharaan (catatan status, pengelola, penjaga) masing-masing satu baris; ini menampilkan setiap proses di dalamnya",
+  "Upkeep rows (status notes, the keeper, the watchdog) are one line each; this shows every run on them": "Baris pemeliharaan (catatan status, pengelola, pengawas) masing-masing satu baris; ini menampilkan setiap proses di dalamnya",
   // History
   "Everything that happened, newest first: messages, every step agents took, agents starting and ending, and trouble.": "Semua yang terjadi, yang terbaru dulu: pesan, setiap langkah agen, agen yang mulai dan berakhir, serta masalah.",
   "Everything": "Semua",
@@ -265,7 +265,7 @@ export default {
     [/^([a-z]{1,2}[0-9a-f]{3,5}): hasn't run$/, "$1: belum berjalan"],
     // Progress
     [/^oldest (\S+) days?; (\d+) with nobody on them$/, "tertua $1 hari; $2 tanpa penanggung jawab"],
-    [/^(\d+) runs? graded; (\d+) silent, (\d+) did nothing$/, "$1 dinilai; $2 diam, $3 tidak melakukan apa pun"],
+    [/^(\d+) runs? graded; (\d+) silent, (\d+) did nothing$/, "$1 proses dinilai; $2 diam, $3 tidak melakukan apa pun"],
     [/^(\d+) judged, (\d+) overdue$/, "$1 dinilai, $2 terlambat"],
     [/^of (\d+) runs?; (\d+) stalled conversations?$/, "dari $1 proses; $2 percakapan macet"],
     [/^(\d+) changes?$/, "$1 perubahan"],
@@ -275,7 +275,7 @@ export default {
     [/^At (\d.*)$/, "Pada $1"],
     [/^Last (\d+) hours?$/, (_, n) => pl(n, "Jam terakhir", `${n} jam terakhir`)],
     [/^(\S+) an hour now$/, "$1 per jam sekarang"],
-    [/^(\d+) in the last hour$/, "$1 dalam jam terakhir"],
+    [/^(\d+) in the last hour$/, "$1 dalam satu jam terakhir"],
     [/^The last agent, (.+), ended (.+) ago on (.+)\. (\d+) agents? ran in the last (\d+) hours\.$/, (_, a, t, th, n, h) => `Agen terakhir, ${a}, berakhir ${t} lalu di ${th}. ${n} agen berjalan dalam ${h} jam terakhir.`],
     // This machine
     [/^The computer has room: (\S+) CPU in use, (\S+ \S+) of memory free\.$/, "Komputer masih lega: CPU terpakai $1, memori bebas $2."],
@@ -310,6 +310,6 @@ export default {
     [/^carried (\S+)$/, "terbawa $1"],
     [/^carried (\S+); new: (.+)$/, (_, c, rest) => `terbawa ${c}; baru: ${rest.replace(/message to it/g, "pesan untuknya").replace(/its tool calls/g, "panggilan alatnya").replace(/its own words/g, "kata-katanya sendiri")}`],
     [/^model id (\S+) · asked for with (.+)$/, "id model $1 · diminta dengan $2"],
-    [/^(.+): it named them in (\d+) posts?, they named it in (\d+) posts?$/, "$1: menyebut mereka dalam $2 pesan, disebut mereka dalam $3 pesan"],
+    [/^(.+): it named them in (\d+) posts?, they named it in (\d+) posts?$/, "$1: menyebut mereka dalam $2 pesan, mereka menyebutnya dalam $3 pesan"],
   ],
 };

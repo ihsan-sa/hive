@@ -209,6 +209,9 @@ def title_core(title):
     return core if len(core) >= 20 else ""
 NAV_AI = re.compile(r"\b(?:skip to )?ai search\b|\bask ai\b|\bai chat\b|\bai assistant\b", re.I)
 DEV_HOST = re.compile(r"(?:^|[.])(?:www-)?(?:dev|staging|stage|test|qa|uat|preview|sandbox)(?:[.-]|$)", re.I)
+JOB_POSTING = re.compile(r"/(?:job|jobs|requisition|vacancy|posting)s?/\d", re.I)
+
+
 def weak_signal_url(url):
     """An org signal must not come from a course catalog, a vendor training host, a LibGuide, a directory or a jobs page: those carry the AI word without saying anything about careers or workforce."""
     u = urllib.parse.urlsplit(url)
@@ -416,6 +419,7 @@ class Hunt:
         if page["status"] != "ok":
             self.blocked[page["url"]] = page.get("note", "")
             return 0
+        if JOB_POSTING.search(urllib.parse.urlsplit(page.get("final_url") or page["url"]).path or "") or (urllib.parse.urlsplit(page.get("final_url") or page["url"]).hostname or "").startswith("jobs."): return 0  # a job posting prints a manager's or a recruiter's title, not a person page
         text = page["text"]
         clean = people.without_events(people.without_boilerplate(text))
         low = fold(clean)

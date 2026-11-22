@@ -22,7 +22,7 @@ const part = p => {
   if ((m = p.match(/^(\d+) posts?$/))) return `${m[1]}件の投稿`;
   if ((m = p.match(/^(\d+) helpers?$/))) return `ヘルパー${m[1]}件`;
   if ((m = p.match(/^(\d+) stuck$/))) return `停滞${m[1]}件`;
-  if ((m = p.match(/^main (thread|conversation) (.+)$/))) return `${m[1] === "thread" ? "メインスレッド" : "メイン会話"} ${m[2]}`;
+  if ((m = p.match(/^main (thread|conversation) (.+)$/))) return `${m[1] === "thread" ? "メインスレッド" : "メインスレッド"} ${m[2]}`;
   return tr(p);
 };
 export default {
@@ -33,7 +33,7 @@ export default {
   "Asked earlier": "以前の依頼",
   "Stuck": "停滞中",
   "You replied": "返信済み",
-  "Quiet": "静か",
+  "Quiet": "静止中",
   "Not picked up": "未着手",
   "on it now": "今取り組んでいます",
   "on it again since the summary": "要約以降、再び取り組んでいます",
@@ -59,11 +59,11 @@ export default {
   "Reply about this summary": "この要約について返信",
   "More tools": "その他のツール",
   "The line under a conversation's title says where it stands: working, waiting, done, or needing you. Click it for the whole summary.":
-    "会話のタイトルの下の行には、作業中、待機中、完了、またはあなたの対応待ちなど、現在の状況が表示されます。クリックすると要約全体を表示します。",
+    "スレッドのタイトルの下の行には、作業中、待機中、完了、またはあなたの対応待ちなど、現在の状況が表示されます。クリックすると要約全体を表示します。",
   "The line under a conversation's title says where it stands: working, waiting, done, or needing you. Tap the title for the whole summary.":
-    "会話のタイトルの下の行には、作業中、待機中、完了、またはあなたの対応待ちなど、現在の状況が表示されます。タイトルをタップすると要約全体を表示します。",
+    "スレッドのタイトルの下の行には、作業中、待機中、完了、またはあなたの対応待ちなど、現在の状況が表示されます。タイトルをタップすると要約全体を表示します。",
   "The agent on it keeps it current. Home, a focus, this line, then the conversation itself: each is one click deeper.":
-    "担当のエージェントが常に最新に保ちます。ホーム、フォーカス、この行、そして会話そのもの。順にクリックするごとに一段深くなります。",
+    "担当のエージェントが常に最新に保ちます。ホーム、フォーカス、この行、そしてスレッドそのもの。順にクリックするごとに一段深くなります。",
   // lang-es-7: the wall display
   "Move the edge between tiles": "タイルの境界を移動",
   "Drag to resize, or click to step it (from the far end it starts again); double-click to reset":
@@ -100,7 +100,7 @@ export default {
   "Send a message and it tries again.": "メッセージを送ると再試行します。",
   "Its last message above is where it got to.": "上の最後のメッセージが、到達した地点です。",
   "Clear search": "検索をクリア",
-  "Loading the conversation…": "会話を読み込み中…",
+  "Loading the conversation…": "スレッドを読み込み中…",
   "No messages match.": "一致するメッセージはありません。",
   "Nothing here for you yet. The rest is agents talking among themselves: Show hidden, in the title's menu, shows it.":
     "あなた宛てのものはまだありません。残りはエージェント同士のやり取りです。タイトルのメニューの「非表示を表示」で見られます。",
@@ -113,11 +113,11 @@ export default {
     "これを不要にしました。書き込むか、「その他」の「再び必要」を選ぶと戻ります。",
   "Likely not needed": "不要の可能性が高い",
   "an agent is on this thread now": "今このスレッドにエージェントがいます",
-  "A helper conversation, started from": "ヘルパーの会話。開始元:",
-  "You left unsent text in this conversation": "この会話に未送信のテキストがあります",
+  "A helper conversation, started from": "ヘルパーのスレッド。開始元:",
+  "You left unsent text in this conversation": "このスレッドに未送信のテキストがあります",
   "Important": "重要",
   "Pinned to the top": "先頭に固定済み",
-  "helper conversation": "ヘルパーの会話",
+  "helper conversation": "ヘルパーのスレッド",
   "the rest": "残り",
   "Couldn't move the focus:": "フォーカスを移動できませんでした:",
   "Pinned": "固定済み",
@@ -132,7 +132,7 @@ export default {
   "is waiting for the machine": "マシンを待っています",
   "Designed, not built yet: the server needs to do this": "設計済み、未実装: サーバー側の対応が必要です",
   "Waiting: ...": "待機中: ...",
-  "Needs the person: ...": "本人の対応が必要: ...",
+  "Needs the person: ...": "あなたの対応が必要: ...",
   "is putting you through on your call": "通話をつないでいます",
   "is on a call with you": "あなたと通話中です",
   "waits for your answer": "あなたの返答を待っています",
@@ -166,7 +166,7 @@ export default {
   "Couldn't file it:": "アーカイブできませんでした:",
   "Turn on For you, Updates and Agent comms": "「あなた宛て」「更新」「エージェント間のやり取り」をオンにする",
   "Save the conversation as one page you can post: the ask, the agents at work, the result. You see it first and can remove anything.":
-    "会話を、投稿できる1ページとして保存します。依頼、作業中のエージェント、結果が含まれます。先に内容を確認でき、不要な部分は削除できます。",
+    "スレッドを、投稿できる1ページとして保存します。依頼、作業中のエージェント、結果が含まれます。先に内容を確認でき、不要な部分は削除できます。",
   "Lay it out like a script and save it as a PDF from the print dialog": "台本の形式にレイアウトし、印刷ダイアログからPDFとして保存",
   "Click to select it": "クリックして選択",
   "waiting on you": "あなたの対応待ち",
@@ -174,7 +174,7 @@ export default {
   "Mail since you last opened it": "前回開いてからのメール",
   "Only the last 24 hours are listed. Show every thread.": "直近24時間のみ表示しています。すべてのスレッドを表示。",
   "List only the recent ones": "最近のものだけ表示",
-  "Show every conversation again": "すべての会話を再表示",
+  "Show every conversation again": "すべてのスレッドを再表示",
   "Everything you sent": "送信したものすべて",
   "Everything by or to": "送信者または宛先:",
   "Chats": "チャット",
@@ -195,7 +195,7 @@ export default {
   "· the Hive is still on another ask here": "· Hiveはここの別の依頼に取り組み中です",
   "Finished since your last visit": "前回の訪問以降に完了",
   "move earlier or later,": "前後に移動、",
-  "New conversation in": "新しい会話:",
+  "New conversation in": "新しいスレッド:",
   "Answer:": "回答:",
   "Go through the older things in Stuff to address with me: clear the ones that are done, obsolete or no longer the focus, decide what an agent can, and bring me only what really needs me, one at a time.":
     "「対応が必要なこと」の古い項目を私と一緒に確認してください。完了済み、古くなったもの、もうフォーカスでないものは片付け、エージェントが判断できるものは判断し、本当に私が必要なものだけを1件ずつ持ってきてください。",
@@ -206,7 +206,7 @@ export default {
   "Nothing archived.": "アーカイブはありません。",
   "Nothing new waits on you": "あなたを待っている新着はありません",
   "older one": "古い項目",
-  "What waits on you, newest first, each in its conversation": "あなたを待っているもの(新しい順、各会話ごと)",
+  "What waits on you, newest first, each in its conversation": "あなたを待っているもの(新しい順、各スレッドごと)",
   "unread message": "未読メッセージ",
   "No agent is waiting on you": "あなたを待っているエージェントはいません",
   "Your Hive has used up its allowance for now, so new work waits until it comes back.":
@@ -218,7 +218,7 @@ export default {
   "agent comms: agents talking to each other and the hive's own notices": "エージェント間のやり取り: エージェント同士の会話とHive自身の通知",
   "Search looks through everything, whatever is on here.": "検索は、ここでオンにしている項目に関係なくすべてを対象にします。",
   "Nothing is on, so no messages show. Turn one on.": "何もオンになっていないため、メッセージは表示されません。どれかをオンにしてください。",
-  "To start something new, use New conversation.": "新しく始めるには「新しい会話」を使ってください。",
+  "To start something new, use New conversation.": "新しく始めるには「新しいスレッド」を使ってください。",
   "Search threads": "スレッドを検索",
   "always show the filters": "フィルターを常に表示",
   "Drop files to attach them": "ファイルをドロップして添付",
@@ -235,27 +235,27 @@ export default {
   "This browser can't record audio.": "このブラウザでは録音できません。",
   "The microphone isn't available: allow it for this page and try again.": "マイクを使用できません。このページで許可してから、もう一度お試しください。",
   "This computer's phone service needs a restart before it can turn speech into text, so the recording is attached as a voice memo instead. Send it, or remove it.":
-    "このコンピューターの電話サービスは、音声をテキストにする前に再起動が必要なため、録音はボイスメモとして添付されました。送信するか、削除してください。",
+    "このコンピューターの電話サービスは、音声をテキストにする前に再起動が必要なため、録音は音声メモとして添付されました。送信するか、削除してください。",
   "not the enrolled voice": "登録された声ではありません",
   "That didn't sound like your enrolled voice, so no words were added.": "登録された声と一致しなかったため、文字は追加されませんでした。",
   "No words were heard in that recording.": "この録音には言葉が聞き取れませんでした。",
   "Turning your words into text…": "音声をテキストに変換中…",
-  "Discard the voice memo": "ボイスメモを破棄",
+  "Discard the voice memo": "音声メモを破棄",
   "Live recording level": "録音レベル(リアルタイム)",
   "Put the words in the box": "テキストを入力欄に入れる",
   "Stop: the words go in the box for you to edit before you send.": "停止: テキストが入力欄に入るので、送信前に編集できます。",
-  "Send the voice memo": "ボイスメモを送信",
-  "Record a voice memo": "ボイスメモを録音",
+  "Send the voice memo": "音声メモを送信",
+  "Record a voice memo": "音声メモを録音",
   "Record a voice memo: press to start, press again to send, or hold to talk and let go. It is transcribed and summarized on the machine your Hive runs on.":
-    "ボイスメモを録音: 押して開始、もう一度押して送信、または押したまま話して離します。文字起こしと要約は、Hiveが動いているマシン上で行われます。",
+    "音声メモを録音: 押して開始、もう一度押して送信、または押したまま話して離します。文字起こしと要約は、Hiveが動いているマシン上で行われます。",
   "Opus": "Opus",
   "Sonnet": "Sonnet",
   "Haiku": "Haiku",
   "Fable": "Fable",
   "Focus:": "フォーカス:",
   "reaches the agent looking after it": "担当のエージェントに届きます",
-  "starts a new agent in its conversation": "その会話で新しいエージェントを開始します",
-  "a new agent, with this conversation to read": "この会話を読む新しいエージェント",
+  "starts a new agent in its conversation": "そのスレッドで新しいエージェントを開始します",
+  "a new agent, with this conversation to read": "このスレッドを読む新しいエージェント",
   "a new agent on this model": "このモデルの新しいエージェント",
   "Save these with the lock:": "鍵アイコンでこれらを保存:",
   "saved since the ask": "依頼以降に保存済み",
@@ -291,7 +291,7 @@ export default {
   "Add to the message": "メッセージに追加",
   "Your words go in the box to edit": "テキストは入力欄に入るので、編集できます",
   "Transcribed on this computer": "このコンピューターで文字起こし済み",
-  "A new agent picks up, reads this conversation and talks with you": "新しいエージェントが引き継ぎ、この会話を読んで、あなたと話します",
+  "A new agent picks up, reads this conversation and talks with you": "新しいエージェントが引き継ぎ、このスレッドを読んで、あなたと話します",
   "Talk with the Hive": "Hiveと話す",
   "is working:": "が作業中:",
   "It stops its current step and reads this at once. Work in that step may be done again. Esc goes back to an ordinary message.":
@@ -456,9 +456,9 @@ export default {
   "an agent asks to bring it up": "エージェントが立ち上げを依頼しています",
   "no board": "ボードなし",
   "This is for the owner's full sign-in. Sign in for full at the top.": "これはオーナーのフルサインイン用です。上部でフルモードにサインインしてください。",
-  "Plug in a board: flash it, set it up, test it and share its console with this chat": "ボードを接続: 書き込み、設定、テストを行い、そのコンソールをこのチャットと共有します",
+  "Plug in a board: flash it, set it up, test it and share its console with this chat": "ボードを接続: 書き込み、設定、テストを行い、そのコンソールをこのスレッドと共有します",
   "Plug in a board": "ボードを接続",
-  "Flash a board the Hive built firmware for, set its Wi-Fi, run its self-test and watch its console, from this browser. Nothing to install. In a conversation, the Board button opens all of this beside the chat.": "Hiveがファームウェアを作ったボードへの書き込み、Wi-Fiの設定、セルフテストの実行、コンソールの確認を、このブラウザから行えます。インストールは不要です。会話の中では、「ボード」ボタンでこれらすべてがチャットの横に開きます。",
+  "Flash a board the Hive built firmware for, set its Wi-Fi, run its self-test and watch its console, from this browser. Nothing to install. In a conversation, the Board button opens all of this beside the chat.": "Hiveがファームウェアを作ったボードへの書き込み、Wi-Fiの設定、セルフテストの実行、コンソールの確認を、このブラウザから行えます。インストールは不要です。スレッドでは、「ボード」ボタンでこれらすべてがスレッドの横に開きます。",
   "Agents can send commands": "エージェントがコマンドを送信可能",
 
   __patterns: [
@@ -479,14 +479,14 @@ export default {
     [/^(.+) stopped \((.+)\)$/, (_, n, w) => `${who(n)}が停止しました（${RETRY[w] || w}）`],
     [new RegExp(`^stopped with an error ${AGO}; a message wakes it to try again$`), (_, t) => `${ago(t)}エラーで停止しました。メッセージを送ると再試行します`],
     // lang-es-7: the tiles' heads and "more" notes
-    [/^\+(\d+) more, quietest last$/, "他$1件(静かなものほど後ろ)"],
+    [/^\+(\d+) more, quietest last$/, "他$1件(動きの少ないものほど後ろ)"],
     [/^\+(\d+) more$/, "他$1件"],
     [/^\+(\d+) not shown$/, "他$1件は未表示"],
     [/^\+(\d+) figures? not shown$/, (_, n) => `他${n}件の数値は未表示`],
     [/^\+(\d+) charts? not shown$/, (_, n) => `他${n}件のグラフは未表示`],
     [/^(\d+) events? in the last hour$/, (_, n) => `直近1時間に${n}件のイベント`],
     [/^(\d+) open$/, (_, n) => `未完了${n}件`],
-    [/^(\S+) of work in 24h$/, "24時間で$1分の作業"],
+    [/^(\S+) of work in 24h$/, "24時間の作業 $1"],
     [/^Couldn't read the (data|timeline|map)\. It keeps trying\.$/, (_, w) => `${WHAT[w]}を読み込めませんでした。再試行を続けています。`],
     // the top bar
     [/^(accounts? (?:has|have) room); (\S+) stops at (\d+)% in (\S+)$/, (_, a, n, p, d) => `${tr(a)}、${n}は${d}後に${p}%で停止`],
@@ -529,8 +529,8 @@ export default {
     [/^Board: (.+)$/, (_, t) => `ボード: ${t}`],
     [/^Saved (.+)\. (?:They|It) can't be shown again; tell the agent (their names|its name)\.$/, (_, n, w) =>
       `保存しました: ${n}。再表示はできません。エージェントに${w === "its name" ? "その名前" : "それらの名前"}を伝えてください。`],
-    [/^Nobody is on this right now\. A message wakes (\S+)$/, "今は誰もこれに取り組んでいません。メッセージを送ると$1を起こします"],
+    [/^Nobody is on this right now\. A message wakes (\S+)$/, "今は誰もこれに取り組んでいません。メッセージを送ると$1が起動します"],
     [/^Waiting for it to join (.+) \((\d+) s left\)$/, (_, n, t) => `${n === "your saved network" ? "保存済みのネットワーク" : n}への参加を待っています（残り${t}秒）`],
-    [/^--- the saved Wi-Fi couldn't be used \((.*)\); asking the person$/, (_, w) => `--- 保存済みのWi-Fiを使用できませんでした（${w === "no answer" ? "応答なし" : w}）。本人に確認します`],
+    [/^--- the saved Wi-Fi couldn't be used \((.*)\); asking the person$/, (_, w) => `--- 保存済みのWi-Fiを使用できませんでした（${w === "no answer" ? "応答なし" : w}）。あなたに確認します`],
   ],
 };

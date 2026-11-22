@@ -14,7 +14,7 @@ const RETRY = { "no connection to Claude": "Claude से कनेक्शन 
 const THEN = ", और तब आपका संदेश पढ़ा जाएगा";
 const LABEL = { "Asked": "अनुरोध", "Asked earlier": "पहले का अनुरोध", "Earlier": "पहले", "Later": "बाद में", "Not needed": "ज़रूरी नहीं" };
 const LIMIT = { "Weekly": "साप्ताहिक", "5-hour": "5 घंटे" };
-const WHAT = { data: "डेटा", timeline: "टाइमलाइन", map: "मानचित्र" };
+const WHAT = { data: "डेटा", timeline: "समयरेखा", map: "मानचित्र" };
 // the words a part of a line can be, found in the table below or here
 const TR = { "Everything else": "बाकी सब कुछ", "now": "अभी", "job running": "कार्य चल रहा है", "hasn't run": "चला नहीं है",
   "paused: no new runs": "रुका हुआ: कोई नया रन नहीं", "account has room": "जगह वाला खाता", "accounts has room": "जगह वाले खाते", "accounts have room": "जगह वाले खाते" };
@@ -100,7 +100,7 @@ export default {
   "Your Hive took a break": "आपका Hive विराम पर है",
   "Your Hive ran into a problem": "आपके Hive में समस्या आ गई",
   "Send a message and it tries again.": "संदेश भेजें और यह फिर कोशिश करेगा।",
-  "Its last message above is where it got to.": "ऊपर इसका आख़िरी संदेश वहीं तक है जहाँ यह पहुँचा।",
+  "Its last message above is where it got to.": "ऊपर का इसका आख़िरी संदेश दिखाता है कि यह कहाँ तक पहुँचा।",
   "Clear search": "खोज साफ़ करें",
   "Loading the conversation…": "बातचीत लोड हो रही है…",
   "No messages match.": "कोई संदेश मेल नहीं खाता।",
@@ -180,7 +180,7 @@ export default {
   "Everything you sent": "आपने जो कुछ भेजा",
   "Everything by or to": "जिसने भेजा या जिसे भेजा गया, वह सब:",
   "Chats": "चैट",
-  "Its id on the board": "संदेश-पटल पर इसकी आईडी",
+  "Its id on the board": "बोर्ड पर इसकी आईडी",
   "Contents": "विषय-सूची",
   "Contents: what's in this thread": "विषय-सूची: इस थ्रेड में क्या है",
   "Search messages": "संदेश खोजें",
@@ -467,7 +467,7 @@ export default {
     // lang-es-6: the second fact: the summary's own ask, or the list's entry that is out of the count
     [/^(Asked|Asked earlier|Earlier|Later|Not needed): (.+)$/s, (_, l, x) => `${LABEL[l]}: ${x}`],
     [new RegExp(`^updated ${AGO} · (\\d+) messages? since$`), (_, t, n) => `${when(t)} अपडेट किया गया · तब से ${n} संदेश`],
-    [/^Summary by (.+)$/, "$1 का सारांश"],
+    [/^Summary by (.+)$/, "$1 द्वारा सारांश"],
     [new RegExp(`^(.+) wrote back ${AGO}$`), (_, n, t) => `${ne(n)} ${when(t)} जवाब दिया`],
     [new RegExp(`^(.+) wrote last, ${AGO}(?:; (.+) picked it up and (wrote nothing back|has written nothing back yet))?$`), (_, n, t, a, y) => `आख़िरी संदेश: ${nm(n)}, ${when(t)}${a ? `; ${LOW[a] || who(a)} ने इसे उठाया और ${y[0] === "w" ? "कोई जवाब नहीं लिखा" : "अभी तक कोई जवाब नहीं लिखा"}` : ""}`],
     [/^(.+) picked it up and has written nothing back yet$/, (_, n) => `${ne(n)} इसे उठाया और अभी तक कोई जवाब नहीं लिखा`],
@@ -484,12 +484,12 @@ export default {
     [/^\+(\d+) more, quietest last$/, "+$1 और, सबसे शांत अंत में"],
     [/^\+(\d+) more$/, "+$1 और"],
     [/^\+(\d+) not shown$/, "+$1 दिखाए नहीं गए"],
-    [/^\+(\d+) figures? not shown$/, (_, n) => `+${n} आँकड़े दिखाए नहीं गए`],
+    [/^\+(\d+) figures? not shown$/, (_, n) => n === "1" ? "+1 आँकड़ा दिखाया नहीं गया" : `+${n} आँकड़े दिखाए नहीं गए`],
     [/^\+(\d+) charts? not shown$/, (_, n) => `+${n} चार्ट दिखाए नहीं गए`],
-    [/^(\d+) events? in the last hour$/, (_, n) => `पिछले एक घंटे में ${n} घटनाएँ`],
+    [/^(\d+) events? in the last hour$/, (_, n) => `पिछले एक घंटे में ${n} ${n === "1" ? "घटना" : "घटनाएँ"}`],
     [/^(\d+) open$/, (_, n) => `${n} खुले`],
     [/^(\S+) of work in 24h$/, "24 घंटे में $1 का काम"],
-    [/^Couldn't read the (data|timeline|map)\. It keeps trying\.$/, (_, w) => `${WHAT[w]} पढ़ा नहीं जा सका। यह कोशिश करता रहता है।`],
+    [/^Couldn't read the (data|timeline|map)\. It keeps trying\.$/, (_, w) => `${WHAT[w]} ${w === "timeline" ? "पढ़ी नहीं जा सकी" : "पढ़ा नहीं जा सका"}। यह कोशिश करता रहता है।`],
     // the top bar
     [/^(accounts? (?:has|have) room); (\S+) stops at (\d+)% in (\S+)$/, (_, a, n, p, d) => `${tr(a)}; ${n} ${d} में ${p}% पर रुकता है`],
     [/^No new data for (.+)\.$/, "$1 से कोई नया डेटा नहीं।"],
@@ -530,7 +530,7 @@ export default {
       `${b === "a board" ? "एक बोर्ड" : "दूसरे बोर्ड"} के लिए ${n} कमांड कतार में हैं, यहाँ नहीं भेजे गए: ${l}। हर कमांड कतार में लगने के 15 मिनट के भीतर केवल अपने बोर्ड को जाता है।`],
     [/^Board: (.+)$/, (_, t) => `बोर्ड: ${t}`],
     [/^Saved (.+)\. (?:They|It) can't be shown again; tell the agent (their names|its name)\.$/, (_, n, w) =>
-      `सहेजा गया: ${n}। इसे दोबारा नहीं दिखाया जा सकता; एजेंट को ${w === "its name" ? "इसका नाम" : "इनके नाम"} बता दें।`],
+      `सहेजा गया: ${n}। ${w === "its name" ? "इसे" : "इन्हें"} दोबारा नहीं दिखाया जा सकता; एजेंट को ${w === "its name" ? "इसका नाम" : "इनके नाम"} बता दें।`],
     [/^Nobody is on this right now\. A message wakes (\S+)$/, "अभी इस पर कोई नहीं है। संदेश भेजने से $1 जाग जाता है"],
     [/^Waiting for it to join (.+) \((\d+) s left\)$/, (_, n, t) => `इसके ${n === "your saved network" ? "आपके सहेजे गए नेटवर्क" : n} से जुड़ने की प्रतीक्षा है (${t} सेकंड बचे)`],
     [/^--- the saved Wi-Fi couldn't be used \((.*)\); asking the person$/, (_, w) => `--- सहेजा गया Wi-Fi उपयोग नहीं हो सका (${w === "no answer" ? "कोई जवाब नहीं" : w}); व्यक्ति से पूछा जा रहा है`],

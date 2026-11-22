@@ -1,6 +1,6 @@
 // Korean (rung E112b-ko): the strings Spanish has in lang-es-6.js, lang-es-7.js and lang-es-8.js.
 // Exact English keys, as in lang-es.js; __patterns for a line with a number or a name. Merged in lang.js.
-const WHO = { "The agent": "에이전트", "An agent": "어떤 에이전트", "The Hive": "Hive", "The warden": "감시자", "You": "사용자" };
+const WHO = { "The agent": "에이전트", "An agent": "어떤 에이전트", "The Hive": "Hive", "The warden": "감시자", "You": "나" };
 const LOW = { "the agent": "에이전트", "an agent": "어떤 에이전트", "the Hive": "Hive", "the warden": "감시자" };
 const who = n => WHO[n] || n.replace(/^Agent ([A-Z]{1,2})$/, "에이전트 $1");
 // the subject particle after a name: 이 or 가 by the last Hangul syllable, 이(가) after a Latin letter or a digit
@@ -74,7 +74,7 @@ export default {
   "How it's working": "작동 현황",
   "Can't reach the data.": "데이터에 연결할 수 없습니다.",
   "It keeps trying.": "계속 재시도합니다.",
-  "Starts held": "보류 중인 시작",
+  "Starts held": "시작 보류됨",
   "No account has room": "여유 있는 계정이 없습니다",
   "nothing new starts": "새로 시작되는 것이 없습니다",
   "of its 5-hour limit": "(5시간 한도 대비)",
@@ -93,7 +93,7 @@ export default {
   "job running": "작업 실행 중",
   "hasn't run": "실행되지 않음",
   "Each row is a thread, each bar an agent's session (filled with a status mark at its end while running; pale and dashed once ended; rows with someone running come first, the hive's own upkeep rows last and one line each), each tick along the top of a row a post. Stacked bars mean agents worked in parallel. A bar's name shows when it fits: hover for any. Click a bar for the agent, a row to read the thread. To zoom: Ctrl+scroll or pinch, or the − and + buttons. Drag sideways to move through time.":
-    "각 행은 하나의 스레드이고, 각 막대는 에이전트의 세션입니다(실행 중에는 채워지고 끝에 상태 표시가 붙으며, 종료되면 연하게 점선으로 표시됩니다. 실행 중인 에이전트가 있는 행이 먼저 나오고, hive 자체의 유지 관리 행은 마지막에 한 줄씩 표시됩니다). 행 위쪽의 각 눈금은 게시물을 나타냅니다. 막대가 겹쳐 있으면 에이전트가 병렬로 작업했다는 뜻입니다. 막대의 이름은 공간이 충분할 때 표시되며, 마우스를 올리면 확인할 수 있습니다. 막대를 클릭하면 에이전트를, 행을 클릭하면 스레드를 읽을 수 있습니다. 확대/축소는 Ctrl+스크롤 또는 핀치, 또는 − 및 + 버튼으로 합니다. 옆으로 드래그하면 시간을 이동합니다.",
+    "각 행은 하나의 스레드이고, 각 막대는 에이전트의 세션입니다(실행 중에는 채워지고 끝에 상태 표시가 붙으며, 종료되면 연하게 점선으로 표시됩니다. 실행 중인 에이전트가 있는 행이 먼저 나오고, Hive 자체의 유지 관리 행은 마지막에 한 줄씩 표시됩니다). 행 위쪽의 각 눈금은 게시물을 나타냅니다. 막대가 겹쳐 있으면 에이전트가 병렬로 작업했다는 뜻입니다. 막대의 이름은 공간이 충분할 때 표시되며, 마우스를 올리면 확인할 수 있습니다. 막대를 클릭하면 에이전트를, 행을 클릭하면 스레드를 읽을 수 있습니다. 확대/축소는 Ctrl+스크롤 또는 핀치, 또는 − 및 + 버튼으로 합니다. 옆으로 드래그하면 시간을 이동합니다.",
   // lang-es-8: views/comms.js, the conversation list and a conversation
   "Couldn't save that:": "저장하지 못했습니다:",
   "the server didn't answer": "서버가 응답하지 않았습니다",
@@ -162,11 +162,11 @@ export default {
   "Back in the list": "목록으로 복귀",
   "Grey it in the list: still there to open and write in, and back by itself when something new is for you":
     "목록에서 흐리게 표시합니다. 열어서 글을 쓸 수 있고, 사용자에게 새 내용이 생기면 자동으로 돌아옵니다",
-  "Where this sits in the hive's priority list": "hive의 우선순위 목록에서 이 항목의 위치",
+  "Where this sits in the hive's priority list": "Hive의 우선순위 목록에서 이 항목의 위치",
   "This thread's priority": "이 스레드의 우선순위",
   "Priority:": "우선순위:",
   "Couldn't file it:": "보관하지 못했습니다:",
-  "Turn on For you, Updates and Agent comms": "「나에게」「업데이트」「에이전트 통신」 켜기",
+  "Turn on For you, Updates and Agent comms": "「나를 위한」「업데이트」「에이전트 통신」 켜기",
   "Save the conversation as one page you can post: the ask, the agents at work, the result. You see it first and can remove anything.":
     "대화를 게시할 수 있는 한 페이지로 저장합니다. 요청, 작업 중인 에이전트, 결과가 담깁니다. 먼저 확인할 수 있고 원하는 부분은 삭제할 수 있습니다.",
   "Lay it out like a script and save it as a PDF from the print dialog": "대본 형식으로 배치하고 인쇄 대화 상자에서 PDF로 저장합니다",
@@ -217,7 +217,7 @@ export default {
     "모든 Claude 계정이 사용량 기준선을 넘었으므로 새 작업은 여유가 생길 때까지 대기합니다. 「사용량」을 확인하세요.",
   "your messages, what agents ask or tell you, and each job's result": "사용자의 메시지, 에이전트가 묻거나 알리는 내용, 각 작업의 결과",
   "agents' progress updates": "에이전트의 진행 상황 업데이트",
-  "agent comms: agents talking to each other and the hive's own notices": "에이전트 통신: 에이전트끼리의 대화와 hive 자체의 알림",
+  "agent comms: agents talking to each other and the hive's own notices": "에이전트 통신: 에이전트끼리의 대화와 Hive 자체의 알림",
   "Search looks through everything, whatever is on here.": "검색은 여기서 어떤 항목이 켜져 있든 전체를 대상으로 합니다.",
   "Nothing is on, so no messages show. Turn one on.": "켜진 항목이 없어서 메시지가 표시되지 않습니다. 하나를 켜세요.",
   "To start something new, use New conversation.": "새로 시작하려면 「새 대화」를 사용하세요.",
@@ -507,17 +507,17 @@ export default {
     [/^(\d+) running · (\d+) more below(?: · (\d+) of (\d+) that ended)?$/, (_, r, b, d, a) => `${r}건 실행 중 · 아래에 ${b}건 더` + (d ? ` · 종료된 것: ${a}건 중 ${d}건` : "")],
     // usage at wall size
     [/^Only (\S+) can take new runs\. At the last 6 hours' pace, (\S+) reaches its (\d+)% stop in about (\S+), (\S+) before it resets\.$/,
-      "$1만 새 실행을 받을 수 있습니다. 최근 6시간 속도 기준으로 $2의 사용량은 약 $4 후 $3% 정지선에 도달하며, 이는 초기화 $5 전입니다."],
+      "$1만 새 실행을 받을 수 있습니다. 최근 6시간 속도 기준으로 $2의 사용량은 약 $4 후 $3% 중단선에 도달하며, 이는 초기화 $5 전입니다."],
     [/^(\d+) of (\d+) logins can take new runs\. At the last 6 hours' pace, (\S+) reaches its (\d+)% stop in about (\S+), (\S+) before it resets\.$/,
-      "로그인 $2개 중 $1개가 새 실행을 받을 수 있습니다. 최근 6시간 속도 기준으로 $3의 사용량은 약 $5 후 $4% 정지선에 도달하며, 이는 초기화 $6 전입니다."],
+      "로그인 $2개 중 $1개가 새 실행을 받을 수 있습니다. 최근 6시간 속도 기준으로 $3의 사용량은 약 $5 후 $4% 중단선에 도달하며, 이는 초기화 $6 전입니다."],
     [/^Only (\S+) can take new runs, and none reaches its stop line before it resets at the current pace\.$/,
-      "$1만 새 실행을 받을 수 있으며, 현재 속도로는 초기화 전에 정지선에 도달하는 것이 없습니다."],
+      "$1만 새 실행을 받을 수 있으며, 현재 속도로는 초기화 전에 중단선에 도달하는 것이 없습니다."],
     [/^(\d+) of (\d+) logins can take new runs, and none reaches its stop line before it resets at the current pace\.$/,
-      "로그인 $2개 중 $1개가 새 실행을 받을 수 있으며, 현재 속도로는 초기화 전에 정지선에 도달하는 것이 없습니다."],
+      "로그인 $2개 중 $1개가 새 실행을 받을 수 있으며, 현재 속도로는 초기화 전에 중단선에 도달하는 것이 없습니다."],
     [/^(· )?last (\d+) hours$/, (_, d, n) => `${d || ""}최근 ${n}시간`],
     [/^of \$(\S+)$/, "$$$1 중"],
     [/^of (\d+) requests$/, "요청 $1건 중"],
-    [/^(Weekly|5-hour): stop line at (\d+)%$/, (_, l, p) => `${LIMIT[l]}: 정지선 ${p}%`],
+    [/^(Weekly|5-hour): stop line at (\d+)%$/, (_, l, p) => `${LIMIT[l]}: 중단선 ${p}%`],
     // the mesh
     [/^(\d+) posts? · (.+)$/, (_, n, s) => `게시물 ${n}건 · ${tr(s)}`],
     [/^(\S+) also here · (\d+) posts?$/, (_, a, n) => `${a} 여기에도 있음 · 게시물 ${n}건`],
