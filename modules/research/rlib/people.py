@@ -1,7 +1,7 @@
 """Names and roles on a page, and whether a page really backs a claim about someone. Pattern matching: it finds candidates and checks words on a page, and doesn't pretend to understand them."""
 import re
 import unicodedata
-from .extract import fold, registrable, domain_of
+from .extract import fold, registrable, domain_of, url_date
 
 ROLE = r"(?:(?:Senior |Associate |Assistant |Deputy |Interim |Acting |Executive |Founding |Vice |Co-?)*(?:President|Vice President|Vice Chancellor|Chancellor|Provost|Dean|Director|Chief [A-Z][a-z]+(?: [A-Z][a-z]+)* Officer|C[EOTFI]O|Chair(?:person|woman|man)?|Professor|Head|Manager|Coordinator|Superintendent|Founder|Partner|Principal|Lead|Secretary|Commissioner|Faculty|Instructor|Lecturer|Fellow|Officer|Editor|Researcher|Scientist|Engineer|Advisor|Adviser|Chief of Staff|General Counsel|Special Assistant|Comptroller|Controller|Registrar|Treasurer|Ombuds(?:person|man)?))"
 _ROLE_RE = re.compile(r"\b" + ROLE + r"\b", re.I)
@@ -838,7 +838,7 @@ def check(page, name, title, org="", domains=None, claim="", today=None):
     verified: on a site that looks like the org's own, the role's words are attached to the name (same sentence or the lines under it, with no other person between). A pattern match, not a reading of the page, and a page saying they held a post doesn't show they hold it today. secondary: the same on another site. partial: the name is there and the role isn't, or the page says they've left.
     not-found: the page was read and has no such name. not-a-person: the name is only part of a named post or building. blocked: unread."""
     import datetime as dt
-    res = {"status": "", "quote": "", "url": page.get("url", ""), "via": page.get("via", ""), "page_date": page.get("date", "") or "", "as_of": page.get("snapshot") or (page.get("fetched_at") or "")[:10], "official": False, "title_share": 0.0, "note": "", "claim_share": "", "stale": False}
+    res = {"status": "", "quote": "", "url": page.get("url", ""), "via": page.get("via", ""), "page_date": page.get("date", "") or url_date(page.get("final_url") or page.get("url", "")), "as_of": page.get("snapshot") or (page.get("fetched_at") or "")[:10], "official": False, "title_share": 0.0, "note": "", "claim_share": "", "stale": False}
     if page.get("status") != "ok":
         return dict(res, status="blocked" if page.get("status") != "refused" else "refused", note=page.get("note", ""))
     text = page["text"]
