@@ -63,6 +63,7 @@ Run `research hunt spec.json --dry-run` first. It searches nothing and writes no
 `must` words normally have to be close to the person on the page. If they describe the organisation rather than the person ("open source" for a foundation), set `"allow_page_signal": true`.
 
 `function_words` (optional) makes a verified title count only when the title or the person's own quote names the function: a title like "Chief Information Officer" is held back as a near miss when the list is for career-services buyers, while a VP of Academic Affairs whose own quote names the future of work stays. Words, not a pattern.
+`role_focus` (optional) is the strict form: the title alone must name one of the words (a provost whose own quote mentions careers is still held back as a near miss). Words, not a pattern; use it when `roles` lets whole classes of heads through.
 
 List `roles` most wanted first: when an org's `per_org` cap is hit on a page, the earlier roles get the places. It tries every angle on every org, finds more orgs from `discover`, and writes `leads.csv` (each row with its page and quote), `near_misses.csv` and `REPORT.md`. A row needs the person, the title and a `must` word near them on a page that names the org. If it can't reach the target it says it's short and exits 3: it never pads. Run it again on the same case to continue.
 

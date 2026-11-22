@@ -214,7 +214,7 @@ def weak_signal_url(url):
     u = urllib.parse.urlsplit(url)
     return bool(DEV_HOST.search(u.hostname or "") or WEAK_SIGNAL_HOST.search(u.hostname or "") or WEAK_SIGNAL_PATH.search(u.path or ""))
 
-HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles org_pattern domains angles site_terms allow_org_signal sources read_per_search allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words".split())
+HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms allow_org_signal sources read_per_search allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words".split())
 
 
 def _pattern(spec, key):
@@ -255,6 +255,10 @@ class Hunt:
         if isinstance(fw, str): fw = [fw]
         if not isinstance(fw, list) or not all(isinstance(x, str) for x in fw): raise ValueError("spec function_words is a list of words (or one word)")
         self.function_words = list(fw)
+        rf = spec.get("role_focus") or []
+        if isinstance(rf, str): rf = [rf]
+        if not isinstance(rf, list) or not all(isinstance(x, str) for x in rf): raise ValueError("spec role_focus is a list of words (or one word)")
+        self.role_focus = list(rf)
         self.role, self.exclude = _pattern(spec, "roles"), _pattern(spec, "exclude_roles")
         for k in ("angles", "orgs", "discover"):
             v = spec.get(k)
@@ -358,6 +362,7 @@ class Hunt:
         if res.get("left"): return "the page says they left"
         if res["status"] == "secondary" and not self.allow_secondary: return "only on another site"
         if far and not self.allow_page_signal: return "the signal isn't near this person"
+        if self.role_focus and not any(people.term_regex(w).search(fold(row.get("title", ""))) for w in self.role_focus): return "the title does not name the role focus"
         if self.function_words and not self.function_fit(row.get("title", ""), row.get("signal", "") + " " + (row.get("check_quote") or "") + (" " + urllib.parse.urlparse(row["source_url"]).path.replace("-", " ").replace("/", " ") if getattr(self, "dir_entry", False) else "")): return "no function word in the title or the person's own quote"
         at = people.employer_after(text, row["name"], org) or people.employer_before(text, row["name"], org) or people.employer_listed(text, row["name"], org)
         if at: return f"the page puts them at {at}"
@@ -425,6 +430,8 @@ class Hunt:
             m = next((x for x in people.term_regex(hit_terms[0]).finditer(body) if CAREER_NEAR.search(body[max(0, x.start() - 300):x.end() + 300])), None)  # the word beside a careers or workforce word: AI research news (UT) is not a careers signal
             excerpt = " ".join(clean[max(0, m.start() - 80):m.end() + 120].split()) if m else ""
             nav = NAV_AI.sub(" ", excerpt)  # "Skip to AI Search" is the site's own menu, not a statement
+            words = re.findall(r"[A-Za-z]+", nav)
+            if words and sum(w[0].isupper() for w in words) / len(words) >= 0.85: nav = ""  # a run of Capitalised Menu Items (BU, Howard, American), not a sentence
             if re.search(r"(?<!\w)" + re.escape(hit_terms[0]) + r"(?!\w)", nav, re.I):  # the word must be in the excerpt we keep, not just in the folded text
                 self.org_signal[org] = (page.get("final_url") or page["url"], excerpt)
         if self.must and not hit_terms:
