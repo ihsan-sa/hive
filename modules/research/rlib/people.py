@@ -51,8 +51,16 @@ def clean_name(n):
     return n.title() if n.isupper() else n  # BRIAN BARNETT, as some directories print it
 
 
+HR_CODE = re.compile(r"[\s,(]+(?=[A-Z0-9]*(?:\d[A-Z]*){5})(?=[A-Z0-9]*[A-Z])[A-Z0-9]{5,12}\)?\s*$")  # an org chart's position code after the title: "Dean Business & Workforce Development 297FA059" (Germanna, fnwords82)
+
+
+def drop_code(t):
+    """A title without the HR position code an org chart prints after it."""
+    return HR_CODE.sub("", t or "") if t else t
+
+
 def clean_title(t):
-    t = t.split("\n")[0]
+    t = drop_code(t.split("\n")[0])
     # Where the post ends ("Special Assistant to the President" goes on past its "to"): "CEO of Nexeon, said:", "..., Dr Alex Groombridge, CTO" (the next person), "CEO, spearheads the ...".
     t = re.split(r"(?<![A-Z])(?<!Assist)(?<!Asst)(?<!Assoc)(?<!Exec)(?<!Coord)(?<!Dept)(?<!aka)[.;:|•]\s|\s[–—-]\s|\s(?:said|says|who|and has|has|is|was|will|at|in|on)\s|(?<![Aa]ssistant)\sto\s|[\"“”(]|,\s+(?:sees|see|feels|believes|notes|adds|hopes|expects|thinks|wants|plans|looks|knows|argues|stresses)\b|,?\s(?:said|says|added|explained)\b|,\s+(?:Dr|Prof|Mr|Ms|Mrs)\.?\s|,\s+[a-z]+s\s+(?:the|a|an|its)\b|,\s+the\s+[a-z]|,\s+(?:where|which|whose|when)\b|\suntil\s|\sand\s+(?:highly|widely|also|one)\b", t)[0].strip(" ,.")
     t = re.sub(r"\b((?:co-?)?founder)\s+of\s+[a-z][a-z -]*(?:,.*)?$", r"\1", t, flags=re.I)  # "co-founder of advanced materials supplier"
@@ -414,6 +422,7 @@ def title_slot(text, name, title, org=""):
             tail = candidate[m.end():].strip()
             if not tail or tail == ".": return True
             if re.fullmatch(r"since (?:19|20)\d\d\.?", tail): return True
+            if HR_CODE.fullmatch(" " + tail.upper()): return True  # an org chart's position code after the post: "Dean Business & Workforce Development 297FA059" (Germanna, fnwords82)
             # A directory card's tags run on with no space after the comma: "Dean / Business & Workforce Development,Administration".
             if re.fullmatch(r",[a-z][a-z &-]{2,40}", tail): return True
             if tail.startswith(("|", "—", "–")) and "@" in tail: return True

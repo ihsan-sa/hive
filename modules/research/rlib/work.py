@@ -283,10 +283,42 @@ BELOW_DIRECTOR = re.compile(r"\b(?:assistant|associate|deputy)\s+director\b", re
 HEAD_ON_PAGE = re.compile(r"(?:^[ \t]*|\bis (?:the |an? |our )?|,[ \t]*)((?:executive |senior |managing )?(?:director|dean|vice president|vice chancellor)\b(?!['’]s)(?!\s+of\s+students)[^\n.;]{0,60})", re.I | re.M)  # a head's title as a page prints it: at the start of a line ("Executive Director", SDSU's team page) or in a bio sentence ("... is the Executive Director of Alumni and Career Engagement", Brooklyn's Magner page)
 
 
+FUNCTION_DIRECTOR = re.compile(r"\b(?:operations|data|systems|technology|analytics|assessment|finance|budget|marketing|communications|events|outreach|recruitment|partnerships|employer\s+(?:relations|engagement|development))\b", re.I)  # a support or outward-facing function inside a unit, not the unit itself
+SENIOR_DIRECTOR = re.compile(r"\b(?:executive|senior|managing)\s+director\b|\bvice\b|\bdean\b|\bprovost\b|\bpresident\b|\bchancellor\b|\bchief\b", re.I)
+UNIT_IN_TITLE = re.compile(r"\b(?:career|workforce)\s+(?:services|center|centre|office)\b", re.I)  # "Director of Career Services and Employer Relations" heads the unit
+HIGHER_HEAD = re.compile(r"(?:^[ \t]*|\bis (?:the |an? |our )?|,[ \t]*)((?:executive director|(?:senior |associate |assistant )?vice (?:provost|president|chancellor)|(?:executive )?dean)\b(?!['’]s)(?!\s+of\s+students)[^\n.;]{0,60})", re.I | re.M)  # a rank above a plain director, as a page prints it
+
+
+def function_director(title):
+    """True for a plain director of a function inside a unit (operations, data, systems, employer relations, partnerships ...): not an executive or senior director, not a dean or vice anything, and not a title that names the unit it heads."""
+    t = title or ""
+    return bool(re.search(r"\bdirector\b", t, re.I) and FUNCTION_DIRECTOR.search(t)) and not (BELOW_DIRECTOR.search(t) or SENIOR_DIRECTOR.search(t) or UNIT_IN_TITLE.search(t))
+
+
+CORE_FUNCTION = re.compile(r"\b(?:advising|advisement|coaching|counsel+ing|experiential|internships?|co-?ops?|exploration|career\s+(?:education|development|readiness|engagement|preparation|pathways?)|programs?|student\s+success)\b", re.I)  # a function the careers unit itself does: advising, coaching, experiential education
+UNIT_WORD = re.compile(r"\b(?:center|centre|office|department|division|institute|services)\b", re.I)  # the title names a unit it may head ("Director, Center for Career & Professional Readiness")
+
+
+def core_function_director(title):
+    """True for a plain director of one of the careers unit's own functions (Rowe: "Director, Experiential Education & Career Advising", AU, under its Vice Provost for Career and Global Readiness, fnwords86): not an executive or senior director, and the title names no unit. function_director covers the support functions; this the core ones. Such a director heads the unit only when nobody above them is listed, so it is held only against a higher head of the same field."""
+    t = title or ""
+    return bool(re.search(r"\bdirector\b", t, re.I) and CORE_FUNCTION.search(t)) and not (BELOW_DIRECTOR.search(t) or SENIOR_DIRECTOR.search(t) or UNIT_IN_TITLE.search(t) or UNIT_WORD.search(t))
+
+
+def field_words(title, skip=()):
+    """The words a head's title shares with a post under it: career or workforce, and the longer title words."""
+    f = fold(title or "")
+    return {w for w in title_words(title) if len(w) > 3 and w not in skip} | {w for w in ("career", "workforce") if w in f}
+
+
 def head_on_page(title, text):
-    """The head an assistant or associate director works under, when the same page lists one, or "". Lewis (assistant director, Brooklyn's Magner Career Center, under its executive director) and Moreno (associate director, SDSU, under an executive director) were verified as leaders in fnwords69: BELOW_HEAD only ranked them inside the per_org cap, and with a free slot they stayed."""
-    if not BELOW_DIRECTOR.search(title or ""): return ""
-    m = HEAD_ON_PAGE.search(text or "")
+    """The head an assistant or associate director works under, when the same page lists one, or "". Lewis (assistant director, Brooklyn's Magner Career Center, under its executive director) and Moreno (associate director, SDSU, under an executive director) were verified as leaders in fnwords69: BELOW_HEAD only ranked them inside the per_org cap, and with a free slot they stayed. A plain director of a function (operations, data, systems, employer relations) is held the same way when the page lists a Vice Provost, Vice President, Vice Chancellor, Executive Director or Dean: Julie Jones (Director of Employer Relations and External Partnerships) and Ndiritu (Director of Career Operations, Data & Systems) verified in fnwords81 from AU's Career Center staff directory, which lists Romig, Vice Provost for Career and Global Readiness. The directory is alphabetical, so "under" is rank, not page order."""
+    if BELOW_DIRECTOR.search(title or ""): m = HEAD_ON_PAGE.search(text or "")
+    elif function_director(title): m = HIGHER_HEAD.search(text or "")
+    elif core_function_director(title):
+        mine = field_words(title, ("director",))
+        m = next((h for h in HIGHER_HEAD.finditer(text or "") if field_words(h.group(1)) & mine), None)  # a higher head of the same field: a Dean of Liberal Arts on the page says nothing about the career advising director
+    else: return ""
     return " ".join(m.group(1).split()) if m else ""
 INTERIM = re.compile(r"\b(?:interim|acting)\b", re.I)
 HEAD_TITLE = re.compile(r"(?:(?:interim|acting)\s+)?(?:(?:executive|senior|associate|assistant)\s+)?(?:vice\s+president|vice\s+chancellor|vice\s+provost|provost|president|chancellor|director|dean|chief\s+\w+\s+officer)\b[^|;\n]{0,70}")
@@ -377,10 +409,18 @@ def skipped_host(url, hosts=SKIP_HOSTS):
 JOB_POSTING = re.compile(r"/(?:job|jobs|requisition|vacancy|posting)s?/\d", re.I)
 
 
+LISTING_PATH = re.compile(r"/(?:taxonomy/term|tags?|topics?|categor(?:y|ies))/[^/]+/?(?:page/\d+/?)?$", re.I)  # an index of other pages' teasers, ending at the term (a post filed under /category/news/its-slug/ is a page of its own)
+
+
+def listing_url(url):
+    """A tag, topic, category or taxonomy listing: gmu.edu/taxonomy/term/21822 is a news-tag index whose one item is the Costello business school career office's AI pilot, and it stood as the central career office head's organisation signal (Campbell, fnwords89). Its text is the site's menu plus other units' headlines, so whose AI news it is can't be told from the listing."""
+    return bool(LISTING_PATH.search(urllib.parse.urlsplit(url or "").path or ""))
+
+
 def weak_signal_url(url):
-    """An org signal must not come from a course catalog, a vendor training host, a LibGuide, a directory or a jobs page: those carry the AI word without saying anything about careers or workforce."""
+    """An org signal must not come from a course catalog, a vendor training host, a LibGuide, a directory, a jobs page or a tag listing: those carry the AI word without saying anything about careers or workforce."""
     u = urllib.parse.urlsplit(url)
-    return bool(DEV_HOST.search(u.hostname or "") or WEAK_SIGNAL_HOST.search(u.hostname or "") or WEAK_SIGNAL_PATH.search(u.path or "") or search_results_url(url))
+    return bool(DEV_HOST.search(u.hostname or "") or WEAK_SIGNAL_HOST.search(u.hostname or "") or WEAK_SIGNAL_PATH.search(u.path or "") or search_results_url(url) or listing_url(url))
 
 
 _CAP = r"[A-Z][\w&'\-]*"
@@ -389,8 +429,22 @@ NOT_A_UNIT = re.compile(r"(?i)\b(?:high|middle|elementary|summer|charter|seconda
 SCHOOL_SMALL = {"school", "college", "of", "and", "the", "for", "&"}
 BLOCK_END = re.compile(r"(?i)\s*(?:read more|view profile|learn more|more)\s*$")
 GOVERNANCE_PAGE = re.compile(r"\b(?:governance|council|task ?force|steering committee|guiding principles?|responsible ai|ai policy|policies)\b")
-TEACHING_PAGE = re.compile(r"\b(?:professors?|courses?|coursework|curricul\w*|open educational resources|oer|teaching|pedagog\w*|classrooms?)\b")
+TEACHING_PAGE = re.compile(r"\b(?:professors?|courses?|coursework|curricul\w*|open educational resources|oer|teaching|pedagog\w*|classrooms?|tutor\w*|academic (?:center|centre|support|success)|learning (?:center|centre|commons|lab|support)|writing (?:center|centre)|study (?:skills|help|guides?))\b")  # study help is teaching too: Germanna's Academic Center for Excellence GenAI guide (Lance, fnwords82)
 CAREER_UNIT = re.compile(r"\bcareer (?:services|center|centre|office|development|education|engagement|coaching)\b|\bworkforce (?:development|division|office|education|innovation)\b|\bcontinuing education\b|\bemployer relations\b")
+HOWTO_PLACEHOLDER = re.compile(r"\[[a-z][a-z /\-]{1,30}\]", re.I)  # a prompt template's slot: "[role]", "[industry or space]"
+HOWTO_WORD = re.compile(r"\b(?:prompts?|glossary|tip sheets?|tips|tools? (?:is|are) available|how to (?:effectively )?(?:use|leverage)|chatgpt|large language models?|llms?)\b", re.I)
+HOWTO_IMPERATIVE = re.compile(r"^(?:don'?t|do not|check|review|use|be|tailor|type|ask|pretend|read|learn|try|avoid|make sure|keep|explore|practice|remember|consider|ensure|write|create|start)\b", re.I)
+HOWTO_ACTIVITY = re.compile(r"\b(?:register(?: now| today| here)?|registration|funded by|grants?|awarded|announc\w+|press release|strategic plan|initiatives?|council|task ?force|partnership with|memorandum|mou|panel|conference|summit|keynote|said|says|according to|signed|launch(?:es|ed)? (?:a|an|the|its|our)\b)", re.I)
+
+
+def howto_page(text):
+    """'' or why a page is a generic AI how-to: a quarter or more of its prose (lines of five words or more, cookie notices aside) is prompts, questions or advice in the imperative, it uses four or more how-to words (prompts, glossary, tips, ChatGPT ...), and none of its prose names an event, grant, plan, initiative, partnership or a person's words. Such a page is advice to students, not a sign the organisation is doing anything about AI (AU's 'AI in Your Career Development' as Romig's only signal, fnwords86 review). On 64 org-signal pages of fnwords80-87 it marks only that one (38% such lines, ten how-to words); the nearest, Macomb's workshop page (27%), has one how-to word and names a grant, and no other page has more than two."""
+    p = [x.strip() for x in (text or "").split("\n") if len(x.split()) >= 5 and "cookie" not in x.lower()]
+    if len(p) < 8 or any(HOWTO_ACTIVITY.search(x) for x in p): return ""
+    tips = sum(1 for x in p if HOWTO_PLACEHOLDER.search(x) or x.endswith("?") or HOWTO_IMPERATIVE.match(x))
+    words = {m.group(0).lower() for x in p for m in HOWTO_WORD.finditer(x)}
+    if tips / len(p) < 0.25 or len(words) < 4: return ""
+    return f"{tips} of its {len(p)} lines are prompts, questions or tips; it names no event, grant, plan or person"
 
 
 def person_schools(title, text, name, org):
@@ -419,6 +473,26 @@ def school_named(unit, title, excerpt, url):
     if words and all(re.search(rf"\b{w}\b", hay) for w in words): return True
     acro = "".join(w[0] for w in re.findall(r"[A-Za-z]+", unit) if w.lower() not in ("of", "and", "the", "for")).lower()
     return len(acro) >= 2 and acro in set(re.split(r"[/._\-]", fold(url)))
+
+
+DEPT_PATH = re.compile(r"/(?:schools?-(?:and-)?departments?|academic-departments?|departments?)/([^/]+)", re.I)
+SCHOOL_HOST = {"business", "law", "engineering", "medicine", "nursing", "education", "cns", "chss", "cas", "las", "artsci", "finearts", "liberalarts", "sciences"}
+
+
+def academic_unit_page(url, title, org=""):
+    """The school or academic department a signal page belongs to, as (its name, a key the person's own address would share when it is theirs too), or None: a department path (GRCC's /schools-departments/computer-information-systems/), a school's subdomain (business.purdue.edu), or a school named in the page title after the site's separator ('… | American University, Kogod School of Business'). A careers or workforce school (continuing education, workforce development) is not academic."""
+    u = urllib.parse.urlsplit(url or "")
+    host = (u.hostname or "").lower().split(".")
+    if (m := DEPT_PATH.search(u.path or "")): name, key = m.group(1).replace("-", " "), m.group(0).lower()
+    elif len(host) > 2 and (set(host[:-2]) & SCHOOL_HOST): name, key = sorted(set(host[:-2]) & SCHOOL_HOST)[0], ".".join(host[host.index(sorted(set(host[:-2]) & SCHOOL_HOST)[0]):])
+    else:
+        units = [x for seg in re.split(r" \| | [-\u2013\u2014] ", title or "")[1:] for x in SCHOOL_UNIT.findall(seg) if not (fold(x) in fold(org) or (org and fold(org) in fold(x)) or NOT_A_UNIT.search(x))]
+        if not units: return None
+        name = units[0]
+        core = name if re.match(r"(?:School|College)\b", name) else re.split(r"\s(?:School|College)\b", name)[0]
+        key = next((w for w in re.findall(r"[a-z]+", fold(core)) if w not in SCHOOL_SMALL), fold(name))
+    if CAREER_UNIT.search(fold(name)) or re.search(r"\b(?:career|workforce|continuing|extended|professional)\b", fold(name)): return None
+    return name, key
 
 
 SEARCH_PATH = re.compile(r"/(?:search|results|site-?search|searchresults?)(?:\.\w+)?/?$", re.I)
@@ -653,6 +727,7 @@ class Hunt:
 
     def recheck_stored(self):
         """Rows found under an earlier spec have to pass this one too. Those that don't become near misses, and the report says how many."""
+        for r in (*self.leads.values(), *self.near.values()): r["title"] = people.drop_code(r.get("title", ""))  # a row stored before drop_code (Lance's 297FA059, fnwords83)
         for k, r in list(self.leads.items()):
             why = self.stored_why(r)
             if why:
@@ -684,21 +759,30 @@ class Hunt:
 
     OTHER_UNIT = "the organisation's signal is another unit's"
     GOV_TEACH = "the organisation's signal is a governance or teaching page"
+    HOWTO = "the organisation's signal is a generic AI how-to page"
 
     def org_signal_weak(self, row, src=None):
-        """Why a row resting on its organisation's signal is a weak lead, or '' (fnwords74 review): the person works in one school (their page's title or block names it) and the signal page is not that school's, or the signal page is a governance or teaching page that names neither the person nor a careers or workforce unit in the signal's words. Such a row is held as a near miss. allow_weak_org_signal lists them."""
+        """Why a row resting on its organisation's signal is a weak lead, or '' (fnwords74 review): the person works in one school (their page's title or block names it) and the signal page is not that school's, or the signal page is a governance or teaching page that names neither the person nor a careers or workforce unit in the signal's words, or a generic AI how-to page (`howto_page`: tools, prompts and tips, no event, grant, plan or person; Romig, fnwords86) that does not name the person. Such a row is held as a near miss. allow_weak_org_signal lists them."""
         m = re.match(r"\(the organisation's, from (\S+)\) (.*)", str(row.get("signal") or ""), re.S)
         if not m or row.get("signal_near_person") == "yes" or self.s.get("allow_weak_org_signal"): return ""
         url, excerpt = m.groups()
         sp = self.case.page_at(url)
         if not sp: return ""
         src = src or self.case.page_at(row.get("source_url", "")) or {}
-        for unit in person_schools(src.get("title", ""), src.get("text", ""), row["name"], row.get("organisation", "")):
+        schools = person_schools(src.get("title", ""), src.get("text", ""), row["name"], row.get("organisation", ""))
+        for unit in schools:
             if not school_named(unit, sp.get("title", ""), excerpt, url): return f"{self.OTHER_UNIT} (this person is in the {unit}; the signal is from {url})"
+        if not schools:  # no school on their page: a central careers or workforce post, and a school's or department's AI page is that unit's, not theirs (Wedge, GRCC's Center for Career & Professional Readiness, on the CIS department's AI incubator, fnwords80)
+            au = academic_unit_page(url, sp.get("title", ""), row.get("organisation", ""))
+            if au and any(w in fold(row.get("title", "")) for w in CAREER_WORDS) and au[1] not in fold(row.get("source_url", "")) and not CAREER_UNIT.search(fold(excerpt)) and not people.name_regex(row["name"]).search(fold(sp.get("text", ""))):
+                un = au[0] if au[0][:1].isupper() else au[0].title()  # a name from a path or host: "computer information systems"
+                return f"{self.OTHER_UNIT} (a central careers or workforce post; the signal is from a page of the {un}, {url})"
         head = fold(f"{sp.get('title', '')} " + urllib.parse.urlsplit(url).path.replace("-", " "))
         k = GOVERNANCE_PAGE.search(head) or TEACHING_PAGE.search(head)
         if k and not people.name_regex(row["name"]).search(fold(sp.get("text", ""))) and not CAREER_UNIT.search(fold(excerpt)):
             return f"{self.GOV_TEACH} ('{k.group(0)}') that names neither this person nor a careers unit ({url})"
+        if (h := howto_page(sp.get("text", ""))) and not people.name_regex(row["name"]).search(fold(sp.get("text", ""))):
+            return f"{self.HOWTO} ({h}; {url})"
         return ""
 
     FULL_NOTE = "the organisation is full"
@@ -845,11 +929,13 @@ class Hunt:
     INTERIM_NOTE = "an interim title, and the organisation's site gives them another post"
     INTERIM_HELD = "an interim title on an old or undated page, and the organisation's site now lists another person in that post"
     NOT_ON_STAFF = "only in the news, and the organisation's own staff page doesn't list them"
+    INTERIM_OFF_STAFF = "an interim title on an old or undated page, and the unit's own staff page no longer lists them"
 
     def case_why(self, r):
         """Why the rest of the case outweighs this row's page, or ''. (1) An Interim or Acting title, when a page of the organisation's site (the same one counts) gives the person another head's post, and the row's page is no newer than that one: Montgomery's chart lists Benmouna as Interim VP of Workforce and as VP of STEM, and its leadership page only the second (fnwords69). (2) A row read on a news page, when the organisation's staff or team page for the same function lists its people and not this person: a 2025 newsroom quote made Welch ACC's career services director, and ACC's Career Life Design team page lists another head and no Welch (fnwords69)."""
         name, title, org, src = r.get("name", ""), r.get("title", ""), r.get("organisation", ""), r.get("source_url", "")
         if not (name and org and src): return ""
+        if (hd := self.head_in_case(r)): return f"{self.UNDER_CASE_HEAD} ({hd})"
         pages, own = None, registrable(domain_of(src)) if r.get("official_site") == "yes" else ""
         if INTERIM.search(title):
             pages = self.org_pages(org, own)
@@ -866,25 +952,51 @@ class Hunt:
                     if pg["date"] and r.get("page_date") and pg["date"] < r["page_date"]: continue
                     who = post_holder(title, pg.get("text", ""), name, skip=orgw)
                     if who: return f"{self.INTERIM_HELD} ({who}, {u})"
+            if self.old_page(r.get("page_date") or extract.url_date(src)) and (u := self.staff_omits(r, pages, own, 2)) and u is not True: return f"{self.INTERIM_OFF_STAFF} ({u})"  # k2794: no one else in the post, but the unit's own staff page, no older, lists its people and not them
         path = urllib.parse.urlsplit(src)
         if (NEWS_PAGE.search(f"{path.hostname or ''}{path.path}") or extract.url_date(src)) and self.old_page(r.get("page_date") or extract.url_date(src)):  # a story from this year is as current as the staff page (Willigan, GMU, March 2026)
-            orgw = set(re.findall(r"[a-z]+", fold(org)))
-            fw = [w for w in self.function_words if people.term_regex(w).search(fold(title))] or sorted(title_words(title) - orgw)
-            if not fw: return ""
-            unit = {w for w in title_words(title) - orgw if len(w) > 3 and not any(people.term_regex(f).search(w) for f in self.function_words)}  # a unit the title names (Costello's Office of Career Services): another unit's staff page says nothing about it
-            rx, last = people.name_regex(name), (fold(people.clean_name(name)).split() or [""])[-1]
-            staff = []
-            for pg in pages if pages is not None else self.org_pages(org, own):
-                u = pg.get("final_url") or pg["url"]
-                if u == src or NEWS_PAGE.search(urllib.parse.urlsplit(u).path or ""): continue
-                where = fold(f"{urllib.parse.urlsplit(u).hostname} {urllib.parse.urlsplit(u).path} {pg.get('title') or ''}".replace("-", " ").replace("/", " ").replace("_", " "))
-                if not STAFF_PAGE.search(where) or not any(people.term_regex(w).search(where) for w in fw): continue
-                txt = fold(pg.get("text", ""))
-                if any(w not in f"{where} {txt}" for w in unit): continue
-                if rx.search(txt) or (len(last) > 2 and re.search(rf"(?<![\w-]){re.escape(last)}(?![\w-])", txt)): return ""  # a staff page names them
-                if pg["date"] and r.get("page_date") and pg["date"] < r["page_date"]: continue  # older than the news
-                if len(LISTED_POST.findall(pg.get("text", ""))) >= 3: staff.append(u)
-            if staff: return f"{self.NOT_ON_STAFF} ({staff[0]})"
+            u = self.staff_omits(r, pages, own, 3)
+            if u and u is not True: return f"{self.NOT_ON_STAFF} ({u})"
+        return ""
+
+    def staff_omits(self, r, pages=None, own="", posts=3):
+        """The organisation's own staff, team or leadership page for the unit a row's title names, no older than the row's page, that lists at least `posts` people with posts and not this person: its address. True when such a page names them (they are on staff), '' when the case has no such page. A page about another unit says nothing (Costello's Office of Career Services against the central Career Center, fnwords74), nor does a news story."""
+        name, title, org, src = r.get("name", ""), r.get("title", ""), r.get("organisation", ""), r.get("source_url", "")
+        orgw = set(re.findall(r"[a-z]+", fold(org)))
+        fw = [w for w in self.function_words if people.term_regex(w).search(fold(title))] or sorted(title_words(title) - orgw)
+        if not fw: return ""
+        unit = {w for w in title_words(title) - orgw if len(w) > 3 and not any(people.term_regex(f).search(w) for f in self.function_words)}  # a unit the title names (Costello's Office of Career Services): another unit's staff page says nothing about it
+        rx, last = people.name_regex(name), (fold(people.clean_name(name)).split() or [""])[-1]
+        staff = []
+        for pg in pages if pages is not None else self.org_pages(org, own):
+            u = pg.get("final_url") or pg["url"]
+            if u == src or NEWS_PAGE.search(urllib.parse.urlsplit(u).path or ""): continue
+            where = fold(f"{urllib.parse.urlsplit(u).hostname} {urllib.parse.urlsplit(u).path} {pg.get('title') or ''}".replace("-", " ").replace("/", " ").replace("_", " "))
+            if not STAFF_PAGE.search(where) or not any(people.term_regex(w).search(where) for w in fw): continue
+            txt = fold(pg.get("text", ""))
+            if any(w not in f"{where} {txt}" for w in unit): continue
+            if rx.search(txt) or (len(last) > 2 and re.search(rf"(?<![\w-]){re.escape(last)}(?![\w-])", txt)): return True  # a staff page names them
+            if pg["date"] and r.get("page_date") and pg["date"] < r["page_date"]: continue  # older than the row's page
+            if len(LISTED_POST.findall(pg.get("text", ""))) >= posts: staff.append(u)
+        return staff[0] if staff else ""
+
+    UNDER_CASE_HEAD = "a post under a head of the same unit the case lists"
+
+    def head_in_case(self, r):
+        """The head an assistant, associate or deputy director works under, when the case holds a row (lead or near miss) at the same organisation whose title heads a unit the row's title names, as "Name, Title", or "". head_on_page sees only the row's own page: Lindsey (Assistant Director, Career Education, Career Services ..., GMU) verified from her own bio page in fnwords80 while Saskia Campbell, executive director of University Career Services, was a near miss in the same case. With no such head anywhere, the associate director may be the most senior there and is not held."""
+        title, org = r.get("title", ""), r.get("organisation", "")
+        plain = not BELOW_DIRECTOR.search(title or "") and core_function_director(title)  # a plain director of a core function sits under a higher head, not under another director
+        if not (BELOW_DIRECTOR.search(title or "") or plain): return ""
+        orgw = set(re.findall(r"[a-z]+", fold(org)))
+        mine = {w for w in title_words(title) - orgw if len(w) > 3} | {w for w in ("career", "workforce") if w in fold(title)}
+        me = people.name_regex(r.get("name", ""))
+        for o in list(self.leads.values()) + list(self.near.values()):
+            t = o.get("title", "") or ""
+            if o.get("organisation") != org or me.search(fold(o.get("name", ""))) or BELOW_DIRECTOR.search(t): continue  # an associate dean or assistant vice president heads a unit; an associate director does not
+            if not re.search(r"\b(?:director|dean|vice\s+president|vice\s+chancellor|vice\s+provost)\b", fold(t)): continue
+            if plain and not (re.search(r"\b(?:executive|senior|managing)\s+director\b|\bvice\s+(?:president|chancellor|provost)\b|\bdean\b", fold(t)) and not core_function_director(t)): continue
+            theirs = {w for w in title_words(t) - orgw if len(w) > 3} | {w for w in ("career", "workforce") if w in fold(t)}
+            if mine & theirs: return f"{o.get('name')}, {' '.join(t.split())[:80]}"
         return ""
 
     def case_rechecks(self):
@@ -1209,7 +1321,7 @@ class Hunt:
                     if any(people.term_regex(t).search(ctx) for t in hit_terms): close = True; break
             if not close and hit_terms and per.get("how") == "directory" and any(people.term_regex(t).search(fold(page.get("title") or "")) for t in hit_terms): close = True  # a contact block on a page titled for the signal: the listed head is the program's contact
             if hit_terms and not sig and not res["official"]: close = False  # only a menu says it, as on a namesake's site
-            row = dict(name=per["name"], title=per["title"], organisation=org, official_site="yes" if res["official"] else "no", signal=sig, signal_near_person="yes" if close else "no", source_url=page.get("final_url") or page["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status=res["status"], check_quote=res["quote"], angle=angle, note=res["note"])
+            row = dict(name=per["name"], title=people.drop_code(per["title"]), organisation=org, official_site="yes" if res["official"] else "no", signal=sig, signal_near_person="yes" if close else "no", source_url=page.get("final_url") or page["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status=res["status"], check_quote=res["quote"], angle=angle, note=res["note"])
             self.dir_entry = per.get("how") == "directory"
             far = bool(hit_terms and not close)
             org_sig = staff_sig  # per person: the first head on a page who took the org's signal left staff_sig set, and everyone below them was held as "the signal isn't near this person" (HCCC's directory: Belle listed, 8 held; fnwords59)
