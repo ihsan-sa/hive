@@ -631,10 +631,9 @@ def employer_after(text, name, org, window=120):
     # Accents and spacing off as fold does, but capitals kept: they are how an employer shows.
     plain = " ".join("".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)).replace("’", "'").split(" "))
     for m in rx.finditer(plain):
-        tail = plain[m.end():m.end() + window]
-        tail = re.split(r"[.;:!?\n“”\"]", tail)[0]
+        tail = re.split(r"[.;:!?\n“”\"]", plain[m.end():m.end() + window + 60])[0]   # the body may run past the window: cut at it, "at the Magner" read as an outside employer where the page says "at the Magner Career Center", Brooklyn's own (Guarin-Klein, fnwords91)
         at = re.search(r"\bat\s+(?:the\s+)?([A-Z][\w&-]*(?:\s+[A-Z][\w&-]*)*)", tail)
-        if not at: continue
+        if not at or at.start() >= window: continue
         # "Ilya Sutskever at the Mathematics Genealogy Project" (a reference title) gives no post, so no employer.
         if not _ROLE_RE.search(tail[:at.start()]): continue
         words = [fold(w) for w in at.group(1).split()]

@@ -194,6 +194,7 @@ export default {
   "Runs' outcomes in the last day": "Resultados de las ejecuciones del último día",
   "Every change to the hive itself, with the measure it should move and the day it is judged on. A landed change isn't an improvement until the measure says so.": "Cada cambio en el propio Hive, con la medida que debería mover y el día en que se juzga. Un cambio aplicado no es una mejora hasta que la medida lo diga.",
   "Couldn't read the progress data. It keeps trying.": "No se pudieron leer los datos de progreso. Sigue intentándolo.",
+  "Couldn't refresh the library, so this shows the list it read last. It keeps trying.": "No se pudo actualizar la biblioteca, así que se muestra la lista que leyó por última vez. Sigue intentándolo.",
   "Couldn't refresh, so this shows what it read last. It keeps trying.": "No se pudo actualizar, así que se muestra lo último que leyó. Sigue intentándolo.",
   "hive progress, hive asks, hive outcomes, hive improve": "hive progress, hive asks, hive outcomes, hive improve",
 

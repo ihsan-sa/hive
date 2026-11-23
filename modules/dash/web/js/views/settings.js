@@ -549,7 +549,7 @@ async function loadConns(ctx, fresh) {
 // the token goes into mcp.json for the agents and is never sent back, so a row says only that it has one.
 function mcpUrlBlock(ctx) {
   const M = F.mcpUrls, A = F.mcpAdd ||= { name: "", url: "", token: "" };
-  if (!M) return null;
+  if (!M || !Array.isArray(M.servers)) return null;   // the consumer preview answers without a list (sweep 11-23: "reading length" crashed Settings)
   const run = async (body, key, done) => {
     F.busy[key] = true; ctx.update();
     try { F.mcpUrls = await post("/api/mcp-url", body); if (done) done(); say("mcpurl", body.do === "add" ? "Added. Agents can use it from their next run." : "Removed.", "good"); } catch (e) { say("mcpurl", e.message, "bad"); }
@@ -565,7 +565,7 @@ function mcpUrlBlock(ctx) {
         h("div", null, field("Name", input({ value: A.name, autocomplete: "off", maxlength: 40, placeholder: "tools", oninput: (e, n) => { A.name = n.value; } }))),
         h("div", { class: "frow-grow" }, field("Address", input({ type: "url", value: A.url, autocomplete: "off", placeholder: "https://example.com/mcp", oninput: (e, n) => { A.url = n.value; } })))),
       h("div", { class: "frow" },
-        h("div", { class: "frow-grow" }, field("Token (if the server needs one)", input({ type: "password", value: A.token, autocomplete: "off", oninput: (e, n) => { A.token = n.value; } }))),
+        h("div", { class: "frow-grow" }, field("Token (if the server needs one)", input({ type: "password", value: A.token, autocomplete: "new-password", oninput: (e, n) => { A.token = n.value; } }))),
         button("Add", null, { type: "submit", size: "s", kind: "primary", busy: F.busy["mcpurl-add"] }))) : h("p", { class: "muted" }, `${M.max} is the most. Remove one to add another.`),
     msg("mcpurl"));
 }
@@ -608,7 +608,7 @@ function connectorsSection(ctx) {
           x.link ? button(x.name === "conn-ntfy" ? "Open Phone alerts" : "Open Push notifications", null, { size: "s", href: href("settings", x.link) }) : null,
           x.readme && h("a", { class: "conn-readme", href: x.readme, target: "_blank", rel: "noreferrer noopener" }, "How to set it up")),
         box ? h("form", { class: "frow conn-paste", onsubmit: e => { e.preventDefault(); paste(x); } },
-          h("div", { class: "frow-grow" }, field(x.can_finish_here ? "Paste the link" : "Paste the token", input({ type: "password", autocomplete: "off", value: F2[x.name] || "", placeholder: x.secret, oninput: (e, n) => { F2[x.name] = n.value; } }))),
+          h("div", { class: "frow-grow" }, field(x.can_finish_here ? "Paste the link" : "Paste the token", input({ type: "password", autocomplete: "new-password", value: F2[x.name] || "", placeholder: x.secret, oninput: (e, n) => { F2[x.name] = n.value; } }))),
           button("Save", null, { type: "submit", size: "s", busy: F.busy["conn-" + x.name] })) : null,
         x.shared ? h("p", { class: "conn-shared muted" }, x.saved ? "Its key is saved. The phone line uses the same key, so it isn't changed from here: use Secrets." : "The phone line uses this key too: saving it here changes the phone line's key.") : null,
         msg("conn-" + x.name)));
