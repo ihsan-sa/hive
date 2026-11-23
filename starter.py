@@ -2213,8 +2213,11 @@ def floor(c, st, alive, login):
         sig, seen = [r.get("rungs_done"), r.get("rungs_left"), r.get("rung")], st.setdefault("floor_seen", {}).get(r["thread"]) or {}
         st["floor_seen"][r["thread"]] = {"sig": sig, "n": seen.get("n", 0) + 1 if seen.get("sig") == sig else 1}
         text = cont.G.brief(r)   # to @new, or to the thread's last worker (goals.resume_arm), who keeps its own model
+        model = c.get("floor_model", "sonnet")
+        try: model, _ = cont.G.no_rung_model(r, text, model)   # a round with no rung to take goes to Opus, a held Sonnet worker via its model-set file (hive-meta R59; aceaa 11-23: 84686c8 reached only `hive goals --post`, so floor rounds stayed on Sonnet)
+        except Exception: pass
         with BOARD.open("a") as f:
-            f.write(json.dumps({"id": dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now(), "from": "starter", "to": [text.split()[0]], "thread": r["thread"], **({"model": c.get("floor_model", "sonnet")} if text.startswith("@new ") else {}), "text": text}) + "\n")
+            f.write(json.dumps({"id": dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now(), "from": "starter", "to": [text.split()[0]], "thread": r["thread"], **({"model": model} if text.startswith("@new ") else {}), "text": text}) + "\n")
         log(event="floor", thread=r["thread"], running=len(alive), tier=1 if first(r) else 2); return
 
 def improver(c, st, alive, login):

@@ -101,15 +101,42 @@ def ddg(q, n):
     if not hits and not re.search(r"no\s+(?:more\s+)?results", page, re.I): raise SourceError(f"no results page (plain request gave HTTP {r.status}): probably blocked")
     return hits
 
+def _parse_ddg_html(html, n):
+    """html.duckduckgo.com: one div.result block per answer, the link in a.result__a (wrapped in a //duckduckgo.com/l/?uddg= redirect), the snippet in a.result__snippet."""
+    out = []
+    for block in re.split(r"""<div[^>]*class=["'][^"']*?\bresult\b""", html)[1:]:
+        if re.match(r"""[^"']*result--ad""", block): continue   # an ad block
+        m = re.search(r"""<a[^>]*class=["']result__a["'][^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>|<a[^>]*href=["']([^"']+)["'][^>]*class=["']result__a["'][^>]*>(.*?)</a>""", block, re.S)
+        if not m: continue
+        u, t = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+        u = htmllib.unescape(u)
+        if "uddg=" in u: u = urllib.parse.parse_qs(urllib.parse.urlsplit(u).query).get("uddg", [u])[0]
+        if u.startswith("//"): u = "https:" + u
+        if "duckduckgo.com/y.js" in u: continue   # an ad
+        sn = re.search(r"""class=["']result__snippet["'][^>]*>(.*?)</a>""", block, re.S)
+        out.append(Hit(url=u, title=_strip(t), snippet=_strip(sn.group(1)) if sn else "", source="ddg"))
+    return out[:n]
+
+
+def ddg_html(q, n):
+    """The same engine's html front end, on its own host, so the per-host gap in net queues its asks apart from lite's."""
+    url = base("ddg_html", "https://html.duckduckgo.com") + f"/html/?q={q_(q)}"
+    r = net.get(url)
+    hits = _parse_ddg_html(r.text, n) if r.status == 200 and not r.error else []
+    if hits: return hits
+    if r.status == 200 and not r.error and re.search(r"no\s+(?:more\s+)?results", r.text, re.I): return []
+    raise SourceError(f"no results page (HTTP {r.status}{': ' + r.error if r.error else ''}): probably blocked")
 
 
 def ddg_twice(q, n):
-    """ddg asked twice, the answers interleaved without repeats, as one ddg list (so merge doesn't count it as two engines agreeing). ddg answers the same query with different pages from call to call: 57% of the URLs repeated across two runs on `site:` queries, against 97% for bing, and fnwords56 lost 5 verified leads to pages only an earlier ddg answer had held. A hunt's site searches use it; one answer stands if the other call fails."""
-    answers, err = [], None
-    for _ in range(2):
-        try: answers.append(ddg(q, n))
-        except SourceError as e: err = err or e
-    if not answers: raise err
+    """ddg asked twice (lite and html front ends), the answers interleaved without repeats, as one ddg list (so merge doesn't count it as two engines agreeing). ddg answers the same query with different pages from call to call: 57% of the URLs repeated across two runs on `site:` queries, against 97% for bing, and fnwords56 lost 5 verified leads to pages only an earlier ddg answer had held. A hunt's site searches use it; one answer stands if the other call fails."""
+    def one(ask):
+        try: return ask(q, n), None
+        except SourceError as e: return None, e
+    # Side by side, and on two hosts: one after the other, fnwords57's site searches waited 338 worker-seconds against 148; both on lite, the per-host gap queued every ddg ask behind the doubled load (fnwords58: 3.6 s engine wait a search).
+    with cf.ThreadPoolExecutor(max_workers=2) as ex: got = list(ex.map(one, (ddg, ddg_html)))
+    answers = [a for a, _ in got if a is not None]
+    if not answers: raise next(e for _, e in got if e)
     out, seen = [], set()
     for i in range(max(len(a) for a in answers)):
         for a in answers:
