@@ -271,6 +271,7 @@ export default {
   "No document matches.": "一致する文書はありません。",
   "The library has no PDFs yet.": "ライブラリにはまだ PDF がありません。",
   "Couldn't read the library:": "ライブラリを読み取れませんでした:",
+  "Couldn't refresh the library, so this shows the list it read last. It keeps trying.": "ライブラリを更新できなかったため、最後に読んだ一覧を表示しています。再試行を続けます。",
   "new, being filed": "新規、登録中",
   "Opening…": "開いています…",
   "Couldn't open this document:": "この文書を開けませんでした:",

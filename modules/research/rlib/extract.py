@@ -110,12 +110,21 @@ def url_date(url):
         except ValueError: pass
     m = re.search(r"/uploads/(?:sites/\d+/)?((?:19|20)\d\d)/(\d\d)/", path)
     if m and 1 <= int(m.group(2)) <= 12: return f"{m.group(1)}-{m.group(2)}-01"
+    m = re.search(r"/archives?/((?:19|20)\d\d)-(?:(?:19|20)?\d\d)/", path)  # an archived catalog's year, /archives/2013-14/directory/: its staff list ended with that year (Cincinnati State's workforce VPs, fnwords104)
+    if m: return f"{int(m.group(1)) + 1}-06-30"
     return ""
+
+
+PEOPLE_PAGE = re.compile(r"/(?:profiles?|directory|staff(?:-directory)?|people|our-team|meet-the-team|meet-our-staff|leadership)(?:/|\.html?|$|[?#])", re.I)  # a page that lists people by name
 
 
 def page_date(url, meta, ld_items, text, title=""):
     """When the page says it was published, and how it knows. A copyright line is not a date."""
     if "wikipedia.org" in url: return "", ""  # the first date there is from the article's subject (an infobox's founding year)
+    # A staff list is kept up to date, not written once: its last edit says it is current. TCNJ's career staff directory was published 2011-05-26 and modified 2025-12-03 (fnwords107). A story keeps its first date: an edit doesn't make old news new.
+    if PEOPLE_PAGE.search(url) or re.search(r"\b(?:staff|directory|our team|leadership)\b", title, re.I):
+        for d in [parse_date(meta.get(k, "")) for k in ("article:modified_time", "og:updated_time", "datemodified")] + [parse_date(str(it.get("dateModified", ""))) for it in ld_items]:
+            if d: return d, "meta"
     for k in DATE_META:
         d = parse_date(meta.get(k, ""))
         if d: return d, "meta"

@@ -170,6 +170,7 @@ export default {
   "No document matches.": "Kein Dokument passt.",
   "The library has no PDFs yet.": "Die Bibliothek hat noch keine PDFs.",
   "Couldn't read the library:": "Die Bibliothek konnte nicht gelesen werden:",
+  "Couldn't refresh the library, so this shows the list it read last. It keeps trying.": "Die Bibliothek konnte nicht aktualisiert werden, daher siehst du die zuletzt gelesene Liste. Es wird weiter versucht.",
   "new, being filed": "neu, wird abgelegt",
   "Opening…": "Wird geöffnet…",
   "Couldn't open this document:": "Dieses Dokument konnte nicht geöffnet werden:",

@@ -13,7 +13,8 @@ export const HX = { "claude-code": ["cc", "Claude Code"], codex: ["cx", "Codex"]
 const T = v => (v ? Date.parse(v) : null);
 /** How long it ran, or has been running. */
 export const took = r => { const a = T(r.start), b = r.state === "running" ? now() : T(r.end); return a && b && b >= a ? b - a : null; };
-export const tookText = r => { const v = took(r); return v == null ? "–" : v < 1000 ? "<1s" : dur(v); };
+// Under a minute it reads "40s", not dur's "under a minute": that is wider than the 72 px timer column and pushed a landscape phone's Now page 28 px sideways (drive_app_empty_land, 2026-11-23).
+export const tookText = r => { const v = took(r); return v == null ? "–" : v < 1000 ? "<1s" : v < 59500 ? Math.round(v / 1000) + "s" : dur(v); };
 export const hModel = r => (r.model ? modelName(r.model) : r.harness === "codex" ? "Codex" : "–");
 export const modeWord = r => (r.mode === "foreground" ? "owner waits" : r.mode === "background" ? "background" : r.mode || "–");
 const modeLong = r => (r.mode === "foreground" ? `${r.agent} waited for it to finish` : r.mode === "background" ? `${r.agent} kept working while it ran` : r.mode === "process" ? "a program of its own (claude -p, codex exec, a session), not a helper inside a run" : "not recorded");

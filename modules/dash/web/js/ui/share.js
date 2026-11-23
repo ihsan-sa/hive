@@ -14,9 +14,9 @@ export async function shareDialog(th) {
   pv.files = pv.files || []; pv.agents = pv.agents || [];
   const gone = new Set(), withFiles = h("input", { type: "checkbox", checked: "" });
   const rows = pv.items.map(i => {
-    const text = h("div", { class: "sh-text" }, i.text || (i.files || []).map(f => "File: " + f.name).join(", "));
+    const text = h("div", { class: "sh-text", "data-content": "" }, i.text || (i.files || []).map(f => "File: " + f.name).join(", "));
     const b = button("Remove", () => { gone.has(i.id) ? gone.delete(i.id) : gone.add(i.id); row.toggleAttribute("data-gone", gone.has(i.id)); b.textContent = tr(gone.has(i.id) ? "Put back" : "Remove"); }, { size: "s", kind: "quiet", title: "Leave this message out of the page" });
-    const row = h("div", { class: "sh-row" }, h("div", { class: "sh-who" }, h("b", null, i.who === "asker" ? "You" : i.who), b), text);
+    const row = h("div", { class: "sh-row" }, h("div", { class: "sh-who" }, i.who === "asker" ? h("b", null, "You") : h("b", { "data-content": "" }, i.who), b), text);
     return row;
   });
   const hasFiles = pv.files.length > 0;

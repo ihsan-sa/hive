@@ -271,6 +271,7 @@ export default {
   "No document matches.": "일치하는 문서가 없습니다.",
   "The library has no PDFs yet.": "라이브러리에 아직 PDF가 없습니다.",
   "Couldn't read the library:": "라이브러리를 읽을 수 없었습니다:",
+  "Couldn't refresh the library, so this shows the list it read last. It keeps trying.": "라이브러리를 새로 고치지 못해 마지막으로 읽은 목록을 보여 줍니다. 계속 시도합니다.",
   "new, being filed": "신규, 등록 중",
   "Opening…": "여는 중…",
   "Couldn't open this document:": "이 문서를 열 수 없었습니다:",

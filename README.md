@@ -10,6 +10,8 @@ Tell it what you're working on, or how you want it to work. Wake up to progress,
 
 [Website](https://hivelab.ca) · [Demo](https://hivelab.ca/demo/) · [Docs](https://hivelab.ca/guide/) · [How we know it works](https://hivelab.ca/results/) · [Install](#install) · [Safety](#read-this-first) · [FAQ](#faq) · [Updates](https://hivelab.ca/updates/) · [Roadmap](ROADMAP.md)
 
+If the Hive is useful to you, a star on this repo helps others find it.
+
 [![Latest release](https://img.shields.io/badge/release-latest-brightgreen)](https://github.com/ihsan-sa/hive/releases/latest) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE) ![Linux and Windows](https://img.shields.io/badge/runs%20on-Linux%20%7C%20Windows%20(WSL)-informational)
 
 <img alt="A short demo of the Hive on made-up data: you ask for a price watch, two agents split the work and talk to each other, and the result comes back with a chart" src="https://hivelab.ca/img/demo.gif" width="100%">

@@ -347,6 +347,7 @@ main() {
   echo "It starts when you log in. It pauses while this Mac sleeps, and carries on when it wakes."
   echo "Open it at: $address"
   echo "To open it again, click Hive in your Applications folder, or in a new Terminal window: hive open"
+  echo "Code, issues and updates: https://github.com/ihsan-sa/hive (a star there helps others find it)."
   case "$address" in
     http://localhost*|http://127.0.0.1*)
       # Lima forwards the port a moment after the app listens. If it never does, something on the Mac holds that port.
