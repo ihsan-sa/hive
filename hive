@@ -65,6 +65,16 @@ def sent_before(nonce, tail=1 << 21):
         if q.get("from") == "person" and isinstance(s, dict) and s.get("nonce") == nonce: return q.get("id")
     return None
 
+RESERVED_NAMES = {"rootwarden"}   # names whose posts root's ledger marks; a user cannot post as them
+VERIFY_POST = "/usr/local/bin/hive-verify-post"
+
+def ledger_mark(p):
+    """Root's verdict on a rootwarden post from its ledger (hive-verify-post: OK, ALTERED, FORGED, ...), or None when not applicable."""
+    if str(p.get("from", "")).lower() not in RESERVED_NAMES or not os.path.exists(VERIFY_POST): return None
+    try: out = subprocess.run([VERIFY_POST, str(p.get("id"))], capture_output=True, text=True, timeout=20).stdout.strip()
+    except (OSError, subprocess.SubprocessError): return "  ✗ could not check root's ledger"
+    return "  " + (out or "✗ no answer from hive-verify-post")
+
 def show(p):
     to = " ".join("@" + n for n in names(p.get("to")))
     print(f"[{p.get('id')}] {p.get('at','')[:19]} {p.get('from')}{' -> ' + to if to else ''} (thread {p.get('thread')})"
@@ -74,6 +84,7 @@ def show(p):
     for f in p.get("files") or []: print(f"  file: {f.get('path')} ({f.get('size', 0)} bytes)")
     if p.get("from") == "person" and signed() and _signed.shell_posted(p): print("  ✓ posted from the root-run word shell (root's log has this id and text)")
     elif p.get("from") == "person" and p.get("sig") and signed(): print("  " + _signed.line(_signed.check(p, _nonces), p))
+    if (m := ledger_mark(p)): print(m)
 
 def attachable(raw):
     """A readable file under the size cap, and not from a dot directory or dotfile in ~: those hold logins and tokens,
@@ -457,6 +468,7 @@ def cmd_post(a):
             sys.exit(f"hive post: nothing posted. A post that pings the person should be short ({len(text)} chars; keep it under {PING_MAX}): "
                      "put the details in the thread in a post without the mention, then send a few plain lines with the `For you:` line.")
     if a.reply_to and not any(p.get("id") == a.reply_to for p in posts()): sys.exit(f"hive post: --reply-to {a.reply_to}: no such post")
+    if a.as_ and a.as_.lower() in RESERVED_NAMES: sys.exit(f"hive post: nothing posted. `{a.as_}` is a reserved name (rootwarden's own posts are marked in its ledger); post as your own name.")   # a courtesy check: a user can still forge by editing this file, which the ledger shows
     once = sig_nonce() if a.as_ == "person" else None
     if once and (first := sent_before(once)):   # a resend of a signed message already on the board: answer with its id, post nothing
         print(first, flush=True); print(f"hive post: already on the board as {first} (the same signed message sent again), so not posted twice", file=sys.stderr); return
@@ -559,7 +571,11 @@ def cmd_verify(a):
     """Exit 0 only for a good signature with a key root has pinned. Reads the whole board, so a copied signature shows. A warden should run its own copy of signed.py: this file is the agents' own."""
     p = next((p for p in posts() if p.get("id") == a.id), None)
     if not p: print(f"hive verify: no post {a.id}", file=sys.stderr); sys.exit(2)
-    if not signed(): print("hive verify: core/signed.py is missing", file=sys.stderr); sys.exit(2)
+    if str(p.get("from", "")).lower() in RESERVED_NAMES:   # root's ledger decides, not this file's copy of the check
+        if not os.path.exists(VERIFY_POST): print("hive verify: hive-verify-post is not installed on this machine", file=sys.stderr); sys.exit(2)
+        r = subprocess.run([VERIFY_POST, a.id], capture_output=True, text=True, timeout=20)
+        print(r.stdout.strip() or r.stderr.strip()); sys.exit(r.returncode)
+    if not signed():print("hive verify: core/signed.py is missing", file=sys.stderr); sys.exit(2)
     if _signed.shell_posted(p): print(f"{a.id} from person: ✓ posted from the root-run word shell (root's log has this id and text)"); sys.exit(0)
     r = _signed.check(p, _nonces)
     print(f"{a.id} from {p.get('from')}: " + (_signed.line(r, p) or "unsigned: a claim, nothing shows who wrote it"))

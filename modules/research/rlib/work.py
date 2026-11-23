@@ -200,8 +200,8 @@ def verify_csv(path, case, out=None, find=False, cols=None, domains=None, worker
     return {"rows": len(rows), "counts": dict(collections.Counter(r["check_status"] for r in rows)), "out": dest, "problems": [{"name": r.get(c["name"]), "status": r["check_status"], "note": r["check_note"]} for r in rows if r["check_status"] != "verified" or r["check_note"]]}
 
 
-WEAK_SIGNAL_HOST = re.compile(r"^(?:careertraining|ed2go|libguides|catalog|bulletin|courses?)\b|\.(?:ed2go|libguides)\.|^ed2go", re.I)
-WEAK_SIGNAL_PATH = re.compile(r"/(?:catalog|courses?|course-?descriptions?|coursesoffered|programs?/all|academic-programs|leadership|directory|faculty-staff|jobs|employment|c\.php|policies|policy|academics|list-of-programs|channels|presidential-search|search-committee|bios?|profiles?|people|about-the-president)\b|(?:ai|artificial-intelligence)-(?:ce|programs?)/", re.I)
+WEAK_SIGNAL_HOST = re.compile(r"^(?:careertraining|ed2go|libguides|catalog|bulletin|courses?)\b|\.(?:ed2go|libguides)\.|^ed2go|(?:^|\.)ratemyprofessors?\.", re.I)
+WEAK_SIGNAL_PATH = re.compile(r"/(?:catalog|courses?|course-?descriptions?|coursesoffered|programs?/all|academic-programs|leadership|directory|faculty-staff|jobs|employment|c\.php|policies|policy|academics|list-of-programs|channels|presidential-search|search-committee|bios?|profiles?|people|about-the-president)\b|(?:ai|artificial-intelligence)-(?:ce|programs?)/|rate-?(?:my-?)?professors?\b", re.I)  # a professor-rating site's AI summary is no signal: luni.now's "no stored AI response" was Ong's (fnwords113 review)
 CAREER_NEAR = re.compile(r"career|workforce|\bjobs?\b|employ|student success|skills|internship|apprentice|job", re.I)
 TAG_LINE = re.compile(r"^\s*(?:tags?|tagged(?: with)?|categor(?:y|ies)|filed (?:under|in)|topics?|keywords?|related topics|share(?: this)?(?: on)?)\s*[:|]", re.I)
 
@@ -646,7 +646,7 @@ def signal_kind(signal, source_url=""):
     if m and (menu_like(text) or BREADCRUMB.search(text)): return "menu"  # a menu is the organisation's site linking to a page; a person's signal in Title Case is a headline or a job title about them (Healey's taskforce, Dallas College's grant; review 112215240022)
     return "statement"
 
-HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms head_terms allow_org_signal allow_weak_org_signal roster_verifies person_signal official_recheck sources read_per_search skip_hosts allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words signal_kinds menu_statement unit_signal".split())
+HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms head_terms allow_org_signal allow_weak_org_signal roster_verifies person_signal held_signal official_recheck sources read_per_search skip_hosts allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words signal_kinds menu_statement unit_signal".split())
 
 
 HEADLINE_VERB = re.compile(r"\b(?:Expands|Launches|Announces|Receives|Wins|Opens|Partners|Celebrates|Hosts|Unveils|Offers|Adds|Joins|Awards|Welcomes|Honors|Signs|Approves|Plans|Seeks|Cuts|Raises|Earns|Debuts|Introduces|Selects|Appoints|Hires|Names|Breaks|Boosts|Makes|Takes|Gets|Says|Calls|Visits|Tours|Funds|Backs|Unveiled|Announced|Launched|Expanded|Awarded)\b")
@@ -810,6 +810,7 @@ class Hunt:
         self.stop_reason = ""
         self.departure_searches = 0
         self.person_signal_searches, self.person_signal_found = 0, 0
+        self.held_signal_searches, self.held_signal_found = 0, 0
         self.menu_statement_searches, self.menu_statement_found = 0, 0
         self.unsignalled_refreshed = 0   # near misses that took their organisation's signal page mid-run: finish_menu_rows judges them again (hop 40, fnwords89's Stevens)
         self.head_searches = 0  # head-first searches of an org's own site, for an org with no lead after its angles
@@ -984,6 +985,7 @@ class Hunt:
         return False
 
     FULL_NOTE = "the organisation is full"
+    LIST_FULL = "the list reached its target first"  # a held head whose own signal was found after the list filled: a later run's stored_readmits takes them back
     UNDER_HEAD = "a post under a head the same page lists"
     NO_SIGNAL = "no page of the organisation's site says the signal word yet"   # its heads wait here; refresh_unsignalled gives them the signal once one is found
     LEAKED_FAR = "the signal isn't near this person"
@@ -992,7 +994,7 @@ class Hunt:
 
     def stored_readmits(self):
         """A near miss held back only by a spec filter (role focus, function words, roles, signal kinds, must words, org signal), or by the module's reading of who employs them, is judged again on its stored page, as a live run judges it, and comes back when the spec as it now stands passes it and its organisation has room. One the spec passes at a full organisation gets the note 'not listed: the organisation is full' in place of the older spec's reason, and comes back on a later run once a slot frees. Without this a wider spec on a stored case brings nobody back (fnwords35/36). Returns how many came back."""
-        cand = [(k, r) for k, r in self.near.items() if str(r.get("note", "")).startswith("not listed: ") and (str(r["note"])[12:].startswith(self.SPEC_FILTERS + self.READ_AGAIN + (self.FULL_NOTE,))
+        cand = [(k, r) for k, r in self.near.items() if str(r.get("note", "")).startswith("not listed: ") and (str(r["note"])[12:].startswith(self.SPEC_FILTERS + self.READ_AGAIN + (self.FULL_NOTE, self.LIST_FULL))
                 or (str(r["note"])[12:].startswith(self.LEAKED_FAR) and str(r.get("signal") or "").startswith("(the organisation's, from ")))]  # held as far while it carried the org's signal: only the staff_sig leak in weigh made that pair (fnwords59), and the org's signal is never "near"
         back, full, self.dir_entry = 0, 0, False
         for k, r in sorted(cand, key=lambda kr: self.role_rank(kr[1].get("title", ""))):
@@ -1292,7 +1294,7 @@ class Hunt:
         for i, sn in enumerate(sents):
             low = fold(sn)
             if near.search(low): seen = True
-            elif not (seen and last and last.search(low)): continue
+            elif not (seen and last and last.search(low)) or Hunt.other_first(sn, toks): continue
             if EARLIER_JOB.search(sn) or people.employer_after(sn, name, org): continue  # a namesake, or this person at another employer
             cell = re.search(r"\S+@\S+\.[a-z]{2,}", sn, re.I)  # "Ann Lee at <her address>": a contact cell in a table; the next line is another column's, not their sentence (Howard's AI page, fnwords111 review)
             for j in ((i,) if cell else (i, i + 1, i - 1)):
@@ -1301,6 +1303,17 @@ class Hunt:
                 if len(t) > 25 and any(people.term_regex(m).search(fold(t)) for m in terms) and not EARLIER_JOB.search(t):
                     return " ".join(sents[min(i, j):max(i, j) + 1])[:300]
         return ""
+
+    NOT_A_FIRST = {"dr", "mr", "mrs", "ms", "mx", "prof", "professor", "dean", "director", "president", "provost", "chancellor", "coach", "vice", "chief", "and", "said", "says", "the", "by", "with", "from", "to", "of", "for", "according", "also", "however", "but", "as", "when", "while", "then", "so", "in", "at", "on", "after", "since", "yet", "if"}
+    @staticmethod
+    def other_first(sn, toks):
+        """A sentence that names the surname only after another first name is about someone else: 'Jane Southworth, Kati Migliaccio, Joe Glover (2023)' is not Ja'Net Glover (fnwords113 review: a bibliography page of hers took a namesake's line as her AI signal)."""
+        if len(toks) < 2: return False
+        first = {toks[0], toks[0].replace("'", "")}
+        for m in re.finditer(rf"([A-Z][\w'’.-]*)\s+(?i:{re.escape(toks[-1])})(?![\w-])", sn):
+            w = fold(m.group(1)).strip(".").replace("’", "'")
+            if len(w) > 1 and w not in first and w.replace("'", "") not in first and w not in Hunt.NOT_A_FIRST: return True
+        return False
 
     OWN_ON_ORG = "(the organisation's signal page names them)"
     def own_on_org_page(self, row, url):
@@ -1404,6 +1417,84 @@ class Hunt:
         with cf.ThreadPoolExecutor(max_workers=self.workers) as ex: list(ex.map(lambda r: self.person_signal(r, r["organisation"]), todo))
         self.log(f"person signal: searched for {len(todo)} stored rows whose signal is the organisation's, found the person's own on {self.person_signal_found - f0} ({time.monotonic() - t0:.0f}s)")
         self._save()
+
+    HELD_FOR_SIGNAL = (NO_SIGNAL, LEAKED_FAR, "the signal is the organisation's", "the organisation's signal")
+    def held_signal_due(self, r):
+        """A near miss held only for its signal: a verified head on the organisation's own site whose role fits, not searched for before, at an organisation with room for it."""
+        n = str(r.get("note", ""))
+        return (bool(self.must) and n.startswith("not listed: ") and n[12:].startswith(self.HELD_FOR_SIGNAL) and r.get("check_status") == "verified" and r.get("signal_near_person") != "roster"
+                and not r.get("held_signal_tried") and self.good_role(r.get("title", "")) and self.room_for(r["organisation"], r.get("title", "")))
+
+    def held_queries(self, r):
+        """The searches for a held head: their name and the shortest must word on the organisation's site, then on the whole web. fnwords112's held heads, 49 of 146: the person_signal query (name, organisation, 'artificial intelligence') found 0, these two 3 (hop 4 of chain 112310401a21)."""
+        org, nm = r["organisation"], people.clean_name(r["name"])
+        w = min(self.must, key=len)
+        d = self.domains.get(org) or self.domains.get(people.org_core(org)) or self.learned.get(org)
+        d = d[0] if isinstance(d, (list, tuple)) and d else d
+        if not (isinstance(d, str) and d) and people.official(org, r.get("source_url", ""), self.domains): d = registrable(domain_of(r.get("source_url", "")))
+        return ([f"site:{d} {nm} {w}"] if isinstance(d, str) and d else []) + [f"{nm} {w}"]
+
+    @side_search("held signal")
+    def held_signal(self, r):
+        """One held head's searches. A page that names the organisation (or is its own), isn't older than max_age_years, and prints a must word in the person's own sentence or the one beside it gives the row that sentence as its signal. Returns the signal page's URL, or ''."""
+        name, org = r["name"], r["organisation"]
+        near = people.name_regex(name)
+        own = {r.get("source_url", "").rstrip("/")}
+        for q in self.held_queries(r):
+            if time.monotonic() >= self.deadline: break
+            r["held_signal_tried"] = "yes"  # only once searched: fnwords113's sweep reached 57 searches for 93 heads and marked all 93 tried, so a rerun would skip the rest
+            with self.save_lock: self.held_signal_searches += 1
+            hits, _ = self.search(q, n=8)
+            read = 0
+            for h in hits:
+                if read >= 4 or time.monotonic() >= self.deadline: break
+                if h["url"].rstrip("/") in own or skipped_host(h["url"], self.skip_hosts): continue  # fnwords113's full sweep: 2 of its 4 finds were LinkedIn posts, a host the spec never reads
+                if not people.official(org, h["url"], self.domains) and near.search(fold(f"{h.get('title', '')} . {h.get('snippet', '')}")) is None: continue
+                read += 1
+                pg = fetcher.fetch(h["url"], self.case)
+                if pg.get("status") != "ok": continue
+                url = pg.get("final_url") or pg["url"]
+                if JOB_POSTING.search(urllib.parse.urlsplit(url).path or "") or search_results_url(url) or search_results_url(h["url"]) or weak_signal_url(url): continue
+                if not (people.official(org, url, self.domains, pg["text"]) or people.names_org(org, pg["text"])): continue  # a namesake at another place
+                d = pg.get("date") or extract.url_date(url)
+                if d and self.max_age:
+                    try:
+                        if (dt.date.today() - dt.date.fromisoformat(d)).days > self.max_age * 365: continue
+                    except ValueError: pass
+                ex = self.own_sentence(pg["text"], name, org, self.must)
+                if ex: return url, ex
+        return "", ""
+
+    def held_signals(self):
+        """Near misses held only for want of their own signal (verified heads of a careers or workforce unit whose organisation's signal isn't theirs, or has none) get a search for them with the must word, side by side; one named beside it on a page of the organisation's, or one naming it, takes that sentence as its signal and is judged again as a readmit is. On unless the spec says `"held_signal": false`."""
+        if not self.must or self.s.get("held_signal") is False: return 0
+        todo = sorted([(k, r) for k, r in self.near.items() if self.held_signal_due(r)], key=lambda kr: self.post_rank(kr[1].get("title", "")))
+        todo = [(k, r) for k, r in todo if not any(x["organisation"] == r["organisation"] and people.same_person(r["name"], x["name"]) for x in self.leads.values())]
+        if not todo: return 0
+        t0, back = time.monotonic(), 0
+        with cf.ThreadPoolExecutor(max_workers=self.workers) as ex: got = list(ex.map(lambda kr: self.held_signal(kr[1]), todo))
+        for (k, r), (url, sig) in zip(todo, got):
+            if not url: continue
+            with self.save_lock: self.held_signal_found += 1
+            org = r["organisation"]
+            keep = [n for n in str(r.get("note", "")).split("; ") if n and not n.startswith(("not listed: ", "the signal is the organisation's", "the organisation's signal"))]
+            row = dict(r, signal=sig, signal_near_person="yes", signal_url=url, note="; ".join([f"the person's own signal is from {url} (a search for them with '{min(self.must, key=len)}')"] + keep))
+            page = self.case.page(r["source_url"]) or {}
+            res = people.check(page, r["name"], r["title"], org, self.domains) if page.get("status") == "ok" else None
+            why = (self.held_back(res, row, org, False, page.get("text", ""), page.get("links")) if res else "its page can't be read again") or self.stored_why(row)
+            if not why and len(self.leads) >= self.target: why = self.LIST_FULL
+            if not why and not self.room_for(org, row.get("title", "")): why = f"{self.FULL_NOTE} ({self.per_org} rows, the per_org cap)"
+            if why:
+                self.near[k] = dict(row, note="; ".join(x for x in (f"not listed: {why}", row["note"]) if x))
+                continue
+            self.make_room(org, row.get("title", ""))
+            self.leads[k] = row
+            del self.near[k]
+            back += 1
+            self.log(f"  + {r['name']} — {str(r.get('title', ''))[:70]} ({org}) [held signal: named beside '{min(self.must, key=len)}' on {url}]")
+        self.log(f"held signal: searched for {len(todo)} heads held for want of their own signal, found it for {sum(1 for u, _ in got if u)}, {back} back on the list ({time.monotonic() - t0:.0f}s)")
+        self._save()
+        return back
 
     def stored_official_rechecks(self):
         """Stored rows whose signal is the person's own but whose page is another site's, or too old to show the post is still held, get one search on the organisation's site, side by side. A near miss confirmed there comes back to the list."""
@@ -1895,7 +1986,7 @@ class Hunt:
 
     ENGINE_GRACE = 4.0   # seconds a search waits on its slower engines once one has answered with hits (fnwords67: 33 of 292 searches waited over 6 s and took 371 of 923 engine-seconds; the rest averaged 2.1 s)
 
-    SIDE_KINDS = ("statement", "official recheck", "person signal", "departure")
+    SIDE_KINDS = ("statement", "official recheck", "person signal", "held signal", "departure")
 
     def time_spent(self, engine_secs0, rows0, side0=None):
         """One line on where this run's angle and site searches spent their worker time, which engines the searches waited on, and the seconds of each search weigh starts, wherever it ran, with the largest named."""
@@ -2044,6 +2135,8 @@ class Hunt:
         self.stored_departures()
         self.stored_person_signals()
         engine_secs0, rows0, side0 = dict(engines.SECS), len(self.log_rows), dict(self.side_secs)
+        end, reserve = self.deadline, (min(300.0, 0.2 * float(self.s.get("max_seconds", 1800))) if self.must and self.s.get("held_signal") is not False else 0.0)
+        self.deadline = end - reserve  # time kept for held_signals: fnwords112 held 146 verified heads for their signal and no search ever looked for theirs
         upto = 1  # breadth first: every org's first angle and site search, then discovery, then the later angles. Depth first, a fresh case of 91 orgs spent its whole 1200 s pass on three angles each and never reached discovery, while the site searches found 12 of the 17 verified rows and the angles after the first found 3 of 324 searches (fnwords51)
         while len(self.leads) < self.target and time.monotonic() < self.deadline:
             todo = [o for o in self.orgs if self.wants_more(o) and self.has_work(o, upto)]  # an org whose angles all ran on an earlier run still gets its site search
@@ -2053,11 +2146,13 @@ class Hunt:
             elif discover: self.discover(discover.pop(0))  # its new orgs get their first round before anyone's later angles
             elif upto < len(self.angles): upto += 1
             else: break
+        out_of_time, self.deadline = time.monotonic() >= self.deadline, end
         self.log(self.time_spent(engine_secs0, rows0, side0))
         self.case_rechecks()
         self.finish_menu_rows()
+        if len(self.leads) < self.target: self.held_signals()
         if len(self.leads) >= self.target: self.stop_reason = f"reached the target of {self.target}"
-        elif time.monotonic() >= self.deadline: self.stop_reason = "ran out of time: run it again on this case to carry on"
+        elif out_of_time or time.monotonic() >= self.deadline: self.stop_reason = "ran out of time: run it again on this case to carry on"
         elif self.failed and not self.answered: self.stop_reason = f"no source answered any of {len(self.failed)} searches, so this says nothing about the organisations: run it again on this case once they are back"
         elif self.failed: self.stop_reason = f"tried what it could, but {len(self.failed)} searches got no answer from any source: run it again on this case to retry them"
         else: self.stop_reason = "tried every angle on every organisation and every discovery search"
@@ -2102,7 +2197,7 @@ class Hunt:
         if nh: lines += ["## No named head", "The office page was read and prints only a mailbox or phone, no person, and no page read on its site named a head in the role. This is a gap in the source or in the search:", *[f"- {o} — [{u}]({u})" for o, u in nh.items()], ""]
         if untried: lines += ["## Organisations not tried", *[f"- {o}" for o in untried[:30]], ""]
         (out_dir / "REPORT.md").write_text("\n".join(lines) + "\n")
-        return {"status": status, "leads": len(rows), "verified": n_ver, "verified_kinds": kinds, "verified_near_person": n_near, "verified_roster": n_roster, "target": self.target, "near": len(self.near), "out": str(out_dir.resolve()), "stopped": self.stop_reason, "departure_searches": self.departure_searches, "person_signal_searches": self.person_signal_searches, "person_signal_found": self.person_signal_found, "menu_statement_searches": self.menu_statement_searches, "menu_statement_found": self.menu_statement_found, "domain_searches": self.domain_searches, "head_searches": self.head_searches, "official_upgrades": self.official_upgrades, "side_secs": {k: round(self.side_secs.get(k, 0.0), 1) for k in self.SIDE_KINDS}, "lead_list": [{k: r.get(k, "") for k in ("name", "title", "organisation", "check_status", "source_url", "signal")} for r in rows], "no_named_head": [{"org": o, "url": nh[o]} for o in sorted(nh)]}
+        return {"status": status, "leads": len(rows), "verified": n_ver, "verified_kinds": kinds, "verified_near_person": n_near, "verified_roster": n_roster, "target": self.target, "near": len(self.near), "out": str(out_dir.resolve()), "stopped": self.stop_reason, "departure_searches": self.departure_searches, "person_signal_searches": self.person_signal_searches, "person_signal_found": self.person_signal_found, "held_signal_searches": self.held_signal_searches, "held_signal_found": self.held_signal_found, "menu_statement_searches": self.menu_statement_searches, "menu_statement_found": self.menu_statement_found, "domain_searches": self.domain_searches, "head_searches": self.head_searches, "official_upgrades": self.official_upgrades, "side_secs": {k: round(self.side_secs.get(k, 0.0), 1) for k in self.SIDE_KINDS}, "lead_list": [{k: r.get(k, "") for k in ("name", "title", "organisation", "check_status", "source_url", "signal")} for r in rows], "no_named_head": [{"org": o, "url": nh[o]} for o in sorted(nh)]}
 
 
 def analyze_pages(pages, today=None):

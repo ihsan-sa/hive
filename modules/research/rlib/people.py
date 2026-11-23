@@ -138,7 +138,10 @@ def people_in(text, ld=()):
                 if more: title = title.rstrip() + " " + more.group(1)
         if t0 < m.start("name") and _row_names_another(text, m): continue
         add(m.group("name"), title, "prose")
-    lines = [l for l in text.split("\n") if l.strip()]
+    lines, gap, blank = [], [], False
+    for l in text.split("\n"):
+        if l.strip(): lines.append(l); gap.append(blank); blank = False
+        else: blank = True
     def head_unit(l):
         m = _STAFF_HEAD.fullmatch(re.sub(r"^The\s+", "", l.strip()))
         if m and not _ROLE_RE.search(m.group(1)) and not re.search(r"\b(?:of|for|and|the|to)$", m.group(1)) and fold(m.group(1)).split()[0] not in ("our", "the", "meet", "all", "faculty", "leadership", "support", "full", "part", "administrative"): return m.group(1)
@@ -154,6 +157,8 @@ def people_in(text, ld=()):
         if margin and len(row) > 1 and any(_LINE_ROLE.match(x) for x in row): continue  # a table row that holds its own post: the line under it is the next person's
         cells = [x for x in row if re.fullmatch(HONOR + LINE_NAME + SUFFIX, x)]
         a, b = cells[0] if len(cells) == 1 else a, _GAP.split(b)[0]
+        if re.fullmatch(HONOR + LINE_NAME + SUFFIX, a) and _LINE_ROLE.match(b) and li and not gap[li] and gap[li + 1] and _LINE_ROLE.match(lines[li - 1].strip()) and len(lines[li - 1].strip()) < 160:
+            add(a, lines[li - 1].strip(), "directory"); continue  # "Vice President, Student Success" / "Shelli Allen" / blank / "Vice President, Workforce Development" / "Elisa Waldman": blocks that print the post above the name; the post under it, past the blank line, is the next person's (JCCC's cabinet page, fnwords113 review)
         if re.fullmatch(HONOR + LINE_NAME + SUFFIX, a) and _LINE_ROLE.match(b) and len(b) < 160 and "directory" not in b.lower():  # 160: UF's "Associate Vice President for ... and Executive Director of the ... Center" is 120
             # A post ending in a comma goes on to its unit on the next line, and a rank printed after the post turns round: "Director, Senior," / "Career and Professional Development Services" (ASU's profile pages, fnwords106).
             if b.endswith(",") and c and len(c) <= 90 and not _LINE_ROLE.match(c) and not _CONTACT.search(c) and not _cell_name(c)[0]:
@@ -295,16 +300,19 @@ _LABEL = re.compile(r"\n[ \t]*(?:(?:job|current)\s+)?(?:title|position|role|desi
 _LABEL_ALONE = re.compile(r"\n[ \t\xa0]*(?:name|(?:(?:job|current)\s+)?(?:title|position|role|designation))[ \t]*:?[ \t\xa0]*(?=\n)", re.I)
 
 
-def _page_lines(text):
-    """Non-blank lines, with a paragraph that was wrapped by hand put back together: "dean of Career and / Technical Programs" is one line, a name over a title isn't."""
-    out = []
+def _page_lines(text, starts=False):
+    """Non-blank lines, with a paragraph that was wrapped by hand put back together: "dean of Career and / Technical Programs" is one line, a name over a title isn't.
+    With starts, also whether each line opens a block (a blank line before it)."""
+    out, first = [], []
     for block in re.split(r"\n\s*\n", _plain(text)):
         lines = [l.strip() for l in block.split("\n") if l.strip()]
-        for line in lines:
+        for k, line in enumerate(lines):
             if len(lines) > 1 and out and out[-1] is not None and (re.match(r"[a-z(]", line) or re.search(r"(?:\b(?:and|or|of|the|for|in|at|to|with|said)|,)$", out[-1])): out[-1] += " " + line
-            else: out.append(line)
-        out.append(None)
-    return [l for l in out if l is not None]
+            else: out.append(line); first.append(k == 0)
+        out.append(None); first.append(None)
+    kept = [(l, f) for l, f in zip(out, first) if l is not None]
+    if starts: return [l for l, _ in kept], [f for _, f in kept]
+    return [l for l, _ in kept]
 
 
 def _sentences(line):
@@ -442,7 +450,7 @@ def title_slot(text, name, title, org=""):
     a title modifier or an unexplained continuation cannot establish a post.
     """
     rx = re.compile(name_regex(name).pattern, re.I)
-    lines = _page_lines(text)
+    lines, opens = _page_lines(text, starts=True)
     # A bare post on a staff list took its unit from the heading above it ("Director/Senior Business Manager" under "The Workforce Development Center Team", Cincinnati State, fnwords108): the card prints the post alone.
     base, _, unit = title.rpartition(", ")
     bare_post = fold(base).strip(" .") if base and any(_STAFF_HEAD.fullmatch(re.sub(r"^The\s+", "", l.strip())) and fold(unit) in fold(l) for l in text.split("\n")) else ""
@@ -547,6 +555,11 @@ def title_slot(text, name, title, org=""):
             # but over only when nothing under it reads as another post and the line above that isn't someone else.
             bare = contact.sub("", sent)
             if _alone(bare, rx.search(bare) or m):
+                # Blocks that print the post above the name: "Vice President, Student Success" / "Shelli Allen" / blank / "Vice President, Workforce Development" / "Elisa Waldman". The post over the name, in its block, is theirs; the one past the blank line is the next person's (JCCC's cabinet page, fnwords113 review).
+                if i and not opens[i] and i + 1 < len(lines) and opens[i + 1] and _LINE_ROLE.match(lines[i - 1]) and len(lines[i - 1]) < 160 and (i < 2 or opens[i - 1]):
+                    # "Vice President, Student Success and Engagement/Chief Student Affairs Officer (CSAO)": two posts, either one theirs.
+                    if role(lines[i - 1]) or any(role(x) for x in re.split(r"\s*/\s*", lines[i - 1]) if x): return " ".join((lines[i - 1] + " " + sent).split())[:300]
+                    continue
                 below = lines[i + 1] if i + 1 < len(lines) else ""
                 # A card's post may run on into its email or phone on the same line.
                 post = below

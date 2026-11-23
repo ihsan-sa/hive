@@ -116,7 +116,7 @@ All of this came out of our own Hive. Look at the checks and the caveats as well
 
 - **A small chip, its board and its firmware.** On 4 November 2026, agents designed Hive Pulse: a Tiny Tapeout chip tile with a dice, a display, a breathing light and a serial port, plus the board it plugs into and the firmware. All 16 chip checks pass (simulation, formal proofs, timing, layout), the board has 0 electrical-rule and 0 design-rule errors with 8 warnings left, and 28 of 28 firmware self-tests pass against the chip's design, in simulation. It is being verified for fabrication with Tiny Tapeout.
 - **A charge-pump PLL,** designed with open chip tools and rendered from its layout.
-- **More than 20 circuit boards,** with schematics, layouts and checks, at [the boards page](https://boards.ihsan.cc). Most have not been built yet, they are being tested and fabricated now, and they are shared as they are, with no warranty.
+- **More than 60 circuit boards,** with schematics, layouts and checks, at [the boards page](https://boards.ihsan.cc). Most have not been built yet, they are being tested and fabricated now, and they are shared as they are, with no warranty.
 - **The Hive you'd install.** Agents write, check and ship the Hive itself, its website and films included: 241 public releases between 22 October and 10 November 2026, each signed. Our own Hive did 6,050 agent runs in 9 days (as of 9 November); 1,815 of its 17,243 messages came from the one person running it. It runs on far more usage than one plan gives, so yours won't reach these numbers.
 
 More in the [showcase](https://hivelab.ca/showcase/) and in [`examples/`](examples/README.md): the first message, what the agents did, and the result.

@@ -41,7 +41,7 @@ function liveIn(th) {
 function cast(th) {
   const d = S.threads.get(th), n = d ? d.posts.length : 0, c = CAST.get(th);
   const lv = liveIn(th);
-  if (c && c.n === n && c.s === S.sessions.length && c.lv === lv) return c.names;
+  if (c && c.n === n && c.s === S.sessions.length && c.lv === lv && (!c.late || c.v === S.ver)) return c.names;   // past Z the labels read other threads' titles, so a big cast also keys on S.ver
   // An heir (a fresh agent the starter hands the chat to after its agent said Done) carries on the same conversation: it is the same agent to the person (E12b),
   // so it takes the name of the one it took over from, and the cast counts the chain once.
   const heirOf = new Map(); for (const s of sessionsIn(th)) if (s.heirOf && s.heirOf !== s.name) heirOf.set(s.name, s.heirOf);
@@ -58,7 +58,7 @@ function cast(th) {
   };
   order.forEach((a, i) => names.set(a, order.length === 1 ? "the agent" : i < 26 ? "Agent " + String.fromCharCode(65 + i) : late(a, i)));
   for (const a of heirOf.keys()) if (names.has(root(a))) names.set(a, names.get(root(a)));
-  CAST.set(th, { n, s: S.sessions.length, lv, names });
+  CAST.set(th, { n, s: S.sessions.length, lv, names, late: order.length > 26, v: S.ver });
   return names;
 }
 /** True while drawing inside one conversation (inConversation): the app look's hovers there name no code either (E10). */
