@@ -90,6 +90,10 @@ hive share CONVERSATION [-o FILE] [--show] [--remove ID,ID] [--no-files]: write 
 
 hive web: the address of the local web app, with its secret. --new-secret replaces the secret; --setup is install's
 
+## hive setup
+
+hive setup: the setup screen's three steps in the terminal (the account, what to share, how much power); a Hive sends nothing, not even failure reports, until setup is done
+
 ## hive open
 
 hive open: start the web app if it's stopped, then open it in the browser (the launcher icon runs this). --print shows the address instead

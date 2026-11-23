@@ -263,6 +263,6 @@ The Hive is installed. Open this address in a browser on this machine, and it ta
   $("$CORE/hive" web 2>/dev/null)
 It's the key to this hive, so keep it to yourself. Run hive web to see it again.
 On another machine: ssh -L PORT:127.0.0.1:PORT this-machine, with the port from that address, then open it there.
-If you'd rather stay in a terminal: hive
+If you'd rather stay in a terminal: hive setup asks the same three steps, then hive
 MSG
 [ "$SERVICE" = 1 ] || echo "You chose no service, so start the app and the hive yourself: python3 ~/modules/dash/dash.py serve   and   python3 ~/core/starter.py"

@@ -73,7 +73,7 @@ function waitList(rows, key = "waits", ctx) {
         key === "later" || key === "moot" ? button("Bring back", () => { setLater(w, "back"); ctx && ctx.update(); }, { size: "s", kind: "quiet" })
           : [laterButtons(w), ans ? h("button", { type: "button", class: "btn cm-need-a", "data-size": "s", "aria-haspopup": "dialog", "aria-expanded": String(quickIs(w)), onclick: ans }, "Answer") : null]) : null);
   }));
-  return left > 0 ? h("div", { class: "yr-capped", "data-key": key + "-c" }, ul, h("div", { class: "lr-more" }, button(`Show ${Math.min(left, 20)} more`, () => { Y.cap[key] = cap + 20; ctx && ctx.update(); }, { kind: "quiet", size: "s" }))) : ul;
+  return left > 0 ? h("div", { class: "yr-capped", "data-key": key + "-c" }, ul, h("div", { class: "lr-more", "data-key": key + "-more" }, button(`Show ${Math.min(left, 20)} more`, () => { Y.cap[key] = cap + 20; ctx && ctx.update(); }, { kind: "quiet", size: "s" }))) : ul;
 }
 
 function entry(p) {
@@ -91,7 +91,7 @@ function stream(items, ctx) {
     ...shown.map(it => it.day ? h("div", { class: "yr-day", "data-key": it.key, role: "heading", "aria-level": "2" }, h("span", null, it.day))
       : it.thread ? h("div", { class: "yr-rule", "data-key": it.key }, h("a", { class: "yr-rule-n", href: threadHref(it.thread), title: "The whole conversation" }, it.name))
       : entry(it.post)),
-    more ? h("div", { class: "lr-more" }, button(`Show ${Math.min(left, STEP)} more`, () => { Y.limit += STEP; ctx.update(); }, { kind: "quiet", size: "s" })) : null);
+    more ? h("div", { class: "lr-more", "data-key": "more" }, button(`Show ${Math.min(left, STEP)} more`, () => { Y.limit += STEP; ctx.update(); }, { kind: "quiet", size: "s" })) : null);
 }
 
 function page(ctx) {

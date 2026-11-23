@@ -281,14 +281,15 @@ def card_pile_due(row, t):
     if last and (t - (last if last.tzinfo else last.replace(tzinfo=dt.timezone.utc))).total_seconds() < PILE_EVERY_H * 3600: return False
     return len(card_mine(row.get("thread"))[1]) >= PILE
 
-def ask_due(row, t):
-    """True when a ladder whose open rungs all wait on a date is owed its daily ask: the first of them opens ASK_AHEAD_H or more hours from now and no ask was posted in its thread in the last ASK_EVERY_H hours."""
+def ask_due(row, t, every_h=ASK_EVERY_H):
+    """True when a ladder whose open rungs all wait on a date is owed its daily ask: the first of them opens ASK_AHEAD_H or more hours from now and no ask was posted in its thread in the last ASK_EVERY_H hours.
+    every_h: the floor asks sooner while the person is away and it runs under agents_floor (starter floor_ask_away_h)."""
     try: gate = dt.datetime.fromisoformat(row["gated_until"]).replace(tzinfo=dt.timezone.utc)
     except ValueError: return False
     if (gate - t).total_seconds() < ASK_AHEAD_H * 3600: return False
     try: last = dt.datetime.fromisoformat(row.get("asked_at") or "")
     except ValueError: return True
-    return (t - (last if last.tzinfo else last.replace(tzinfo=dt.timezone.utc))).total_seconds() >= ASK_EVERY_H * 3600
+    return (t - (last if last.tzinfo else last.replace(tzinfo=dt.timezone.utc))).total_seconds() >= every_h * 3600
 
 def with_ladder(row, g, t=None):
     lad = g["ladder"] if g else None

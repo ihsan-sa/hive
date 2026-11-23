@@ -697,13 +697,24 @@ def starter_proc():
             except OSError: pass
     return False
 
+def setup_note():
+    """What the door says while the setup screen hasn't been finished (install writes setup_done false). A person who took install's
+    "stay in a terminal" line never sees that screen, so nothing would tell them that this Hive sends nothing, not even the failure
+    reports they'd choose, until it's done (report.py setup_pending)."""
+    try: v = json.loads((HOME / "settings.json").read_text())
+    except (OSError, ValueError): return None
+    if not isinstance(v, dict) or v.get("setup_done") is not False: return None
+    return ("Setup isn't finished: three short steps (the account agents run on, whether anything is shared, how much agents may do without asking). "
+            "Until then it sends nothing, not even failure reports. Here in the terminal: hive setup (Ctrl-C this first). In a browser: the address from hive web.")
+
 def door(extra):
     """The person's way in: an ordinary Claude Code session in ~, told it is the door (door.md), signed as person.
     `hive` resumes the same conversation, `hive --new` starts another; other args go to claude."""
     st = STATE / "starter.json"
     if (not st.exists() or time.time() - st.stat().st_mtime > 60) and not starter_proc():
         print("Note: the starter isn't running, so posts won't start agents. Try: systemctl --user start hive-starter", file=sys.stderr)
-    try: login = str(Path(json.loads((CORE / "config.json").read_text())["logins"][0]).expanduser())
+    if (n := setup_note()): print(n, file=sys.stderr)
+    try: login =str(Path(json.loads((CORE / "config.json").read_text())["logins"][0]).expanduser())
     except (OSError, ValueError, KeyError, IndexError): login = str(HOME / ".claude")
     STATE.mkdir(exist_ok=True)
     f = STATE / "door_session"
@@ -1237,6 +1248,72 @@ def login_add(name, paused=False):
             + "The hold in kb/priorities.md stands: a new login doesn't lift it, only the person does.")
     cmd_post(argparse.Namespace(text=[text], to=None, thread="keeper", as_="hive-login", model=None, file=None, reply_to=None, routed=False))
 
+SETUP_POWER = ((1, "Ask me first", "Agents work inside the sandbox on their own. A step that has to leave the sandbox comes to you, and waits for your answer."),
+               (2, "A warden decides", "A warden, an agent whose only job is judging these steps, approves the step and it runs as your computer account. A step that's hard to undo needs more than one opinion."),
+               (3, "A warden decides, I hear afterwards", "A warden settles it without you, and you're told what happened afterwards."))  # the web's POWER (dash web/js/ui/setup.js)
+SETUP_SHARE = (("Nothing", "Nothing goes to Hive's developer.", False, False),
+               ("Failure reports and a daily check-in", "What failed, when and why, and one small message a day saying this Hive is running and whether an agent has been started yet (yes or no).", True, False),
+               ("Failure reports and a daily check-in, and usage reports", "Counts of runs, restarts and limit hits.", True, True))  # the web's three (start.js), from SHARES
+
+def cmd_setup(a):
+    """The setup screen's three steps for a person who stays in a terminal (install's "stay in a terminal" route never opened that screen, so
+    setup_done stayed false and the Hive sent nothing, not even failure reports: report.py setup_pending). The same choices and checks as the
+    dash's set_settings: power 1-3, share failures/usage, setup_done true; every other field stays. Enter keeps the choice shown; end of input
+    saves nothing, so no answer is never taken as a yes. a4698, 2026-11-23."""
+    f = HOME / "settings.json"
+    try: cur = json.loads(f.read_text())
+    except OSError: sys.exit("This Hive has no settings file, so there's nothing to set up: it was set up by hand.")
+    except ValueError: sys.exit(f"{f} can't be read; fix it, or open the address from hive web for the setup screen.")
+    if not isinstance(cur, dict): sys.exit(f"{f} isn't a settings file; fix it, or open the address from hive web for the setup screen.")
+    if cur.get("setup_done") is not False: print("Setup is already done. Going through it again changes your choices; Ctrl-C leaves them as they are.\n")
+    def ask(prompt, ok):
+        while True:
+            print(prompt, end="", flush=True)
+            line = sys.stdin.readline()
+            if not line: print(); sys.exit("Setup isn't saved: no answer. Run hive setup again, or open the address from hive web.")
+            v = line.strip()
+            if v in ok: return v
+            print(f"  Type {', '.join(x for x in ok if x) or 'one of the numbers'}, or press Enter for the one marked.")
+    # 1 the account agents run on: nothing to choose here; Claude Code asks for a sign-in the first time hive opens
+    try: login = Path(read_cfg()["logins"][0]).expanduser()
+    except Exception: login = HOME / ".claude"
+    print("Step 1 of 3: the account agents run on")
+    print("  Signed in to Claude." if login_status(login) else "  Not signed in yet. When you next run hive, Claude Code asks you to sign in (a paid Claude plan or an API key). Other accounts, Codex too, are in the web app's Settings.")
+    # 2 what to share: the report module's own words, as the screen shows them
+    print("\nStep 2 of 3: what to share")
+    rp = MODULES / "report" / "report.py"
+    text = None
+    if rp.is_file():
+        try: text = subprocess.run([sys.executable, "-I", str(rp), "question"], capture_output=True, text=True, timeout=10).stdout.strip() or None
+        except (OSError, subprocess.SubprocessError): pass
+    print("  " + (text or "The report module isn't installed here, so nothing can be sent, whatever you choose."))
+    sh = cur.get("share") if isinstance(cur.get("share"), dict) else {}
+    now = (2 if sh.get("usage") is True else 1) if sh.get("failures") is True else 0
+    for i, (label, hint, _, _) in enumerate(SETUP_SHARE): print(f"  {i} {label}{'  (now)' if i == now else ''}\n      {hint}")
+    print("  Sending a copy of everything, and GitHub issues, are in the web app's Settings.")
+    share = int(ask(f"Choose 0, 1 or 2 [{now}]: ", ("0", "1", "2", "")) or now)
+    # 3 how much power
+    print("\nStep 3 of 3: how much power: how much agents may do on this computer without asking")
+    p = cur.get("power") if type(cur.get("power")) is int and 1 <= cur.get("power") <= 3 else 2
+    for k, label, hint in SETUP_POWER: print(f"  {k} {label}{'  (now)' if k == p else ''}\n      {hint}")
+    power = int(ask(f"Choose 1, 2 or 3 [{p}]: ", ("1", "2", "3", "")) or p)
+    failures, usage = SETUP_SHARE[share][2], SETUP_SHARE[share][3]
+    cur = json.loads(f.read_text())  # the file again: the app may have changed something while the questions were open
+    if not isinstance(cur, dict): sys.exit(f"{f} changed into something that isn't a settings file; setup isn't saved.")
+    was = cur.get("share") if isinstance(cur.get("share"), dict) else {}
+    cur.update(power=power, share={**{k: was.get(k) is True for k in ("failures", "usage", "everything", "github")}, "failures": failures, "usage": usage}, setup_done=True)
+    t = f.with_name(f".settings.json.{os.getpid()}")
+    t.touch(mode=0o600); t.chmod(0o600); t.write_text(json.dumps(cur, indent=1) + "\n"); t.replace(f)
+    sent = failures and rp.is_file()
+    if sent:  # the first check-in now, as the app does on Finish, instead of at the next 6-hour timer
+        try: subprocess.Popen([sys.executable, "-I", str(rp), "send"], start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError: pass
+    print(f"\nSetup is done. Sharing: {SETUP_SHARE[share][0].lower()}. Power: {power}, {SETUP_POWER[power - 1][1].lower()}."
+          + (" The first check-in is on its way." if sent and text and "not being sent yet" not in text else ""))
+    if (sb := boxed()) and not (r := sb.check())["works"]:
+        print(f"\nThe sandbox doesn't work on this machine: {r['why']}\n{r['fix']}\nNo agent starts until that's fixed, or until you choose to run without it (\"sandbox\": \"bare\" in {f}).".replace("\n\n", "\n"))
+    print("You can change all of this later in the web app's Settings (hive web) or by running hive setup again. Now: hive")
+
 def cmd_login(a):
     if a.do == "add":
         if not a.name: sys.exit("Usage: hive login add NAME  (for example: hive login add cc3)")
@@ -1574,6 +1651,8 @@ p = sp.add_parser("share", help="hive share CONVERSATION [-o FILE] [--show] [--r
 p.add_argument("rest", nargs=argparse.REMAINDER); p.set_defaults(f=cmd_share)
 p = sp.add_parser("web", help="hive web: the address of the local web app, with its secret. --new-secret replaces the secret; --setup is install's")
 p.add_argument("--setup", action="store_true"); p.add_argument("--new-secret", action="store_true"); p.set_defaults(f=cmd_web)
+p = sp.add_parser("setup", help="hive setup: the setup screen's three steps in the terminal (the account, what to share, how much power); a Hive sends nothing, not even failure reports, until setup is done")
+p.set_defaults(f=cmd_setup)
 p = sp.add_parser("open", help="hive open: start the web app if it's stopped, then open it in the browser (the launcher icon runs this). --print shows the address instead")
 p.add_argument("--print", action="store_true"); p.set_defaults(f=cmd_open)
 p = sp.add_parser("waits", help="hive waits [--after 12]: runs that stopped on a Waiting: reason and haven't posted since, with the wait due (older than --after hours, or a post landed): resume these by name")

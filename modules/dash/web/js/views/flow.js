@@ -18,6 +18,7 @@ const sayPlain = (t, n) => sayPlain0(String(t || "").replace(/`?@?\b([a-z][0-9a-
 import { gist } from "../core/gist.js";
 import { sayTo } from "../ui/composer.js";
 import { canvas } from "../templates.js";
+import { keep as standIn } from "../ui/graph.js";   // the stage on the page goes into a render as a bare copy: appending the live one lifts it out and takes focus with it
 import { button, empty, icon, infoButton, pageNav, seg, toolbar, waiting } from "../ui/kit.js";
 
 const WIN = { "1h": HOUR, "6h": 6 * HOUR, "24h": DAY, "3d": 3 * DAY };
@@ -231,7 +232,10 @@ function drawNow() {
     kids.push(g);
     for (const rs of r.results) if (rs.t > you && rs.text) since.push({ lane: l.name, ...rs });
   });
+  // a redraw builds every node anew: a keyboard stop in the chart would lose focus to the page (drive_app_keys #flow, 2026-11-22), so the same stop in the new chart takes it
+  const stops = () => [...svg.querySelectorAll("a[href],[tabindex='0']")], had = svg.contains(document.activeElement) ? stops().indexOf(document.activeElement) : -1;
   svg.replaceChildren(...kids);
+  if (had >= 0) stops()[Math.min(had, stops().length - 1)]?.focus({ preventScroll: true });
   // on a phone the list comes first: each goal's name, state and the whole of its next words, with say; the chart is folded under it (css shows it there only)
   const lb = pageBox(".fl-listbox");
   if (lb) lb.replaceChildren(
@@ -281,6 +285,6 @@ export default {
       h("span", { class: "meta fl-legend" }, h("i", { class: "fl-k fl-k-run" }), " ran ", h("i", { class: "fl-k fl-k-live" }), " running ", h("i", { class: "fl-k fl-k-wait" }), " waits on you ", h("i", { class: "fl-k fl-k-you" }), " you"),   // "decided for you" left the key; the diamond keeps its <title> (§5.2)
       infoButton("About this chart", "One lane per goal in your order; time runs into now. Open a lane for its card, a bar for its conversation; the speech bubble speaks to whoever is on it."));
     const nav = pageNav();   // the page row (R7 step 6): outside the canvas, which a phone folds away
-    return h("div", { class: "fl-page", "data-fold": F.fold ? "" : null }, nav && h("div", { class: "cvp-nav" }, nav), h("div", { class: "fl-listbox", "data-own": "", "data-sig": "flow" }), canvas({ key: "flow", bar, note: null, stage }), h("div", { class: "fl-moved", "data-own": "", "data-sig": "flow" }));
+    return h("div", { class: "fl-page", "data-fold": F.fold ? "" : null }, nav && h("div", { class: "cvp-nav" }, nav), h("div", { class: "fl-listbox", "data-own": "", "data-sig": "flow" }), canvas({ key: "flow", bar, note: null, stage: standIn(stage) }), h("div", { class: "fl-moved", "data-own": "", "data-sig": "flow" }));
   },
 };
