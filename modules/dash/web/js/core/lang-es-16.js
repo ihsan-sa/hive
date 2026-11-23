@@ -88,7 +88,16 @@ export default {
   "This page can't be opened here.": "Esta página no se puede abrir aquí.",
   "press Connect to see its console: its new USB serial port needs your OK once": "pulsa Conectar para ver su consola: su nuevo puerto serie USB necesita tu permiso una vez",
   "the network refused the password": "la red rechazó la contraseña",
+  // added after the 2026-11-22 16:00 check: Comms' row for notes sent on a document (comms.js joins "Comments on “T” sent · N notes"),
+  // the preview's Edit tab (leaving with unsaved text, the file changing under it) and the viewer's Download label for a revision still being filed
+  "Comments on": "Comentarios sobre",
+  "sent": "enviados",
+  "notes": "notas",
+  "Leave without saving? Your changes to this file will be lost.": "¿Salir sin guardar? Se perderán tus cambios en este archivo.",
+  "changed on disk while you edit": "cambió en el disco mientras lo editas",
+  "the revision being filed": "la revisión que se está archivando",
   __patterns: [
+    [/^Box on page (\d+)(?:: “([\s\S]*)”)?$/, (_, p, q) => `Recuadro en la página ${p}` + (q !== undefined ? `: “${q}”` : "")],   // ui markup.js, the box just drawn (2026-11-22 nightly)
     [/^Sent (.+) · with the agent$/, (_, a) => `Enviada ${ago(a)} · con el agente`],
     [/^Addressed in rev (.+)$/, (_, r) => `Resuelta en la rev. ${r}`],
     [/^rev (\S+)( · being filed| · older)?$/, (_, r, s) => `rev. ${r}` + (s === " · being filed" ? " · archivándose" : s ? " · anterior" : "")],

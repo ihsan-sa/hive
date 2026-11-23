@@ -608,11 +608,11 @@ def person_held_of(threads, board=None):
         text = re.sub(r"^\((?:from [^,()]+, )?web app[^()]*\)", "", text.strip()).strip()
         try: age_d = (now() - dt.datetime.fromisoformat(str(p.get("at")).replace("Z", "+00:00"))).total_seconds() / 86400
         except (TypeError, ValueError): age_d = 0
-        # Only the established same-day clock form has a known short deadline.
-        # "Until I say", conditions, and undated pauses never expire by age.
-        same_day_clock = re.search(
-            r"\buntil\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\s+today\b", text, re.I)
-        if same_day_clock and age_d > 1.5: continue
+        # Only a pause with a short stated deadline lapses by age: a clock time or tomorrow/tonight after 1.5 days, a weekday after 8.
+        # "Until I say", conditions, "next month" and undated pauses never expire by age (i0411); "until 3pm"/"until tomorrow" held forever
+        # once the same-day-only rule landed (review a6e64, 2026-11-23).
+        if age_d > 1.5 and re.search(r"\buntil\s+(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|noon\b|midnight\b|tomorrow\b|tonight\b|this (?:morning|afternoon|evening)\b|later today\b)", text, re.I): continue
+        if age_d > 8 and re.search(r"\buntil\s+(?:mon|tues|wednes|thurs|fri|satur|sun)day\b", text, re.I): continue
         if PERSON_HOLD.search(text) and not PERSON_GO.search(text) and not hold_is_question(text):
             out[th] = f"the person's newest post here, {p.get('id')}, reads as a pause: \"{' '.join(text.split())[:80]}\""
     return out

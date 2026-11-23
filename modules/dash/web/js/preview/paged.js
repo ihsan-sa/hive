@@ -3,7 +3,7 @@
 // side (edit.js) and file markup's boxes (markup.js, which finds the .pg-sheet elements) use it. Save as → PDF prints the same pages.
 // The person, 1122104123fb: "view MDs in PDF render where it renders them nicely as a PDF and then I can comment and box on those".
 // paged(text) → node (.pv-pg). The split into pages happens once the node is in the document, since it needs measuring.
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { markdown } from "../ui/markdown.js";
 
 export const PAGE_W = 816, PAGE_H = 1056, MARGIN = 72;
@@ -61,7 +61,7 @@ export function paginate(md, host) {
     pg = null;
   }
   if (!sheets.length) fresh();
-  sheets.forEach((s, i) => { s.dataset.p = String(i + 1); s.querySelector(".pg-n").textContent = sheets.length > 1 ? `${i + 1} of ${sheets.length}` : ""; });
+  sheets.forEach((s, i) => { s.dataset.p = String(i + 1); s.querySelector(".pg-n").textContent = sheets.length > 1 ? tr(`${i + 1} of ${sheets.length}`) : ""; });
   return sheets;
 }
 

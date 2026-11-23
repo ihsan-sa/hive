@@ -1,5 +1,5 @@
 """Search sources. Each returns Hits. A source that fails says so and the others carry on: a thin result must never look like an empty world."""
-import base64, concurrent.futures as cf, html as htmllib, json, os, re, urllib.parse, xml.etree.ElementTree as ET
+import base64, concurrent.futures as cf, html as htmllib, json, os, re, time, urllib.parse, xml.etree.ElementTree as ET
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from . import net
@@ -41,8 +41,15 @@ def _rss(body, src, n):
     for it in root.iter("item"):
         src_el = it.find("source")
         title = (it.findtext("title") or "").strip()
-        out.append(Hit(url=(it.findtext("link") or "").strip(), title=title, snippet=_strip(it.findtext("description")) + (f" [{src_el.text}]" if src_el is not None and src_el.text else ""), date=parse_date(it.findtext("pubDate") or "") or _rfc822(it.findtext("pubDate")), source=src))
+        out.append(Hit(url=_feed_target((it.findtext("link") or "").strip()), title=title, snippet=_strip(it.findtext("description")) + (f" [{src_el.text}]" if src_el is not None and src_el.text else ""), date=parse_date(it.findtext("pubDate") or "") or _rfc822(it.findtext("pubDate")), source=src))
     return out[:n]
+
+
+def _feed_target(u):
+    """Bing's news feed links to its own click counter, bing.com/news/apiclick.aspx?url=<the page>. Kept wrapped, every hit sits on bing.com: a site: filter drops it and two engines' copies of one page never meet."""
+    if "bing.com/news/apiclick" not in u: return u
+    t = urllib.parse.parse_qs(urllib.parse.urlsplit(u).query).get("url", [""])[0]
+    return t if t.startswith("http") else u
 
 
 def _rfc822(s):
@@ -94,6 +101,23 @@ def ddg(q, n):
     if not hits and not re.search(r"no\s+(?:more\s+)?results", page, re.I): raise SourceError(f"no results page (plain request gave HTTP {r.status}): probably blocked")
     return hits
 
+
+
+def ddg_twice(q, n):
+    """ddg asked twice, the answers interleaved without repeats, as one ddg list (so merge doesn't count it as two engines agreeing). ddg answers the same query with different pages from call to call: 57% of the URLs repeated across two runs on `site:` queries, against 97% for bing, and fnwords56 lost 5 verified leads to pages only an earlier ddg answer had held. A hunt's site searches use it; one answer stands if the other call fails."""
+    answers, err = [], None
+    for _ in range(2):
+        try: answers.append(ddg(q, n))
+        except SourceError as e: err = err or e
+    if not answers: raise err
+    out, seen = [], set()
+    for i in range(max(len(a) for a in answers)):
+        for a in answers:
+            if i >= len(a): continue
+            try: k = canonical(a[i].url)
+            except ValueError: continue
+            if k not in seen: seen.add(k); out.append(a[i])
+    return out[:2 * n]
 
 def _bing_target(u):
     """Bing wraps results in a click link holding the real address in u=a1<base64>."""
@@ -210,7 +234,7 @@ def exa(q, n):
     return [Hit(url=x["url"], title=x.get("title") or "", snippet=(x.get("text") or "")[:400], date=parse_date(x.get("publishedDate") or ""), source="exa") for x in d.get("results", [])]
 
 
-SOURCES = {"ddg": ddg, "bing_web": bing_web, "bing": bing, "bing_news": bing_news, "google_news": google_news, "wikipedia": wikipedia, "hn": hn, "arxiv": arxiv, "openalex": openalex, "crossref": crossref, "github": github, "x": x_posts, "linkedin": linkedin, "reddit": reddit, "brave": brave, "tavily": tavily, "exa": exa}
+SOURCES = {"ddg": ddg, "ddg_twice": ddg_twice, "bing_web": bing_web, "bing": bing, "bing_news": bing_news, "google_news": google_news, "wikipedia": wikipedia, "hn": hn, "arxiv": arxiv, "openalex": openalex, "crossref": crossref, "github": github, "x": x_posts, "linkedin": linkedin, "reddit": reddit, "brave": brave, "tavily": tavily, "exa": exa}
 KEYED = {"brave", "tavily", "exa"}
 GROUPS = {"web": ["ddg", "bing_web", "bing"], "news": ["bing_news", "google_news"], "papers": ["openalex", "arxiv", "crossref"], "code": ["github", "hn"], "social": ["x", "reddit", "hn"], "people": ["linkedin", "ddg", "bing_web"], "all": ["ddg", "bing_web", "bing", "bing_news", "google_news", "wikipedia", "hn", "openalex", "arxiv", "github"]}
 
@@ -279,12 +303,16 @@ def merge(lists, n=30, rrf=60, q=""):
 FULL_FIT = 0.25  # the share of the query's words a result needs before its engines' rank alone decides
 
 
+SECS, _SECS_LOCK = {}, __import__("threading").Lock()   # seconds each source spent answering, cache hits aside: a hunt logs it, to say which engine its searches wait on
+
+
 def search(q, sources, n=10, case=None):
     """Run the sources side by side. (merged, {source: error}). A source that errors stays out of the merge and stays in the report, and isn't cached, so a rerun asks it again."""
     errors, lists = {}, []
     def one(s):
         cached = case.cached_search(q, s) if case else None
         if cached is not None: return s, [Hit(**h) for h in cached], ""
+        t0 = time.monotonic()
         try:
             hits = SOURCES[s](q, n)
             if case: case.save_search(q, s, [h.dict() for h in hits], "")
@@ -294,6 +322,8 @@ def search(q, sources, n=10, case=None):
         except Exception as e:  # one engine's bad answer, of any kind, mustn't cost the others' results
             if case: case.save_search(q, s, [], f"{type(e).__name__}: {e}"[:200])
             return s, [], f"{type(e).__name__}: {e}"[:200]
+        finally:
+            with _SECS_LOCK: SECS[s] = SECS.get(s, 0.0) + time.monotonic() - t0
     with cf.ThreadPoolExecutor(max_workers=max(1, len(sources))) as ex:
         for s, hits, err in ex.map(one, sources):
             lists.append(hits)
