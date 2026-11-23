@@ -10,6 +10,7 @@ import { waveFigure } from "./wave.js";
 import { touchstoneFigure } from "./touchstone.js";
 import { spiceFigure } from "./spice.js";
 import { artifactFigure } from "./artifact.js";
+import { buyCard } from "./buy.js";
 
 const KINDS = {
   math: code => mathFence(code),
@@ -23,6 +24,7 @@ const KINDS = {
   wavedrom: waveFigure,
   spice: spiceFigure, cir: spiceFigure, sp: spiceFigure,
   touchstone: touchstoneFigure,
+  buy: buyCard,
   s1p: touchstoneFigure, s2p: touchstoneFigure, s3p: touchstoneFigure, s4p: touchstoneFigure,
 };
 

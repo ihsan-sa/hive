@@ -350,7 +350,7 @@ def cmd_default(a, d):
 
 # Upkeep: never placed, never gated, whatever a placement says.
 TIER0 = {"hive-offsite", "hive-offsite-b2", "hive-tmp-sweep", "hive-watchdog", "hive-boxwatch", "cf-guard", "hive-kb-restore", "hive-mirror-kb",
-         "hive-preview-sweep", "hive-modules-pull", "launchpadlib-cache-clean"}
+         "hive-preview-sweep", "hive-modules-pull", "launchpadlib-cache-clean", "hive-buy-sweep"}
 
 
 def cmd_jobs(a, d):

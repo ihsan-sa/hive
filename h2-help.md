@@ -150,6 +150,10 @@ hive outcomes list [--since 24h] [--grade G] | stats | grade: per-run grades (de
 
 hive subagents [NAME...] [--since 24h] [--running] [--all] [--json] [-v]: helpers agents started inside Claude Code (Agent tool) or Codex (multi_agent), per agent, with model, time, state and cost (core/subagents.py)
 
+## hive buy
+
+hive buy ask --thread T --merchant M --url U --item I --amount TOTAL --shipping S --tax X --why W [--test] | wait ID | card ID | done ID --recording F --receipt F | cancel ID | list | setup: buy parts with a one-time Link card once the person approves that exact purchase in their Link app (core/buy.py; warden 11231556881e)
+
 ## hive continue
 
 hive continue list [--json] | stats [--baseline] [--since D] [--until D]: the continuation pilot, where a run ending on `Next:` in a thread whose goals.md has `Continue: on` is carried on (core/continuation.py)
