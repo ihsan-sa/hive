@@ -2956,14 +2956,14 @@ FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcoun
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
 GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read", "/api/ran": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/work-tiers": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/subagents": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
-           "/api/config": "config", "/api/export": "config", "/api/modules": "modules", "/api/connectors": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
+           "/api/config": "config", "/api/export": "config", "/api/modules": "modules", "/api/connectors": "modules", "/api/mcp-url": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/kb/wipe": "files", "/api/kb/copies": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files", "/api/docs": "files", "/api/docs/doc": "files", "/api/docs/page": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/kb/wipe": "files", "/api/kb/putback": "files", "/api/docs/notes": "files", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/side-ask": "post", "/api/door": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
-            "/api/module": "modules", "/api/voice": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/kb/save": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
+            "/api/module": "modules", "/api/mcp-url": "modules", "/api/voice": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/kb/save": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
-LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
+LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/mcp-url", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
 
 
 _DOCS = []
@@ -3126,6 +3126,25 @@ def tailnet_host(web):
     t = web.get("tailnet") if isinstance(web.get("tailnet"), dict) else {}
     h = str(t.get("host") or "").strip().lower()
     return h if re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+:[0-9]{1,5}", h) else None
+
+
+_QR = {}
+
+
+def phone_qr(web):
+    """E122: the address a phone can actually reach, for the QR code in Settings › This device. The outside address if one is
+    set (outside.hosts, then the names in outside.sites), else the tailnet name tailscale serve answers on; None when neither is.
+    {"url", "via": "outside"|"tailnet", "qr": rows of "0"/"1"}. It only reads web.json: it opens nothing (hard limit 5)."""
+    out = web.get("outside") if isinstance(web.get("outside"), dict) else {}
+    sites = out.get("sites") if isinstance(out.get("sites"), dict) else {}
+    names = [str(h).strip().lower().rstrip(".") for h in (out.get("hosts") or []) if isinstance(h, str)] + [site_key(k) for k in sites]
+    name = next((n for n in names if re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+(:[0-9]{1,5})?", n)), None)
+    url, via = (f"https://{name}/", "outside") if name else (f"https://{tailnet_host(web)}/", "tailnet") if tailnet_host(web) else (None, None)
+    if not url: return None
+    if url not in _QR:
+        spec = importlib.util.spec_from_file_location("h2_qr", Path(__file__).resolve().with_name("qr.py")); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+        _QR.clear(); _QR[url] = m.matrix(url)
+    return {"url": url, "via": via, "qr": _QR[url]}
 
 
 TS_SOCK = "/run/tailscale/tailscaled.sock"
@@ -5851,8 +5870,9 @@ def do_import(d):
         have = _person_mcp(_person_home())
         bad = [n for n in names if n not in have]
         if bad: raise ValueError("no such MCP server: " + ", ".join(bad))
-        if names: write_text_private(MCP_COPY, json.dumps({"mcpServers": {n: have[n] for n in names}}, indent=1))
-        else: MCP_COPY.unlink(missing_ok=True)
+        clash = [n for n in names if n in _mcp_urls()]
+        if clash: raise ValueError("a connector added by address already has this name: " + ", ".join(clash))
+        _write_mcp({n: have[n] for n in names})   # the connectors added by address stay
         if "claude_md" not in d: return import_view()
     if type(d.get("claude_md")) is not bool: raise ValueError("claude_md is true or false")
     if d["claude_md"]:
@@ -5863,6 +5883,80 @@ def do_import(d):
     else:
         USER_INSTR.unlink(missing_ok=True)
     return import_view()
+
+
+# ---------- connectors added by address (E120a): a remote MCP server by its URL, as Claude's custom connectors ----------
+# The list lives in mcp-urls.json (name -> url, and a token if one was given); mcp.json, which the starter passes with --mcp-config,
+# is always the person's ticked imports plus these. A token is written into mcp.json as a header (agents need it) and never shown back.
+MCP_URLS = HOME / "mcp-urls.json"
+MCP_URL_MAX = 20
+MCP_LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+def _mcp_urls():
+    try: v = json.loads(MCP_URLS.read_text())
+    except (OSError, ValueError): return {}
+    return {n: s for n, s in v.items() if isinstance(s, dict) and isinstance(s.get("url"), str)} if isinstance(v, dict) else {}
+
+
+def _mcp_entry(s):
+    e = {"type": "http", "url": s["url"]}
+    if s.get("token"): e["headers"] = {"Authorization": "Bearer " + s["token"]}
+    return e
+
+
+def _write_mcp(imports=None, urls=None):
+    """mcp.json = the ticked imports (None: those already in it) + the connectors added by address. Nothing left: no file."""
+    urls = _mcp_urls() if urls is None else urls
+    if imports is None:
+        try: cur = json.loads(MCP_COPY.read_text()).get("mcpServers") or {}
+        except (OSError, ValueError, AttributeError): cur = {}
+        imports = {n: v for n, v in cur.items() if n not in urls and n not in _mcp_urls()} if isinstance(cur, dict) else {}
+    servers = {**imports, **{n: _mcp_entry(s) for n, s in urls.items()}}
+    if servers: write_text_private(MCP_COPY, json.dumps({"mcpServers": servers}, indent=1))
+    else: MCP_COPY.unlink(missing_ok=True)
+
+
+def mcp_url_view():
+    return {"servers": [{"name": n, "url": s["url"], "token": bool(s.get("token"))} for n, s in sorted(_mcp_urls().items())], "max": MCP_URL_MAX}
+
+
+def mcp_url_check(url):
+    """An https address with a host, or plain http on this computer only (a test server). No user:password inside it."""
+    if not isinstance(url, str) or not url.strip(): raise ValueError("paste the server's address")
+    url = url.strip()
+    if len(url) > 500 or any(c.isspace() for c in url): raise ValueError("that address has spaces in it or is too long")
+    try: u = urllib.parse.urlsplit(url); host = (u.hostname or "").lower(); u.port
+    except ValueError: raise ValueError("that isn't a web address")
+    if not host: raise ValueError("that isn't a web address")
+    if u.username or u.password: raise ValueError("leave the sign-in out of the address; paste a token in its own box")
+    if u.scheme == "https": return url
+    if u.scheme == "http" and host in MCP_LOOPBACK: return url
+    raise ValueError("the address must start with https:// (plain http only for a server on this computer)")
+
+
+def mcp_url_do(d):
+    """POST /api/mcp-url {"do": "add", "name", "url", "token"?} or {"do": "remove", "name"}. Local only: it gives every agent new tools."""
+    what, name = d.get("do"), d.get("name")
+    urls = _mcp_urls()
+    if what == "remove":
+        if name not in urls: raise ValueError("no connector added by address has that name")
+        urls.pop(name)
+    elif what == "add":
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}", name.strip()):
+            raise ValueError("give it a short name: letters, digits, - and _ (up to 40)")
+        name = name.strip()
+        try: cur = json.loads(MCP_COPY.read_text()).get("mcpServers") or {}
+        except (OSError, ValueError, AttributeError): cur = {}
+        if name in urls or (name in cur) or name in _person_mcp(_person_home()): raise ValueError("a connector with that name is already here")
+        if len(urls) >= MCP_URL_MAX: raise ValueError(f"{MCP_URL_MAX} is the most; remove one first")
+        url = mcp_url_check(d.get("url"))
+        tok = d.get("token") or ""
+        if not isinstance(tok, str) or len(tok) > 4000 or any(c in tok for c in "\r\n"): raise ValueError("that token can't be used")
+        urls[name] = {"url": url, **({"token": tok.strip()} if tok.strip() else {})}
+    else: raise ValueError("do: add or remove")
+    _write_mcp(urls=urls)   # mcp.json first: if it can't be written, the list doesn't claim a connector agents don't have
+    if urls: write_text_private(MCP_URLS, json.dumps(urls, indent=1))
+    else: MCP_URLS.unlink(missing_ok=True)
+    return mcp_url_view()
 
 
 def sandbox_state():
@@ -6575,6 +6669,7 @@ def serve(port):
             info = {"route": self.route, "can": list(self.can), "app": self.route != "open", "brand": brand_view()}
             if self.route != "open": info.update(setup={**SETUP.get(), "starter": starter_up()}, secrets_on=self.secrets_on, settings=settings_brief())  # the starter heartbeat is one stat, so read it fresh: from the 20 s cache "isn't running" and "back" took ~35-43 s to show
             if self.route != "open" and "modules" in self.can: info["features"] = ["slack-door"]; info["slack_door"] = slack_door_view()  # Settings > Modules > slack-door "Set up" (POST /api/slack-door)
+            if self.route in ("local", "tailnet"): info["phone_link"] = phone_qr(web)   # E122: the QR code in Settings › This device; not to an outside visitor, who may be a friend and needn't learn the other names
             if self.route != "open" and install_id(): info["install"] = install_id()   # the report module's install code, shown at the foot of Settings so the owner can match this Hive to its reports
             if self.route != "open": info["default_model"] = default_model(); info["voice"] = voice_ready(); info["phone"] = phone_ready() and "post" in self.can
             if self.route != "open" and "post" in self.can and word_shell(): info["word_shell"] = word_shell()
@@ -6720,6 +6815,8 @@ def serve(port):
                 self.send(json.dumps(modules_view()).encode(), J)
             elif u.path == "/api/connectors":   # read-only (CONNECTORS.md): there is no POST twin, and nothing here runs `conn`
                 self.send(json.dumps(connectors_view(fresh=q.get("fresh") == ["1"], secrets="secrets" in self.can)).encode(), J)
+            elif u.path == "/api/mcp-url":
+                self.send(json.dumps(mcp_url_view()).encode(), J)
             elif u.path == "/api/voice":
                 self.send(json.dumps(voice_view()).encode(), J)
             elif u.path == "/api/signin":
@@ -6876,7 +6973,7 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/starter", "/api/module", "/api/voice", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
+            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/starter", "/api/module", "/api/voice", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/mcp-url", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
                 try:
                     if u.path == "/api/post" and isinstance(d.get("page"), dict): res = page_edit_post(d.get("page"), d.get("thread"), limited="config" not in self.can)
                     elif u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True, edit_of=d.get("edit_of"), retry_of=d.get("retry_of"), files_from=d.get("files_from"), focus=d.get("focus"))
@@ -6913,6 +7010,7 @@ def serve(port):
                     elif u.path == "/api/signin/cancel": SIGNIN.cancel(); res = {"ok": True}
                     elif u.path == "/api/settings": res = set_settings(d)
                     elif u.path == "/api/import": res = do_import(d)
+                    elif u.path == "/api/mcp-url": res = mcp_url_do(d)
                     elif u.path == "/api/share-copy": res = share_copy()
                     elif u.path == "/api/share-pack": res = share_pack()
                     elif u.path == "/api/draft": res = draft_do(d)
