@@ -1,8 +1,8 @@
 """The long jobs: crawl a site, dig a question recursively, verify a list, hunt a list to its target, analyse what came back."""
-import collections, concurrent.futures as cf, csv, datetime as dt, functools, json, os, re, shlex, statistics as st, subprocess, threading, time, urllib.parse
+import collections, concurrent.futures as cf, csv, datetime as dt, functools, json, os, re, shlex, statistics as st, subprocess, threading, time, unicodedata, urllib.parse
 from pathlib import Path
 from . import engines, extract, fetcher, net, people
-from .extract import canonical, domain_of, fold, registrable
+from .extract import PEOPLE_PAGE, canonical, domain_of, fold, registrable
 from .store import now, safe_row
 
 
@@ -528,21 +528,31 @@ RANK_WORD = re.compile(r"^(?:senior|sr|executive|exec|assistant|asst|associate|a
 
 
 def title_units(title):
-    """The careers or workforce units a title names, each as its folded words: "Executive Dean, Career Life Design Services" gives career life design services; "Director of Workforce and Career Readiness" gives career readiness. A title is cut at commas, "&", "and", "of" and "for", rank words are dropped from each part's ends, and a part of two words or more with a careers or workforce word in it is a unit."""
-    out = []
-    for seg in re.split(r",|;|&|/|\band\b|\bof\b|\bfor\b|\s[-\u2013\u2014]\s", fold(title or "")):
-        w = re.findall(r"[a-z]+", seg)
-        while w and RANK_WORD.match(w[0]): w.pop(0)
-        while w and RANK_WORD.match(w[-1]): w.pop()
-        if len(w) >= 2 and any(x.startswith(c) for x in w for c in CAREER_WORDS) and w not in out: out.append(w)
-    return out
+    """The careers or workforce units a title names, each as its folded words: "Executive Dean, Career Life Design Services" gives career life design services; "Director of Workforce and Career Readiness" gives career readiness. A title is cut at commas, "&", "and", "of" and "for", rank words are dropped from each part's ends, and a part of two words or more with a careers or workforce word in it is a unit. A title with no unit so cut is cut again without "&" and "and", so a name joined by them stays whole: "Director Center for Career & Professional Readiness" gives career professional readiness (Wedge, GRCC, fnwords99)."""
+    def units(cut):
+        out = []
+        for seg in re.split(cut, fold(title or "")):
+            w = re.findall(r"[a-z]+", seg)
+            while w and RANK_WORD.match(w[0]): w.pop(0)
+            while w and RANK_WORD.match(w[-1]): w.pop()
+            if len(w) >= 2 and any(x.startswith(c) for x in w for c in CAREER_WORDS) and w not in out: out.append(w)
+        return out
+    return units(r",|;|&|/|\band\b|\bof\b|\bfor\b|\s[-\u2013\u2014]\s") or units(r",|;|/|\bof\b|\bfor\b|\s[-\u2013\u2014]\s")
+
+
+UNIT_NOUN = re.compile(r"^(?:cent(?:er|re)s?|offices?|services|departments?|divisions?|institutes?|hubs?|studios?|lab)$")
 
 
 def unit_named(title, text, url=""):
-    """Whether a page names one of the careers or workforce units in a person's title, its words in order (a page about "career readiness" doesn't name a "Career Education" office), or is that unit's own page (its words in the address)."""
-    hay, path = fold(text or ""), " ".join(re.findall(r"[a-z]+", fold(urllib.parse.urlsplit(url or "").path)))
+    """Whether a page's prose names one of the careers or workforce units in a person's title as a proper name: its words in order, each capitalised as the page prints it (a page about "career readiness" doesn't name a "Career Education" office), or is that unit's own page (its words in the address). A menu link to the unit is not prose (Wedge: GRCC's AI degree page lists the Center for Career and Professional Readiness only in its menu), nor is a common phrase in lower case ("technology, education and workforce development", Bowman, SPC's AI grant story; fnwords99), unless it is an office's name after "the" or "its" ("the career center at Triton College")."""
+    def sentence(ln):  # a line whose every longer word is capitalised is a name or a heading (a menu item of six words, "Center for Career and Professional Readiness"), not a sentence
+        return any(x[:1].islower() for x in re.findall(r"[^\W\d_]{4,}", ln))
+    body = " ".join(" ".join(ln for ln in prose_lines(unicodedata.normalize("NFKC", text or "")).split("\n") if sentence(ln)).split())
+    path = " ".join(re.findall(r"[a-z]+", fold(urllib.parse.urlsplit(url or "").path)))
     for w in title_units(title):
-        if re.search(r"\b" + r"\W+(?:(?:of|for|and|the)\W+)?".join(w) + r"\b", hay) or re.search(r"\b" + " ".join(w) + r"\b", path): return True
+        cap = r"\W+(?:(?i:of|for|and|the)\W+)?".join(f"[{x[0].upper()}](?i:{re.escape(x[1:])})" for x in w)
+        low = r"\b(?i:the|its|our|their|his|her)\s+" + r"\W+(?:(?:of|for|and|the)\W+)?".join(re.escape(x) for x in w) + r"\b" if UNIT_NOUN.match(w[-1]) else ""  # "the career center at Triton" names the office in lower case; "workforce development" after a comma is an activity
+        if re.search(r"\b" + cap + r"\b", body) or (low and re.search(low, body)) or re.search(r"\b" + " ".join(w) + r"\b", path): return True
     return False
 
 
@@ -633,7 +643,7 @@ def signal_kind(signal, source_url=""):
     if m and (menu_like(text) or BREADCRUMB.search(text)): return "menu"  # a menu is the organisation's site linking to a page; a person's signal in Title Case is a headline or a job title about them (Healey's taskforce, Dallas College's grant; review 112215240022)
     return "statement"
 
-HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms allow_org_signal allow_weak_org_signal person_signal official_recheck sources read_per_search skip_hosts allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words signal_kinds menu_statement".split())
+HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms head_terms allow_org_signal allow_weak_org_signal roster_verifies person_signal official_recheck sources read_per_search skip_hosts allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words signal_kinds menu_statement".split())
 
 
 HEADLINE_VERB = re.compile(r"\b(?:Expands|Launches|Announces|Receives|Wins|Opens|Partners|Celebrates|Hosts|Unveils|Offers|Adds|Joins|Awards|Welcomes|Honors|Signs|Approves|Plans|Seeks|Cuts|Raises|Earns|Debuts|Introduces|Selects|Appoints|Hires|Names|Breaks|Boosts|Makes|Takes|Gets|Says|Calls|Visits|Tours|Funds|Backs|Unveiled|Announced|Launched|Expanded|Awarded)\b")
@@ -686,6 +696,29 @@ def side_search(kind):
         return timed
     return deco
 
+
+
+_LABEL_SKIP = set("of at the and for in".split())
+
+
+def label_names(org, reg):
+    """Whether a domain's first label spells the organisation from its words in order: each word's first letters ("waketech" for Wake Technical Community College), or the initials ("dmacc", "tcnj", "fscj"), skipping only small words. At least two words, and a label of three letters or more."""
+    label = re.sub(r"[^a-z0-9]", "", reg.split(".")[0].lower())
+    words = [w for w in re.findall(r"[a-z0-9]+", fold(org).lower())]
+    if len(label) < 3: return False
+    def go(i, j, used):
+        if i == len(label): return used >= 2
+        if j == len(words): return False
+        w = words[j]
+        if w in _LABEL_SKIP and go(i, j + 1, used): return True
+        k = 0
+        while k < len(w) and i + k < len(label) and label[i + k] == w[k]:
+            k += 1
+            if go(i + k, j + 1, used + 1): return True
+        return False
+    return go(0, 0, 0)
+
+_PEOPLE_URL = PEOPLE_PAGE
 
 class Hunt:
     """A list to a target. It keeps trying other angles and other organisations until it reaches the target or truly runs out, and it never pads: a row is in the list only if a saved page backs it.
@@ -771,6 +804,9 @@ class Hunt:
         self.person_signal_searches, self.person_signal_found = 0, 0
         self.menu_statement_searches, self.menu_statement_found = 0, 0
         self.unsignalled_refreshed = 0   # near misses that took their organisation's signal page mid-run: finish_menu_rows judges them again (hop 40, fnwords89's Stevens)
+        self.head_searches = 0  # head-first searches of an org's own site, for an org with no lead after its angles
+        ht = spec.get("head_terms")
+        if ht is not None and (not isinstance(ht, list) or not all(isinstance(x, str) and x.strip() for x in ht)): raise ValueError("spec head_terms is a list of search words, one site: search each ([] turns the head-first searches off)")
         self.guessed, self.domain_searches, self.official_upgrades = {}, 0, 0  # org -> site found by one search for its name ('' when none passed)
         self.no_head = {}  # org -> page that was read and names nobody
         self.side_secs, self.side_lock, self._side_tl = collections.Counter(), threading.Lock(), threading.local()  # worker-seconds of each search weigh starts
@@ -829,6 +865,7 @@ class Hunt:
         elif self.kind_refused(signal_kind(r.get("signal"), r.get("source_url"))): why = f"the signal rests on a {signal_kind(r.get('signal'), r.get('source_url'))} page, and signal_kinds asks for {', '.join(self.signal_kinds)}"
         elif self.function_words and not self.function_fit(r.get("title", ""), f"{r.get('signal', '')} {r.get('check_quote') or ''} " + urllib.parse.urlparse(r.get("source_url", "")).path.replace("-", " ").replace("/", " ")): why = "no function word in the title or the person's own quote"  # the URL path always counts here: whether the row came from a directory isn't stored
         elif self.must and not any(people.term_regex(m).search(fold(self._stored_text(r))) for m in self.must): why = "the spec's must words aren't on its page"
+        elif (rw := self.roster_why(r)): why = rw
         elif (ow := self.org_signal_weak(r)): why = ow
         elif weak_signal_url(stored_signal_url(r)): why = f"the signal's page is not one the module now takes as a signal ({stored_signal_url(r)})"  # a site's own search page echoing our query (Benmouna, fnwords51)
         elif self.max_age and (r["page_date"] or extract.url_date(r["source_url"])) and not self._current_stored(r):  # judged as a live run judges it (held_back); a row stored before url_date read the folder date stays undated otherwise (Linley White's 2011 uploads chart, fnwords51)
@@ -837,6 +874,12 @@ class Hunt:
                 if (dt.date.today() - dt.date.fromisoformat(d)).days > self.max_age * 365: why = f"the page is from {d}"
             except ValueError: pass
         return why
+
+    ROSTER_HELD = "the signal page names this person only as a seat in a member table"
+    def roster_why(self, row):
+        """A row whose only signal is a seat in a member table (signal_near_person=roster) is a near miss unless the spec sets roster_verifies: three reviewers of four called Margolin's seat on HCCC's AI council weak (fnwords89, fnwords93, fnwords99)."""
+        if row.get("signal_near_person") != "roster" or self.s.get("roster_verifies") is True: return ""
+        return f"{self.ROSTER_HELD} (set roster_verifies to list such rows)"
 
     OTHER_UNIT = "the organisation's signal is another unit's"
     GOV_TEACH = "the organisation's signal is a governance or teaching page"
@@ -865,7 +908,7 @@ class Hunt:
         if (h := howto_page(sp.get("text", ""))) and not people.name_regex(row["name"]).search(fold(sp.get("text", ""))):
             return f"{self.HOWTO} ({h}; {url})"
         if self.earlier_job_excerpt(sp.get("text", ""), excerpt): return f"{self.EARLIER} ({url})"
-        if title_units(row.get("title", "")) and not people.name_regex(row["name"]).search(fold(sp.get("text", ""))) and not unit_named(row.get("title", ""), f"{sp.get('title', '')}\n{sp.get('text', '')}", url):
+        if title_units(row.get("title", "")) and not people.name_regex(row["name"]).search(fold(sp.get("text", ""))) and not unit_named(row.get("title", ""), sp.get("text", ""), url):  # the page's prose, not its title: a headline's capitals name nothing
             return f"{self.NO_UNIT} ({url})"  # ACC's AI-initiative story beside its Career Life Design dean; Ivy Tech's Microsoft MOU beside a career-coaching director (fnwords93 review: 5 of 6 weak rows)
         return ""
 
@@ -885,7 +928,7 @@ class Hunt:
     UNDER_HEAD = "a post under a head the same page lists"
     NO_SIGNAL = "no page of the organisation's site says the signal word yet"   # its heads wait here; refresh_unsignalled gives them the signal once one is found
     LEAKED_FAR = "the signal isn't near this person"
-    SPEC_FILTERS = ("the title does not name the role focus", "no function word in the title", "the role doesn't fit the spec", "the signal rests on a ", "the spec's must words aren't on its page", "the signal is the organisation's, not this person's")
+    SPEC_FILTERS = ("the title does not name the role focus", "no function word in the title", "the role doesn't fit the spec", "the signal rests on a ", "the spec's must words aren't on its page", "the signal is the organisation's, not this person's", ROSTER_HELD)
     READ_AGAIN = ("the signal's page is not one the module now takes", "the page puts them at ", "the page is from ", "a search result says they left", "an interim title, and ", "an interim title on an old", "only in the news, and ", "adult basic education, not ", "the organisation's signal is ")  # the module's own reading of the page: a fix to it (a greeting read as an employer, fnwords41; a 2018 CMS date on a staff page whose text names Fall 2026, fnwords44; a namesake's retirement, fnwords44) must reach the stored rows too
 
     def stored_readmits(self):
@@ -1211,9 +1254,13 @@ class Hunt:
         """A row on the organisation's signal whose page names the person only in a member table or list gets signal_near_person=roster and a note naming the seat. Returns True when it changed the row."""
         if not self.must or row.get("signal_near_person") not in ("no", ""): return False
         sp = self.case.page(url) or {}
-        if not roster_only(sp.get("text", ""), row["name"], self.must): return False
+        if not self.seat_page(sp) or not roster_only(sp.get("text", ""), row["name"], self.must): return False
         self.seat(row, sp, url)
         return True
+
+    def seat_page(self, page):
+        """Whether a page is an AI body's own page listing several people, so a table on it is a seat: its title names a must word ("Artificial Intelligence Strategy and Governance Council", Margolin). A staff directory lists everyone in short lines, and its AI word elsewhere is no seat (the test fixtures' "Triton staff" page)."""
+        return any(people.term_regex(m).search(fold(page.get("title") or "")) for m in self.must) and len(people.people_in(page.get("text") or "")) >= 2  # a table seats several people: one contact block ("Have Questions? Sue Kim, Program Director") on an AI course page is that person's own post, not a seat (HCCC's council page lists 16)
 
     def seat(self, row, page, url):
         """Mark a row as named on its signal page only as a seat in a member table or list."""
@@ -1230,7 +1277,7 @@ class Hunt:
             sp = self.case.page(r["source_url"]) or {}
             ex = self.own_sentence(sp.get("text", ""), r["name"], r["organisation"], self.must)
             m = re.match(r"\(the organisation's, from (\S+)\)", str(r.get("signal") or ""))
-            if not ex and not m and r.get("signal_near_person") == "yes" and roster_only(sp.get("text", ""), r["name"], self.must):  # its own page lists them in a member table: a seat, though an older run called it near (only a "yes": a "no" there is already not theirs, and a staff directory lists everyone in short lines, fnwords98)
+            if not ex and not m and r.get("signal_near_person") == "yes" and self.seat_page(sp) and roster_only(sp.get("text", ""), r["name"], self.must):  # its own page lists them in a member table: a seat, though an older run called it near (only a "yes": a "no" there is already not theirs, and a staff directory lists everyone in short lines, fnwords98)
                 r["signal_near_person"] = "no"; self.seat(r, sp, r["source_url"]); n += 1
                 continue
             if r.get("signal_near_person") == "yes": continue
@@ -1243,6 +1290,7 @@ class Hunt:
             elif m and self.mark_roster(r, m.group(1)): n += 1
         if n:
             self.log(f"own signal: {n} stored rows whose signal was the organisation's are named beside the word, or only as a seat in a member table, on a page already read")
+            self.recheck_stored()  # a row this made a seat is held now, not at the next run
             self._save()
         return n
 
@@ -1448,7 +1496,7 @@ class Hunt:
         text = page["text"]
         clean = people.without_events(people.without_boilerplate(text))
         low = fold(clean)
-        is_official = people.official(org, page.get("final_url") or page["url"], self.domains, text)
+        is_official = people.official(org, page.get("final_url") or page["url"], self.domains, text) or bool(self.on_known_site(org, page))
         if is_official and not self.domains.get(org) and not self.domains.get(people.org_core(org)):
             self.learned.setdefault(org, people.registrable(people.domain_of(page.get("final_url") or page["url"])))
         if not people.names_org(org, text) and not is_official: return 0
@@ -1479,6 +1527,7 @@ class Hunt:
             k = people.person_key(per["name"])
             if k in self.leads or any(r["organisation"] == org and people.same_person(per["name"], r["name"]) for r in self.leads.values()): continue
             res = people.check(page, per["name"], per["title"], org, self.domains)
+            if not res["official"] and (known := self.on_known_site(org, page)): res = people.check(page, per["name"], per["title"], org, {org: [known]})
             res = undated_down(res, page.get("final_url") or page["url"])
             if res["status"] not in ("verified", "secondary") and not res.get("left") and not res.get("other_employer") and not res.get("stale"): continue
             near = people.name_regex(per["name"])
@@ -1497,7 +1546,7 @@ class Hunt:
             if not close and hit_terms and (own := self.own_sentence(text, per["name"], org, hit_terms)): sig, close = own, True  # "Campbell also addressed ... 'Employers now expect graduates to use AI tools,' she said." (fnwords89 review)
             if hit_terms and not sig and not res["official"]: close = False  # only a menu says it, as on a namesake's site
             row = dict(name=per["name"], title=people.drop_code(per["title"]), organisation=org, official_site="yes" if res["official"] else "no", signal=sig, signal_near_person="yes" if close else "no", source_url=page.get("final_url") or page["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status=res["status"], check_quote=res["quote"], angle=angle, note=res["note"])
-            if close and hit_terms and roster_only(text, per["name"], hit_terms) and not self.own_sentence(text, per["name"], org, hit_terms):
+            if close and hit_terms and roster_only(text, per["name"], hit_terms) and self.seat_page(page) and not self.own_sentence(text, per["name"], org, hit_terms):
                 self.seat(row, page, row["source_url"])  # the signal page itself lists them in a member table: a seat, not their words (a council roster, Margolin)
             self.dir_entry = per.get("how") == "directory"
             far = bool(hit_terms and not close)
@@ -1517,6 +1566,7 @@ class Hunt:
                 why = ""  # the date was the last thing against it, and the organisation's own site has them now: listed in this run, not at the start of the next (Parks, fnwords44 and fnwords45)
             kind = signal_kind(row.get("signal"), row["source_url"])
             if not why and self.kind_refused(kind): why = f"the signal rests on a {kind} page, and signal_kinds asks for {', '.join(self.signal_kinds)}"
+            if not why: why = self.roster_why(row)
             if not why and (res["status"] == "secondary" or self.old_page(res["page_date"])): why, row["departure_read"] = self.left_elsewhere(per["name"], org), dt.date.today().isoformat()
             if why or (len(self.leads) >= self.target and self.org_count(org) < self.per_org) or not self.room_for(org, row["title"]):
                 if why: row["note"] = "; ".join(x for x in (f"not listed: {why}", row["note"]) if x)
@@ -1531,6 +1581,15 @@ class Hunt:
             self.log(f"  + {per['name']} — {per['title'][:70]} ({org}) [{res['status']}]")
         return got
 
+    def on_known_site(self, org, page):
+        """The site the hunt already took as this organisation's own (learned from an official page, or found for its `site:` searches) when the spec gave none, if this page is on it; else "".
+        A profile on search.asu.edu says "ASU" and Wake Tech's directory "Wake Tech", never the full name, so `official` could not tell they were the org's own, though the hunt had searched those very sites (fnwords108)."""
+        if self.domains.get(org) or self.domains.get(people.org_core(org)): return ""
+        d = self.learned.get(org) or self.guessed.get(org) or ""  # plain reads: a caller may hold save_lock
+        d = d[0] if isinstance(d, (list, tuple)) and d else d
+        host = people.domain_of(page.get("final_url") or page.get("url") or "")
+        return d if isinstance(d, str) and d and (host == d or host.endswith("." + d)) else ""
+
     def org_domain(self, org):
         """The organisation's own site: the spec's, one the hunt has read, or else one search for its name, taking the first institutional or same-named site whose title names it (fnwords29: ufl.edu, tri-c.edu were never known, so a quoted head could not be confirmed)."""
         d = self.domains.get(org) or self.domains.get(people.org_core(org)) or self.learned.get(org)
@@ -1539,18 +1598,24 @@ class Hunt:
         with self.save_lock:
             if org in self.guessed: return self.guessed[org]
         web = [x for x in self.sources if x in engines.GROUPS.get("web", [])] or self.sources
-        try: hits, _ = engines.search(people.org_core(org), web, n=8, case=self.case)
-        except Exception: hits = []
-        got = ""
-        for h in hits:
-            reg = registrable(domain_of(h["url"]))
-            tld = reg.rsplit(".", 1)[-1]
-            inst = tld in ("edu", "gov") or bool(re.search(r"\.(?:edu|ac|gov)\.[a-z]{2}$", reg))
-            if not people.names_org(org, h.get("title") or ""): continue
-            if people.official(org, h["url"], None, h.get("title") or "") or (inst and people._SCHOOL.search(fold(people.org_core(org)))):  # tri-c.edu spells nothing of Cuyahoga Community College, but its title names it
-                got = reg; break
+        school = people._SCHOOL.search(fold(people.org_core(org)))
+        q = org if school or re.match(r"the\s", fold(org).lower()) else people.org_core(org)  # a school by its whole name: org_core cuts "College of New Jersey" to "College of New", which finds New College and the College of New Caledonia, not tcnj.edu (fnwords104)
+        got, tries = "", 0
+        for q in [q] + ([q + " edu"] if school else []):  # a school that the bare name doesn't find gets one more search with "edu" ("College of New Jersey edu" finds tcnj.edu)
+            tries += 1
+            try: hits, _ = engines.search(q, web, n=8, case=self.case)
+            except Exception: hits = []
+            for h in hits:
+                reg = registrable(domain_of(h["url"]))
+                tld = reg.rsplit(".", 1)[-1]
+                inst = tld in ("edu", "gov") or bool(re.search(r"\.(?:edu|ac|gov)\.[a-z]{2}$", reg))
+                if inst and label_names(org, reg): got = reg; break  # "Lead the Way | Wake Tech" names no org, but waketech.edu, dmacc.edu, fscj.edu spell it (fnwords103)
+                if not people.names_org(org, h.get("title") or ""): continue
+                if people.official(org, h["url"], None, h.get("title") or "") or (inst and school):  # tri-c.edu spells nothing of Cuyahoga Community College, but its title names it
+                    got = reg; break
+            if got: break
         with self.save_lock:
-            self.domain_searches += 1
+            self.domain_searches += tries
             self.guessed[org] = got
         return got
 
@@ -1642,6 +1707,7 @@ class Hunt:
             self.log_rows.append({"org": org, "angle": angle, "hits": len(hits), "read": read, "found": found, **self.split_secs(t0, t_search, t_read), "read_routes": routes, "at": now()})
             self._save()
         self.site_angle(org)
+        self.head_search(org)
 
     DEAD_AFTER = 20   # failed calls, with none answered, before a source is dropped for the rest of the run
 
@@ -1736,6 +1802,32 @@ class Hunt:
         """An organisation with room left and a known site gets one search on that site alone, for its heads: the unscoped angles return news and program pages, which name nobody. It runs below the cap, not only at no lead: Hudson County's first row filled from an angle, and associate dean Valcarcel was only on its site search (fnwords44)."""
         a = self.site_query(org)
         if not a or not self.wants_more(org) or time.monotonic() > self.deadline or not self.site_due(org): return
+        self._site_search(org, a)
+
+    def head_queries(self, org):
+        """The head-first searches of an organisation with no lead yet: its own site (guessed from one search for its name when no domain is known), for the unit's staff and the college's leadership pages. The unscoped angles had read storefronts, news reposts, catalogs, LeadIQ and AI pages of other offices, and all ten of a sample of fnwords102's 81 "No named head" colleges named a current head on their own leadership or staff pages (REVIEW-nohead.md)."""
+        terms = self.s.get("head_terms")
+        if terms == []: return []
+        d = self.org_domain(org)
+        if not d: return []
+        if terms is None:
+            words = self.role_focus[:2] or [w for w in (re.sub(r"[^a-z ]", "", x.lower()).strip() for x in str(self.s.get("roles") or "dean|director").split("|")) if w][:2]
+            terms = [f"{w} staff" for w in words] + ["leadership administration"]
+        qs = [f"(site) site:{d} {t}" for t in terms]
+        if not self.site_query(org):  # its site wasn't known, so it never had the one site search (Wake Tech, DMACC, TCNJ in fnwords102)
+            words = [w for w in (re.sub(r"[^a-z ]", "", x.lower()).strip() for x in str(self.s.get("roles") or "dean|director").split("|")) if w][:2]
+            qs.insert(0, f'(site) site:{d} {self.s.get("site_terms") or " ".join(words)}')
+        return qs
+
+    def head_search(self, org):
+        """Head first: before an organisation with no lead can end as "No named head", search its own site for its heads, one query at a time until one gives a lead. A head on a page without the `must` word comes in by the (site) path, as a near miss until the word is found on the site."""
+        for a in self.head_queries(org) if not self.org_count(org) else []:
+            if self.org_count(org) or not self.wants_more(org) or time.monotonic() > self.deadline: return
+            if (org, a) in self.tried or (org, a) in self.failed: continue
+            with self.save_lock: self.head_searches += 1
+            self._site_search(org, a)
+
+    def _site_search(self, org, a):
         q = a[len("(site) "):]
         t0 = time.monotonic()
         srcs = self.site_sources()
@@ -1749,6 +1841,7 @@ class Hunt:
         self.answered = True
         found, t_read, routes = 0, 0.0, {}
         hits = [h for h in hits if not skipped_host(h["url"], self.skip_hosts)]
+        hits.sort(key=lambda h: not _PEOPLE_URL.search(h["url"]))  # a profile or staff list first: ASU's site search held search.asu.edu/profile/1716332 (the head) past the four it read (fnwords106)
         for h in hits[:self.read]:
             if h["relevance"] < 0.2: continue
             p, secs = self.read_page(h["url"], routes)
@@ -1847,11 +1940,12 @@ class Hunt:
         if self.blocked: lines += ["## Pages that couldn't be read", *[f"- {u} — {w}" for u, w in list(self.blocked.items())[:20]], ""]
         far = sum("signal isn't near" in r.get("note", "") for r in self.near.values())
         if far and self.must: lines += ["## Held back", f"- {far} near misses are only held because the `must` words aren't close to the person. If those words describe the organisation rather than the person, set `\"allow_page_signal\": true` in the spec.", ""]
-        nh = {o: u for o, u in self.no_head.items() if not self.org_count(o)}
-        if nh: lines += ["## No named head", "The office page was read and prints only a mailbox or phone, no person. This is a gap in the source, not a miss by the search:", *[f"- {o} — [{u}]({u})" for o, u in nh.items()], ""]
+        named = {r["organisation"] for r in self.near.values() if self.good_role(r.get("title", "")) and r.get("check_status") == "verified" and "puts them at" not in (r.get("note") or "")}  # a page that puts the person at another employer (Wake's NC Chamber speakers, fnwords103) names no head of this org  # a near miss in a head's role names a head: the org's head was found and held for another reason
+        nh = {o: u for o, u in self.no_head.items() if not self.org_count(o) and o not in named}
+        if nh: lines += ["## No named head", "The office page was read and prints only a mailbox or phone, no person, and no page read on its site named a head in the role. This is a gap in the source or in the search:", *[f"- {o} — [{u}]({u})" for o, u in nh.items()], ""]
         if untried: lines += ["## Organisations not tried", *[f"- {o}" for o in untried[:30]], ""]
         (out_dir / "REPORT.md").write_text("\n".join(lines) + "\n")
-        return {"status": status, "leads": len(rows), "verified": n_ver, "verified_kinds": kinds, "verified_near_person": n_near, "verified_roster": n_roster, "target": self.target, "near": len(self.near), "out": str(out_dir.resolve()), "stopped": self.stop_reason, "departure_searches": self.departure_searches, "person_signal_searches": self.person_signal_searches, "person_signal_found": self.person_signal_found, "menu_statement_searches": self.menu_statement_searches, "menu_statement_found": self.menu_statement_found, "domain_searches": self.domain_searches, "official_upgrades": self.official_upgrades, "side_secs": {k: round(self.side_secs.get(k, 0.0), 1) for k in self.SIDE_KINDS}, "lead_list": [{k: r.get(k, "") for k in ("name", "title", "organisation", "check_status", "source_url", "signal")} for r in rows], "no_named_head": [{"org": o, "url": nh[o]} for o in sorted(nh)]}
+        return {"status": status, "leads": len(rows), "verified": n_ver, "verified_kinds": kinds, "verified_near_person": n_near, "verified_roster": n_roster, "target": self.target, "near": len(self.near), "out": str(out_dir.resolve()), "stopped": self.stop_reason, "departure_searches": self.departure_searches, "person_signal_searches": self.person_signal_searches, "person_signal_found": self.person_signal_found, "menu_statement_searches": self.menu_statement_searches, "menu_statement_found": self.menu_statement_found, "domain_searches": self.domain_searches, "head_searches": self.head_searches, "official_upgrades": self.official_upgrades, "side_secs": {k: round(self.side_secs.get(k, 0.0), 1) for k in self.SIDE_KINDS}, "lead_list": [{k: r.get(k, "") for k in ("name", "title", "organisation", "check_status", "source_url", "signal")} for r in rows], "no_named_head": [{"org": o, "url": nh[o]} for o in sorted(nh)]}
 
 
 def analyze_pages(pages, today=None):

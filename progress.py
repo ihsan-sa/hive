@@ -491,6 +491,32 @@ def cmd_reading(a):
     append(LEDGER, {"id": a.id, "kind": READING, "reading_by": me, "reading_at": iso(), "reading_why": a.why})
     print(f"{a.id}: a reading, no longer owed a verdict. The lab's index counts it apart, with the closings.")
 
+DEFER_MAX_DAYS, DEFER_MAX = 21, 2
+
+def cmd_defer(a):
+    """Move a hand-judged row's revisit when what it rests on comes later (its experiment was extended, the reader data lands on a date).
+    Without this a row sat overdue and every keeper and improver round re-deferred it in words (i0303, i0383: 11-23, 5 rounds); a777c
+    once moved i0302 by appending to the ledger by hand. Never by its owner, a source in --why, at most DEFER_MAX_DAYS ahead and
+    DEFER_MAX times a row; the lab's index counts deferred rows beside verdict_due_pct."""
+    items = ledger()
+    e = items.get(a.id)
+    if not e or not re.fullmatch(r"i\d+", a.id): sys.exit(f"hive improve defer: no improvement {a.id}")
+    me = os.environ.get("HIVE_NAME", os.environ.get("USER", "?"))
+    if e.get("by") == me: sys.exit(f"hive improve defer: {a.id} was logged by you; moving its revisit moves what is owed, so ask an agent that didn't.")
+    if e.get("status") != "landed" or e.get("kind") == READING: sys.exit(f"hive improve defer: {a.id} reads {e.get('kind') or e.get('status')}, so no verdict is owed to move.")
+    if e.get("check"): sys.exit(f"hive improve defer: {a.id} has a check that its script reads at {e.get('due_at', 'its revisit')}; a scripted row isn't moved by hand.")
+    try: to = dt.date.fromisoformat(a.to)
+    except ValueError: sys.exit("hive improve defer: --to takes a date, YYYY-MM-DD.")
+    today = now().date()
+    if not today < to <= today + dt.timedelta(days=DEFER_MAX_DAYS): sys.exit(f"hive improve defer: --to must be after today and at most {DEFER_MAX_DAYS} days ahead ({(today + dt.timedelta(days=DEFER_MAX_DAYS)).isoformat()}).")
+    if str(e.get("revisit") or "") > today.isoformat(): sys.exit(f"hive improve defer: {a.id}'s revisit is {e['revisit']}, not come yet; defer it once it is due.")
+    n = sum(1 for r in jsonl(LEDGER) if r.get("id") == a.id and r.get("revisit_by"))
+    if n >= DEFER_MAX: sys.exit(f"hive improve defer: {a.id} was deferred {n} times already; give it a verdict (inconclusive, expired or unjudgeable) instead.")
+    if not re.search(r"\b[0-9a-f]{12}\b|[\w.~-]+/[\w./-]+|\b[\w-]+\.(?:jsonl|json|md|py|log)\b", a.why or ""):
+        sys.exit("hive improve defer: --why must say what the number waits on and where that is written (a post id or a file path).")
+    append(LEDGER, {"id": a.id, "revisit": to.isoformat(), "revisit_from": e.get("revisit", ""), "revisit_by": me, "revisit_at": iso(), "revisit_why": a.why})
+    print(f"{a.id}: revisit {e.get('revisit')} -> {to.isoformat()} (defer {n + 1} of {DEFER_MAX}). Judge it then.")
+
 def cmd_list(a):
     if a.due: autojudge()
     items = ledger()
@@ -1026,6 +1052,8 @@ def main(argv=None):
     p.add_argument("--base", help="BFROM..BTO (ISO; a time with no zone is UTC), with --apart: the baseline window, ending within the hour before this row landed, with --apart starting within the hour after, the two within a fifth of each other in length; a row it shares a number with that landed a whole window before BFROM (and was never read as reverted) is live in both, so it doesn't block. --why gives the number over each"); p.set_defaults(f=cmd_judge)
     p = sp.add_parser("reading", help="mark a row that read a number and changed nothing (no --where, no --commit) as a reading, not owed a verdict; never by its owner: ID --why 'what it read, for what'")
     p.add_argument("id"); p.add_argument("--why", required=True); p.set_defaults(f=cmd_reading)
+    p = sp.add_parser("defer", help="move a due hand-judged row's revisit when what it rests on comes later; never by its owner, at most 21 days ahead and twice a row: ID --to YYYY-MM-DD --why 'what it waits on, with a post id or path'")
+    p.add_argument("id"); p.add_argument("--to", required=True); p.add_argument("--why", required=True); p.set_defaults(f=cmd_defer)
     p = sp.add_parser("list", help="the ledger; --due for revisits past their date"); p.add_argument("--due", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_list)
     p = sp.add_parser("attach", help="give a logged change a check after the fact, on or after its revisit date; the number is kept but never counts as held (late-check): ID --check CMD --want up|down [--band N] [--before N: the number from before the change; without it, measured now and read in 48 h]")
     p.add_argument("id"); p.add_argument("--check", required=True); p.add_argument("--want"); p.add_argument("--band", type=float); p.add_argument("--before", type=float); p.set_defaults(f=cmd_attach)

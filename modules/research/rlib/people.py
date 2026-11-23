@@ -12,9 +12,9 @@ _GAP = re.compile(r"\t+|[ \u00a0]{3,}")
 _PARTICLE = r"(?:de|del|della|di|du|la|le|van|von|der|den|ter|bin|ibn|al|el|da|dos|das)"  # Jean de la Verpilliere
 NAME = rf"{_W}(?:{_SP}[A-Z]\.)*(?:{_SP}(?:{_PARTICLE}{_SP})*{_W}){{1,2}}"
 LINE_NAME = NAME.replace(r"[A-Z]\.", r"[A-Z]\.?", 1)  # a line or cell that is only a name may drop the initial's dot, "Marittza M Adame" (South Texas's chart); in prose "Plan B Funding" would pass
-SUFFIX = r"(?:,?\s+(?:Jr\.?|Sr\.?|II|III|IV|Ph\.?\s?D\.?|Ed\.?\s?D\.?|M\.?D\.?|J\.?D\.?|MBA|M\.?S\.?|DBA|Esq\.?))*"
+SUFFIX = r"(?:,?\s+(?:Jr\.?|Sr\.?|II|III|IV|Ph\.?\s?D\.?|Ed\.?\s?D\.?|M\.?D\.?|J\.?D\.?|MBA|M\.?S\.?|DBA|Esq\.?|M\.A\.|MA|M\.?Ed\.?|M\.?P\.?A\.?|MSW|Ed\.?S\.?|CPA|SPHR|SHRM-SCP|GCDF))*"
 HONOR = r"(?:(?:Dr|Prof|Mr|Ms|Mrs|Mx)\.?\s+)?"
-NOT_NAME = set("""has officially stepped steps expect compensation analysis by blvd boulevard ave avenue road rd drive highway parkway suite log copy position profile vertically integrated projects effectiveness governor senator congressman representative act acts report reports offices hub directory services resources contact contacts apply news events calendar careers staff faculty students alumni tech university college community center centre office department school institute program programs campus board foundation technology artificial intelligence data science workforce president vice dean director chief associate assistant executive senior interim the news read more contact student students services academic affairs human resources learn click home about our staff faculty new state national american united north south east west county city district education learning development innovation career careers business engineering computer health online division professional continuing leadership team trustees chancellor provost professor manager coordinator chair head email phone view all meet his her their this that these those when where with from for and page press release media event events research strategic planning economic public relations information systems digital cyber security machine ai it us january february march april may june july august september october november december monday tuesday wednesday thursday friday saturday sunday he she we they you read share follow privacy policy site map search menu working title property management job jobs salary posting vacancy vacancies opening openings breakfast club summit webinar webinars technical pathway pathways academy academies initiative initiatives partnerships solutions lab labs designer librarian librarians sciences trades skills service aid nursing room rooms auditorium criminal therapy assisting recruit officer officers counsel excellence access equitable success audit internal institutional advancement organizational chart police lieutenant technologies assist""".split())
+NOT_NAME = set("""has officially stepped steps expect compensation analysis by blvd boulevard ave avenue road rd drive highway parkway suite log copy position profile vertically integrated projects effectiveness governor senator congressman representative act acts report reports offices hub directory services resources contact contacts apply news events calendar careers staff faculty students alumni tech university college community center centre office department school institute program programs campus board foundation technology artificial intelligence data science workforce president vice dean director chief associate assistant executive senior interim the news read more contact student students services academic affairs human resources learn click home about our staff faculty new state national american united north south east west county city district education learning development innovation career careers business engineering computer health online division professional continuing leadership team trustees chancellor provost professor manager coordinator chair head email phone view all meet his her their this that these those when where with from for and page press release media event events research strategic planning economic public relations information systems digital cyber security machine ai it us january february march april may june july august september october november december monday tuesday wednesday thursday friday saturday sunday he she we they you read share follow privacy policy site map search menu working title property management job jobs salary posting vacancy vacancies opening openings breakfast club summit webinar webinars technical pathway pathways academy academies initiative initiatives partnerships solutions lab labs designer librarian librarians sciences trades skills service aid nursing room rooms auditorium criminal therapy assisting recruit officer officers counsel excellence access equitable success audit internal institutional advancement organizational chart police lieutenant technologies assist request info my salon grooming""".split())
 _LINE_ROLE = re.compile(rf"^(?:the\s+)?(?:(?:program|project|center|centre|department|unit|division|regional|operations|office|workforce|career|academic|student|campus|site|general)[ \t]+){{0,2}}(?:{ROLE})\b", re.I)
 
 
@@ -64,6 +64,7 @@ def clean_title(t):
     # Where the post ends ("Special Assistant to the President" goes on past its "to"): "CEO of Nexeon, said:", "..., Dr Alex Groombridge, CTO" (the next person), "CEO, spearheads the ...".
     t = re.split(r"(?<![A-Z])(?<!Assist)(?<!Asst)(?<!Assoc)(?<!Exec)(?<!Coord)(?<!Dept)(?<!aka)[.;:|•]\s|\s[–—-]\s|\s(?:said|says|who|and has|has|is|was|will|at|in|on)\s|(?<![Aa]ssistant)\sto\s|[\"“”(]|,\s+(?:sees|see|feels|believes|notes|adds|hopes|expects|thinks|wants|plans|looks|knows|argues|stresses)\b|,?\s(?:said|says|added|explained)\b|,\s+(?:Dr|Prof|Mr|Ms|Mrs)\.?\s|,\s+[a-z]+s\s+(?:the|a|an|its)\b|,\s+the\s+[a-z]|,\s+(?:where|which|whose|when)\b|\suntil\s|\sand\s+(?:highly|widely|also|one)\b", t)[0].strip(" ,.")
     t = re.sub(r"\b((?:co-?)?founder)\s+of\s+[a-z][a-z -]*(?:,.*)?$", r"\1", t, flags=re.I)  # "co-founder of advanced materials supplier"
+    t = re.sub(r"\s+\S+@\S+.*$", "", t)  # "Interim Director jdoe@example.com": the email is no part of the post
     if len(t) > 110: t = t[:110].rsplit(" ", 1)[0].strip(" ,")  # whole words only: a cut "Inno" read as another employer
     return t
 
@@ -77,6 +78,11 @@ _PATS = [
 
 
 _LAST_FIRST = re.compile(r"([A-Z][\w'’]+(?:-[A-Z][\w'’]+)?),\s+((?:[A-Z][a-z][\w'’-]*|[A-Z]\.)(?:\s+(?:[A-Z]\.?|[A-Z][a-z][\w'’-]*))?)")  # "Seado, Christina", "Garcia-Lopez, Ana M", "Lee, J. R." (review 112215240022)
+
+
+_STACKED_LAST_FIRST = re.compile(r"([A-Z][\w'’]+(?:[ -][A-Z][\w'’]+)?),\s+([A-Z][a-z][\w'’-]*(?:\s+(?:[A-Z]\.?|[A-Z][a-z][\w'’-]*))?)")  # a line that is only "Blanchard Smith, Korrie L": a two-word surname is fine on a line of its own
+_STAFF_HEAD = re.compile(r"(?:Meet\s+(?:the|our)\s+)?([A-Z][\w&',. -]{2,60}?)\s+(?:Staff|Team|Staff Directory)")
+_CONTACT = re.compile(r"@|\bemail\b|\[email|^\(?\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}$", re.I)
 
 
 def _cell_name(cell, flip=False):
@@ -133,14 +139,48 @@ def people_in(text, ld=()):
         if t0 < m.start("name") and _row_names_another(text, m): continue
         add(m.group("name"), title, "prose")
     lines = [l for l in text.split("\n") if l.strip()]
-    for a, b in zip(lines, lines[1:]):
-        margin, a, b = a[:1] not in " \t\u00a0", a.strip(), b.strip()
+    def head_unit(l):
+        m = _STAFF_HEAD.fullmatch(re.sub(r"^The\s+", "", l.strip()))
+        if m and not _ROLE_RE.search(m.group(1)) and not re.search(r"\b(?:of|for|and|the|to)$", m.group(1)) and fold(m.group(1)).split()[0] not in ("our", "the", "meet", "all", "faculty", "leadership", "support", "full", "part", "administrative"): return m.group(1)
+        return ""
+    heads = [head_unit(l) for l in lines]
+    unit, units = "", []
+    for h in heads: unit = h or unit; units.append(unit)  # the nearest "<Unit> Staff" heading above a line names its unit: "The Workforce Development Center Team" over Brackman, not the "Administrative Team" under him (Cincinnati State, fnwords108)
+    for li, (a, b, c) in enumerate(zip(lines, lines[1:], lines[2:] + [""])):
+        unit = units[li]
+        margin, a, b, c = a[:1] not in " \t\u00a0", a.strip(), b.strip(), c.strip()
         # A PDF table row: the name is the one cell that is a name ("Connection | Jim Bayne", "Bernadette Russell | Russell"), the post the first cell under it.
         row = _GAP.split(a)
         if margin and len(row) > 1 and any(_LINE_ROLE.match(x) for x in row): continue  # a table row that holds its own post: the line under it is the next person's
         cells = [x for x in row if re.fullmatch(HONOR + LINE_NAME + SUFFIX, x)]
         a, b = cells[0] if len(cells) == 1 else a, _GAP.split(b)[0]
-        if re.fullmatch(HONOR + LINE_NAME + SUFFIX, a) and _LINE_ROLE.match(b) and len(b) < 160 and "directory" not in b.lower(): add(a, b, "directory")  # 160: UF's "Associate Vice President for ... and Executive Director of the ... Center" is 120
+        if re.fullmatch(HONOR + LINE_NAME + SUFFIX, a) and _LINE_ROLE.match(b) and len(b) < 160 and "directory" not in b.lower():  # 160: UF's "Associate Vice President for ... and Executive Director of the ... Center" is 120
+            # A post ending in a comma goes on to its unit on the next line, and a rank printed after the post turns round: "Director, Senior," / "Career and Professional Development Services" (ASU's profile pages, fnwords106).
+            if b.endswith(",") and c and len(c) <= 90 and not _LINE_ROLE.match(c) and not _CONTACT.search(c) and not _cell_name(c)[0]:
+                b = b.rstrip(", ") + ", " + c
+                if inv := re.match(r"([^,]+),\s+(Senior|Associate|Assistant|Executive|Interim|Acting|Deputy|Managing)\s*,\s*(.+)$", b): b = f"{inv.group(2)} {inv.group(1)}, {inv.group(3)}"
+            add(a, b + (", " + unit if unit and not re.search(r"\b(?:of|for)\b|,", b) and fold(unit) not in fold(b) else ""), "directory")  # a bare post on a unit's staff list is that unit's: "Interim Executive Director" on "Continuing Education & Workforce Training Staff" (DMACC, fnwords106)
+    # A directory that stacks "Last, First M", the email, then the post and its unit on lines of their own (Wake Tech's /directory/dept/ pages: "Blanchard Smith, Korrie L" / "[email protected]" / "Dean of Career Services" / "Career Services"). fnwords106 read no one there.
+    rows = [l.strip() for l in lines]
+    for i, a in enumerate(rows):
+        m = _STACKED_LAST_FIRST.fullmatch(a)
+        if not m or m.group(2).lower() == "interim": continue
+        name = _cell_name(m.group(2) + " " + m.group(1))[0]
+        j = i + 1
+        while j < len(rows) and j <= i + 2 and _CONTACT.search(rows[j]): j += 1
+        if not name or j >= len(rows) or not _LINE_ROLE.match(rows[j]) or len(rows[j]) >= 160: continue
+        post, unit = rows[j], rows[j + 1] if j + 1 < len(rows) else ""
+        if (unit and len(unit) <= 60 and re.match(r"[A-Z][A-Za-z&' -]+$", unit) and not _LINE_ROLE.match(unit) and not _STACKED_LAST_FIRST.fullmatch(unit) and not _cell_name(unit)[0]
+                and fold(unit) not in fold(post)): post += ", " + unit
+        add(name, post, "directory")
+    # A staff list that prints the post above the name and the email under it: "Director, Career Center" / "Audrey Cooper" / "jdoe@example.com", or with a unit line between, "Associate Director" / "Employer Relations" / "Joseph Pietromonico" (TCNJ, fnwords106). The email line is what says the post belongs to the name above it, not the name below.
+    for i, a in enumerate(rows):
+        if not _LINE_ROLE.match(a) or len(a) >= 160: continue
+        for k in (1, 2):
+            if i + k + 1 >= len(rows) or not _CONTACT.search(rows[i + k + 1]): continue
+            nm, mid = rows[i + k], rows[i + 1:i + k]
+            if not re.fullmatch(HONOR + LINE_NAME + SUFFIX, nm) or any(_LINE_ROLE.match(x) or len(x) >= 160 or _cell_name(x)[0] for x in mid): continue
+            add(nm, a + "".join(", " + x for x in mid), "directory")
     # A table row at the margin, "Interim Associate Vice President ...      Dr. Holly Bennett      Bennett, Holly": post and name side by side in the first two cells. An indented row is an org chart's boxes, where the cells beside each other are different people's.
     # A staff list whose section header holds the post, "Title: Dean,      Name      Email to:" (Palm Beach State): each row under it gives the unit, then the name ("Health Sciences, LW      Dr. Alphonso Baldwin"). A header ending in a comma wants the unit after it; without one the post is whole.
     head, email, prev = None, False, ""
@@ -403,9 +443,13 @@ def title_slot(text, name, title, org=""):
     """
     rx = re.compile(name_regex(name).pattern, re.I)
     lines = _page_lines(text)
+    # A bare post on a staff list took its unit from the heading above it ("Director/Senior Business Manager" under "The Workforce Development Center Team", Cincinnati State, fnwords108): the card prints the post alone.
+    base, _, unit = title.rpartition(", ")
+    bare_post = fold(base).strip(" .") if base and any(_STAFF_HEAD.fullmatch(re.sub(r"^The\s+", "", l.strip())) and fold(unit) in fold(l) for l in text.split("\n")) else ""
     def role(candidate, appt=False):
         candidate = long_form(fold(candidate)).strip(" .")
         candidate = re.sub(r"^(?:the|a|an)\s+", "", candidate)
+        if bare_post and candidate == long_form(bare_post): return True
         # "Founder, CEO" or "Co-founder and CEO": the founding is said first, the post after it.
         if not re.search(r"found", title, re.I): candidate = re.sub(r"^(?:co-?)?founder\s*(?:,|and|&)\s*", "", candidate)
         for part in re.split(r"\s*[;/]\s*", title):
@@ -456,7 +500,7 @@ def title_slot(text, name, title, org=""):
     then = re.compile(rf"^(?:she|he|they|{re.escape(toks[-1]) if toks else 'she'})\s+(?:is|serves as|has been)\s+(.*)$", re.I)
     contact = re.compile(r"\s*(?:[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\+?[\d(][\d ().-]{6,}\d)\s*$")
     def contact_line(line):
-        return bool(re.fullmatch(r"\s*(?:(?:e-?mail|phone|tel|fax|contact)\b.*|[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\+?[\d(][\d ().-]{6,}\d)\s*", line, re.I))
+        return bool(re.fullmatch(r"\s*(?:(?:e-?mail|phone|tel|fax|contact)\b.*|[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\[email\s*protected\]|\+?[\d(][\d ().-]{6,}\d)\s*", line, re.I))  # "[email protected]": Cloudflare hides the address (Wake Tech, ASU)
     for i, line in enumerate(lines):
         # A directory row: "Jane Doe<TAB>Dean of Students<TAB>jdoe@example.com", nothing but contact cells after the post.
         if "\t" in line:
@@ -516,8 +560,25 @@ def title_slot(text, name, title, org=""):
                 two = lines[i + 2] if i + 2 < len(lines) else ""
                 if below and two and not contact_line(below) and not contact_line(two) and not _alone_name(two) and len(below.split()) <= 8 and role(below + " " + two):
                     return " ".join((sent + " " + below + " " + two).split())[:300]
-                if (not below or contact_line(below)) and i and role(lines[i - 1]) and not (i > 1 and _alone_name(lines[i - 2])):
+                # ... with the rank printed after the post: "Director, Senior," / "Career and Professional Development Services" (ASU's profile pages, fnwords108).
+                inv = re.fullmatch(r"([^,]+),\s+(Senior|Associate|Assistant|Executive|Interim|Acting|Deputy|Managing)\s*,?", below)
+                if inv and two and not contact_line(two) and not _alone_name(two) and role(f"{inv.group(2)} {inv.group(1)}, {two}"):
+                    return " ".join((sent + " " + below + " " + two).split())[:300]
+                # The name's own line may carry its email ("Audrey Cooper jdoe@example.com"): the card ends there, so the post over it is theirs (TCNJ, fnwords107).
+                ends = not below or contact_line(below) or (bare.strip() != sent.strip() and "@" in sent)
+                if ends and i and role(lines[i - 1]) and not (i > 1 and _alone_name(lines[i - 2])):
                     return " ".join((lines[i - 1] + " " + sent).split())[:300]
+                # ... or over two lines, the post then its unit: "Associate Director" / "Employer Relations" / "Joseph Pietromonico jroe@example.com".
+                if ends and i > 1 and not contact_line(lines[i - 1]) and not contact_line(lines[i - 2]) and len(lines[i - 1].split()) <= 8 and not _ROLE_RE.search(lines[i - 1]) and role(lines[i - 2] + ", " + lines[i - 1]) and not (i > 2 and _alone_name(lines[i - 3])):
+                    return " ".join((lines[i - 2] + " " + lines[i - 1] + " " + sent).split())[:300]
+    # A directory card that prints "Last, First M" on its own line, then the email, then the post (Wake Tech's /directory/dept/ pages, fnwords108).
+    for i, line in enumerate(lines):
+        lf = _STACKED_LAST_FIRST.fullmatch(line.strip())
+        if not lf or not rx.fullmatch(f"{lf.group(2)} {lf.group(1)}"): continue
+        rest = [x.strip() for x in lines[i + 1:i + 5]]
+        while rest and contact_line(rest[0]): rest.pop(0)
+        if rest and (role(rest[0]) or (len(rest) > 1 and not contact_line(rest[1]) and not _STACKED_LAST_FIRST.fullmatch(rest[1]) and role(rest[0] + ", " + rest[1]))):
+            return " ".join((line + " " + " ".join(rest[:2])).split())[:300]
     return ""
 
 

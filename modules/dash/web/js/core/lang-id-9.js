@@ -211,6 +211,7 @@ export default {
   "No document matches.": "Tidak ada dokumen yang cocok.",
   "The library has no PDFs yet.": "Perpustakaan belum memiliki PDF.",
   "Couldn't read the library:": "Tidak bisa membaca perpustakaan:",
+  "Couldn't refresh the library, so this shows the list it read last. It keeps trying.": "Tidak bisa memperbarui pustaka, jadi ini menampilkan daftar yang terakhir dibaca. Terus mencoba.",
   "new, being filed": "baru, sedang diarsipkan",
   "Opening…": "Membuka…",
   "Couldn't open this document:": "Tidak bisa membuka dokumen ini:",

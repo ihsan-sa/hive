@@ -17,6 +17,7 @@ export default {
   "No document matches.": "Ningún documento coincide.",
   "The library has no PDFs yet.": "La biblioteca aún no tiene PDF.",
   "Couldn't read the library:": "No se pudo leer la biblioteca:",
+  "Couldn't refresh the library, so this shows the list it read last. It keeps trying.": "No se pudo actualizar la biblioteca, así que muestra la lista que leyó la última vez. Sigue intentándolo.",
   "new, being filed": "nueva, archivándose",
   // the viewer: the page, its tools and the list of notes
   "Opening…": "Abriendo…",

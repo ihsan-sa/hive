@@ -167,6 +167,7 @@ export default {
   "No document matches.": "Aucun document ne correspond.",
   "The library has no PDFs yet.": "La bibliothèque n'a pas encore de PDF.",
   "Couldn't read the library:": "Impossible de lire la bibliothèque :",
+  "Couldn't refresh the library, so this shows the list it read last. It keeps trying.": "Impossible d'actualiser la bibliothèque : voici la dernière liste lue. Nouvel essai en cours.",
   "new, being filed": "nouvelle, en cours de dépôt",
   "Opening…": "Ouverture…",
   "Couldn't open this document:": "Impossible d'ouvrir ce document :",

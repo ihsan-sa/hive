@@ -271,6 +271,7 @@ export default {
   "No document matches.": "कोई दस्तावेज़ मेल नहीं खाता।",
   "The library has no PDFs yet.": "लाइब्रेरी में अभी कोई PDF नहीं है।",
   "Couldn't read the library:": "लाइब्रेरी नहीं पढ़ी जा सकी:",
+  "Couldn't refresh the library, so this shows the list it read last. It keeps trying.": "लाइब्रेरी ताज़ा नहीं हो सकी, इसलिए यह पिछली बार पढ़ी गई सूची दिखा रहा है। कोशिश जारी है।",
   "new, being filed": "नया, दर्ज किया जा रहा है",
   "Opening…": "खुल रहा है…",
   "Couldn't open this document:": "यह दस्तावेज़ नहीं खोला जा सका:",
