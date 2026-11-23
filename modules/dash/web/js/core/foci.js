@@ -131,14 +131,30 @@ export function focusOf(th) {
 // An agent at work in it right now keeps a "likely not needed" thread on its focus (the interaction round, 2026-11-13): the rule pass greys a
 // thread with nothing for the person in a day, and its focus page then said "no agent running" with two agents at work on the focus's own loop.
 export const workingIn = th => ((S.live && S.live.agents) || []).some(a => a.thread === th && a.alive !== false);   // the live list is short; the sessions are thousands
-export const listed = th => { const d = S.threads.get(th); return !!d && !btwParent(th) && !isSystemThread(d) && (!faded(th) || workingIn(th)) && !archived(th); };
+export const listed = th => memo().listed.has(th);
+const listedNow = th => { const d = S.threads.get(th); return !!d && !btwParent(th) && !isSystemThread(d) && (!faded(th) || workingIn(th)) && !archived(th); };
 const lastAt = th => { const d = S.threads.get(th), p = d && d.posts.at(-1); return p ? p.t : 0; };
-/** The threads of a focus (id, or null for Misc), newest activity first: {th, t, active} where active is a post in the last week. */
-export function threadsOf(id) {
-  const out = [];
-  for (const d of S.threads.values()) { if (!listed(d.name) || focusOf(d.name) !== id) continue; const t = lastAt(d.name); out.push({ th: d.name, t, active: now() - t < ACTIVE_FOR }); }
-  return out.sort((a, b) => b.t - a.t);
+// What threadsOf and agentsOf work out holds until the board, the log, the foci, the thread marks or who is working where changes, or a minute passes
+// (the week and day windows): the home asked for every focus's threads on every 1.5 s poll, each ask walking every thread (11231146bc6e, the person:
+// the dashboard was laggy, typing included). The live list's own clock ticks on every poll, so it counts by who is alive in which thread only.
+const LIVE_SIG = new WeakMap();
+const liveSig = () => { const L = S.live; if (!L) return ""; let v = LIVE_SIG.get(L); if (v == null) { v = (L.agents || []).map(a => a.name + "@" + a.thread + (a.alive === false ? "-" : "")).sort().join(); LIVE_SIG.set(L, v); } return v; };
+let MEMO = { key: null, by: null, agents: new Map() };
+function memo() {
+  const k = [S.ver, S.threads.size, S.posts.length, S.sessions.length, S.foci, S.threadMeta, liveSig(), Math.floor(now() / 60e3)];
+  if (MEMO.key && MEMO.key.every((x, i) => x === k[i])) return MEMO;
+  const by = new Map(), at = now(), ok = new Set();
+  for (const d of S.threads.values()) {
+    if (!listedNow(d.name)) continue;
+    ok.add(d.name);
+    const f = focusOf(d.name), t = lastAt(d.name); let l = by.get(f); if (!l) by.set(f, l = []);
+    l.push({ th: d.name, t, active: at - t < ACTIVE_FOR });
+  }
+  for (const l of by.values()) l.sort((a, b) => b.t - a.t);
+  return (MEMO = { key: k, by, listed: ok, agents: new Map() });
 }
+/** The threads of a focus (id, or null for Misc), newest activity first: {th, t, active} where active is a post in the last week. A fresh array each call. */
+export function threadsOf(id) { return (memo().by.get(id ?? null) || []).map(r => ({ ...r })); }
 export const activeThreads = id => threadsOf(id).filter(r => r.active);
 /** The cards' order: the foci as listed, then Misc, only when something is going on there. */
 export function fociOrder() { const fs = foci().slice(); if (activeThreads(null).length) fs.push(MISC); return fs; }
@@ -146,6 +162,10 @@ export function fociOrder() { const fs = foci().slice(); if (activeThreads(null)
 export const needsOf = id => waitingNow().filter(w => (w.focus ? w.focus === id : focusOf(w.th) === id));
 /** Agents in a focus's threads: running now, and the ones that worked there in the last day. */
 export function agentsOf(id) {
+  const m = memo(), had = m.agents.get(id ?? null); if (had) return { now: had.now.slice(), day: had.day.slice() };
+  const v = agentsNow(id); m.agents.set(id ?? null, v); return { now: v.now.slice(), day: v.day.slice() };
+}
+function agentsNow(id) {
   const ths = new Set(threadsOf(id).map(r => r.th)), nowOn = new Set(), day = new Set(), since = now() - DAY;
   for (const a of (S.live && S.live.agents) || []) if (a.name && a.thread && ths.has(a.thread)) nowOn.add(a.name);
   for (const s of S.sessions) if (s.thread && ths.has(s.thread) && s.name) { if (isRunning(s.name) && !s.end) nowOn.add(s.name); else if ((s.end || s.start) > since) day.add(s.name); }

@@ -2229,6 +2229,9 @@ def floor(c, st, alive, login):
     for r in sorted(rows, key=lambda r: (not first(r), -(r["quiet_s"] if r["quiet_s"] is not None else float("inf")))):
         if keep(r, "wait", held.get(r["thread"], 0) <= t) and keep(r, "stopped", not cont.stopped_thread(r["thread"])) and keep(r, "tier", not tier_held(c, r["thread"])) and keep(r, "person_pause", r["thread"] not in paused): pass
         else: continue
+        try: dup = cont.G.recent_round(r["thread"])   # a keeper's `hive goals --post` landed since goals() read the board: hive-stars 11-23 14:37, two agents on one brief
+        except Exception: dup = None
+        if not keep(r, "just_posted", not dup): continue
         started[r["thread"]] = t
         sig, seen = [r.get("rungs_done"), r.get("rungs_left"), r.get("rung")], st.setdefault("floor_seen", {}).get(r["thread"]) or {}
         st["floor_seen"][r["thread"]] = {"sig": sig, "n": seen.get("n", 0) + 1 if seen.get("sig") == sig else 1}
