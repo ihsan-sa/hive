@@ -1,6 +1,7 @@
 """A case: one folder holding everything a piece of research saw, so each claim can be traced to the words on a page and the moment they were read."""
 import datetime as dt, hashlib, json, os, re, sqlite3, threading
 from pathlib import Path
+from . import extract
 
 SCHEMA = """
 create table if not exists pages(url text primary key, final_url text, via text, status text, http int, title text, text text, sha text, fetched_at text, date text, date_from text, snapshot text, links text, people_ld text, note text);
@@ -67,11 +68,22 @@ class Case:
     def _row(r):
         d = dict(r)
         d["links"], d["people_ld"] = json.loads(d["links"] or "[]"), json.loads(d["people_ld"] or "[]")
+        if not d.get("date") and d.get("status") == "ok" and (td := extract.text_date(d.get("text") or "", d.get("title") or "")): d["date"], d["date_from"] = td, "text"  # a page stored before text_date read its dateline (Parks' GRCC story, fnwords74)
         return d
 
     def page(self, url):
         with self.lock: r = self.db.execute("select * from pages where url=?", (url,)).fetchone()
         return self._row(r) if r else None
+
+    def page_at(self, url):
+        """The page stored under this address, or the one a redirect brought here (a row keeps the final address)."""
+        if (d := self.page(url)): return d
+        with self.lock: r = self.db.execute("select * from pages where final_url=? order by status='ok' desc", (url,)).fetchone()
+        return self._row(r) if r else None
+
+    def page_count(self):
+        """How many pages, and the newest rowid: a page saved again (insert or replace) changes the second, so a cache keyed on it sees the new text."""
+        with self.lock: return tuple(self.db.execute("select count(*), max(rowid) from pages").fetchone())
 
     def pages(self, ok_only=True):
         with self.lock: rows = self.db.execute("select * from pages" + (" where status='ok'" if ok_only else "")).fetchall()

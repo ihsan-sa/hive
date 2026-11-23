@@ -601,7 +601,7 @@ def person_held_of(threads, board=None):
     try:
         sys.path.insert(0, str(CORE)); import continuation as _C
         for th in want:
-            if _C.stop_file(th).exists(): out[th] = "stopped by the person (the starter's stop mark)"
+            if _C.still_held(th): out[th] = "stopped by the person (the starter's stop mark)"
     except Exception: pass
     for th, p in newest.items():
         if th in out: continue

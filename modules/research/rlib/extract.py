@@ -113,7 +113,7 @@ def url_date(url):
     return ""
 
 
-def page_date(url, meta, ld_items, text):
+def page_date(url, meta, ld_items, text, title=""):
     """When the page says it was published, and how it knows. A copyright line is not a date."""
     if "wikipedia.org" in url: return "", ""  # the first date there is from the article's subject (an infobox's founding year)
     for k in DATE_META:
@@ -125,8 +125,33 @@ def page_date(url, meta, ld_items, text):
             if d: return d, "meta"
     d = url_date(url)
     if d: return d, "url"
-    d = parse_date(text[:1500])
+    d = parse_date(text[:1500]) or text_date(text, title)
     return (d, "text") if d else ("", "")
+
+
+_DATELINE = re.compile(r"(?m)^[ \t]*" + _TEXT_DATE.pattern + r"\s*[,\u2013\u2014-]\s*[A-Z][A-Z.'\-]+(?:\s+[A-Z][A-Z.'\-]+)*\b(?![a-z])")
+
+
+def _past(m, today):
+    try: d = dt.date(int(m.group(3)), MONTHS.index(m.group(1)[:3].lower()) + 1, int(m.group(2)))
+    except ValueError: return ""
+    return d.isoformat() if d <= today else ""
+
+
+def text_date(text, title="", today=None):
+    """A date the body gives as the story's own, past the first 1500 characters a menu can fill: a press dateline ("Jan. 10, 2022, GRAND RAPIDS, Mich. –", a line opening with a date then a place in capitals), or a date on a short line of its own in the 300 characters after the headline (the title before its " | Site" tail). Not any date in the text: an event, a deadline or a © year is not when the page was written, and a future date never is (Parks' GRCC news page, fnwords74, read as undated)."""
+    if not text: return ""
+    today = today or dt.date.today()
+    for m in _DATELINE.finditer(text):
+        if (d := _past(m, today)): return d
+    head = (title or "").split(" | ")[0].strip()
+    if len(head) >= 20:
+        i = text.find(head)
+        if i >= 0:
+            for line in text[i + len(head): i + len(head) + 300].split("\n"):   # a date line of its own ("Published on: January 27, 2015"), not a date inside a sentence ("join us on Mar. 3")
+                m = _TEXT_DATE.search(line)
+                if m and len((line[:m.start()] + line[m.end():]).split()) <= 4 and (d := _past(m, today)): return d
+    return ""
 
 
 def parse_html(html, url=""):
@@ -148,8 +173,9 @@ def parse_html(html, url=""):
         t = it.get("@type")
         if (t == "Person" or (isinstance(t, list) and "Person" in t)) and isinstance(it.get("name"), str) and isinstance(it.get("jobTitle"), str):
             people.append({"name": it["name"], "title": it["jobTitle"]})
-    date, how = page_date(url, p.meta, items, text)
-    return {"title": " ".join(htmllib.unescape(p.title).split()), "text": text, "links": list(dict(p.links).items()), "date": date, "date_from": how, "people_ld": people, "cut": cut}
+    title = " ".join(htmllib.unescape(p.title).split())
+    date, how = page_date(url, p.meta, items, text, title)
+    return {"title": title, "text": text, "links": list(dict(p.links).items()), "date": date, "date_from": how, "people_ld": people, "cut": cut}
 
 
 def fold(s):

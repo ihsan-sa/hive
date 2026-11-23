@@ -732,6 +732,17 @@ def setup_note():
     return ("Setup isn't finished: three short steps (the account agents run on, whether anything is shared, how much agents may do without asking). "
             "Until then it sends nothing, not even failure reports. Here in the terminal: hive setup (Ctrl-C this first). In a browser: the address from hive web.")
 
+def release_setup_holds():
+    """Setup pauses a Claude login nobody signed in to while a Codex login or key exists (dash sync_accounts, setup_paused.json), so
+    the starter doesn't pick it. Signing in from this terminal happens inside claude, which hive execs, so the next hive releases it here;
+    the app's own sign-in does it there. Nothing runs when no login is held. a4698, 2026-11-23."""
+    try: held = json.loads((STATE / "setup_paused.json").read_text())
+    except (OSError, ValueError): return
+    dp = MODULES / "dash" / "dash.py"
+    if not (isinstance(held, list) and held and dp.is_file() and any(login_status(Path(p)) for p in held if isinstance(p, str))): return
+    try: subprocess.run([sys.executable, "-I", str(dp), "sync-accounts"], capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError): pass
+
 def door(extra):
     """The person's way in: an ordinary Claude Code session in ~, told it is the door (door.md), signed as person.
     `hive` resumes the same conversation, `hive --new` starts another; other args go to claude."""
@@ -739,6 +750,7 @@ def door(extra):
     if (not st.exists() or time.time() - st.stat().st_mtime > 60) and not starter_proc():
         print("Note: the starter isn't running, so posts won't start agents. Try: systemctl --user start hive-starter", file=sys.stderr)
     if (n := setup_note()): print(n, file=sys.stderr)
+    release_setup_holds()
     try: login =str(Path(json.loads((CORE / "config.json").read_text())["logins"][0]).expanduser())
     except (OSError, ValueError, KeyError, IndexError): login = str(HOME / ".claude")
     STATE.mkdir(exist_ok=True)
@@ -1303,7 +1315,7 @@ def cmd_setup(a):
     try: login = Path(read_cfg()["logins"][0]).expanduser()
     except Exception: login = HOME / ".claude"
     print("Step 1 of 3: the account agents run on")
-    print("  Signed in to Claude." if login_status(login) else "  Not signed in yet. When you next run hive, Claude Code asks you to sign in (a paid Claude plan or an API key). Other accounts, Codex too, are in the web app's Settings.")
+    print("  Signed in to Claude." if login_status(login) else "  Not signed in yet. When you next run hive, Claude Code asks you to sign in (a paid Claude plan or an API key). A Codex login made with codex login counts too; API keys are added in the web app's Settings.")
     # 2 what to share: the report module's own words, as the screen shows them
     print("\nStep 2 of 3: what to share")
     rp = MODULES / "report" / "report.py"
@@ -1329,6 +1341,11 @@ def cmd_setup(a):
     cur.update(power=power, share={**{k: was.get(k) is True for k in ("failures", "usage", "everything", "github")}, "failures": failures, "usage": usage}, setup_done=True)
     t = f.with_name(f".settings.json.{os.getpid()}")
     t.touch(mode=0o600); t.chmod(0o600); t.write_text(json.dumps(cur, indent=1) + "\n"); t.replace(f)
+    dp = MODULES / "dash" / "dash.py"
+    if dp.is_file():  # accounts, as the app's Finish does: a Codex login made with `codex login` becomes a fallback, and a Claude login nobody signed in to is paused
+        try: r = subprocess.run([sys.executable, "-I", str(dp), "sync-accounts"], capture_output=True, text=True, timeout=180)
+        except (OSError, subprocess.SubprocessError) as e: r = None; print(f"Accounts weren't checked ({e}); the web app's Settings does it when opened.", file=sys.stderr)
+        if r is not None and r.returncode: print(f"Accounts weren't checked: {(r.stderr or r.stdout).strip()[-300:]}", file=sys.stderr)
     sent = failures and rp.is_file()
     if sent:  # the first check-in now, as the app does on Finish, instead of at the next 6-hour timer
         try: subprocess.Popen([sys.executable, "-I", str(rp), "send"], start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

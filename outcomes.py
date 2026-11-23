@@ -8,7 +8,8 @@ Every run the starter logs (~/log.jsonl start/end) gets a grade in ~/outcomes.js
   partial    some of it, or a handover with a plan
   nothing    it posted, but no delivery and no handover: status only, questions back, the wrong thing
   not_asked  the post asked this agent nothing concrete
-  not_run    it hit a provider's usage limit and exited non-zero within a minute, posting nothing (no model): it never ran, so it is no bad work
+  not_run    it hit a provider's usage limit and exited non-zero within a minute, posting nothing (no model): it never ran, so it is no bad work;
+             so is a longer limited run that posted nothing when the starter resumed its session on the same post (that run carries the ask)
              either (R30, 2026-11-14: Codex at its limit read as 29.6% delivered when the runs that did run delivered 70%, i0203)
 A run the starter stopped because the person edited the message it was answering (or asked for another answer) is not_asked by rule too (marked
 `superseded`): the run resumed on the new version carries the ask. So is a run the person told to pause or stop mid-run that then stopped and did no
@@ -307,14 +308,23 @@ def limit_times(log):
             if k: out.setdefault(k, []).append(e.get("at", ""))
     return out
 
-def not_run(run, mine, limits):
-    """The run hit a provider's limit and exited non-zero within LIMIT_S of its start, posting nothing: it never got to the ask."""
+def not_run(run, mine, limits, log=()):
+    """The run hit a provider's limit and exited non-zero, posting nothing: within LIMIT_S of its start it never got to the ask; later, it is
+    not_run only if the starter resumed the same session on the same post (moved to another login, or at the reset), since that run carries
+    the ask. a2f16 worked 4.5 min on cc3, hit the limit, moved to another login 2 s later and posted the round at 00:12, yet the stopped run
+    was the week's only silent grade (2026-11-23 00:06, post 112219061a91)."""
     if mine or not run.get("exit"): return False
     try: t0, t1 = (dt.datetime.fromisoformat(run[k]) for k in ("started", "ended"))
     except (KeyError, TypeError, ValueError): return False
-    if (t1 - t0).total_seconds() >= LIMIT_S: return False
     ats = limits.get(run.get("session"), []) + limits.get(("name", run.get("name")), [])   # an agent runs one run at a time, so its name in the window is this run
-    return any(run["started"] <= at <= iso(t1 + dt.timedelta(seconds=LIMIT_S)) for at in ats)
+    if not any(run["started"] <= at <= iso(t1 + dt.timedelta(seconds=LIMIT_S)) for at in ats): return False
+    return (t1 - t0).total_seconds() < LIMIT_S or limit_resumed(run, log)
+
+def limit_resumed(run, log):
+    """The session's next start after this run is on the same post: the starter resumed it, so that run carries this run's ask."""
+    nxt = next((r for r in log if r.get("event") == "start" and r.get("session") == run.get("session") and r.get("name") == run.get("name")
+                and r.get("at", "") >= run["ended"]), None)
+    return bool(nxt) and (nxt.get("woke") or [nxt.get("post")])[0] == run.get("post")
 
 def mechanical(run, post, mine):
     if mine: return "not_asked" if contentless(post) else None   # "???" answered with where things stand was graded nothing on 2026-11-04
@@ -496,9 +506,9 @@ def cmd_grade(a):
         rp = not (sw or sup or pz) and bool(reap_resumed(r, log))
         if parked(r, log): r = {**r, "parked": True}
         post = ask
-        g = "not_asked" if sw or sup or pz or rp else "not_run" if not_run(r, mine, lims) else mechanical(r, post, mine)
+        g = "not_asked" if sw or sup or pz or rp else "not_run" if not_run(r, mine, lims, log) else mechanical(r, post, mine)
         if g:
-            why = "only switched model or effort; the run it resumed as carries the ask" if sw else "reaped on a background wait and resumed on the same post; that run carries the ask" if rp else "stopped for the person's edit or retry; the run it resumed as carries the ask" if sup else "the person paused it mid-run and it stopped; the run that resumes carries the ask" if pz else "hit a usage limit and exited within a minute; resumed at the reset" if g == "not_run" \
+            why = "only switched model or effort; the run it resumed as carries the ask" if sw else "reaped on a background wait and resumed on the same post; that run carries the ask" if rp else "stopped for the person's edit or retry; the run it resumed as carries the ask" if sup else "the person paused it mid-run and it stopped; the run that resumes carries the ask" if pz else "hit a usage limit before posting; the same session resumes on the same post and carries the ask" if g == "not_run" \
                 else "the post asked nothing" if g == "not_asked" else "posted nothing" + (" though named" if g == "silent" else "")
             if not a.dry: append(LEDGER, {**r, **({"switch": True} if sw else {}), **({"superseded": True} if sup else {}), **({"person_pause": True} if pz else {}), **({"reap_resumed": True} if rp else {}), **tag, "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
             graded += 1
