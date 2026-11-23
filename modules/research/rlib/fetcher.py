@@ -1,6 +1,6 @@
 """Read a page by whichever honest route works: plain request, then a real browser, then the Internet Archive's copy.
 It goes no further than that: no proxies or challenge solving. A page it can't read comes back as blocked, never as content."""
-import json, re, shutil, subprocess, tempfile, unicodedata, urllib.parse
+import json, re, shutil, subprocess, tempfile, threading, unicodedata, urllib.parse
 from . import net, pdfboxes
 from .extract import domain_of, parse_html
 from .store import now
@@ -102,14 +102,20 @@ def _archive(url):
 NEEDS_BROWSER = ("news.google.com",)
 
 
+LAST = threading.local()   # LAST.route: how this thread's last fetch ended: saved (from the case), direct, browser, archive, blocked or refused. A hunt splits its page-read seconds by it
+
+
 def fetch(url, case=None, refresh=False, allow_archive=True, allow_browser=True):
     """The page dict, saved in the case. status is ok, blocked or refused; note says what each route answered."""
     notes, page = [], None
+    LAST.route = "blocked"
     try:
         net.check_url(url, resolve=False)   # a saved page too: the list may have changed since
         if case and not refresh:
             known = case.page(url)
-            if known and known["status"] == "ok": return known
+            if known and known["status"] == "ok":
+                LAST.route = "saved"
+                return known
         host = (urllib.parse.urlsplit(url).hostname or "").lower()
         routes = [("direct", _direct), ("browser", _browser), ("archive", _archive)]
         if host in NEEDS_BROWSER: routes = routes[1:2]
@@ -120,10 +126,13 @@ def fetch(url, case=None, refresh=False, allow_archive=True, allow_browser=True)
             try: page, why = route(url)
             except net.Refused: raise
             except Exception as e: page, why = None, f"{type(e).__name__}: {e}"  # one bad page never ends a long run
-            if page: break
+            if page:
+                LAST.route = name
+                break
             notes.append(f"{name}: {why}")
             gone = gone or why in GONE
     except net.Refused as e:
+        LAST.route = "refused"
         return dict(url=url, status="refused", note=str(e), text="", title="", links=[], people_ld=[], via="", date="", fetched_at=now())
     if not page:
         page = dict(url=url, status="blocked", via="", text="", title="", links=[], people_ld=[], date="", fetched_at=now())

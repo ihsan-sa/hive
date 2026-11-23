@@ -1,5 +1,5 @@
 """The long jobs: crawl a site, dig a question recursively, verify a list, hunt a list to its target, analyse what came back."""
-import collections, concurrent.futures as cf, csv, datetime as dt, json, os, re, shlex, statistics as st, subprocess, threading, time, urllib.parse
+import collections, concurrent.futures as cf, csv, datetime as dt, functools, json, os, re, shlex, statistics as st, subprocess, threading, time, urllib.parse
 from pathlib import Path
 from . import engines, extract, fetcher, net, people
 from .extract import canonical, domain_of, fold, registrable
@@ -378,6 +378,23 @@ def current_despite_date(text, url, links=()):
     return bool(re.search(rf"\b(?:{y}|{y - 1})\b", text))
 
 
+def side_search(kind):
+    """Times one of the searches weigh starts (statement, official recheck, person signal, departure) into `Hunt.side_secs[kind]`, its own seconds only: a departure search inside an official recheck counts as departure, not twice. fnwords63's weigh took 1267 worker-seconds and the log couldn't say which of them to cut."""
+    def deco(f):
+        @functools.wraps(f)
+        def timed(self, *a, **k):
+            stack = self._side_tl.__dict__.setdefault("stack", [])
+            stack.append(0.0); t0 = time.monotonic()
+            try: return f(self, *a, **k)
+            finally:
+                spent = time.monotonic() - t0
+                inner = stack.pop()
+                if stack: stack[-1] += spent
+                with self.side_lock: self.side_secs[kind] += max(0.0, spent - inner)
+        return timed
+    return deco
+
+
 class Hunt:
     """A list to a target. It keeps trying other angles and other organisations until it reaches the target or truly runs out, and it never pads: a row is in the list only if a saved page backs it.
     Running again on the same case picks up where the last run stopped; pages and searches are reused."""
@@ -461,6 +478,7 @@ class Hunt:
         self.menu_statement_searches, self.menu_statement_found = 0, 0
         self.guessed, self.domain_searches, self.official_upgrades = {}, 0, 0  # org -> site found by one search for its name ('' when none passed)
         self.no_head = {}  # org -> page that was read and names nobody
+        self.side_secs, self.side_lock, self._side_tl = collections.Counter(), threading.Lock(), threading.local()  # worker-seconds of each search weigh starts
         if self.state_file.exists(): self._load()
 
     def _load(self):
@@ -655,6 +673,7 @@ class Hunt:
         try: return (dt.date.today() - dt.date.fromisoformat(page_date)).days > self.s.get("stale_days", 365)
         except (ValueError, TypeError): return False
 
+    @side_search("departure")
     def left_elsewhere(self, name, org):
         """A row that stands on a profile aggregator (secondary) can be years out of date, and its page can't say so. One search for the person with retire/steps down/named; if a result's title or snippet says they left, hold the row. Returns why, or ''."""
         self.departure_searches += 1
@@ -691,9 +710,10 @@ class Hunt:
         self._save()
         return out
 
+    @side_search("person signal")
     def person_signal(self, row, org):
-        """A row whose signal is the organisation's (or only somewhere on its page) gets one plain search for the person with the first `must` word. A page that names the organisation and prints that word in the person's own sentence, or the one beside it, gives the row a signal of its own. Marks the row so a rerun doesn't search again. `"person_signal": false` in the spec switches it off."""
-        if not self.must or row.get("signal_near_person") == "yes" or row.get("person_signal_tried") or self.s.get("person_signal") is False: return False
+        """A row whose signal is the organisation's (or only somewhere on its page) gets one plain search for the person with the first `must` word. A page that names the organisation and prints that word in the person's own sentence, or the one beside it, gives the row a signal of its own. Marks the row so a rerun doesn't search again. Off unless the spec says `"person_signal": true`: from fnwords56 to 64 it ran 98 times, found nothing, and took the most of weigh's worker-seconds (478 of fnwords64's, 28 s a search with its page reads)."""
+        if not self.must or row.get("signal_near_person") == "yes" or row.get("person_signal_tried") or self.s.get("person_signal") is not True: return False
         row["person_signal_tried"] = "yes"
         with self.save_lock: self.person_signal_searches += 1
         name = row["name"]
@@ -730,7 +750,7 @@ class Hunt:
     def stored_person_signals(self):
         """Rows from an earlier run whose signal is the organisation's get the same search, side by side."""
         todo = [r for r in self.leads.values() if r.get("check_status") == "verified" and r.get("signal_near_person") != "yes" and not r.get("person_signal_tried")]
-        if not todo or not self.must or self.s.get("person_signal") is False: return
+        if not todo or not self.must or self.s.get("person_signal") is not True: return
         t0, f0 = time.monotonic(), self.person_signal_found
         with cf.ThreadPoolExecutor(max_workers=self.workers) as ex: list(ex.map(lambda r: self.person_signal(r, r["organisation"]), todo))
         self.log(f"person signal: searched for {len(todo)} stored rows whose signal is the organisation's, found the person's own on {self.person_signal_found - f0} ({time.monotonic() - t0:.0f}s)")
@@ -778,6 +798,7 @@ class Hunt:
         m = next((x for x in people.term_regex(term).finditer(body) if CAREER_NEAR.search(body[max(0, x.start() - 300):x.end() + 300]) and not EARLIER_JOB.search(sentence_at(body, x.start(), x.end()))), None)  # the word beside a careers or workforce word: AI research news (UT) is not a careers signal; nor a leader bio on an AI degree at an earlier employer (SLCC president, fnwords23)
         return flat[max(0, m.start() - 80):m.end() + 120].strip() if m else ""
 
+    @side_search("statement")
     def menu_statement(self, org):
         """An organisation whose signal is only its site's menu, or which has none while its own site shows heads (UT's leadership page in fnwords62: the heads were dropped, as St. Petersburg's Bowman and Saenz were), gets one search on its own site for a `must` word with the spec's first function word, and the first official page that says it in a sentence becomes its signal, on its rows and near misses too. A stored case reads no new pages, so AU's, BHCC's and Alamo's rows kept a menu (fnwords48). Marked in `tried`, so a rerun doesn't search again. Returns True when a statement was found."""
         old = self.org_signal.get(org)
@@ -990,6 +1011,7 @@ class Hunt:
         """A title read again on the organisation's site must still fit the spec as recheck_stored applies it."""
         return self.good_role(title) and not people.elsewhere(title, org) and (not self.role_focus or any(people.term_regex(w).search(fold(title)) for w in self.role_focus))
 
+    @side_search("official recheck")
     def official_recheck(self, row, org):
         """A lead read on another site, or on a page too old to show the post is still held, gets one search for the person on the organisation's own domain; it is upgraded when `check` verifies them there, and keeps its quote as the signal."""
         row["official_recheck_tried"] = "yes"
@@ -1059,17 +1081,16 @@ class Hunt:
                 continue
             self.answered = True
             hits = sorted(hits, key=lambda h: (not people.official(org, h["url"], self.domains), -h["score"]))
-            found, read, t_read = 0, 0, 0.0
+            found, read, t_read, routes = 0, 0, 0.0, {}
             for h in hits[:self.read]:
                 if h["relevance"] < 0.2: continue
-                t1 = time.monotonic()
-                p = fetcher.fetch(h["url"], self.case)
-                t_read += time.monotonic() - t1
+                p, secs = self.read_page(h["url"], routes)
+                t_read += secs
                 read += 1
                 found += self.weigh(org, p, angle)
                 if not self.wants_more(org): break
             self.tried.add((org, angle))
-            self.log_rows.append({"org": org, "angle": angle, "hits": len(hits), "read": read, "found": found, **self.split_secs(t0, t_search, t_read), "at": now()})
+            self.log_rows.append({"org": org, "angle": angle, "hits": len(hits), "read": read, "found": found, **self.split_secs(t0, t_search, t_read), "read_routes": routes, "at": now()})
             self._save()
         self.site_angle(org)
 
@@ -1097,13 +1118,45 @@ class Hunt:
                 errs = {k: v for k, v in errs.items() if k not in dead}   # callers weigh len(errs) against len(self.sources), which no longer counts it
         return hits, errs
 
-    def time_spent(self, engine_secs0, rows0):
-        """One line on where this run's angle and site searches spent their worker time, and which engines the searches waited on."""
+    SIDE_KINDS = ("statement", "official recheck", "person signal", "departure")
+
+    def time_spent(self, engine_secs0, rows0, side0=None):
+        """One line on where this run's angle and site searches spent their worker time, which engines the searches waited on, and the seconds of each search weigh starts, wherever it ran, with the largest named."""
         rows = [r for r in self.log_rows[rows0:] if "search_secs" in r]
         tot = {k: sum(r[k] for r in rows) for k in ("secs", "search_secs", "read_secs", "weigh_secs")}
         eng = sorted(((s, t - engine_secs0.get(s, 0.0)) for s, t in engines.SECS.items()), key=lambda x: -x[1])
         return (f"time: {len(rows)} searches took {tot['secs']:.0f} worker-seconds: waiting on the engines {tot['search_secs']:.0f}, fetching pages {tot['read_secs']:.0f}, "
-                f"weighing them (with the searches that starts) {tot['weigh_secs']:.0f}; engines, all searches: " + ", ".join(f"{s} {t:.0f}s" for s, t in eng if t >= 0.5))
+                f"weighing them (with the searches that starts) {tot['weigh_secs']:.0f}; engines, all searches: " + ", ".join(f"{s} {t:.0f}s" for s, t in eng if t >= 0.5)
+                + "; " + self.side_line(side0) + "; " + self.route_line(rows))
+
+    ROUTES = ("saved", "direct", "browser", "archive", "blocked", "refused")
+
+    def read_page(self, url, routes):
+        """Fetch one result page, adding its seconds and count to `routes` under the route that ended the fetch (fnwords65: fetching pages was 5558 of 7607 worker-seconds and the log couldn't say which route). A blocked page's seconds are all the routes it tried."""
+        fetcher.LAST.route = None
+        t1 = time.monotonic()
+        p = fetcher.fetch(url, self.case)
+        secs = time.monotonic() - t1
+        r = routes.setdefault(getattr(fetcher.LAST, "route", None) or "other", [0.0, 0])
+        r[0] = round(r[0] + secs, 2); r[1] += 1
+        return p, secs
+
+    def route_line(self, rows):
+        """The page-read seconds and page count of each fetch route over `rows`, and the route that cost most."""
+        tot = {}
+        for row in rows:
+            for k, (s, n) in (row.get("read_routes") or {}).items():
+                t = tot.setdefault(k, [0.0, 0]); t[0] += s; t[1] += n
+        if not tot: return "page reads by route: none"
+        order = [k for k in self.ROUTES if k in tot] + sorted(k for k in tot if k not in self.ROUTES)
+        big = max(order, key=lambda k: tot[k][0])
+        return "page reads by route: " + ", ".join(f"{k} {tot[k][0]:.0f}s for {tot[k][1]} pages" for k in order) + f" (largest: {big})"
+
+    def side_line(self, side0=None):
+        """The worker-seconds of each search weigh starts since `side0` (a copy of side_secs), and the largest."""
+        side = {k: self.side_secs.get(k, 0.0) - (side0 or {}).get(k, 0.0) for k in self.SIDE_KINDS}
+        big = max(self.SIDE_KINDS, key=lambda k: side[k])
+        return "searches weigh starts: " + ", ".join(f"{k} {side[k]:.0f}s" for k in self.SIDE_KINDS) + (f" (largest: {big})" if side[big] > 0 else "")
 
     @staticmethod
     def split_secs(t0, t_search, t_read):
@@ -1138,16 +1191,15 @@ class Hunt:
             self._save()
             return
         self.answered = True
-        found, t_read = 0, 0.0
+        found, t_read, routes = 0, 0.0, {}
         for h in hits[:self.read]:
             if h["relevance"] < 0.2: continue
-            t1 = time.monotonic()
-            p = fetcher.fetch(h["url"], self.case)
-            t_read += time.monotonic() - t1
+            p, secs = self.read_page(h["url"], routes)
+            t_read += secs
             found += self.weigh(org, p, "(site) " + q)
             if not self.wants_more(org): break  # GMU's site search printed assistant director Lindsey, then Bradshaw's staff page, and director Meares fourth (fnwords45)
         self.tried.add((org, "(site) " + q))
-        self.log_rows.append({"org": org, "angle": "(site) " + q, "hits": len(hits), "read": self.read, "found": found, **self.split_secs(t0, t_search, t_read), "at": now()})
+        self.log_rows.append({"org": org, "angle": "(site) " + q, "hits": len(hits), "read": self.read, "found": found, **self.split_secs(t0, t_search, t_read), "read_routes": routes, "at": now()})
         self._save()
 
     def discover(self, q):
@@ -1183,7 +1235,7 @@ class Hunt:
         if self.stored_readmits(): self._save()
         self.stored_departures()
         self.stored_person_signals()
-        engine_secs0, rows0 = dict(engines.SECS), len(self.log_rows)
+        engine_secs0, rows0, side0 = dict(engines.SECS), len(self.log_rows), dict(self.side_secs)
         upto = 1  # breadth first: every org's first angle and site search, then discovery, then the later angles. Depth first, a fresh case of 91 orgs spent its whole 1200 s pass on three angles each and never reached discovery, while the site searches found 12 of the 17 verified rows and the angles after the first found 3 of 324 searches (fnwords51)
         while len(self.leads) < self.target and time.monotonic() < self.deadline:
             todo = [o for o in self.orgs if self.wants_more(o) and self.has_work(o, upto)]  # an org whose angles all ran on an earlier run still gets its site search
@@ -1193,7 +1245,7 @@ class Hunt:
             elif discover: self.discover(discover.pop(0))  # its new orgs get their first round before anyone's later angles
             elif upto < len(self.angles): upto += 1
             else: break
-        self.log(self.time_spent(engine_secs0, rows0))
+        self.log(self.time_spent(engine_secs0, rows0, side0))
         self.finish_menu_rows()
         if len(self.leads) >= self.target: self.stop_reason = f"reached the target of {self.target}"
         elif time.monotonic() >= self.deadline: self.stop_reason = "ran out of time: run it again on this case to carry on"
@@ -1238,7 +1290,7 @@ class Hunt:
         if nh: lines += ["## No named head", "The office page was read and prints only a mailbox or phone, no person. This is a gap in the source, not a miss by the search:", *[f"- {o} — [{u}]({u})" for o, u in nh.items()], ""]
         if untried: lines += ["## Organisations not tried", *[f"- {o}" for o in untried[:30]], ""]
         (out_dir / "REPORT.md").write_text("\n".join(lines) + "\n")
-        return {"status": status, "leads": len(rows), "verified": n_ver, "verified_kinds": kinds, "verified_near_person": n_near, "target": self.target, "near": len(self.near), "out": str(out_dir.resolve()), "stopped": self.stop_reason, "departure_searches": self.departure_searches, "person_signal_searches": self.person_signal_searches, "person_signal_found": self.person_signal_found, "menu_statement_searches": self.menu_statement_searches, "menu_statement_found": self.menu_statement_found, "domain_searches": self.domain_searches, "official_upgrades": self.official_upgrades, "lead_list": [{k: r.get(k, "") for k in ("name", "title", "organisation", "check_status", "source_url", "signal")} for r in rows], "no_named_head": [{"org": o, "url": nh[o]} for o in sorted(nh)]}
+        return {"status": status, "leads": len(rows), "verified": n_ver, "verified_kinds": kinds, "verified_near_person": n_near, "target": self.target, "near": len(self.near), "out": str(out_dir.resolve()), "stopped": self.stop_reason, "departure_searches": self.departure_searches, "person_signal_searches": self.person_signal_searches, "person_signal_found": self.person_signal_found, "menu_statement_searches": self.menu_statement_searches, "menu_statement_found": self.menu_statement_found, "domain_searches": self.domain_searches, "official_upgrades": self.official_upgrades, "side_secs": {k: round(self.side_secs.get(k, 0.0), 1) for k in self.SIDE_KINDS}, "lead_list": [{k: r.get(k, "") for k in ("name", "title", "organisation", "check_status", "source_url", "signal")} for r in rows], "no_named_head": [{"org": o, "url": nh[o]} for o in sorted(nh)]}
 
 
 def analyze_pages(pages, today=None):

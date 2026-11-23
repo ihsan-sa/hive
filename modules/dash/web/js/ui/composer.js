@@ -517,6 +517,33 @@ function addFiles(th, list) {
   }
   refresh();
 }
+// A share from another app (the manifest's share_target, E118): sw.js kept its words and files under ?shared=ID; they go into the new
+// conversation's box as if typed and attached, and the entry is deleted. Nothing is sent. The title only leads when it isn't already in the text.
+export function sharedText(m) {
+  const text = String(m.text || "").trim(), url = String(m.url || "").trim(), title = String(m.title || "").trim();
+  return [title && !text.includes(title) ? title : "", text, url && !text.includes(url) ? url : ""].filter(Boolean).join("\n");
+}
+async function takeShared() {
+  const id = (new URLSearchParams(location.search).get("shared") || "").replace(/[^a-z0-9]/g, "");
+  if (!id) return;
+  const q = new URLSearchParams(location.search); q.delete("shared");
+  history.replaceState(history.state, "", location.pathname + (q.size ? "?" + q : "") + location.hash);
+  try {
+    const c = await caches.open("hive-shared"), base = `share-in/${id}/`, meta = await c.match(base + "meta");
+    if (!meta) return;
+    const m = await meta.json(), files = [];
+    for (let i = 0; i < (m.files || 0); i++) {
+      const r = await c.match(base + i); if (!r) continue;
+      files.push(new File([await r.blob()], decodeURIComponent(r.headers.get("x-name") || "shared-" + (i + 1)), { type: r.headers.get("content-type") || "" }));
+    }
+    for (const k of await c.keys()) if (new URL(k.url).pathname.includes("/" + base)) await c.delete(k);
+    if (files.length) addFiles(null, files);
+    const t = sharedText(m);
+    if (t) { const d = draft(null); d.text = d.text.trim() ? d.text.trimEnd() + "\n\n" + t : t; keep(d); const el = field(null); if (el) { el.value = d.text; mdSync(el); } }   // morph leaves a focused field alone
+    CP.focus = true; refresh();
+  } catch (e) { /* no caches here: the box stays as it was */ }
+}
+if (typeof location !== "undefined" && /[?&]shared=/.test(location.search)) setTimeout(takeShared, 0);
 const hasFiles = e => e.dataTransfer && [...(e.dataTransfer.types || [])].includes("Files");
 /** Props for the element files can be dropped on (the whole conversation). */
 export function dropZone(th) {

@@ -167,7 +167,7 @@ Your old folder is still at $OLD_ROOT. Delete it when you're happy."; fi
   launcher
   echo "It's the key to this hive, so keep it to yourself. To see it again: $web"
   echo "On another machine: ssh -L PORT:127.0.0.1:PORT this-machine, with the port from that address, then open it there."
-  echo "If you'd rather stay in a terminal: $term"
+  echo "If you'd rather stay in a terminal: $term setup asks the same three steps, then $term"
 }
 
 deps() {

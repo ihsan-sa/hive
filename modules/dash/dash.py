@@ -6817,6 +6817,8 @@ def serve(port):
             try: n = int(self.headers.get("Content-Length") or 0)
             except ValueError: n = -1
             if not self.admit(u.path): return
+            if u.path == "/share-in":   # a phone share the app's worker didn't catch (E118): open a new conversation, take nothing from the form
+                self.send_response(303); self.send_header("Location", "/#comms/~new"); self.send_header("Content-Length", "0"); self.end_headers(); return
             if self.headers.get("X-Hive-Dash") != "1": return self.send_error(403)
             if u.path == "/login":
                 if self.route != "local" or not 0 < n < 1024: return self.send_error(403)

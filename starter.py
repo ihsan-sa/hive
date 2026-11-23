@@ -1663,6 +1663,14 @@ def reply_back_note(name, posts):
             f"end your turn with no post. A reply naming @{them} starts it again for nothing: on 11-20 two agents traded thanks and status notes for six rounds. "
             f"If you do reply and {them} has nothing to do, write its name in backticks.") if them else ""
 
+def person_choice_note(posts):
+    """R64 (aceaa 2026-11-23): person-woken runs delivered 78.1% over the week to 11-22, the lowest large group; three on 11-22 proposed
+    résumé edits, a reorder or asked for numbers back, and changed nothing (graded partial). Said only when the person wrote a waking post."""
+    if not any(str(p.get("from", "")).lower() == "person" for p in posts): return ""
+    return (" If the person's post leaves choices you can make (which edits, what order, how to read their guess), make them: do the change as a draft "
+            "they can undo, or take their words as given and go on, then show it and say in one line what you'd change on their word. "
+            "Ask back only for what only they have (their own facts, money, an account).")
+
 def start_model(c, posts):
     """The model a start runs on: a provider wins (main loop picked it), then a model a post asked for, then the default."""
     return (next((p["model"] for p in posts if provider_of(c, p.get("model"))), None)
@@ -1948,6 +1956,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
         if str(first.get("from", "")).lower() == "person":   # R46: "He said yes to $150" in a new thread got a question back (aadf9, 11-13)
             prompt += ("If it reads as the next step of an earlier chat, find that chat (`hive search`, `hive read --since 2d`) and act on the best match, "
                        "saying which one; ask only when nothing matches. ")
+    if not resume: prompt += person_choice_note(posts)
     if heir_of:
         prompt += (f" You are a new agent taking over from @{heir_of['name']}, which isn't being brought back because {heir_of['why']}. You have none of its memory. "
                    f"Its stream log, if a detail isn't in the thread or on disk, is {heir_of['out']}: search it, don't read it whole.")
@@ -1964,7 +1973,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
                   # posted a wait, or answered a different question (a732a, a81d2, a87dc), or said done without checking (a38af).
                   "Do what that post asks first, in its thread, before your own rung or wait: answer its question, or do its work, "
                   "or say plainly why you can't. Check before you say something is done."
-                  + reply_back_note(name, posts))
+                  + reply_back_note(name, posts) + person_choice_note(posts))
     elif resume and woken and any(p.get("supersede") for p in woken["posts"]):
         sup = [p for p in woken["posts"] if p.get("supersede")]; other = [p for p in woken["posts"] if not p.get("supersede")]
         new = "; ".join(f"{p['id']} in thread {p.get('thread', p['id'])}" for p in sup)
@@ -2204,10 +2213,12 @@ def floor(c, st, alive, login):
         return t - started.get(r["thread"], 0) >= g and (r["quiet_s"] is None or r["quiet_s"] >= g)
     only = set(c.get("floor_only") or [])  # config floor_only: when set, the floor starts only these threads (the person's "pause all but career", 2026-11-11, post 11111341a979); unset or [] is every ladder
     why = {}   # floor_idle: the first reason each ladder was passed over
+    rows_all = [r for r in cont.G.goals()["rows"] if r["kind"] == "focus" or r.get("ladder")]
+    asked_away = ask_away(c, st, rows_all, t) if below else set()
     def keep(r, k, ok):
         if not ok: why[k] = why.get(k, 0) + 1
         return ok
-    rows = [r for r in cont.G.goals()["rows"] if (r["kind"] == "focus" or r.get("ladder")) and keep(r, "running", not r["running"]) and keep(r, "parked", not r.get("parked"))
+    rows = [r for r in rows_all if keep(r, "running", not r["running"]) and keep(r, "parked", not r.get("parked"))
             and keep(r, "gated", not gated_now(r, t)) and keep(r, "busy", r["thread"] not in busy) and keep(r, "not_only", not only or r["thread"] in only) and keep(r, "not_due", due(r))]
     if not rows:
         if below: floor_idle(st, running, why)
@@ -2227,8 +2238,28 @@ def floor(c, st, alive, login):
         except Exception: pass
         with BOARD.open("a") as f:
             f.write(json.dumps({"id": dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now(), "from": "starter", "to": [text.split()[0]], "thread": r["thread"], **({"model": model} if text.startswith("@new ") else {}), "text": text}) + "\n")
-        log(event="floor", thread=r["thread"], running=len(alive), tier=1 if first(r) else 2); return
+        log(event="floor", thread=r["thread"], running=len(alive), tier=1 if first(r) else 2, **({"ask_away": True} if r["thread"] in asked_away else {})); return
     if below: floor_idle(st, running, why)
+
+AWAY_S = 3 * 3600   # the person is away 3 h+ after their last post (rsi-lab roots.py, the away_ratio measure)
+
+def ask_away(c, st, rows, t):
+    """config floor_ask_away_h (0 or unset: off): while the person is away and the floor runs under agents_floor, a ladder whose open rungs
+    all wait on a date is asked what else would move it every floor_ask_away_h hours, not once a day (goals.ASK_EVERY_H). a266c 11-23, rsi-lab
+    rung 5: floor_idle showed 15 of 36 ladders passed over as gated with 3 to 5 runs going; the 49 ask rounds graded since 11-16 were 82%
+    delivered against 77% for rung rounds. Sets row["ask_more"] so gated_now lets the row through and goals.brief writes the ask; returns the threads."""
+    h = c.get("floor_ask_away_h") or 0
+    if h and "person_at" not in st:   # first pass after this landed: the board reader only sees posts after its offset
+        try: st["person_at"] = max((epoch(p.get("at", "")) or 0 for p in map(json.loads, BOARD.read_text(errors="replace").splitlines()[-20000:]) if p.get("from") == "person"), default=0)
+        except ValueError: st["person_at"] = 0
+    if not h or not st.get("person_at") or t - st["person_at"] < AWAY_S: return set()
+    out, when = set(), dt.datetime.fromtimestamp(t, dt.timezone.utc)
+    for r in rows:
+        if r.get("gated_until") and not r.get("ask_more") and not r.get("parked") and not r.get("rung"):
+            try: due = cont.G.ask_due(r, when, every_h=h)
+            except Exception: due = False
+            if due: r["ask_more"] = True; out.add(r["thread"])
+    return out
 
 def floor_idle(st, running, why):
     """Under agents_floor and nothing started: log why, at most every 10 min (a266c 11-22, rsi-lab ladder: the floor ran under 6 in
@@ -2716,6 +2747,7 @@ def main():
                     except Exception as e: w = None; log(event="person_waiter_error", post=p.get("id"), err=f"{type(e).__name__}: {e}"[:200])
                     if w: called = [w]; log(event="person_waiter", name=w, post=p.get("id"), thread=p.get("thread"))
                 note_seen(p)
+                if p.get("from") == "person": st["person_at"] = max(st.get("person_at", 0), epoch(p.get("at", "")) or 0)   # floor_ask_away_h: away = 3 h+ since this, as in rsi-lab roots.py
                 guarded("note_post", p, is_stop(p))
                 if is_stop(p):
                     for hn in [hn for hn, hps in st.get("held", {}).items() if hn[:1] in SPAWN.values() and hps and hps[0].get("thread") == p.get("thread")]: st["held"].pop(hn)
