@@ -7085,6 +7085,9 @@ def serve(port):
 
 def main(argv):
     if "-h" in argv or "--help" in argv: print(__doc__); return
+    if argv and argv[0] == "sync-accounts":  # `hive setup`'s Finish: the same as the app's, so a Codex login made in a terminal reaches the starter
+        if not SETTINGS.is_file(): print("This Hive has no settings file, so accounts are set by hand in core/config.json."); return
+        sync_accounts(); return
     if argv and argv[0] == "serve":
         port = int(argv[argv.index("--port") + 1]) if "--port" in argv else int((web_cfg() or {}).get("port") or 8077)
         return serve(port)

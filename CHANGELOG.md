@@ -4,6 +4,11 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Smaller fixes, 2026-11-23
+
+- The release check no longer picks a sign-in with no room left in its 5-hour window.
+- The README and the website now explain the six ideas behind the Hive, each in one line with the details folded underneath.
+
 ## Markdown files as pages you can mark up and edit
 
 A Markdown file opened in the preview panel now has three tabs. **Page** sets it out as printed US Letter pages in a book face, with page numbers, and **Save as → PDF** prints those same pages. **Text** is the plain rendered view. **Edit** opens the text in an editor, with the pages beside it when the panel is wide. The **Box** tool works on the pages: draw a box or select words to leave a note. **Edit** appears for notes and project files the web app may write. It saves with Ctrl/⌘+S. If the file changed on disk while you were editing, it says so and keeps your text, and you can save over the change. Closing the panel or leaving the page with unsaved text asks first. Files with Windows line ends keep them.

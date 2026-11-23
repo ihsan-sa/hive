@@ -258,9 +258,34 @@ def stop_file(thread): return DIR / "stop" / safe(thread)
 def stop_at(thread):
     try: return float(json.loads(stop_file(thread).read_text()).get("at") or 0)
     except (OSError, ValueError, AttributeError, TypeError): return None
-def hold(thread, at, post=None):
+def hold(thread, at, post=None, why=None):
     f = stop_file(thread); f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps({"at": max(at, stop_at(thread) or 0), "post": post}))
+    f.write_text(json.dumps({"at": max(at, stop_at(thread) or 0), "post": post, **({"why": why} if why else {})}))
+
+# A same-day end in a stop line: "paused until the person says resume or about midnight", "until tomorrow", "until 3pm".
+SHORT_END = re.compile(r"\b(?:midnight|tonight|tomorrow|noon|this (?:morning|afternoon|evening)|later today)\b|\buntil\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|utc)\b", re.I)
+def still_held(thread):
+    """True while the stop mark holds. A mark born of an agent's `Told to stop:` bar (no person post) whose stop line named a same-day end lapses
+    1.5 days on, once the bar no longer says Told to stop and the person's newest post in the thread is not a pause. A phone-relayed "pause until
+    about midnight" on 2026-11-11 held fund-rsi out of every keeper, floor and continuation round for 12 days: the person never posted in the thread,
+    so nothing cleared it (ad388, 2026-11-23). A person's own stop post, or a stop with no end named, still holds until the person says otherwise."""
+    f = stop_file(thread)
+    try: mark = json.loads(f.read_text())
+    except FileNotFoundError: return False
+    except (OSError, ValueError): return True
+    at = float(mark.get("at") or 0) if isinstance(mark, dict) else 0
+    if not isinstance(mark, dict) or mark.get("post") or now().timestamp() - at < 1.5 * 86400: return True
+    why = mark.get("why")
+    if why is None:
+        why = next((str(r.get("text", "")) for r in jsonl(STATUS) if r.get("thread") == thread and isinstance(r.get("at"), (int, float)) and abs(r["at"] - at) < 2), "")
+    stop_lines = [clean(l) for l in str(why).splitlines() if clean(l).lower().startswith("told to stop:")] or [clean(str(why))]
+    if not any(SHORT_END.search(l) for l in stop_lines): return True
+    lines = [clean(l) for l in str(newest_status(thread).get("text", "")).splitlines() if l.strip()]
+    if lines and lines[-1].lower().startswith("told to stop:"): return True
+    mine = [p for p in thread_posts(thread) if p.get("from") == "person"]
+    if mine and (G.PERSON_HOLD.search(str(mine[-1].get("text", ""))) and not G.PERSON_GO.search(str(mine[-1].get("text", "")))): return True
+    f.unlink(missing_ok=True)
+    return False
 def note_post(p, stopped):
     """Every board post, in order. A person's stop holds the thread until a later non-stop post of theirs; an agent's post never clears it."""
     if p.get("from") != "person": return
@@ -277,8 +302,8 @@ def stopped_thread(thread, posts=None):
     lines = [clean(l) for l in str(told.get("text", "")).splitlines() if l.strip()]
     if lines and lines[-1].lower().startswith("told to stop:"):
         at = told.get("at") if isinstance(told.get("at"), (int, float)) else 0
-        if not any(p.get("from") == "person" and (epoch(p.get("at")) or 0) > at and not (is_stop and is_stop(p)) for p in posts): hold(thread, at)
-    return stop_file(thread).exists()
+        if not any(p.get("from") == "person" and (epoch(p.get("at")) or 0) > at and not (is_stop and is_stop(p)) for p in posts): hold(thread, at, why=lines[-1])
+    return still_held(thread)
 
 def tokens(line):
     words = re.findall(r"\w+", line.lower())
