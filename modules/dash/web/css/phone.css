@@ -297,7 +297,10 @@
   /* the conversation named in a Settings list line is reached by a finger too; a focus card's lead line that wraps (its tier chip, then agents)
      keeps 44 px between its lines, so the chip and the agent under it each get their whole target (drive_phone_targets) */
   .lr-s a{position:relative}
-  .lr-s a::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+  .lr-s a::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%);z-index:1}   /* z-index: a Settings memory link sits low in its row, and the next row painted over its lower half (38 px) */
+  /* "· 51 helpers" beside the agent count on Agents is a button (show them under their agents): 24 px tall, so a finger gets a 44 px target */
+  .sa-count button{position:relative}
+  .sa-count button::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
   .fc-lead{row-gap:20px}
   /* Agent and Conversation sit one above the other in a stacked row, so two 44 px targets need that pitch between them. */
   .tbl.tg:not(.ag)>.tb>.tr>[data-label]:has(>a.ref){padding-block:10px}

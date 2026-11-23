@@ -174,8 +174,19 @@ def carry_on(r):
 
 WAIT_CLOCK = re.compile(r"\b(\d{1,2}):(\d{2})\s*(UTC|Z\b)?", re.I)
 WAIT_IN = re.compile(r"(?:\bin\s+|~\s*|\babout\s+)(\d+)\s*(h|hr|hrs|hours?|m|mins?|minutes?)\b", re.I)
+WAIT_DATE = re.compile(r"\b(20\d\d)-(\d\d)-(\d\d)(?:[T ](\d{2}):(\d{2}))?")
+def wait_date(line, base):
+    """The earliest calendar date (UTC, 00:00 unless it has a time) after base that a `Waiting:` line names, or None. A date already past names nothing to wait for."""
+    best = None
+    for m in WAIT_DATE.finditer(line):
+        try: t = dt.datetime(int(m[1]), int(m[2]), int(m[3]), int(m[4] or 0), int(m[5] or 0), tzinfo=dt.timezone.utc).timestamp()
+        except ValueError: continue
+        if t > base and (best is None or t < best): best = t
+    return best
+
 def wait_until(line, base):
-    """The time a `Waiting:` line names, as seconds, or None. A clock time is the next one after base (the host clock unless it says UTC)."""
+    """The time a `Waiting:` line names, as seconds, or None. A calendar date wins; a clock time is the next one after base (the host clock unless it says UTC)."""
+    if (d := wait_date(line, base)): return d
     if (m := WAIT_IN.search(line)): return base + int(m[1]) * (3600 if m[2][0].lower() == "h" else 60)
     if not (m := WAIT_CLOCK.search(line)) or int(m[1]) > 23 or int(m[2]) > 59: return None
     zone = dt.timezone.utc if m[3] else None
