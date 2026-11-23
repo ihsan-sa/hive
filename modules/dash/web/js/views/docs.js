@@ -5,7 +5,7 @@ import { h } from "../core/dom.js";
 import { can, jget } from "../core/store.js";
 import { href } from "../core/router.js";
 import { ago } from "../core/format.js";
-import { empty, list, pageHeader, needFull } from "../ui/kit.js";
+import { empty, list, pageHeader, needFull, staleNote } from "../ui/kit.js";
 import { icon } from "../ui/icons.js";
 import { chatPlace } from "./comms.js";
 import { viewer, poll as pollDoc, leave as leaveDoc } from "../ui/docviewer.js";
@@ -25,6 +25,7 @@ function listPage(ctx) {
   }));
   return h("div", { class: "page", "data-width": "narrow", "data-key": "docs" },
     pageHeader({ title: "Documents", lead: "The library's PDFs. Open one to comment on it like in the library: select text or draw a box. An agent edits the file and files the new revision, and it shows up here." }),
+    D.err ? staleNote("Couldn't refresh the library, so this shows the list it read last. It keeps trying.") : null,
     h("input", { class: "input dv-find", type: "search", placeholder: "Find a document", "aria-label": "Find a document", "data-key": "find", value: D.q,
       oninput: e => { D.q = e.target.value; ctx.update(); } }),
     list(rows, { empty: q ? "No document matches." : "The library has no PDFs yet.", limit: D.more ? 0 : 30, onMore: () => { D.more = true; ctx.update(); } }));

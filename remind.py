@@ -37,6 +37,24 @@ def if_hint(text, cond, by):
             "--if \"CMD\" so it posts only once that passes (hive remind rm the one above).")
 
 
+# An agent that starts its own long job (a replay, a lead list) and sets itself a reminder to read it was graded part-done
+# on the first run and woke again for the reading: 5 of 35 misses over 48 h to 2026-11-23 (ab5b4, ac009 x4), 16 in the week.
+# A background waiter wakes it at the job's end and the run is graded as one (a reaped waiter resumes on the same post).
+OWN_JOB = re.compile(r"^\s*(read|check|judge|look at)\b.{0,80}\b(finished|results?|output|replay|run\d*|lead-list|REVIEW|log)\b"
+                     r"|\(finished( file)?\)|\bcheck .{0,60} finished\b", re.I)
+OWN_JOB_MIN = 180
+NOT_OWN = re.compile(r"\bcheck (whether|if)\b|\bthe person\b|\b(released|lease)\b", re.I)  # outside waits: the --if hint's
+
+
+def own_job_hint(text, to, by, minutes):
+    """The nudge printed when an agent reminds itself, within 3 h, to read the result of a job it just started."""
+    if by == "person" or to != by or minutes is None or minutes > OWN_JOB_MIN or not OWN_JOB.search(text or "") or NOT_OWN.search(text): return ""
+    return ("remind: this reads like a reminder to read your own job's result. Runs that start a job and remind themselves are graded "
+            "part-done and wake again for the reading. Instead, wait on the job in this run: a background shell with a time limit "
+            "(e.g. `timeout 3600 sh -c 'until test -e .../finished; do sleep 30; done'`, run_in_background) wakes you when it ends, "
+            "and a waiter that gets reaped is resumed on the same post. If you keep this reminder, hive remind rm it once the waiter is set.")
+
+
 def woke_thread():
     """As hive's: HIVE_THREAD, else the run record of HIVE_NAME (a warm agent has no HIVE_THREAD)."""
     if (t := os.environ.get("HIVE_THREAD")): return t
@@ -246,7 +264,10 @@ def main(argv):
         when, rest = a[1], a[2:]
         if a[0] == "at" and len(rest) > 1 and re.fullmatch(r"\d\d:\d\d", rest[0]) and re.fullmatch(r"\d{4}-\d\d-\d\d", when): when, rest = f"{when} {rest[0]}", rest[1:]
         it = add(a[0], when, " ".join(rest), to, thread, by=by, cond=cond, wait=wait); print(it["id"], "next", it["due"], "in", it["thread"], (f"once `{cond}` passes" + (f", or at {it['until']} anyway " if it.get("until") else " ")) if cond else "", "(stop it: hive remind rm " + it["id"] + ")")
-        if not os.environ.get("HIVE_REMIND_NO_IF") and (h := if_hint(it["text"], cond, by)): print(h, file=sys.stderr)  # the sandbox can't set --if
+        try: mins = (dt.datetime.fromisoformat(it["due"]) - dt.datetime.now(dt.datetime.fromisoformat(it["due"]).tzinfo)).total_seconds() / 60 if a[0] == "at" else None
+        except (ValueError, TypeError): mins = None
+        if (h := own_job_hint(it["text"], it["to"], by.lower(), mins)): print(h, file=sys.stderr)
+        elif not os.environ.get("HIVE_REMIND_NO_IF") and (h := if_hint(it["text"], cond, by)): print(h, file=sys.stderr)  # the sandbox can't set --if
     elif a[:1] == ["list"]:
         here = woke_thread() if by != "person" else None
         items = [it for it in load(STATE / "reminders.json") if mine(it, by, here) and (not thread or it["thread"] == thread)]

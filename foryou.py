@@ -16,6 +16,7 @@ CHAIN = re.compile(r"\bthen\b|\bafter that\b|\bonce you\b|(?:^|\s)1[.)]\s.*(?:^|
 OURS = re.compile(r"\b(?<![-\w])(?:reload|refresh(?![- ]tokens?)|test (?:it|this|that|the|on|whether|if)|try it|confirm (?:that )?it works)\b|\bsay (?:if|whether) it looks right\b"
                   r"|\breview (?:the |this |that |our |a |an )?(?:open )?(?:pr|pull request)\b"
                   r"|\bopen (?:the |your |a )?(?:\w+ )?(?:dashboard|app|page|card)\b.*\b(?:say|check|see)\b", re.S)
+DEVICE = re.compile(r"\b(?:plug(?:s|ged)? (?:\w+ ){0,4}in(?:to)?\b|unplug|usb|cable|power[- ]cycle|press (?:the )?(?:reset|boot) button)", re.I)  # a hands-on step with hardware only they can reach is theirs, not a check on our work (2026-11-23: a Lite plug-in line read as ours)
 WHY = {"long": "It is over 30 words.",
        "many": "It says more than one thing: one sentence, one ask.",
        "command": "It holds a command, flag or path: say what you need in plain words, or run it yourself.",
@@ -33,10 +34,10 @@ ORDER = ["command", "many", "long", "chain", "ours", "offer"]  # commonest first
 # The test before a For you line: only these six are the person's; anything else an agent decides and writes up as Decided. A word list, so it warns and never refuses.
 THEIRS = re.compile(r"\$|\b(?:pay|buy|purchase|order|checkout|check out|invoice|budget|price|cost|bill|subscription|funds?|spend|quote"  # money
                     r"|account|github|waterlooworks|sign(?:ing)?[ -]?(?:in|up)|log[ -]?in|token|password|credentials?|api key|keys?|cookies?|secret|permission|invite|2fa"  # an account
-                    r"|your (?:own )?(?:voice|name|word|number|career|cv|resume|interview)|e-?mail|dm|slack|message|reply to|linkedin|show hn|publish|post on|send"  # their voice
+                    r"|your (?:own )?(?:voice|name|word|number|career|cv|resume|interview)|e-?mail|dm|slack|message|reply to|linkedin|show hn|publish(?:ing|ed)?|post on|send|own words|dictat(?:e|ion)|(?:your|their) (?:own )?predictions?"  # their voice (own words, dictation, a prediction: 2026-11-23)
                     r"|phone|iphone|laptop|mac|windows|pc|powershell|print|printer|device|call|usb|browser|bench|solder|hardware|scope"  # a device
                     r"|root|rootwarden|sudo|warden"  # root
-                    r"|hard limit|delete|history)\b", re.I)  # a hard limit
+                    r"|hard limit|delete|history|to the outside|outside world)\b", re.I)  # a hard limit (opening the machine to the outside: 2026-11-23)
 DECIDE = ("Test before a For you line: is it money, an account, their voice, a device, root or a hard limit? "
           "This one names none of them, so decide it yourself, write `Decided: <what>` and carry on; keep the For you line only if it really is one of the six.")
 
@@ -80,7 +81,7 @@ def flags(line):
     if len(re.findall(r"[.!?]\s+[A-Z]", bare)) >= 2 or ";" in bare: out.append("many")
     if SPAN.search(line) or re.search(r"(?<!\S)--[a-z]", bare) or any(is_path(m[0]) for m in PATH.finditer(bare)): out.append("command")
     if CHAIN.search(REPORT_BACK.sub(" ", bare)): out.append("chain")
-    if OURS.search(bare.lower()): out.append("ours")
+    if OURS.search(bare.lower()) and not DEVICE.search(bare): out.append("ours")
     if OFFER.match(bare): out.append("offer")
     return out
 

@@ -118,6 +118,7 @@ def _claude_models():
     return tuple(m) if isinstance(m, list) and m and all(isinstance(x, str) and re.fullmatch(r"[a-z][a-z0-9.-]*", x) for x in m) else ("haiku", "sonnet", "opus", "fable")
 CLAUDE_MODELS = _claude_models()
 FRESH = ("new", "claude", "codex", "free", *CLAUDE_MODELS, "astra")  # words that start a fresh agent (SPAWN in starter.py)
+QUOTED_FRESH = re.compile(r"[\"“‘']@([a-z0-9][a-z0-9_-]*)", re.I)  # a mention right after an opening quotation mark
 HASH_NAME = re.compile(r"[a-z][0-9a-f]{4,}")  # what new/claude/codex/free/warden hand out (a9aba, c12cd, f12cd, w0e1f)
 sys.path.insert(0, str(CORE))
 try: import foryou; FOR_YOU = foryou.FOR_YOU  # the line that puts a post on the person's card
@@ -437,6 +438,11 @@ def cmd_post(a):
         sys.exit(f"hive post: nothing posted. {' and '.join(w)} starts a new agent, so choose its model: add --model sonnet (or opus, haiku, fable, codex:gpt-6-astra), "
                  "or use the words opus, sonnet, haiku, fable or astra instead. A Claude agent runs at medium effort unless you add --effort high "
                  "(a design, an independent review, debugging that failed once). If you only meant to write about it, put it in backticks.")
+    # A fresh-agent word in quotation marks ("@haiku:") is a quote, not a brief, yet it starts an agent: a78f4 quoted one in an improve
+    # result and started a0ae2 with nothing to do (2026-11-23). Refused for agents' own posts; --to still calls on purpose.
+    if HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_ and (q := sorted({m.group(1).lower() for m in QUOTED_FRESH.finditer(CODE.sub(" ", text)) if m.group(1).lower() in FRESH and m.group(1).lower() not in asked})):
+        sys.exit(f"hive post: nothing posted. {', '.join('@' + n for n in q)} sits in quotation marks, so you are quoting it, but it would start a new agent. "
+                 "Put it in backticks to write about it; to start one, write it unquoted (or pass --to).")
     # A post naming the person pings their phone: orientation asks for it short, plain, with one `For you:` line. Checked before
     # anything is written, so a slip costs a re-post, not a second ping. Agents' own names only, like the model check above.
     # (A chat answer has no need of the mention: refused here, agents added "For you: nothing needed" to get it through, projects/everyday E9.)

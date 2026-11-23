@@ -158,6 +158,36 @@ def cmd_list(a):
 
 PRIORITIES = HOME / "kb" / "priorities.md"
 
+SLUG_STOP = {"hive", "work", "test", "main", "meta", "with", "from", "fix", "the"}
+
+def pri_before(since, path):
+    """kb/priorities.md as the ~ backup held it at `since`, or None if the backup can't say (not under ~, untracked, git fails)."""
+    try:
+        rel = str(Path(path).resolve().relative_to(HOME.resolve()))
+        h = subprocess.run(["git", "-C", str(HOME), "log", "-1", f"--before={since}", "--format=%H", "--", rel], capture_output=True, text=True, timeout=20).stdout.strip()
+        if not h: return None
+        r = subprocess.run(["git", "-C", str(HOME), "show", f"{h}:{rel}"], capture_output=True, text=True, timeout=20)
+        return r.stdout if r.returncode == 0 else None
+    except (ValueError, OSError, subprocess.SubprocessError): return None
+
+def pri_change(old, new):
+    """The lines a priorities.md edit changed, or None when it lifted a pause (a removed PAUSED/held line whose [person ID]
+    ref is on no added line): then every hold may have lapsed. One rewrite at 06:40 on 2026-11-23, naming three threads,
+    lapsed all 34 priorities holds and took three keeper rounds to re-hold by hand (a9347 re-held 15 of 29, graded part-done)."""
+    o, n = set(old.splitlines()), set(new.splitlines())
+    gone, added = o - n, n - o
+    for l in gone:
+        if re.search(r"PAUSED|\bheld\b|\bhold\b", l):
+            refs = re.findall(r"person ([0-9a-f]{12})", l)
+            if not refs or not any(r in a for r in refs for a in added): return None
+    return "\n".join(gone | added)
+
+def hold_touched(e, changed):
+    """Does the changed priorities text name this ask: its thread or post id, or a distinctive word of its thread's slug."""
+    th, low = str(e.get("thread") or ""), changed.lower()
+    keys = {th, str(e.get("post") or "")} | ({w for w in re.split(r"[-_]", th) if len(w) >= 4 and w.lower() not in SLUG_STOP} if not re.fullmatch(r"[0-9a-f]{12}", th) else set())
+    return any(k and k.lower() in low for k in keys)
+
 def waiting_items(items, posts=None, t=None, priorities=None):
     """Held or person-waiting entries whose reason may have lapsed, oldest first, with why: the person posted in the ask's
     thread after it was set aside, or it is held under priorities (its why says so) and kb/priorities.md changed since.
@@ -170,14 +200,21 @@ def waiting_items(items, posts=None, t=None, priorities=None):
         if str(p.get("from", "")).lower() != "person": continue
         th = p.get("thread") or p.get("id")
         if p.get("at", "") > person.get(th, ""): person[th] = p["at"]
-    out = []
+    out, cur, change = [], None, {}
     for e in open_items(items):
         if e.get("status") not in WAITING or e.get("kind") == "direction": continue
         since = e.get("updated") or e.get("at") or ""
         th = e.get("thread") or e.get("post")
         if person.get(th, "") > since: out.append((e, f"the person posted in its thread at {person[th][:16]}, after it was set aside"))
         elif e.get("status") == "held" and re.search(r"priorit|pause|hold|held", str(e.get("why") or ""), re.I) and pri > since:
-            out.append((e, f"held under priorities, and kb/priorities.md changed at {pri[11:16]} UTC, after the hold"))
+            if since[:16] not in change:  # what the edits since the hold changed; None when the backup can't say or a pause was lifted
+                if cur is None:
+                    try: cur = Path(priorities).read_text()
+                    except OSError: cur = ""
+                was = pri_before(since, priorities); change[since[:16]] = pri_change(was, cur) if was is not None else None
+            ch = change[since[:16]]
+            if ch is None or hold_touched(e, ch):
+                out.append((e, f"held under priorities, and kb/priorities.md changed at {pri[11:16]} UTC, after the hold" + (", on a line naming its thread" if ch else "")))
     return sorted(out, key=lambda x: x[0].get("updated") or x[0].get("at") or "")
 
 def cmd_check(a):
