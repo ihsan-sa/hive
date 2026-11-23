@@ -660,8 +660,19 @@ _NOT_EMPLOYER = re.compile(r"\b(?:e-?mail|phone|tel|fax|contact|bio|biography|re
 
 GREETING = re.compile(r"(?:Meet|About|Contact|Email|E-mail|Message|Call|Book|Schedule|Connect with|Read more about|Learn more about|More about|View|See|Visit|Chat with)\b", re.I)
 SITE_NOTICE = re.compile(r"(?:Attention|Notice|Alert|Warning|Important|Note|Reminder|Announcement|Update|Please Note)s?\s*[!:.]*", re.I)
-def employer_listed(text, name, org):
-    """The other body printed straight after a person's name and post: "Mike Pettit / Senior Vice President / Wabash" on three lines, or "Jane Doe, Vice President, Intel". Offices and departments of the org don't count."""
+_UNIT_OF = re.compile(r"(?:College|School|Division|Department|Office|Center|Centre|Faculty)\s+(?:of|for)\s+[A-Z]")
+
+
+def own_unit(label, org):
+    """On the organisation's own site, a line under a post that is shaped like one of its units: a university's "College of Natural Sciences" (UT's career leadership page), or a unit named in post words but one ("Career and Transfer Pathways", HCCC's directory; fnwords60)."""
+    label = label.strip(" ,.;:|-–—")
+    if _UNIT_OF.match(label) and re.search(r"\bUniversity\b", org) and not names_org(org, label): return True  # a college of a university; a college's own page that names "College of Charleston" is another body
+    words = re.findall(r"[a-z]+", fold(label))
+    return len(words) >= 3 and sum(w not in POST_WORDS for w in words) <= 1 and not re.search(r"\b(?:Inc|LLC|Ltd|Corp|Corporation|Company|Group|Bank|Partners|University|College|Institute|School)\b", label)  # "University of Ohio" under a Duke dean is another body
+
+
+def employer_listed(text, name, org, official=False):
+    """The other body printed straight after a person's name and post: "Mike Pettit / Senior Vice President / Wabash" on three lines, or "Jane Doe, Vice President, Intel". Offices and departments of the org don't count, nor, on its own site (`official`), a line shaped like one of its units (own_unit)."""
     own = set(re.findall(r"[a-z0-9]+", fold(org))) - ORG_NOISE
     initials = "".join(t[0] for t in re.findall(r"[a-z0-9]+", fold(org)) if t not in ("the", "of", "and", "at", "for", "in"))
     rx = re.compile(name_regex(name).pattern, re.I)
@@ -670,6 +681,7 @@ def employer_listed(text, name, org):
         label = label.strip(" ,.;:|-–—")
         words = label.split()
         if not 1 <= len(words) <= 5 or not words[0][0].isupper() or label.lower() == initials: return ""
+        if official and own_unit(label, org): return ""
         if SITE_NOTICE.fullmatch(label): return ""  # a browser banner under the last staff entry (Broward: "Attention!")
         if GREETING.match(label) or set(re.findall(r"[a-z]+", fold(label))) & own_name: return ""  # a link to the person's own profile: "Meet Gabriel", "Email Robin", "Robin's calendar" (Kogod staff page)
         low = set(re.findall(r"[a-z0-9]+", fold(label)))
@@ -869,7 +881,7 @@ def check(page, name, title, org="", domains=None, claim="", today=None):
         return dict(res, status="partial", note="; ".join([f"the page says they left or are leaving: {left}"] + notes))
     res["note"] = "; ".join(notes)
     if org:
-        other = employer_after(text, name, org) or employer_before(text, name, org) or employer_listed(text, name, org) or elsewhere(title, org)
+        other = employer_after(text, name, org) or employer_before(text, name, org) or employer_listed(text, name, org, res.get("official")) or elsewhere(title, org)
         if other:
             res["other_employer"] = other
             return dict(res, status="partial", note="; ".join([f"the page puts them at {other}, not {org}"] + notes))

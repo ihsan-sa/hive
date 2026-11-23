@@ -21,6 +21,20 @@ MIN_GAP_MIN = 15          # a schedule can't fire more often than this
 MENTION = re.compile(r"(?<![\w.])@([a-z0-9][a-z0-9_-]*)", re.I)
 AGENT = re.compile(r"[a-z][0-9a-f]{4,}$")
 WARDEN = re.compile(r"w[0-9a-f]{4}$")
+# A reminder worded as a check on something outside ("should be done", "check whether X is free") woke its agent to find
+# "not yet" 12 of 22 times in the week to 2026-11-22 (10 of 69 for other reminders): creating one without --if gets a hint.
+WAITS_ON = re.compile(r"\b(should be (done|free|finished|ready|back)|check (whether|if|that)\b|once (it|the|they|[\w-]+ (is|are|has|have))\b"
+                      r"|is (it|.{0,30}) (finished|done|free|back)\b|has .{0,40}(been|finished|pinned|landed)"
+                      r"|if .{0,40}(is|are) (free|done|finished|ready|back|up)|(finished|done)[:,;] (start|read|run)"
+                      r"|when .{0,30}(finishes|is done|is free|lands))", re.I)
+
+
+def if_hint(text, cond, by):
+    """The nudge printed when an agent sets a reminder that reads like a wait on an outside state but has no --if."""
+    if cond or by == "person" or not WAITS_ON.search(text or ""): return ""
+    return ("remind: this reads like a wait on something outside; reminders worded so found it not ready about half the time. "
+            "If a shell check can tell (a `finished` file, `serialtab lease list | grep -q`, a printer ping), set it again with "
+            "--if \"CMD\" so it posts only once that passes (hive remind rm the one above).")
 
 
 def woke_thread():
@@ -232,6 +246,7 @@ def main(argv):
         when, rest = a[1], a[2:]
         if a[0] == "at" and len(rest) > 1 and re.fullmatch(r"\d\d:\d\d", rest[0]) and re.fullmatch(r"\d{4}-\d\d-\d\d", when): when, rest = f"{when} {rest[0]}", rest[1:]
         it = add(a[0], when, " ".join(rest), to, thread, by=by, cond=cond, wait=wait); print(it["id"], "next", it["due"], "in", it["thread"], (f"once `{cond}` passes" + (f", or at {it['until']} anyway " if it.get("until") else " ")) if cond else "", "(stop it: hive remind rm " + it["id"] + ")")
+        if not os.environ.get("HIVE_REMIND_NO_IF") and (h := if_hint(it["text"], cond, by)): print(h, file=sys.stderr)  # the sandbox can't set --if
     elif a[:1] == ["list"]:
         here = woke_thread() if by != "person" else None
         items = [it for it in load(STATE / "reminders.json") if mine(it, by, here) and (not thread or it["thread"] == thread)]

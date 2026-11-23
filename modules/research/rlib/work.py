@@ -519,6 +519,7 @@ class Hunt:
         return why
 
     FULL_NOTE = "the organisation is full"
+    NO_SIGNAL = "no page of the organisation's site says the signal word yet"   # its heads wait here; refresh_unsignalled gives them the signal once one is found
     LEAKED_FAR = "the signal isn't near this person"
     SPEC_FILTERS = ("the title does not name the role focus", "no function word in the title", "the role doesn't fit the spec", "the signal rests on a ", "the spec's must words aren't on its page", "the signal is the organisation's, not this person's")
     READ_AGAIN = ("the page puts them at ", "the page is from ", "a search result says they left")  # the module's own reading of the page: a fix to it (a greeting read as an employer, fnwords41; a 2018 CMS date on a staff page whose text names Fall 2026, fnwords44; a namesake's retirement, fnwords44) must reach the stored rows too
@@ -636,7 +637,7 @@ class Hunt:
         if far and not self.allow_page_signal: return "the signal isn't near this person"
         if self.role_focus and not any(people.term_regex(w).search(fold(row.get("title", ""))) for w in self.role_focus): return "the title does not name the role focus"
         if self.function_words and not self.function_fit(row.get("title", ""), row.get("signal", "") + " " + (row.get("check_quote") or "") + (" " + urllib.parse.urlparse(row["source_url"]).path.replace("-", " ").replace("/", " ") if getattr(self, "dir_entry", False) else "")): return "no function word in the title or the person's own quote"
-        at = people.employer_after(text, row["name"], org) or people.employer_before(text, row["name"], org) or people.employer_listed(text, row["name"], org)
+        at = people.employer_after(text, row["name"], org) or people.employer_before(text, row["name"], org) or people.employer_listed(text, row["name"], org, res.get("official"))
         if at: return f"the page puts them at {at}"
         # A college's own summit page lists its guests too.
         if people.EVENT_URL.search(row["source_url"]) and not people.org_near(text, row["name"], org): return "an event page that doesn't tie them to this organisation: may be a guest"
@@ -778,12 +779,12 @@ class Hunt:
         return flat[max(0, m.start() - 80):m.end() + 120].strip() if m else ""
 
     def menu_statement(self, org):
-        """An organisation whose signal is only its site's menu gets one search on its own site for a `must` word with the spec's first function word, and the first official page that says it in a sentence becomes its signal, on its rows and near misses too. A stored case reads no new pages, so AU's, BHCC's and Alamo's rows kept a menu (fnwords48). Marked in `tried`, so a rerun doesn't search again. Returns True when a statement was found."""
+        """An organisation whose signal is only its site's menu, or which has none while its own site shows heads (UT's leadership page in fnwords62: the heads were dropped, as St. Petersburg's Bowman and Saenz were), gets one search on its own site for a `must` word with the spec's first function word, and the first official page that says it in a sentence becomes its signal, on its rows and near misses too. A stored case reads no new pages, so AU's, BHCC's and Alamo's rows kept a menu (fnwords48). Marked in `tried`, so a rerun doesn't search again. Returns True when a statement was found."""
         old = self.org_signal.get(org)
-        if not self.must or not old or not menu_like(old[1]) or self.s.get("menu_statement") is False: return False
+        if not self.must or (old and not menu_like(old[1])) or self.s.get("menu_statement") is False: return False
         spec = self.domains.get(org) or self.domains.get(people.org_core(org))
         spec = spec[0] if isinstance(spec, (list, tuple)) and spec else spec
-        own = registrable(domain_of(old[0])) if str(old[0]).startswith("http") else ""
+        own = registrable(domain_of(old[0])) if old and str(old[0]).startswith("http") else ""
         d = spec or own or self.org_domain(org)  # the menu page's own site was already judged official; a guessed domain may not be (review 112215240022)
         if not d: return False
         fw = (self.function_words or [""])[0]
@@ -793,11 +794,12 @@ class Hunt:
             if (org, a) in self.tried or (org, a) in self.failed: return False
         doms = self.domains if spec else {**self.domains, org: d}
         t0 = time.monotonic()
-        try: hits, errs = self.search(q, n=8)
+        srcs = self.site_sources()   # a site: search: only ddg honours it (fnwords62)
+        try: hits, errs = self.search(q, n=8, only=srcs)
         except Exception:
             with self.save_lock: self.failed.add((org, a))  # not searched again on every run
             return False
-        if len(errs) >= len(self.sources):
+        if len(errs) >= len([x for x in srcs if x in self.sources]):
             with self.save_lock: self.failed.add((org, a))
             return False
         with self.save_lock:
@@ -805,7 +807,7 @@ class Hunt:
         read = 0
         for h in hits:
             if read >= 3 or time.monotonic() >= self.deadline: break
-            if h["url"].rstrip("/") == old[0].rstrip("/") or not people.official(org, h["url"], doms) or weak_signal_url(h["url"]): continue  # another site's page is not the organisation's statement
+            if (old and h["url"].rstrip("/") == old[0].rstrip("/")) or not people.official(org, h["url"], doms) or weak_signal_url(h["url"]): continue  # another site's page is not the organisation's statement
             read += 1
             pg = fetcher.fetch(h["url"], self.case)
             if pg.get("status") != "ok": continue
@@ -824,6 +826,7 @@ class Hunt:
             with self.save_lock:
                 self.org_signal[org] = (url, excerpt)
                 self.refresh_menu_rows(org, "a search of its site found a statement")
+                self.refresh_unsignalled(org, url, excerpt)
                 self.menu_statement_found += 1
                 self.log_rows.append({"org": org, "angle": a, "hits": len(hits), "read": read, "found": 0, "secs": round(time.monotonic() - t0, 2), "at": now()})
             self.log(f"  menu signal: {org} now rests on a statement from {url}")
@@ -846,9 +849,19 @@ class Hunt:
             n += 1
         return n
 
+    def refresh_unsignalled(self, org, url, excerpt):
+        """Near misses held only because their organisation had no signal page take the one now found, so stored_readmits can judge them again. Call under save_lock. Returns how many changed."""
+        n = 0
+        for r in self.near.values():
+            if r.get("organisation") != org or not str(r.get("note", "")).startswith("not listed: " + self.NO_SIGNAL): continue
+            r.update(signal=f"(the organisation's, from {url}) {excerpt}", signal_near_person="no")
+            r["note"] = "; ".join(x for x in ["not listed: the signal is the organisation's, not this person's", "the signal is the organisation's, from another of its pages, not this person's"] + str(r["note"]).split("; ")[1:] if x)
+            n += 1
+        return n
+
     def stored_menu_statements(self):
         """Organisations whose rows or near misses rest on a menu signal get menu_statement, side by side. Runs before the near misses are judged again, so a row held back only for its menu comes back. Rows whose organisation already has a better signal take it first, with no search. Returns how many rows or organisations changed."""
-        with self.save_lock: fixed = self.refresh_menu_rows()
+        with self.save_lock: fixed = self.refresh_menu_rows() + sum(self.refresh_unsignalled(o, *self.org_signal[o]) for o in sorted({r.get("organisation") for r in self.near.values()}) if o in self.org_signal)
         if fixed: self.log(f"menu signal: {fixed} rows took their organisation's newer signal in place of its menu")
         orgs = sorted({r["organisation"] for r in list(self.leads.values()) + list(self.near.values()) if r.get("organisation") in self.org_signal and signal_kind(r.get("signal"), r.get("source_url")) == "menu"})
         if not orgs or not self.must or self.s.get("menu_statement") is False:
@@ -887,9 +900,12 @@ class Hunt:
             if re.search(r"(?<!\w)" + re.escape(hit_terms[0]) + r"(?!\w)", nav, re.I):  # the word must be in the excerpt we keep, not just in the folded text
                 if not self.signal_kinds or signal_kind(f"(the organisation's, from {page.get('final_url') or page['url']}) {excerpt}") in self.signal_kinds:  # a course page is not kept as the org's signal when the spec wants statements: a later statement page can take the place
                     self.org_signal[org] = (page.get("final_url") or page["url"], excerpt)
+                    with self.save_lock: self.refresh_unsignalled(org, *self.org_signal[org])
+        no_sig = False
         if self.must and not hit_terms:
-            if not (angle.startswith("(site)") and is_official and org in self.org_signal): return 0
-            staff_sig = self.org_signal[org]  # the organisation's own staff page: the signal word is on another of its pages
+            if not (angle.startswith("(site)") and is_official): return 0
+            if org not in self.org_signal and not self.menu_statement(org): no_sig = True  # its own site shows heads but no page of it has said the word yet: one search of the site for it, and the heads wait as near misses if none answers (UT, fnwords62)
+            else: staff_sig = self.org_signal[org]  # the organisation's own staff page: the signal word is on another of its pages
         found_people = people.people_in(text, page["people_ld"])
         if not found_people and not JOB_BOARD.search(people.domain_of(page.get("final_url") or page["url"])) and re.search(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\(?\b\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b", text): self.no_head.setdefault(org, page.get("final_url") or page["url"])  # read, and prints only a mailbox or phone
         if not found_people and org in self.no_head and not getattr(self, "_in_staff", False):
@@ -924,6 +940,7 @@ class Hunt:
             if far and res["official"] and not org_sig and org in self.org_signal and self.function_fit(row["title"], row.get("check_quote") or ""):
                 org_sig, far = self.org_signal[org], False  # an official page with a careers head on it, and the org has a signal page of its own: the signal is the org's, as with a (site) head
             why = self.held_back(res, row, org, far, text, page.get("links"))
+            if no_sig and not why: why = self.NO_SIGNAL
             if org_sig:
                 row.update(signal=f"(the organisation's, from {org_sig[0]}) {org_sig[1]}", signal_near_person="no")
                 row["note"] = "; ".join(x for x in ("the signal is the organisation's, from another of its pages, not this person's", row.get("note")) if x)
@@ -1058,9 +1075,15 @@ class Hunt:
 
     DEAD_AFTER = 20   # failed calls, with none answered, before a source is dropped for the rest of the run
 
-    def search(self, q, n, twice=False):
+    SITE_SOURCES = ("ddg",)   # the engines whose hits survive a site: query: bing's feed ignores site: (72 of fnwords62's 79 site searches got the same Alamo pages), bing_news answers with an empty feed, and google_news links sit on news.google.com, which merge's site filter drops. Asking them made a site search wait 2.74 s, against 0.95 s for ddg asked twice
+
+    def site_sources(self):
+        """The sources a site: search asks: those of this hunt's that answer site: queries, or all of them when it has none."""
+        return [x for x in self.sources if x in self.SITE_SOURCES] or list(self.sources)
+
+    def search(self, q, n, twice=False, only=None):
         """engines.search over this hunt's sources (with twice, ddg is asked twice and its answers unioned: see engines.ddg_twice), dropping for the rest of the run a source that has failed its first DEAD_AFTER calls while another answered: bing_news failed 237 of 242 calls in fnwords55, 3.4 s each, inside every search's wait. A source never drops while nobody answers (the network is down, not the source), nor if it is the last."""
-        srcs = list(self.sources)
+        srcs = list(only or self.sources)
         asked = ["ddg_twice" if twice and x == "ddg" else x for x in srcs]
         hits, errs = engines.search(q, asked, n=n, case=self.case)
         errs = {("ddg" if k == "ddg_twice" else k): v for k, v in errs.items()}   # tallied, dropped and reported as the ddg it is
@@ -1106,10 +1129,11 @@ class Hunt:
         if not a or not self.wants_more(org) or time.monotonic() > self.deadline or not self.site_due(org): return
         q = a[len("(site) "):]
         t0 = time.monotonic()
-        hits, errs = self.search(q, n=8, twice=True)   # site searches live on ddg, which answers differently each call (fnwords56)
+        srcs = self.site_sources()
+        hits, errs = self.search(q, n=8, twice=True, only=srcs)   # site searches live on ddg, which answers differently each call (fnwords56)
         t_search = time.monotonic() - t0
         for s, e in errs.items(): self.errors[f"{s}: {e[:70]}"] += 1
-        if len(errs) >= len(self.sources):  # nobody answered: retried on the next run, not looped on in this one
+        if len(errs) >= len([x for x in srcs if x in self.sources]):  # nobody answered: retried on the next run, not looped on in this one
             self.failed.add((org, a))
             self._save()
             return

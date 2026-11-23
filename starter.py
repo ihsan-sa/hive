@@ -2183,6 +2183,7 @@ def floor(c, st, alive, login):
     Second tier, the other ladders: only while under agents_floor runs, floor_gap_s apart. Longest quiet first within a tier.
     Skips a thread with someone on it, a post queued, a `Parked until` line, a `Waiting:` that names a running agent or a time (continuation.waits), the person's stop, or their worded pause (goals.person_held_of). 0 turns a tier off."""
     want, focus_gap = c.get("agents_floor", 0), c.get("floor_focus_gap_s", 0)
+    if want and cont and not login and not floor_off(c, time.time()): floor_idle(st, len(alive), {"no_login": 1})
     if not (want or focus_gap) or not login or not cont or floor_off(c, time.time()): return
     t = time.time()
     if t - st.get("floor_check", 0) < 60: return
@@ -2202,13 +2203,21 @@ def floor(c, st, alive, login):
         else: g = gap
         return t - started.get(r["thread"], 0) >= g and (r["quiet_s"] is None or r["quiet_s"] >= g)
     only = set(c.get("floor_only") or [])  # config floor_only: when set, the floor starts only these threads (the person's "pause all but career", 2026-11-11, post 11111341a979); unset or [] is every ladder
-    rows = [r for r in cont.G.goals()["rows"] if (r["kind"] == "focus" or r.get("ladder")) and not r["running"] and not r.get("parked") and not gated_now(r, t) and r["thread"] not in busy and (not only or r["thread"] in only) and due(r)]
-    if not rows: return
+    why = {}   # floor_idle: the first reason each ladder was passed over
+    def keep(r, k, ok):
+        if not ok: why[k] = why.get(k, 0) + 1
+        return ok
+    rows = [r for r in cont.G.goals()["rows"] if (r["kind"] == "focus" or r.get("ladder")) and keep(r, "running", not r["running"]) and keep(r, "parked", not r.get("parked"))
+            and keep(r, "gated", not gated_now(r, t)) and keep(r, "busy", r["thread"] not in busy) and keep(r, "not_only", not only or r["thread"] in only) and keep(r, "not_due", due(r))]
+    if not rows:
+        if below: floor_idle(st, running, why)
+        return
     held = cont.waits({r["thread"] for r in rows}, set(alive) | {n for n, ps in st["pending"].items() if ps}, t, c.get("floor_wait_max_s", 7200))
     try: paused = cont.G.person_held_of({r["thread"] for r in rows})   # the person's worded pause ("ok pause the FW dev"): is_stop takes only a bare stop, so the floor briefed fw-bench 40 min after it (11151647ee34, 2026-11-20 23:20)
     except Exception: paused = {}
     for r in sorted(rows, key=lambda r: (not first(r), -(r["quiet_s"] if r["quiet_s"] is not None else float("inf")))):
-        if held.get(r["thread"], 0) > t or cont.stopped_thread(r["thread"]) or tier_held(c, r["thread"]) or r["thread"] in paused: continue
+        if keep(r, "wait", held.get(r["thread"], 0) <= t) and keep(r, "stopped", not cont.stopped_thread(r["thread"])) and keep(r, "tier", not tier_held(c, r["thread"])) and keep(r, "person_pause", r["thread"] not in paused): pass
+        else: continue
         started[r["thread"]] = t
         sig, seen = [r.get("rungs_done"), r.get("rungs_left"), r.get("rung")], st.setdefault("floor_seen", {}).get(r["thread"]) or {}
         st["floor_seen"][r["thread"]] = {"sig": sig, "n": seen.get("n", 0) + 1 if seen.get("sig") == sig else 1}
@@ -2219,6 +2228,15 @@ def floor(c, st, alive, login):
         with BOARD.open("a") as f:
             f.write(json.dumps({"id": dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now(), "from": "starter", "to": [text.split()[0]], "thread": r["thread"], **({"model": model} if text.startswith("@new ") else {}), "text": text}) + "\n")
         log(event="floor", thread=r["thread"], running=len(alive), tier=1 if first(r) else 2); return
+    if below: floor_idle(st, running, why)
+
+def floor_idle(st, running, why):
+    """Under agents_floor and nothing started: log why, at most every 10 min (a266c 11-22, rsi-lab ladder: the floor ran under 6 in
+    67 of 99 away hours and returned silently). why counts each ladder once, by the first check that passed it over. Not the usage check."""
+    t = time.time()
+    if t - st.get("floor_idle_at", 0) < 600: return
+    st["floor_idle_at"] = t
+    log(event="floor_idle", running=running, why=why)
 
 def improver(c, st, alive, login):
     """Every improve_every_s, one fresh agent on a deliberately open brief (the person, 2026-11-02: "just a spawn with one line").
