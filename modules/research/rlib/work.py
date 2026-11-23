@@ -423,6 +423,20 @@ def titles_on_page(text, name):
         if h: out.append(h.group(0).strip(" ,"))
     return out
 NAV_AI = re.compile(r"\b(?:skip to )?ai search\b|\bask ai\b|\bai chat\b|\bai assistant\b", re.I)
+ASIDE = re.compile(r"\b(?:as in|such as|e\.g\.,?)\s+[^,;:()\u2013\u2014.!?\"\u201c\u201d]{0,60}", re.I)  # "as technology continues to change, as in AI innovation, we ...": an example dropped in passing; the sentence is about something else (Lance's AWS partnership line, fnwords114 review)
+DATE_LINE = re.compile(r"(?im)^[ \t|]*(?:(?:mon|tues|wednes|thurs|fri|satur|sun)day,?\s+)?" + extract._TEXT_DATE.pattern + r"[ \t|]*$")
+
+
+def signal_page_date(page, url):
+    """When the page a signal came from was written: its own date, the address's, or a line holding nothing but a past date ("Thursday, July 11, 2024" under a news story's pull quote: Germanna's story lent Lance her signal undated, fnwords114 review). '' if none."""
+    d = (page or {}).get("date") or extract.url_date(url or "")
+    if d: return d
+    today = dt.date.today()
+    for m in DATE_LINE.finditer((page or {}).get("text", "")):
+        try: x = dt.date(int(m.group(3)), extract.MONTHS.index(m.group(1)[:3].lower()) + 1, int(m.group(2)))
+        except ValueError: continue
+        if x <= today: return x.isoformat()
+    return ""
 DEV_HOST = re.compile(r"(?:^|[.])(?:www-)?(?:dev|staging|stage|test|qa|uat|preview|sandbox)(?:[.-]|$)", re.I)
 JOB_BOARD = re.compile(r"(?:^|\.)(?:indeed|glassdoor|ziprecruiter|simplyhired|monster|linkedin|careerbuilder|higheredjobs)\.", re.I)
 SKIP_HOSTS = ("linkedin.com", "zoominfo.com", "rocketreach.co", "wiza.co", "facebook.com", "glassdoor.com")   # never gave a lead in any run, and took the read time: in fnwords66, 109 of 203 browser pages were LinkedIn (2478 browser-seconds), and zoominfo, rocketreach and wiza were 16 of the 60 blocked reads; over fnwords60 to 68, facebook took 50 browser reads and glassdoor 29, with no lead or near miss
@@ -671,7 +685,7 @@ def _pattern(spec, key):
     except re.error as e: raise ValueError(f"spec {key} isn't a valid pattern: {e}")
 
 
-LEAD_COLS = ["name", "title", "organisation", "official_site", "signal", "signal_near_person", "signal_kind", "source_url", "via", "page_date", "read_on", "check_status", "check_quote", "angle", "note"]
+LEAD_COLS = ["name", "title", "organisation", "official_site", "signal", "signal_near_person", "signal_kind", "signal_date", "source_url", "via", "page_date", "read_on", "check_status", "check_quote", "angle", "note"]
 
 
 COPYRIGHT_YEAR = re.compile(r"(?:©|\(c\)|copyright)\s*[^\n]{0,40}?(?:19|20)\d\d(?:\s*[-–]\s*(?:19|20)\d\d)?", re.I)
@@ -1299,7 +1313,7 @@ class Hunt:
             cell = re.search(r"\S+@\S+\.[a-z]{2,}", sn, re.I)  # "Ann Lee at <her address>": a contact cell in a table; the next line is another column's, not their sentence (Howard's AI page, fnwords111 review)
             for j in ((i,) if cell else (i, i + 1, i - 1)):
                 if not 0 <= j < len(sents): continue
-                t = NAV_AI.sub(" ", sents[j] if not cell else sn[:cell.start()])
+                t = ASIDE.sub(" ", NAV_AI.sub(" ", sents[j] if not cell else sn[:cell.start()]))
                 if len(t) > 25 and any(people.term_regex(m).search(fold(t)) for m in terms) and not EARLIER_JOB.search(t):
                     return " ".join(sents[min(i, j):max(i, j) + 1])[:300]
         return ""
@@ -1321,7 +1335,7 @@ class Hunt:
         if not self.must: return False
         ex = self.own_sentence((self.case.page(url) or {}).get("text", ""), row["name"], row["organisation"], self.must)
         if not ex: return False
-        row.update(signal=ex, signal_near_person="yes")
+        row.update(signal=ex, signal_near_person="yes", signal_date=signal_page_date(self.case.page(url), url))
         keep = [n for n in str(row.get("note") or "").split("; ") if n and not n.startswith("the signal is the organisation's")]
         held = [n for n in keep[:1] if n.startswith("not listed: ")]   # a near miss's reason stays first, so stored_readmits still finds it
         row["note"] = "; ".join(held + [f"the person's own signal is from {url} {self.OWN_ON_ORG}"] + keep[len(held):])
@@ -1358,7 +1372,7 @@ class Hunt:
             if not ex and not m and r.get("signal_near_person") == "yes" and self.seat_page(sp) and roster_only(sp.get("text", ""), r["name"], self.must):  # its own page lists them in a member table: a seat, though an older run called it near (only a "yes": a "no" there is already not theirs, and a staff directory lists everyone in short lines, fnwords98)
                 r["signal_near_person"] = "no"; self.seat(r, sp, r["source_url"]); n += 1
                 continue
-            own = OWN_SIGNAL_NOTE.search(str(r.get("note") or "")) if r.get("signal_near_person") == "yes" and not ex and self.OWN_ON_ORG in str(r.get("note") or "") else None
+            own = OWN_SIGNAL_NOTE.search(str(r.get("note") or "")) if r.get("signal_near_person") == "yes" and not ex else None   # any page that lent them their own signal, a search's too: Burroughs kept a roster's "Ka'ai'ai" as her AI after term_regex learnt better (fnwords115)
             if own and (op := self.case.page(own.group(1))) and not self.own_sentence(op.get("text", ""), r["name"], r["organisation"], self.must):  # an older reading took the page as theirs, and today's does not (Wells's contact cell on Howard's AI page, fnwords111 review): the organisation's signal again, judged as one
                 r.update(signal=f"(the organisation's, from {own.group(1)}) {r.get('signal') or ''}"[:400], signal_near_person="no")
                 r["note"] = "; ".join([x for x in str(r.get("note") or "").split("; ") if x and not x.startswith("the person's own signal is from")] + ["the signal is the organisation's, from another of its pages, not this person's"])
@@ -1402,7 +1416,7 @@ class Hunt:
             if not (people.official(org, url, self.domains, pg["text"]) or people.names_org(org, pg["text"])): continue  # a namesake at another place
             ex = self.own_sentence(pg["text"], name, org, self.must)
             if ex:
-                row.update(signal=ex, signal_near_person="yes", signal_url=url)
+                row.update(signal=ex, signal_near_person="yes", signal_url=url, signal_date=signal_page_date(pg, url))
                 row["note"] = "; ".join(x for x in (f"the person's own signal is from {url} (a search for them with '{self.must[0]}')", *[n for n in (row.get("note") or "").split("; ") if n and not n.startswith("the signal is the organisation's")]) if x)
                 with self.save_lock: self.person_signal_found += 1
                 return True
@@ -1456,7 +1470,7 @@ class Hunt:
                 url = pg.get("final_url") or pg["url"]
                 if JOB_POSTING.search(urllib.parse.urlsplit(url).path or "") or search_results_url(url) or search_results_url(h["url"]) or weak_signal_url(url): continue
                 if not (people.official(org, url, self.domains, pg["text"]) or people.names_org(org, pg["text"])): continue  # a namesake at another place
-                d = pg.get("date") or extract.url_date(url)
+                d = signal_page_date(pg, url)
                 if d and self.max_age:
                     try:
                         if (dt.date.today() - dt.date.fromisoformat(d)).days > self.max_age * 365: continue
@@ -1478,7 +1492,7 @@ class Hunt:
             with self.save_lock: self.held_signal_found += 1
             org = r["organisation"]
             keep = [n for n in str(r.get("note", "")).split("; ") if n and not n.startswith(("not listed: ", "the signal is the organisation's", "the organisation's signal"))]
-            row = dict(r, signal=sig, signal_near_person="yes", signal_url=url, note="; ".join([f"the person's own signal is from {url} (a search for them with '{min(self.must, key=len)}')"] + keep))
+            row = dict(r, signal=sig, signal_near_person="yes", signal_url=url, signal_date=signal_page_date(self.case.page(url), url), note="; ".join([f"the person's own signal is from {url} (a search for them with '{min(self.must, key=len)}')"] + keep))
             page = self.case.page(r["source_url"]) or {}
             res = people.check(page, r["name"], r["title"], org, self.domains) if page.get("status") == "ok" else None
             why = (self.held_back(res, row, org, False, page.get("text", ""), page.get("links")) if res else "its page can't be read again") or self.stored_why(row)

@@ -1,0 +1,9 @@
+[Unit]
+Description=Hive buy sweep every 10 min, so no card outlives its buy when no agent runs hive buy
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target

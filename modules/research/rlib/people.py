@@ -246,10 +246,10 @@ def person_key(name):
 
 
 def term_regex(term):
-    """A term as whole words in folded text, so AI doesn't match training or villain. A last word of 3 or more letters also takes its plural: career finds Careers, internship finds Internships, agency finds agencies (fnwords36: Director of Careers failed role_focus career). Short acronyms stay exact."""
+    """A term as whole words in folded text, so AI doesn't match training or villain. A last word of 3 or more letters also takes its plural: career finds Careers, internship finds Internships, agency finds agencies (fnwords36: Director of Careers failed role_focus career). Short acronyms stay exact, and a short one inside an apostrophe-joined word is not it."""
     t = fold(term)
     m = re.search(r"([a-z]{3,})$", t)
-    if not m: return re.compile(rf"(?<![\w]){re.escape(t)}(?![\w])")
+    if not m: return re.compile(rf"(?<![\w])(?<!\w'){re.escape(t)}(?![\w])(?!'(?!s\b)\w)")   # not inside a name joined by apostrophes: "Amber Ka'ai'ai" in a committee roster lent Burroughs 'AI' (fnwords115); "AI's" still counts
     stem = t[:-1] if t.endswith("y") and t[-2:-1] not in "aeiou" else t
     tail = "(?:y|ies)" if stem != t else ("(?:es)?" if t.endswith(("s", "x", "z", "ch", "sh")) else "s?")
     return re.compile(rf"(?<![\w]){re.escape(stem)}{tail}(?![\w])")
