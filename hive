@@ -170,6 +170,30 @@ def held_tier_note(to, ext, me, thread):
             f"waits until that tier runs. If the work belongs elsewhere, tag the thread to a running focus (`hive tier why {thread}` "
             f"shows its tier); tier settings are the person's.")
 
+PAUSE_WORDS = re.compile(r"(?im)^\s*Told to stop:|\bpaus(?:e|ed|ing)\b")
+
+def paused_untiered_note(text, thread):
+    """A hint when an agent answers the person's pause in a thread whose work tier still runs. Agents heard "pause chip flow work"
+    (11201815212c) and "Pause HiFi work" (11201925bf7e), parked ladders and wrote priorities lines, but no tier held them: chip-flow sat
+    in running tier 1 with its park lapsing on 11-23, and a weekly reminder woke a3f17 into the paused Hi-Fi lab (11220900b768, graded
+    nothing). The tier is what holds timers and every wake; a9357 placed both by hand on 2026-11-23. None on any error, when the post
+    says nothing of a pause, when the person's newest post there is no pause, or when the tier is held already."""
+    if not thread or not PAUSE_WORDS.search(text or ""): return None
+    try:
+        import goals
+        why = goals.person_held_of([thread]).get(thread)
+        if not why or goals.tier_held_of([thread]).get(thread, "past its stop point") != "past its stop point": return None   # a usage stop lifts by itself
+        m = re.search(r"\b([0-9a-f]{12})\b", why)
+        pid = m.group(1) if m else "POST"
+        import focus
+        fid = focus.focus_of(focus.state(), thread)
+    except Exception: return None
+    whole = f", or the focus `{fid}` if the pause covers all its work" if fid else ""
+    return (f"hive post: the person paused thread {thread} ({why}), but its work tier still runs, so reminders, timers and the keeper "
+            f"can still wake work there. Hold it in a paused tier (`hive tier list`; or `hive tier new \"NAME\" --post {pid}` and "
+            f"`hive tier pause N --post {pid} --why ...`): `hive tier set {thread} N --post {pid}` for this thread alone{whole}. "
+            f"Note the tier on the pause's line in kb/priorities.md.")
+
 def effort_hint(to, a):
     """The line an agent sees when it starts a fresh Claude agent with no --effort, or None. The rule is in `hive help agents`, which few
     runs open, so it is said at the step it applies to (7 days to 2026-11-15: 4 of 187 such starts chose an effort,
@@ -493,6 +517,7 @@ def cmd_post(a):
     if not a.as_: remind_own(p["thread"])
     receipt(list(dict.fromkeys(to)), ignored, ext, me)
     if not a.as_ and (w := held_tier_note(to, ext, me, p["thread"])): print(w, file=sys.stderr, flush=True)
+    if not a.as_ and HASH_NAME.fullmatch(me or "") and (w := paused_untiered_note(text, p["thread"])): print(w, file=sys.stderr, flush=True)
     if (w := effort_hint(to, a)): print(w, file=sys.stderr)
 
 def cmd_model(a):

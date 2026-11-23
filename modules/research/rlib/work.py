@@ -279,9 +279,27 @@ def role_order(pat):
 
 
 BELOW_HEAD = re.compile(r"\b(?:assistant|associate|deputy)\s+director\b|\bassistant\s+(?:dean|vice\s+(?:president|chancellor|provost))\b", re.I)  # a post under the unit's head: an assistant director of career education is not the head of career services (Lindsey under Meares, fnwords44)
+BELOW_DIRECTOR = re.compile(r"\b(?:assistant|associate|deputy)\s+director\b", re.I)  # an assistant or associate dean is the college's leader of a function; an assistant or associate director works under a director (review fnwords69)
+HEAD_ON_PAGE = re.compile(r"(?:^[ \t]*|\bis (?:the |an? |our )?|,[ \t]*)((?:executive |senior |managing )?(?:director|dean|vice president|vice chancellor)\b(?!['’]s)(?!\s+of\s+students)[^\n.;]{0,60})", re.I | re.M)  # a head's title as a page prints it: at the start of a line ("Executive Director", SDSU's team page) or in a bio sentence ("... is the Executive Director of Alumni and Career Engagement", Brooklyn's Magner page)
+
+
+def head_on_page(title, text):
+    """The head an assistant or associate director works under, when the same page lists one, or "". Lewis (assistant director, Brooklyn's Magner Career Center, under its executive director) and Moreno (associate director, SDSU, under an executive director) were verified as leaders in fnwords69: BELOW_HEAD only ranked them inside the per_org cap, and with a free slot they stayed."""
+    if not BELOW_DIRECTOR.search(title or ""): return ""
+    m = HEAD_ON_PAGE.search(text or "")
+    return " ".join(m.group(1).split()) if m else ""
 NAV_AI = re.compile(r"\b(?:skip to )?ai search\b|\bask ai\b|\bai chat\b|\bai assistant\b", re.I)
 DEV_HOST = re.compile(r"(?:^|[.])(?:www-)?(?:dev|staging|stage|test|qa|uat|preview|sandbox)(?:[.-]|$)", re.I)
 JOB_BOARD = re.compile(r"(?:^|\.)(?:indeed|glassdoor|ziprecruiter|simplyhired|monster|linkedin|careerbuilder|higheredjobs)\.", re.I)
+SKIP_HOSTS = ("linkedin.com", "zoominfo.com", "rocketreach.co", "wiza.co", "facebook.com", "glassdoor.com")   # never gave a lead in any run, and took the read time: in fnwords66, 109 of 203 browser pages were LinkedIn (2478 browser-seconds), and zoominfo, rocketreach and wiza were 16 of the 60 blocked reads; over fnwords60 to 68, facebook took 50 browser reads and glassdoor 29, with no lead or near miss
+
+
+def skipped_host(url, hosts=SKIP_HOSTS):
+    """A search hit on a site whose pages never give a row: people-aggregators and LinkedIn sit behind a login or a wall, so a read costs the browser or a block and returns no quote to verify."""
+    h = (urllib.parse.urlsplit(url).hostname or "").lower()
+    return any(h == d or h.endswith("." + d) for d in hosts)
+
+
 JOB_POSTING = re.compile(r"/(?:job|jobs|requisition|vacancy|posting)s?/\d", re.I)
 
 
@@ -330,18 +348,26 @@ def menu_like(text):
     words = [w for w in re.findall(r"[A-Za-z]+", t) if w.lower() not in MENU_SMALL and not (len(w) > 1 and w.isupper())]
     return len(words) >= 10 and sum(w[0].isupper() for w in words) / len(words) >= 0.85
 
+SIGNAL_KINDS = ("statement", "course", "vendor", "menu", "posting")
+SIGNAL_POSTING_URL = re.compile(r"(?:^|[./])(?:jobs|employment|hr|faculty)\.[^/]*/(?:career|jobs?|postings?|positions?|openings?)/|/(?:job|jobs|requisition|vacancy|posting|positions?)s?/\d|/(?:job-?postings?|open-?positions|faculty-?positions|employment-?opportunities)(?:[/.]|$)", re.I)
+SIGNAL_POSTING_TEXT = re.compile(r"\binvites applications\b|\bseeks applications\b|\bapplications are invited\b|\b(?:we|the \w+(?: \w+){0,4}) (?:seeks?|is seeking) (?:candidates|applicants)\b|\b(?:tenure[- ]track|faculty) (?:position|opening|search)s? in\b", re.I)  # a job advert: UT's McCombs faculty posting ("invites applications for a faculty position in Artificial Intelligence and Operations Management") stood as the signal of two career-services directors in fnwords69; hiring an AI professor is not a statement about AI and careers
+SIGNAL_INDEX_URL = re.compile(r"/(?:a-?to-?z|a-z|az)(?:-index|-list)?(?:[/.]|$)|/(?:site-?map|site-?index)(?:[/.]|$)", re.I)
+
+
 def signal_kind(signal, source_url=""):
-    """What a lead's signal rests on: `vendor` (a third-party tool blurb, Jobscan on a career site), `course` (a course, certificate or catalog page), `menu` (a run of the site's own menu or link titles, such as "AI in Your Career Development": the site links to it but says nothing in a sentence) or `statement` (the organisation or person says it). "" when there is no signal."""
+    """What a lead's signal rests on: `vendor` (a third-party tool blurb, Jobscan on a career site), `posting` (a job advert), `course` (a course, certificate or catalog page), `menu` (a run of the site's own menu or link titles, such as "AI in Your Career Development": the site links to it but says nothing in a sentence) or `statement` (the organisation or person says it). "" when there is no signal."""
     if not (signal or "").strip(): return ""
     m = re.match(r"\(the organisation's, from (\S+)\)\s*", signal)
     url, text = (m.group(1), signal[m.end():]) if m else (source_url or "", signal)
     if SIGNAL_VENDOR.search(text): return "vendor"
     u = urllib.parse.urlsplit(url)
+    if SIGNAL_POSTING_URL.search(u.netloc + u.path) or SIGNAL_POSTING_TEXT.search(text): return "posting"
+    if m and SIGNAL_INDEX_URL.search(u.path): return "menu"  # an A-to-Z index or site map lists the site's pages; "Artificial Intelligence (AI) certificate" there is a link, not a sentence (Stark State, fnwords69)
     if (not STAFF_PATH.search(u.path) and SIGNAL_COURSE_URL.search(u.netloc + u.path)) or SIGNAL_COURSE_TEXT.search(text) or SIGNAL_ADVERT.search(text) or (m and SIGNAL_DEGREE.search(text)): return "course"  # a staff page on a catalog or continuing-education host is not a course (review 112215240022)
     if m and (menu_like(text) or BREADCRUMB.search(text)): return "menu"  # a menu is the organisation's site linking to a page; a person's signal in Title Case is a headline or a job title about them (Healey's taskforce, Dallas College's grant; review 112215240022)
     return "statement"
 
-HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms allow_org_signal person_signal official_recheck sources read_per_search allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words signal_kinds menu_statement".split())
+HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms allow_org_signal person_signal official_recheck sources read_per_search skip_hosts allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words signal_kinds menu_statement".split())
 
 
 HEADLINE_VERB = re.compile(r"\b(?:Expands|Launches|Announces|Receives|Wins|Opens|Partners|Celebrates|Hosts|Unveils|Offers|Adds|Joins|Awards|Welcomes|Honors|Signs|Approves|Plans|Seeks|Cuts|Raises|Earns|Debuts|Introduces|Selects|Appoints|Hires|Names|Breaks|Boosts|Makes|Takes|Gets|Says|Calls|Visits|Tours|Funds|Backs|Unveiled|Announced|Launched|Expanded|Awarded)\b")
@@ -427,10 +453,10 @@ class Hunt:
         if isinstance(rf, str): rf = [rf]
         if not isinstance(rf, list) or not all(isinstance(x, str) for x in rf): raise ValueError("spec role_focus is a list of words (or one word)")
         self.role_focus = list(rf)
-        sk = spec.get("signal_kinds") or []
+        sk = spec.get("signal_kinds")
+        if sk is None: sk = ["statement"]  # by default only a statement verifies a row: in fnwords69, a menu, a vendor blurb, a course catalog or a job advert under 11 of 21 verified rows, and a reader judged none of them a signal (REVIEW.md); [] takes every kind
         if isinstance(sk, str): sk = [sk]
-        if not isinstance(sk, list) or not sk or not set(sk) <= {"statement", "course", "vendor", "menu"}:
-            if spec.get("signal_kinds") is not None: raise ValueError('spec signal_kinds is a list of "statement", "course", "vendor", "menu"')
+        if not isinstance(sk, list) or not set(sk) <= set(SIGNAL_KINDS): raise ValueError('spec signal_kinds is a list of "statement", "course", "vendor", "menu", "posting" ([] takes every kind)')
         self.signal_kinds = list(sk)
         self.role, self.exclude = _pattern(spec, "roles"), _pattern(spec, "exclude_roles")
         for k in ("angles", "orgs", "discover"):
@@ -444,6 +470,7 @@ class Hunt:
         named = spec.get("sources") or ["web"]
         # bing_web drives a browser: 17.1 s a call against 1.3 to 3.4 s for the other engines, so every hunt search waited on it, and in fnwords55 the 15 of its 1154 URLs no other engine found gave no lead. A spec that names it outright still gets it.
         self.sources = [x for x in engines.expand(named) if x != "bing_web" or "bing_web" in named]
+        self.late_tally = {}   # source: searches that returned without waiting for it (ENGINE_GRACE)
         self.source_tally, self.tally_lock = {}, threading.Lock()   # source: [calls failed, calls answered] this run, for dropping a dead source
         self.domains = spec.get("domains") or {}
         if not isinstance(self.domains, dict): raise ValueError("spec domains must map an organisation to a site or a list of sites")
@@ -451,6 +478,7 @@ class Hunt:
             if not (isinstance(d, str) or (isinstance(d, list) and all(isinstance(x, str) for x in d))): raise ValueError(f"spec domains for {o!r} must be a site or a list of sites")
         self.deadline = time.monotonic() + float(spec.get("max_seconds", 1800))
         self.read = int(spec.get("read_per_search", 4))
+        self.skip_hosts = tuple(spec.get("skip_hosts", SKIP_HOSTS))   # [] reads every host
         if self.read < 1: raise ValueError(f"spec read_per_search must be at least 1, not {self.read}")
         self.allow_secondary = spec.get("allow_secondary", True)
         self.allow_page_signal = spec.get("allow_page_signal", False)
@@ -525,7 +553,8 @@ class Hunt:
         elif r["check_status"] == "secondary" and not self.allow_secondary: why = "only on another site"
         elif self.role_focus and not any(people.term_regex(w).search(fold(r.get("title", ""))) for w in self.role_focus): why = "the title does not name the role focus"
         elif people.elsewhere(r.get("title", ""), r.get("organisation", "")): why = f"the title points elsewhere ({people.elsewhere(r.get('title', ''), r.get('organisation', ''))})"
-        elif self.signal_kinds and signal_kind(r.get("signal"), r.get("source_url")) not in self.signal_kinds: why = f"the signal rests on a {signal_kind(r.get('signal'), r.get('source_url'))} page, and signal_kinds asks for {', '.join(self.signal_kinds)}"
+        elif head_on_page(r.get("title", ""), (self.case.page(r["source_url"]) or {}).get("text", "")): why = f"{self.UNDER_HEAD} ({head_on_page(r.get('title', ''), self.case.page(r['source_url'])['text'])})"
+        elif self.kind_refused(signal_kind(r.get("signal"), r.get("source_url"))): why = f"the signal rests on a {signal_kind(r.get('signal'), r.get('source_url'))} page, and signal_kinds asks for {', '.join(self.signal_kinds)}"
         elif self.function_words and not self.function_fit(r.get("title", ""), f"{r.get('signal', '')} {r.get('check_quote') or ''} " + urllib.parse.urlparse(r.get("source_url", "")).path.replace("-", " ").replace("/", " ")): why = "no function word in the title or the person's own quote"  # the URL path always counts here: whether the row came from a directory isn't stored
         elif self.must and not any(people.term_regex(m).search(fold(self._stored_text(r))) for m in self.must): why = "the spec's must words aren't on its page"
         elif weak_signal_url(stored_signal_url(r)): why = f"the signal's page is not one the module now takes as a signal ({stored_signal_url(r)})"  # a site's own search page echoing our query (Benmouna, fnwords51)
@@ -537,6 +566,7 @@ class Hunt:
         return why
 
     FULL_NOTE = "the organisation is full"
+    UNDER_HEAD = "a post under a head the same page lists"
     NO_SIGNAL = "no page of the organisation's site says the signal word yet"   # its heads wait here; refresh_unsignalled gives them the signal once one is found
     LEAKED_FAR = "the signal isn't near this person"
     SPEC_FILTERS = ("the title does not name the role focus", "no function word in the title", "the role doesn't fit the spec", "the signal rests on a ", "the spec's must words aren't on its page", "the signal is the organisation's, not this person's")
@@ -648,6 +678,10 @@ class Hunt:
         if self.exclude and self.exclude.search(t): return False
         return bool(self.role.search(t)) if self.role else True
 
+    def kind_refused(self, kind):
+        """The spec's signal_kinds don't take this kind. A row with no signal at all (a spec with no `must` words) has no kind to refuse."""
+        return bool(self.signal_kinds and kind and kind not in self.signal_kinds)
+
     def held_back(self, res, row, org, far, text="", links=None):
         """Why this person is a near miss and not a lead, or ''."""
         if res.get("left"): return "the page says they left"
@@ -661,6 +695,8 @@ class Hunt:
         if people.EVENT_URL.search(row["source_url"]) and not people.org_near(text, row["name"], org): return "an event page that doesn't tie them to this organisation: may be a guest"
         other = people.elsewhere(row["title"], org)
         if other: return f"the title points elsewhere ({other})"
+        head = head_on_page(row.get("title", ""), text)
+        if head: return f"{self.UNDER_HEAD} ({head})"
         if self.max_age and row["page_date"] and not current_despite_date(text, row["source_url"], links):
             try:
                 if (dt.date.today() - dt.date.fromisoformat(row["page_date"])).days > self.max_age * 365: return f"the page is from {row['page_date']}"
@@ -969,7 +1005,7 @@ class Hunt:
             if why.startswith("the page is from ") and row["check_status"] != "verified" and row.get("signal_near_person") == "yes" and self.s.get("official_recheck") is not False and len(self.leads) < self.target and self.room_for(org, row["title"]) and self.official_recheck(row, org):
                 why = ""  # the date was the last thing against it, and the organisation's own site has them now: listed in this run, not at the start of the next (Parks, fnwords44 and fnwords45)
             kind = signal_kind(row.get("signal"), row["source_url"])
-            if not why and self.signal_kinds and kind not in self.signal_kinds: why = f"the signal rests on a {kind} page, and signal_kinds asks for {', '.join(self.signal_kinds)}"
+            if not why and self.kind_refused(kind): why = f"the signal rests on a {kind} page, and signal_kinds asks for {', '.join(self.signal_kinds)}"
             if not why and (res["status"] == "secondary" or self.old_page(res["page_date"])): why, row["departure_read"] = self.left_elsewhere(per["name"], org), dt.date.today().isoformat()
             if why or (len(self.leads) >= self.target and self.org_count(org) < self.per_org) or not self.room_for(org, row["title"]):
                 if why: row["note"] = "; ".join(x for x in (f"not listed: {why}", row["note"]) if x)
@@ -1080,7 +1116,7 @@ class Hunt:
                 self._save()
                 continue
             self.answered = True
-            hits = sorted(hits, key=lambda h: (not people.official(org, h["url"], self.domains), -h["score"]))
+            hits = sorted((h for h in hits if not skipped_host(h["url"], self.skip_hosts)), key=lambda h: (not people.official(org, h["url"], self.domains), -h["score"]))
             found, read, t_read, routes = 0, 0, 0.0, {}
             for h in hits[:self.read]:
                 if h["relevance"] < 0.2: continue
@@ -1106,10 +1142,14 @@ class Hunt:
         """engines.search over this hunt's sources (with twice, ddg is asked twice and its answers unioned: see engines.ddg_twice), dropping for the rest of the run a source that has failed its first DEAD_AFTER calls while another answered: bing_news failed 237 of 242 calls in fnwords55, 3.4 s each, inside every search's wait. A source never drops while nobody answers (the network is down, not the source), nor if it is the last."""
         srcs = list(only or self.sources)
         asked = ["ddg_twice" if twice and x == "ddg" else x for x in srcs]
-        hits, errs = engines.search(q, asked, n=n, case=self.case)
+        late = []
+        hits, errs = engines.search(q, asked, n=n, case=self.case, grace=self.ENGINE_GRACE, late=late)
         errs = {("ddg" if k == "ddg_twice" else k): v for k, v in errs.items()}   # tallied, dropped and reported as the ddg it is
+        late = {("ddg" if k == "ddg_twice" else k) for k in late}
         with self.tally_lock:
-            for x in srcs: self.source_tally.setdefault(x, [0, 0])[0 if x in errs else 1] += 1
+            for x in late: self.late_tally[x] = self.late_tally.get(x, 0) + 1
+            for x in srcs:
+                if x not in late: self.source_tally.setdefault(x, [0, 0])[0 if x in errs else 1] += 1   # a late engine neither answered nor failed
             answered = any(t[1] for t in self.source_tally.values())
             dead = [x for x in self.sources if answered and self.source_tally.get(x, [0, 0])[1] == 0 and self.source_tally.get(x, [0, 0])[0] >= self.DEAD_AFTER]
             if dead:   # never all of them: a dead one needs another that answered, and that one has an answer
@@ -1117,6 +1157,8 @@ class Hunt:
                 self.log(f"sources: dropped {', '.join(dead)} for the rest of this run: failed its first {self.DEAD_AFTER} calls while the others answered ({errs.get(dead[0], '')[:80]})")
                 errs = {k: v for k, v in errs.items() if k not in dead}   # callers weigh len(errs) against len(self.sources), which no longer counts it
         return hits, errs
+
+    ENGINE_GRACE = 4.0   # seconds a search waits on its slower engines once one has answered with hits (fnwords67: 33 of 292 searches waited over 6 s and took 371 of 923 engine-seconds; the rest averaged 2.1 s)
 
     SIDE_KINDS = ("statement", "official recheck", "person signal", "departure")
 
@@ -1127,6 +1169,7 @@ class Hunt:
         eng = sorted(((s, t - engine_secs0.get(s, 0.0)) for s, t in engines.SECS.items()), key=lambda x: -x[1])
         return (f"time: {len(rows)} searches took {tot['secs']:.0f} worker-seconds: waiting on the engines {tot['search_secs']:.0f}, fetching pages {tot['read_secs']:.0f}, "
                 f"weighing them (with the searches that starts) {tot['weigh_secs']:.0f}; engines, all searches: " + ", ".join(f"{s} {t:.0f}s" for s, t in eng if t >= 0.5)
+                + "; not waited for after the first hits: " + (", ".join(f"{s} {k} times" for s, k in sorted(self.late_tally.items(), key=lambda x: -x[1])) or "none")
                 + "; " + self.side_line(side0) + "; " + self.route_line(rows))
 
     ROUTES = ("saved", "direct", "browser", "archive", "blocked", "refused")
@@ -1192,6 +1235,7 @@ class Hunt:
             return
         self.answered = True
         found, t_read, routes = 0, 0.0, {}
+        hits = [h for h in hits if not skipped_host(h["url"], self.skip_hosts)]
         for h in hits[:self.read]:
             if h["relevance"] < 0.2: continue
             p, secs = self.read_page(h["url"], routes)

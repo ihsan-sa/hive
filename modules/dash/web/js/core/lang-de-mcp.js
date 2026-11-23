@@ -1,0 +1,27 @@
+// de: Settings > Connectors > Add a connector by address (views/settings.js mcpUrlBlock, E120a) and the server's reasons for a refusal
+// (dash.py mcp_url_check / mcp_url_do), shown as they come. Exact English keys; patterns for the lines with a name or a count.
+const SELF = {
+  "Add a connector by address": "Connector über seine Adresse hinzufügen",
+  "A remote MCP server, like a custom connector in Claude. Your agents can use its tools from their next run, so only add a server you trust.": "Ein entfernter MCP-Server, wie ein eigener Connector in Claude. Deine Agenten können seine Werkzeuge ab ihrem nächsten Lauf nutzen, also füge nur einen Server hinzu, dem du vertraust.",
+  "Added. Agents can use it from their next run.": "Hinzugefügt. Agenten können ihn ab ihrem nächsten Lauf nutzen.",
+  "Address": "Adresse",
+  "Agents stop seeing its tools from their next run.": "Agenten sehen seine Werkzeuge ab ihrem nächsten Lauf nicht mehr.",
+  "has a token": "hat ein Token",
+  "Token (if the server needs one)": "Token (falls der Server eins braucht)",
+  "paste the server's address": "füge die Adresse des Servers ein",
+  "that address has spaces in it or is too long": "diese Adresse enthält Leerzeichen oder ist zu lang",
+  "that isn't a web address": "das ist keine Webadresse",
+  "leave the sign-in out of the address; paste a token in its own box": "lass die Anmeldung aus der Adresse weg; füge das Token in sein eigenes Feld ein",
+  "the address must start with https:// (plain http only for a server on this computer)": "die Adresse muss mit https:// beginnen (einfaches http nur für einen Server auf diesem Computer)",
+  "no connector added by address has that name": "kein über die Adresse hinzugefügter Connector hat diesen Namen",
+  "give it a short name: letters, digits, - and _ (up to 40)": "gib ihm einen kurzen Namen: Buchstaben, Ziffern, - und _ (bis zu 40)",
+  "a connector with that name is already here": "ein Connector mit diesem Namen ist schon da",
+  "that token can't be used": "dieses Token kann nicht verwendet werden",
+  __patterns: [
+    [/^Remove (.+)\?$/, "$1 entfernen?"],
+    [/^(\d+) is the most\. Remove one to add another\.$/, "$1 sind das Maximum. Entferne einen, um einen weiteren hinzuzufügen."],
+    [/^(\d+) is the most; remove one first$/, "$1 sind das Maximum; entferne zuerst einen"],
+    [/^a connector added by address already has this name: (.+)$/, "ein über die Adresse hinzugefügter Connector hat schon diesen Namen: $1"],
+  ],
+};
+export default SELF;

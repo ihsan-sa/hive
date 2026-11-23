@@ -1,6 +1,6 @@
 // Settings: Everyday, Accounts, Power and sandbox, Data sharing, Secrets, This device, Set once, Connectors, Modules, Access from outside (R7). Shown only where can() allows each part.
 import { status as st } from "../core/status.js";
-import { h } from "../core/dom.js";
+import { h, s } from "../core/dom.js";
 import { S, can, built, jget, needsAccount, post, loadApp, said, fullEnded, unreached, kept, keep, KEPT_NOTE } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
 import { stillOn, setStill } from "../core/still.js";
@@ -138,7 +138,7 @@ function viewSection(ctx) {
       actions: button(on ? "Show everything" : "Turn on simple view", () => { setSimple(!on); ctx.update(); }, { size: "s" }) }),
     block({ title: "Still screen", key: "still", sub: stillOn() ? "On: nothing moves by itself, not the live dots, the Map's rings or the loading shimmer." : "Off: live agents breathe, the Map shows each post, and loading shimmers. Turn it on to stop everything that moves by itself.",
       actions: button(stillOn() ? "Let things move" : "Stop all motion", () => { setStill(!stillOn()); ctx.update(); }, { size: "s" }) }),
-    langBlock(), keysBlock(ctx), voiceBlock(ctx), installBlock(ctx), notifyBlock(ctx), pushBlock(ctx), phoneBlock(ctx), signBlock(ctx)));
+    langBlock(), keysBlock(ctx), voiceBlock(ctx), installBlock(ctx), phoneLinkBlock(), notifyBlock(ctx), pushBlock(ctx), phoneBlock(ctx), signBlock(ctx)));
 }
 // Voice calls and memos: where they stand on this install (dash.py voice_view, projects/everyday/VOICE.md V1). The build runs in the
 // background after install, so this says Setting up, Didn't finish (with Try again) or Not on this install (with why) instead of a Call
@@ -251,6 +251,24 @@ function phoneBlock(ctx) {
       button("Make a new topic", () => confirm({ title: "Make a new topic?", body: ["The topic your phone follows stops working. You'd subscribe to the new one on your phone."], ok: "Make a new topic", onOk: () => phoneDo(ctx, "topic", "New topic. Subscribe to it on your phone; the old one is dead.") }), { size: "s" }),
       P.error ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, P.error) : null, msg("phone")) : msg("phone"));
 }
+// Open on your phone (E122): a QR code for the address a phone can actually reach (dash.py phone_link: the outside address, else the
+// tailnet name), drawn black on white in any theme so a camera reads it. With neither set, plain words and a way to Access from outside.
+function qrSvg(rows, label) {
+  const n = rows.length, q = 4, d = rows.flatMap((r, y) => [...r].flatMap((c, x) => c === "1" ? [`M${x + q} ${y + q}h1v1h-1z`] : [])).join("");
+  return s("svg", { class: "qr", viewBox: `0 0 ${n + 2 * q} ${n + 2 * q}`, width: 200, height: 200, role: "img", "aria-label": label, "shape-rendering": "crispEdges", "data-key": "qr" },
+    s("rect", { width: n + 2 * q, height: n + 2 * q, fill: "#fff" }), s("path", { d, fill: "#000" }));
+}
+function phoneLinkBlock() {
+  const L = S.app.phone_link;
+  if (S.app.phone_link === undefined) return null;   // an older server, or the open dash
+  if (!L) return block({ title: "Open on your phone", key: "phone-link",
+    sub: "Your phone can't open this Hive yet: only this computer can. It needs an address the phone can reach, either a name on the internet set up under Access from outside, or this computer on your tailnet (Tailscale).",
+    actions: S.app.route === "local" && S.app.outside ? h("a", { class: "btn", "data-size": "s", href: href("settings", "access-from-outside"), "data-key": "phone-link-go" }, "Access from outside") : null });
+  return block({ title: "Open on your phone", key: "phone-link",
+    sub: L.via === "outside" ? "Point your phone's camera at the code. It opens your Hive at its internet address, where you sign in as set up under Access from outside."
+      : "Point your phone's camera at the code. This address works only on your tailnet: the phone needs the Tailscale app signed in, and to be one of the devices let in." },
+    h("div", { class: "qr-box" }, qrSvg(L.qr, "QR code"), h("p", null, h("code", { "data-key": "phone-link-url" }, L.url), " ", copyButton(L.url))));
+}
 // Add to home screen (E56c): how to put the Hive on a phone's home screen, so it opens full screen like an app. Hidden once it is running
 // that way. The Install app button shows only where the browser said it can install the page (beforeinstallprompt, core/notify.js).
 function installBlock(ctx) {
@@ -291,8 +309,8 @@ function pushBlock(ctx) {
   if (!can("config") || !P || !pushSupported()) return null;
   if (P.failed) return block({ live: true, title: "Push notifications", key: "push", sub: `Couldn't read whether push is on for this browser: ${P.failed}.`, actions: button("Try again", () => loadPush(ctx), { size: "s" }) });
   return block({ title: "Push notifications", key: "push",
-    sub: P.on ? `On for this browser: it hears from your Hive even with this page closed. The push service only ever carries one fixed line and a link, never what was said.`
-      : `Off for this browser. Turn it on to hear from your Hive with this page closed. It goes through your browser's push service (Google, Mozilla, Apple or Microsoft), which only ever carries one line and a link, never what was said.`,
+    sub: P.on ? `On for this browser: it hears from your Hive even with this page closed. An alert names the conversation and gives the first words of the reply, locked so only this browser can read them; the push service passes it on unread.`
+      : `Off for this browser. Turn it on to hear from your Hive with this page closed. An alert names the conversation and gives the first words of the reply. It goes through your browser's push service (Google, Mozilla, Apple or Microsoft), locked so only this browser can read it.`,
     actions: button(P.on ? "Turn off" : "Turn on push", () => pushDo(ctx, !P.on), { size: "s" }) }, msg("push"));
 }
 // The name saves when you leave the box; a picture saves as soon as it's picked. Every tab and page picks them up from /api/app.
@@ -524,7 +542,32 @@ const secretsSection = ctx => can("secrets") || secretsLost() ? section({ title:
 async function loadConns(ctx, fresh) {
   if (!can("modules")) return;
   try { F.conns = await jget("/api/connectors" + (fresh ? "?fresh=1" : "")); F.connsErr = null; } catch (e) { F.connsErr = e.message; }
+  try { F.mcpUrls = await jget("/api/mcp-url"); } catch (e) { F.mcpUrls = null; }
   ctx.update();
+}
+// A connector added by its address (E120a): a remote MCP server, as Claude's custom connectors. The list and mcp.json are dash.py's mcp_url_do;
+// the token goes into mcp.json for the agents and is never sent back, so a row says only that it has one.
+function mcpUrlBlock(ctx) {
+  const M = F.mcpUrls, A = F.mcpAdd ||= { name: "", url: "", token: "" };
+  if (!M) return null;
+  const run = async (body, key, done) => {
+    F.busy[key] = true; ctx.update();
+    try { F.mcpUrls = await post("/api/mcp-url", body); if (done) done(); say("mcpurl", body.do === "add" ? "Added. Agents can use it from their next run." : "Removed.", "good"); } catch (e) { say("mcpurl", e.message, "bad"); }
+    delete F.busy[key]; ctx.update();
+  };
+  const add = () => run({ do: "add", name: A.name.trim(), url: A.url.trim(), token: A.token }, "mcpurl-add", () => { F.mcpAdd = { name: "", url: "", token: "" }; });
+  return block({ title: "Add a connector by address", sub: "A remote MCP server, like a custom connector in Claude. Your agents can use its tools from their next run, so only add a server you trust." },
+    M.servers.length ? h("ul", { class: "list mcp-url-list" }, M.servers.map(x => h("li", { class: "lr mcp-url-row", "data-key": x.name },
+      h("div", { class: "lr-in" }, h("b", null, x.name), " ", h("span", { class: "meta mcp-url" }, x.url), x.token ? [" ", h("span", { class: "meta" }, "has a token")] : null),
+      button("Remove", () => confirm({ title: `Remove ${x.name}?`, body: ["Agents stop seeing its tools from their next run."], ok: "Remove", kind: "danger", onOk: () => run({ do: "remove", name: x.name }, "mcpurl-" + x.name) }), { size: "s", kind: "quiet", busy: F.busy["mcpurl-" + x.name] })))) : null,
+    M.servers.length < M.max ? h("form", { class: "mcp-url-add", onsubmit: e => { e.preventDefault(); add(); } },
+      h("div", { class: "frow" },
+        h("div", null, field("Name", input({ value: A.name, autocomplete: "off", maxlength: 40, placeholder: "tools", oninput: (e, n) => { A.name = n.value; } }))),
+        h("div", { class: "frow-grow" }, field("Address", input({ type: "url", value: A.url, autocomplete: "off", placeholder: "https://example.com/mcp", oninput: (e, n) => { A.url = n.value; } })))),
+      h("div", { class: "frow" },
+        h("div", { class: "frow-grow" }, field("Token (if the server needs one)", input({ type: "password", value: A.token, autocomplete: "off", oninput: (e, n) => { A.token = n.value; } }))),
+        button("Add", null, { type: "submit", size: "s", kind: "primary", busy: F.busy["mcpurl-add"] }))) : h("p", { class: "muted" }, `${M.max} is the most. Remove one to add another.`),
+    msg("mcpurl"));
 }
 const CONN_STATE = { on: ["working", "Running"], ready: ["queued", "Ready to turn on"], usable: ["working", "Ready to use"], nothing: ["off", "Nothing to turn on"],
   off: ["off", "Not set up"], two_way: ["off", "Needs a separate account first"], cant_load: ["failed", "Can't load"], token_missing: ["stuck", "Token missing"],
@@ -578,7 +621,8 @@ function connectorsSection(ctx) {
        C.removable ? h("div", { class: "lr-more" }, button("Remove the connectors", () => confirm({ title: "Remove every connector?", body: ["They all come off this Hive, with any that are on. You can add them back from this page."], ok: "Remove", kind: "danger", onOk: () => bundle("remove") }), { size: "s", kind: "quiet", busy: F.busy.reach })) : null];
   return section({ title: "Connectors", level: 1, note: "other apps that can reach you, or that the agent can read" },
     msg("conns"),   // above the list: after Add the line shows where the person is looking, not under 24 rows
-    C == null ? (F.connsErr ? [empty(`Couldn't read the connectors: ${F.connsErr}`, { kind: "error" }), button("Try again", () => { F.connsErr = null; ctx.update(); return loadConns(ctx, true); }, { size: "s" })] : empty("Reading…", { kind: "loading" })) : body());
+    C == null ? (F.connsErr ? [empty(`Couldn't read the connectors: ${F.connsErr}`, { kind: "error" }), button("Try again", () => { F.connsErr = null; ctx.update(); return loadConns(ctx, true); }, { size: "s" })] : empty("Reading…", { kind: "loading" })) : body(),
+    mcpUrlBlock(ctx));
 }
 
 function modulesSection(ctx) {

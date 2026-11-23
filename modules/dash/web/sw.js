@@ -43,14 +43,15 @@ async function shareIn(r) {
   } catch (err) { return Response.redirect("./#comms/~new", 303); }
   return Response.redirect(`./?shared=${id}#comms/~new`, 303);
 }
-// Web Push (module conn-webpush): one fixed line and a link, with the page closed. Nothing shows if the page is already in front.
+// Web Push (module conn-webpush): the conversation's name and the reply's first words (E123), or one fixed line, with the page closed. Each chat
+// keeps its own alert (tag), so a second chat's reply doesn't hide the first. Nothing shows if the page is already in front.
 const PUSH_LINE = "Your Hive has a message for you";
 self.addEventListener("push", e => {
   let m = {};
   try { m = e.data.json() || {}; } catch (err) { /* the fixed line will do */ }
   e.waitUntil(self.clients.matchAll({type: "window", includeUncontrolled: true}).then(list => {
     if (list.some(c => c.focused)) return;
-    return self.registration.showNotification(String(m.title || "Hive"), { body: String(m.body || PUSH_LINE), icon: "icons/icon-192.png", tag: "hive-waiting", data: { url: m.url } });
+    return self.registration.showNotification(String(m.title || "Hive"), { body: String(m.body || PUSH_LINE), icon: "icons/icon-192.png", tag: m.thread ? "hive-" + String(m.thread).slice(0, 80) : "hive-waiting", data: { url: m.url } });
   }));
 });
 // Only ever this site: a click can't be sent anywhere else, whatever a message says.
@@ -61,7 +62,9 @@ const clickTarget = n => {
 self.addEventListener("notificationclick", e => {
   e.notification.close();
   e.waitUntil(self.clients.matchAll({type: "window", includeUncontrolled: true}).then(list => {
-    const w = list.find(c => "focus" in c);
-    return w ? w.focus() : self.clients.openWindow(clickTarget(e.notification));
+    const w = list.find(c => "focus" in c), to = clickTarget(e.notification);
+    if (!w) return self.clients.openWindow(to);
+    // An open window is brought forward first (focus needs the click), then taken to the alert's chat; a window this worker doesn't control stays where it is.
+    return w.focus().then(c => new URL(to).hash && c && c.url !== to ? c.navigate(to).catch(() => c) : c);
   }));
 });

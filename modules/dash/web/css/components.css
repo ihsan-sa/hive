@@ -3939,3 +3939,7 @@ a.ref[data-kind=doc][data-pv-on]{background:color-mix(in oklab,var(--accent) 16%
 .pv-ed[data-wide] .pv-ed-pv{display:block;flex:1;min-width:0;overflow:auto;border-left:1px solid var(--line)}
 .pv-ed[data-wide] .pv-ed-in{flex:0 0 44%}
 .pv-dlslot{display:contents}
+/* E122 Open on your phone: the QR stays black on white in any theme, with its own quiet zone, so a camera reads it */
+.qr-box{display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin-top:8px}
+.qr-box svg.qr{width:200px;height:200px;max-width:100%;border-radius:var(--r-s);background:#fff}
+.qr-box code{overflow-wrap:anywhere}

@@ -333,8 +333,9 @@ FULL_FIT = 0.25  # the share of the query's words a result needs before its engi
 SECS, _SECS_LOCK = {}, __import__("threading").Lock()   # seconds each source spent answering, cache hits aside: a hunt logs it, to say which engine its searches wait on
 
 
-def search(q, sources, n=10, case=None):
-    """Run the sources side by side. (merged, {source: error}). A source that errors stays out of the merge and stays in the report, and isn't cached, so a rerun asks it again."""
+def search(q, sources, n=10, case=None, grace=None, late=None):
+    """Run the sources side by side. (merged, {source: error}). A source that errors stays out of the merge and stays in the report, and isn't cached, so a rerun asks it again.
+    With `grace` (seconds), once one source has answered with hits the search waits at most that long for the rest, then returns what it has: the late ones finish on their own and save their answer to the case, so a rerun has it, but this search doesn't wait (fnwords67: 33 of 292 searches waited over 6 s, up to 48 s, and took 371 of the 923 engine-seconds). Their names go in `late` (a list) if one is given; they are neither answers nor errors."""
     errors, lists = {}, []
     def one(s):
         cached = case.cached_search(q, s) if case else None
@@ -351,8 +352,22 @@ def search(q, sources, n=10, case=None):
             return s, [], f"{type(e).__name__}: {e}"[:200]
         finally:
             with _SECS_LOCK: SECS[s] = SECS.get(s, 0.0) + time.monotonic() - t0
-    with cf.ThreadPoolExecutor(max_workers=max(1, len(sources))) as ex:
-        for s, hits, err in ex.map(one, sources):
-            lists.append(hits)
-            if err: errors[s] = err
+    ex = cf.ThreadPoolExecutor(max_workers=max(1, len(sources)))
+    try:
+        pending = {ex.submit(one, s): s for s in sources}
+        until, got = None, {}
+        while pending:
+            left = None if until is None else until - time.monotonic()
+            if left is not None and left <= 0: break
+            done, _ = cf.wait(pending, timeout=left, return_when=cf.FIRST_COMPLETED)
+            for f in done:
+                del pending[f]
+                s, hits, err = f.result()
+                got[s] = hits
+                if err: errors[s] = err
+                if hits and grace is not None and until is None: until = time.monotonic() + grace
+        lists = [got[s] for s in sources if s in got]   # in the sources' order, as before, so merge breaks ties the same way
+        if late is not None: late.extend(pending.values())
+    finally:
+        ex.shutdown(wait=False)
     return merge(lists, n=max(n * len(sources), n), q=q), errors
