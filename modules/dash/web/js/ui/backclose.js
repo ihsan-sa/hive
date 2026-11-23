@@ -8,6 +8,18 @@ const OPEN = "[aria-haspopup]:not([aria-haspopup=false])[aria-expanded=true], di
 const isOpen = () => [...document.querySelectorAll(OPEN)].some(e => e.getClientRects().length);
 const MARK = "h2back";
 let pushed = false, queued = false, closing = false;
+// taking: the Back that takes the extra entry off is on its way (history.back() lands later). A page change before it lands (a link, or a test's
+// next address, under load) would be undone by it: over keeps that address, and the Back's landing goes there again (drive_subagents, 2026-11-22).
+let taking = null;
+// Called on each popstate and hashchange while the Back is on its way. Another address is the page moving on (it comes as a popstate or a
+// hashchange, in either order); the address the Back left from is the Back landing, which then goes on to where the page moved, if it did.
+function landed() {
+  if (Date.now() - taking.t > 10e3) { taking = null; return false; }   // a Back the browser dropped must not catch a later one of the person's
+  if (location.href !== taking.from) { taking.over = location.href; return false; }
+  const over = taking.over; taking = null;
+  if (over) { location.replace(over); return true; }
+  return false;
+}
 
 // The way a person closes it, in order: a window's own close, Escape, a press outside, the menu's button again. Views redraw on a later
 // frame, so each way gets a moment to work before the next is tried (clicking the button of a menu already closing would open it again).
@@ -28,16 +40,17 @@ function check() {
   queued = false;
   const open = isOpen();
   if (open && !pushed && !closing) { history.pushState({ [MARK]: 1 }, "", location.href); pushed = true; }
-  else if (!open && pushed) { pushed = false; if (history.state && history.state[MARK]) history.back(); }
+  else if (!open && pushed) { pushed = false; if (history.state && history.state[MARK]) { taking = { from: location.href, over: null, t: Date.now() }; history.back(); } }
 }
 
 export function backCloses() {
   new MutationObserver(() => { if (!queued) { queued = true; requestAnimationFrame(check); } })
     .observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-expanded", "open", "class"] });
   addEventListener("popstate", e => {
+    if (taking && landed()) return;
     if (pushed && !(e.state && e.state[MARK])) { pushed = false; if (isOpen()) shut(); return; }
     // Landed on an extra entry whose menu went away with a page change: nothing to close here, so this Back goes on to the page before.
     if (e.state && e.state[MARK] && !isOpen()) history.back();
   });
-  addEventListener("hashchange", () => { if (pushed && isOpen()) { pushed = false; shut(); } });
+  addEventListener("hashchange", () => { if (taking && landed()) return; if (pushed && isOpen()) { pushed = false; shut(); } });
 }

@@ -115,7 +115,7 @@ export function markup(it, thread, { root, body, key, where }) {
       setBox(false);
       if (pend) pend.el.remove();
       pend = { el, p: +sh.dataset.p || 1, r: r.map(v => Math.round(v * 10000) / 10000), q: under(sh, R) };
-      q.textContent = pend.q ? "Box on page " + pend.p + ": “" + clip(pend.q, 160) + "”" : tr("Box on page " + pend.p);
+      q.textContent = tr("Box on page " + pend.p + (pend.q ? ": “" + clip(pend.q, 160) + "”" : ""));   // whole line through tr(): a pattern in lang-es-16 keeps the quoted text as written
       box.value = ""; card.hidden = false;
       const er = el.getBoundingClientRect(), RR = root.getBoundingClientRect();
       card.style.left = Math.max(8, Math.min(RR.width - card.offsetWidth - 8, er.left - RR.left)) + "px";

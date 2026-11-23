@@ -424,7 +424,10 @@ class Hunt:
             try: a.format(org="x")
             except (KeyError, IndexError, ValueError) as e: raise ValueError(f"spec angles: {a!r} doesn't format: {{org}} is the only slot, and a literal brace is written twice ({e})")
         if spec.get("sources") is not None and (not isinstance(spec["sources"], list) or not all(isinstance(x, str) for x in spec["sources"])): raise ValueError("spec sources must be a list of source names")
-        self.sources = engines.expand(spec.get("sources") or ["web"])
+        named = spec.get("sources") or ["web"]
+        # bing_web drives a browser: 17.1 s a call against 1.3 to 3.4 s for the other engines, so every hunt search waited on it, and in fnwords55 the 15 of its 1154 URLs no other engine found gave no lead. A spec that names it outright still gets it.
+        self.sources = [x for x in engines.expand(named) if x != "bing_web" or "bing_web" in named]
+        self.source_tally, self.tally_lock = {}, threading.Lock()   # source: [calls failed, calls answered] this run, for dropping a dead source
         self.domains = spec.get("domains") or {}
         if not isinstance(self.domains, dict): raise ValueError("spec domains must map an organisation to a site or a list of sites")
         for o, d in self.domains.items():
@@ -652,7 +655,7 @@ class Hunt:
     def left_elsewhere(self, name, org):
         """A row that stands on a profile aggregator (secondary) can be years out of date, and its page can't say so. One search for the person with retire/steps down/named; if a result's title or snippet says they left, hold the row. Returns why, or ''."""
         self.departure_searches += 1
-        hits, _ = engines.search(f'{name} {org} retirement', self.sources, n=6, case=self.case)  # plain words: the engines ignore quotes and OR, and "named" pulls namesakes
+        hits, _ = self.search(f'{name} {org} retirement', n=6)  # plain words: the engines ignore quotes and OR, and "named" pulls namesakes
         for h in hits[:4]:
             t = f"{h['title']} . {h['snippet']}"
             if people.name_regex(name).search(fold(t)) is None: continue  # a result that doesn't print the name says nothing about this person
@@ -691,7 +694,7 @@ class Hunt:
         row["person_signal_tried"] = "yes"
         with self.save_lock: self.person_signal_searches += 1
         name = row["name"]
-        hits, _ = engines.search(f'{people.clean_name(name)} {org} {self.must[0]}', self.sources, n=8, case=self.case)  # plain words: the engines ignore quotes
+        hits, _ = self.search(f'{people.clean_name(name)} {org} {self.must[0]}', n=8)  # plain words: the engines ignore quotes
         near = people.name_regex(name)
         own = {row.get("source_url", "").rstrip("/")}
         read = 0
@@ -788,7 +791,7 @@ class Hunt:
             if (org, a) in self.tried or (org, a) in self.failed: return False
         doms = self.domains if spec else {**self.domains, org: d}
         t0 = time.monotonic()
-        try: hits, errs = engines.search(q, self.sources, n=8, case=self.case)
+        try: hits, errs = self.search(q, n=8)
         except Exception:
             with self.save_lock: self.failed.add((org, a))  # not searched again on every run
             return False
@@ -977,7 +980,7 @@ class Hunt:
         d = d if isinstance(d, str) and d else None
         q = f'site:{d} "{people.clean_name(row["name"])}"' if d else f'"{people.clean_name(row["name"])}" "{org}"'
         doms = self.domains if (self.domains.get(org) or self.domains.get(people.org_core(org))) or not d else {**self.domains, org: d}
-        try: hits, _ = engines.search(q, self.sources, n=6, case=self.case)
+        try: hits, _ = self.search(q, n=6)
         except Exception: return False
         seen = 0
         for h in hits:
@@ -1027,7 +1030,8 @@ class Hunt:
             if (org, angle) in self.tried or (org, angle) in self.failed: continue
             q = angle.format(org=org)
             t0 = time.monotonic()
-            hits, errs = engines.search(q, self.sources, n=8, case=self.case)
+            hits, errs = self.search(q, n=8)
+            t_search = time.monotonic() - t0
             for s, e in errs.items(): self.errors[f"{s}: {e[:70]}"] += 1
             if len(errs) >= len(self.sources):  # nobody answered, so this pair hasn't been tried
                 self.failed.add((org, angle))
@@ -1035,17 +1039,51 @@ class Hunt:
                 continue
             self.answered = True
             hits = sorted(hits, key=lambda h: (not people.official(org, h["url"], self.domains), -h["score"]))
-            found, read = 0, 0
+            found, read, t_read = 0, 0, 0.0
             for h in hits[:self.read]:
                 if h["relevance"] < 0.2: continue
+                t1 = time.monotonic()
                 p = fetcher.fetch(h["url"], self.case)
+                t_read += time.monotonic() - t1
                 read += 1
                 found += self.weigh(org, p, angle)
                 if not self.wants_more(org): break
             self.tried.add((org, angle))
-            self.log_rows.append({"org": org, "angle": angle, "hits": len(hits), "read": read, "found": found, "secs": round(time.monotonic() - t0, 2), "at": now()})
+            self.log_rows.append({"org": org, "angle": angle, "hits": len(hits), "read": read, "found": found, **self.split_secs(t0, t_search, t_read), "at": now()})
             self._save()
         self.site_angle(org)
+
+    DEAD_AFTER = 20   # failed calls, with none answered, before a source is dropped for the rest of the run
+
+    def search(self, q, n, twice=False):
+        """engines.search over this hunt's sources (with twice, ddg is asked twice and its answers unioned: see engines.ddg_twice), dropping for the rest of the run a source that has failed its first DEAD_AFTER calls while another answered: bing_news failed 237 of 242 calls in fnwords55, 3.4 s each, inside every search's wait. A source never drops while nobody answers (the network is down, not the source), nor if it is the last."""
+        srcs = list(self.sources)
+        asked = ["ddg_twice" if twice and x == "ddg" else x for x in srcs]
+        hits, errs = engines.search(q, asked, n=n, case=self.case)
+        errs = {("ddg" if k == "ddg_twice" else k): v for k, v in errs.items()}   # tallied, dropped and reported as the ddg it is
+        with self.tally_lock:
+            for x in srcs: self.source_tally.setdefault(x, [0, 0])[0 if x in errs else 1] += 1
+            answered = any(t[1] for t in self.source_tally.values())
+            dead = [x for x in self.sources if answered and self.source_tally.get(x, [0, 0])[1] == 0 and self.source_tally.get(x, [0, 0])[0] >= self.DEAD_AFTER]
+            if dead:   # never all of them: a dead one needs another that answered, and that one has an answer
+                self.sources = [x for x in self.sources if x not in dead]
+                self.log(f"sources: dropped {', '.join(dead)} for the rest of this run: failed its first {self.DEAD_AFTER} calls while the others answered ({errs.get(dead[0], '')[:80]})")
+                errs = {k: v for k, v in errs.items() if k not in dead}   # callers weigh len(errs) against len(self.sources), which no longer counts it
+        return hits, errs
+
+    def time_spent(self, engine_secs0, rows0):
+        """One line on where this run's angle and site searches spent their worker time, and which engines the searches waited on."""
+        rows = [r for r in self.log_rows[rows0:] if "search_secs" in r]
+        tot = {k: sum(r[k] for r in rows) for k in ("secs", "search_secs", "read_secs", "weigh_secs")}
+        eng = sorted(((s, t - engine_secs0.get(s, 0.0)) for s, t in engines.SECS.items()), key=lambda x: -x[1])
+        return (f"time: {len(rows)} searches took {tot['secs']:.0f} worker-seconds: waiting on the engines {tot['search_secs']:.0f}, fetching pages {tot['read_secs']:.0f}, "
+                f"weighing them (with the searches that starts) {tot['weigh_secs']:.0f}; engines, all searches: " + ", ".join(f"{s} {t:.0f}s" for s, t in eng if t >= 0.5))
+
+    @staticmethod
+    def split_secs(t0, t_search, t_read):
+        """Where a search angle's time went: the engines' answer, the page fetches, and the rest (weigh: reading people, rechecks and the follow-up searches it starts). One `secs` hid which to cut (fnwords54: angle 2 took 46 s an organisation)."""
+        total = time.monotonic() - t0
+        return {"secs": round(total, 2), "search_secs": round(t_search, 2), "read_secs": round(t_read, 2), "weigh_secs": round(max(0.0, total - t_search - t_read), 2)}
 
     def site_query(self, org):
         """The one search on an organisation's known site, or None when its site isn't known."""
@@ -1064,26 +1102,31 @@ class Hunt:
         a = self.site_query(org)
         if not a or not self.wants_more(org) or time.monotonic() > self.deadline or not self.site_due(org): return
         q = a[len("(site) "):]
-        hits, errs = engines.search(q, self.sources, n=8, case=self.case)
+        t0 = time.monotonic()
+        hits, errs = self.search(q, n=8, twice=True)   # site searches live on ddg, which answers differently each call (fnwords56)
+        t_search = time.monotonic() - t0
         for s, e in errs.items(): self.errors[f"{s}: {e[:70]}"] += 1
         if len(errs) >= len(self.sources):  # nobody answered: retried on the next run, not looped on in this one
             self.failed.add((org, a))
             self._save()
             return
         self.answered = True
-        found = 0
+        found, t_read = 0, 0.0
         for h in hits[:self.read]:
             if h["relevance"] < 0.2: continue
-            found += self.weigh(org, fetcher.fetch(h["url"], self.case), "(site) " + q)
+            t1 = time.monotonic()
+            p = fetcher.fetch(h["url"], self.case)
+            t_read += time.monotonic() - t1
+            found += self.weigh(org, p, "(site) " + q)
             if not self.wants_more(org): break  # GMU's site search printed assistant director Lindsey, then Bradshaw's staff page, and director Meares fourth (fnwords45)
         self.tried.add((org, "(site) " + q))
-        self.log_rows.append({"org": org, "angle": "(site) " + q, "hits": len(hits), "read": self.read, "found": found, "at": now()})
+        self.log_rows.append({"org": org, "angle": "(site) " + q, "hits": len(hits), "read": self.read, "found": found, **self.split_secs(t0, t_search, t_read), "at": now()})
         self._save()
 
     def discover(self, q):
         """New organisations from a discovery search: names in result titles and snippets."""
         if ("(discover)", q) in self.tried: return 0
-        hits, errs = engines.search(q, self.sources, n=15, case=self.case)
+        hits, errs = self.search(q, n=15)
         for s, e in errs.items(): self.errors[f"{s}: {e[:70]}"] += 1
         if len(errs) >= len(self.sources):
             self.failed.add(("(discover)", q))
@@ -1113,15 +1156,17 @@ class Hunt:
         if self.stored_readmits(): self._save()
         self.stored_departures()
         self.stored_person_signals()
+        engine_secs0, rows0 = dict(engines.SECS), len(self.log_rows)
         upto = 1  # breadth first: every org's first angle and site search, then discovery, then the later angles. Depth first, a fresh case of 91 orgs spent its whole 1200 s pass on three angles each and never reached discovery, while the site searches found 12 of the 17 verified rows and the angles after the first found 3 of 324 searches (fnwords51)
         while len(self.leads) < self.target and time.monotonic() < self.deadline:
             todo = [o for o in self.orgs if self.wants_more(o) and self.has_work(o, upto)]  # an org whose angles all ran on an earlier run still gets its site search
             if todo:
                 with cf.ThreadPoolExecutor(max_workers=workers) as ex:
-                    list(ex.map(lambda o: self.try_org(o, upto), todo[:workers]))
+                    list(ex.map(lambda o: self.try_org(o, upto), todo))  # the whole round, so a free worker takes the next org: in batches of `workers`, each batch waited on its slowest org, and fnwords52 kept its 8 workers busy less than half its pass
             elif discover: self.discover(discover.pop(0))  # its new orgs get their first round before anyone's later angles
             elif upto < len(self.angles): upto += 1
             else: break
+        self.log(self.time_spent(engine_secs0, rows0))
         self.finish_menu_rows()
         if len(self.leads) >= self.target: self.stop_reason = f"reached the target of {self.target}"
         elif time.monotonic() >= self.deadline: self.stop_reason = "ran out of time: run it again on this case to carry on"
