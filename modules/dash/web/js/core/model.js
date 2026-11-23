@@ -23,9 +23,25 @@ function sessionsIn(th) {
   if (BY_TH.n !== S.sessions.length) { const m = new Map(); for (const s of S.sessions) { let l = m.get(s.thread); if (!l) m.set(s.thread, l = []); l.push(s); } BY_TH = { n: S.sessions.length, m }; }
   return BY_TH.m.get(th) || [];
 }
+// Who the live poll puts in each thread, as one string per thread, worked out once per poll: S.live is a new object every 1.5 s, and keying the cast on it
+// rebuilt every cast on every poll (the home view drew in 300-600 ms, and typing waited on it). A poll that moves nobody keeps every cast.
+const LIVE_IN = new WeakMap(), NO_LIVE = new Map();
+function liveIn(th) {
+  const L = S.live; if (!L) return "";
+  let m = LIVE_IN.get(L);
+  if (!m) {
+    const by = new Map(), add = (t, n) => { if (!t || !n) return; let l = by.get(t); if (!l) by.set(t, l = []); l.push(n); };
+    for (const a of L.agents || []) add(a.thread, a.name);
+    for (const p of L.pending || []) for (const t of p.threads || []) add(t, p.name);
+    m = new Map(); for (const [t, l] of by) m.set(t, l.sort().join(","));
+    LIVE_IN.set(L, m);
+  }
+  return m.get(th) || "";
+}
 function cast(th) {
   const d = S.threads.get(th), n = d ? d.posts.length : 0, c = CAST.get(th);
-  if (c && c.n === n && c.s === S.sessions.length && c.live === S.live) return c.names;
+  const lv = liveIn(th);
+  if (c && c.n === n && c.s === S.sessions.length && c.lv === lv) return c.names;
   // An heir (a fresh agent the starter hands the chat to after its agent said Done) carries on the same conversation: it is the same agent to the person (E12b),
   // so it takes the name of the one it took over from, and the cast counts the chain once.
   const heirOf = new Map(); for (const s of sessionsIn(th)) if (s.heirOf && s.heirOf !== s.name) heirOf.set(s.name, s.heirOf);
@@ -42,7 +58,7 @@ function cast(th) {
   };
   order.forEach((a, i) => names.set(a, order.length === 1 ? "the agent" : i < 26 ? "Agent " + String.fromCharCode(65 + i) : late(a, i)));
   for (const a of heirOf.keys()) if (names.has(root(a))) names.set(a, names.get(root(a)));
-  CAST.set(th, { n, s: S.sessions.length, live: S.live, names });
+  CAST.set(th, { n, s: S.sessions.length, lv, names });
   return names;
 }
 /** True while drawing inside one conversation (inConversation): the app look's hovers there name no code either (E10). */
@@ -96,9 +112,19 @@ function threadBase(th) {
   return w + (/[^suiSUI]s$/.test(w) ? "' agent" : "'s agent");   // "RSI lab rules' agent", not "rules's"; "Hive status's agent" keeps its s   // "Do modules update?" is "Do modules update's agent", never "?'s agent"
 }
 /** What an agent was first asked in this conversation, in a few words ("Agent on mesh page: the zoom"): the post that woke it, without its mentions, codes or "Brief:" lead. */
+// Who woke each agent (the authors of the posts that started its sessions), by agent, rebuilt when sessions or posts grow: askedName scanned every session per name.
+let WOKEN = { n: -1, m: new Map() };
+function wokenBy(a) {
+  if (WOKEN.n !== S.sessions.length || WOKEN.ids !== S.posts.length) {
+    const m = new Map(); for (const x of S.sessions) { const q = x.post && S.byId[x.post]; if (!q || !q.from) continue; let l = m.get(x.name); if (!l) m.set(x.name, l = new Set()); l.add(q.from); }
+    WOKEN = { n: S.sessions.length, ids: S.posts.length, m };
+  }
+  return WOKEN.m.get(a) || NO_SET;
+}
+const NO_SET = new Set();
 function askedName(n, th) {
-  const s = S.sessions.find(x => x.name === n && x.thread === th && x.post), p = s && S.byId[s.post];
-  if (!p || !p.text || S.sessions.some(x => x.name === p.from && x.post && (S.byId[x.post] || {}).from === n)) return "";   // a reply to its own brief asked it nothing
+  const s = sessionsIn(th).find(x => x.name === n && x.post), p = s && S.byId[s.post];
+  if (!p || !p.text || wokenBy(p.from).has(n)) return "";   // a reply to its own brief asked it nothing
   let t = String(p.text).split(/\n/).find(l => l.trim() && !/^\s*(?:@\S+\s*)+$/.test(l)) || "";
   t = t.replace(/@\S+/g, " ").replace(/\([^)]*\)/g, " ").replace(/\b[a-z](?=[0-9a-f]{0,3}\d)[0-9a-f]{4}\b|\bk\d{3,}\b/g, " ")
     .replace(/^\s*(?:keeper\s+)?(?:brief|round)\b[^:]{0,70}:\s*/i, "").replace(/^\s*feedback on the app,\s*from the\s*/i, "")

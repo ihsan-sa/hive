@@ -87,7 +87,19 @@ function crashPage(v, e) {
     h("p", null, "The rest of the app still works. Reloading usually clears it."),
     h("div", { class: "row" }, button("Reload", () => location.reload()), button("Copy details", (ev, b) => { copyText(detail).then(() => { b.textContent = tr("Copied"); }, () => { b.textContent = tr("Couldn't copy"); }); }, { kind: "quiet" })));
 }
-function schedule(force) { if (raf) { raf.force ||= force; return; } raf = { force }; queueMicrotask(() => { const f = raf.force; raf = 0; render(f); }); }
+// While the person types, a redraw from a poll waits until they pause (TYPE_HOLD), at most TYPE_MAX: a keystroke that landed inside a whole-page
+// redraw waited for it, and typing in a prompt box lagged (the person, 11231146bc6e). Their own actions (ctx.update) still draw at once.
+const TYPE_HOLD = 600, TYPE_MAX = 3000;
+let typedAt = 0, heldSince = 0, heldT = 0;
+addEventListener("keydown", e => { if (e.target && e.target.closest && e.target.closest("textarea, input, [contenteditable]")) typedAt = performance.now(); }, { capture: true, passive: true });
+function schedule(force) {
+  if (!force) {
+    const t = performance.now(), wait = typedAt + TYPE_HOLD - t;
+    if (wait > 0 && (!heldSince || t - heldSince < TYPE_MAX)) { heldSince ||= t; if (!heldT) heldT = setTimeout(() => { heldT = 0; schedule(false); }, wait); return; }
+  }
+  heldSince = 0;
+  if (raf) { raf.force ||= force; return; } raf = { force }; queueMicrotask(() => { const f = raf.force; raf = 0; render(f); });
+}
 
 function route() {
   if (parse().id === "plans") { location.replace("#knowledge/projects"); return; }   // the old Plans page lives in Knowledge now

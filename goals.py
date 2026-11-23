@@ -107,6 +107,25 @@ def jsonl(path):
 def asks_module():
     spec = importlib.util.spec_from_file_location("asks", CORE / "asks.py"); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); return m
 
+def recent_round(thread, secs=300, board=None):
+    """The id of a `Keeper round on` brief posted in `thread` within `secs`, else None. Read from the board's tail just before a
+    round is posted: the starter's floor and a keeper's `hive goals --post` each read the board, then post, and twice-started rounds
+    followed (hive-stars 2026-11-23 14:37:34 and :36, ae0ba and a8958 on one brief)."""
+    path = Path(board or BOARD); cut = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=secs)
+    try:
+        with path.open("rb") as f:
+            f.seek(0, 2); n = f.tell(); f.seek(max(0, n - 400_000)); tail = f.read().decode("utf-8", "replace").splitlines()[1 if n > 400_000 else 0:]
+    except OSError: return None
+    for line in reversed(tail):
+        try: p = json.loads(line)
+        except ValueError: continue
+        try: at = dt.datetime.fromisoformat(p.get("at", ""))
+        except ValueError: continue
+        if at.tzinfo is None: at = at.replace(tzinfo=dt.timezone.utc)
+        if at < cut: break
+        if p.get("thread") == thread and re.match(r"@\S+ Keeper round on ", p.get("text") or ""): return p.get("id")
+    return None
+
 def live_runs():
     out = []
     for p in RUN.glob("*.json"):
@@ -707,6 +726,8 @@ def main():
             sys.exit(f"{th}: its work tier is {why} (`hive tier why {th}`), so the starter would hold the brief. No round posted; --force posts one anyway.")
         if not a.force and (why := person_held_of([th]).get(th)):
             sys.exit(f"{th}: {why}. No round posted; --force posts one anyway (only once the person has said to go on).")
+        if not a.force and (dup := recent_round(th)):
+            sys.exit(f"{th}: a round was posted there under 5 min ago ({dup}), so a second would start a second agent on the same brief. No round posted; --force posts one anyway.")
         model, _ = no_rung_model(r, b, a.model)
         cmd = ["hive", "post", "--thread", th] + post_model_args(b, model)
         sys.exit(subprocess.run(cmd, input=b, text=True).returncode)

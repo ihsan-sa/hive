@@ -84,7 +84,9 @@ export function waitingOn() { return all().filter(w => !laterOf(w)); }
  *  The key is the item's: its post for a question, its words for a summary bullet (the bullets are renumbered when a summary is rewritten).
  *  A newer item on the same key (a new question in the thread) is not put off: it shows again. */
 export const laterKey = w => (w.src === "summary" ? `sum:${w.focus}:${String(w.text || "").replace(/\s+/g, " ").slice(0, 120)}` : w.key || (w.post ? "p:" + w.post : w.src + ":" + w.th));
-const laterMap = () => { const m = new Map(); for (const e of (S.foci && S.foci.later) || []) if (e && e.key && !m.has(e.key)) m.set(e.key, e); return m; };
+// Built once per foci read: laterOf runs for every waiting item on every draw, and rebuilt the map each time.
+let LATER = { of: undefined, l: undefined, m: new Map() };
+const laterMap = () => { const l = S.foci && S.foci.later; if (LATER.of === S.foci && LATER.l === l) return LATER.m; const m = new Map(); for (const e of l || []) if (e && e.key && !m.has(e.key)) m.set(e.key, e); LATER = { of: S.foci, l, m }; return m; };
 /** The later entry that holds this item off, or null. */
 export function laterOf(w) {
   const e = laterMap().get(laterKey(w));
