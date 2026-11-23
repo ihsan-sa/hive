@@ -519,12 +519,14 @@ class Hunt:
         return why
 
     FULL_NOTE = "the organisation is full"
+    LEAKED_FAR = "the signal isn't near this person"
     SPEC_FILTERS = ("the title does not name the role focus", "no function word in the title", "the role doesn't fit the spec", "the signal rests on a ", "the spec's must words aren't on its page", "the signal is the organisation's, not this person's")
     READ_AGAIN = ("the page puts them at ", "the page is from ", "a search result says they left")  # the module's own reading of the page: a fix to it (a greeting read as an employer, fnwords41; a 2018 CMS date on a staff page whose text names Fall 2026, fnwords44; a namesake's retirement, fnwords44) must reach the stored rows too
 
     def stored_readmits(self):
         """A near miss held back only by a spec filter (role focus, function words, roles, signal kinds, must words, org signal), or by the module's reading of who employs them, is judged again on its stored page, as a live run judges it, and comes back when the spec as it now stands passes it and its organisation has room. One the spec passes at a full organisation gets the note 'not listed: the organisation is full' in place of the older spec's reason, and comes back on a later run once a slot frees. Without this a wider spec on a stored case brings nobody back (fnwords35/36). Returns how many came back."""
-        cand = [(k, r) for k, r in self.near.items() if str(r.get("note", "")).startswith("not listed: ") and str(r["note"])[12:].startswith(self.SPEC_FILTERS + self.READ_AGAIN + (self.FULL_NOTE,))]
+        cand = [(k, r) for k, r in self.near.items() if str(r.get("note", "")).startswith("not listed: ") and (str(r["note"])[12:].startswith(self.SPEC_FILTERS + self.READ_AGAIN + (self.FULL_NOTE,))
+                or (str(r["note"])[12:].startswith(self.LEAKED_FAR) and str(r.get("signal") or "").startswith("(the organisation's, from ")))]  # held as far while it carried the org's signal: only the staff_sig leak in weigh made that pair (fnwords59), and the org's signal is never "near"
         back, full, self.dir_entry = 0, 0, False
         for k, r in sorted(cand, key=lambda kr: self.role_rank(kr[1].get("title", ""))):
             org = r["organisation"]
@@ -918,11 +920,12 @@ class Hunt:
             row = dict(name=per["name"], title=per["title"], organisation=org, official_site="yes" if res["official"] else "no", signal=sig, signal_near_person="yes" if close else "no", source_url=page.get("final_url") or page["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status=res["status"], check_quote=res["quote"], angle=angle, note=res["note"])
             self.dir_entry = per.get("how") == "directory"
             far = bool(hit_terms and not close)
-            if far and res["official"] and not staff_sig and org in self.org_signal and self.function_fit(row["title"], row.get("check_quote") or ""):
-                staff_sig, far = self.org_signal[org], False  # an official page with a careers head on it, and the org has a signal page of its own: the signal is the org's, as with a (site) head
+            org_sig = staff_sig  # per person: the first head on a page who took the org's signal left staff_sig set, and everyone below them was held as "the signal isn't near this person" (HCCC's directory: Belle listed, 8 held; fnwords59)
+            if far and res["official"] and not org_sig and org in self.org_signal and self.function_fit(row["title"], row.get("check_quote") or ""):
+                org_sig, far = self.org_signal[org], False  # an official page with a careers head on it, and the org has a signal page of its own: the signal is the org's, as with a (site) head
             why = self.held_back(res, row, org, far, text, page.get("links"))
-            if staff_sig:
-                row.update(signal=f"(the organisation's, from {staff_sig[0]}) {staff_sig[1]}", signal_near_person="no")
+            if org_sig:
+                row.update(signal=f"(the organisation's, from {org_sig[0]}) {org_sig[1]}", signal_near_person="no")
                 row["note"] = "; ".join(x for x in ("the signal is the organisation's, from another of its pages, not this person's", row.get("note")) if x)
                 if not why and not self.s.get("allow_org_signal"): why = "the signal is the organisation's, not this person's (set allow_org_signal to list such rows)"
             if why.startswith("the page is from ") and row["check_status"] != "verified" and row.get("signal_near_person") == "yes" and self.s.get("official_recheck") is not False and len(self.leads) < self.target and self.room_for(org, row["title"]) and self.official_recheck(row, org):
