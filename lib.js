@@ -183,11 +183,12 @@ function downloadPath(dir, name, exists) {
 }
 
 // The site says which app is current in /app-version.json ({"version": "1.2.3"}). Returns that version when it is newer than
-// this app's, else null (a missing, odd or older file says nothing). Only plain x.y.z numbers count.
+// this app's, else null (a missing, odd or older file says nothing). Only plain x.y.z numbers count on the site's side.
+// The site must serve the file itself with a 200: a redirect reads as no file.
 function newerApp(mine, text) {
   let v; try { v = JSON.parse(String(text)).version; } catch { return null; }
   const num = x => /^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(String(x)) ? String(x).split('.').map(Number) : null;
-  const a = num(mine), b = num(v);
+  const a = num(String(mine).replace(/-.*$/, '')), b = num(v);   // a test build (1.2.0-beta.1) compares as 1.2.0
   if (!a || !b) return null;
   for (let i = 0; i < 3; i++) if (b[i] !== a[i]) return b[i] > a[i] ? v : null;
   return null;

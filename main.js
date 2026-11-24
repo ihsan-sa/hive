@@ -7,7 +7,7 @@ const path = require('path');
 const fs = require('fs');
 const lib = require('./lib');
 
-let win = null, hiveUrl = null, child = null, kept = false, fails = 0, newer = null;
+let win = null, hiveUrl = null, child = null, kept = false, fails = 0, newer = null, shown = null;   // shown: the update notification, kept so its click still arrives
 const logFile = () => path.join(app.getPath('userData'), 'app.log');
 const log = t => lib.appendLog(logFile(), t);
 const setupFile = path.join(__dirname, 'setup.html');
@@ -79,29 +79,30 @@ async function showSetup(state, note) {
 // Once a launch, ask the site (and only the site) which app is current. A newer one is said on the setup screen and, once per
 // version, in a system notification that opens the download page. Nothing installs itself.
 function checkNewer() {
-  const u = lib.SITE + '/app-version.json';
-  const get = u.startsWith('https:') ? require('https').get : require('http').get;
-  const q = get(u, { timeout: 5000 }, r => {
-    let b = ''; r.setEncoding('utf8');
-    r.on('data', d => { b += d; if (b.length > 4000) q.destroy(); });
-    r.on('end', () => {
-      const v = r.statusCode === 200 ? lib.newerApp(app.getVersion(), b) : null;
+  // Chromium's own fetch: it goes through the system's proxy and certificates as the browser does. No redirects, 10 s in all, 4 KB.
+  const { net } = require('electron');
+  net.fetch(lib.SITE + '/app-version.json', { redirect: 'error', signal: AbortSignal.timeout(10000), cache: 'no-store' })
+    .then(r => r.status === 200 && Number(r.headers.get('content-length') || 0) <= 4000 ? r.text() : '')
+    .then(b => {
+      const v = b.length <= 4000 ? lib.newerApp(app.getVersion(), b) : null;
       if (!v) return;
       newer = v; log('update notice ' + v);
       send('newer', v);
       const seenFile = path.join(app.getPath('userData'), 'newer-seen.txt');
       let seen = ''; try { seen = fs.readFileSync(seenFile, 'utf8').trim(); } catch { }
       if (seen === v) return;
-      try { fs.writeFileSync(seenFile, v); } catch { }
+      // Marked seen only once the notification has really shown, so a launch where it couldn't show tries again next time.
+      const mark = () => { try { fs.writeFileSync(seenFile, v); } catch { } };
       const { Notification } = require('electron');
-      if (process.env.HIVE_APP_TEST !== '1' && Notification.isSupported()) {
-        const n = new Notification({ title: 'A newer Hive app is available', body: `Version ${v}. Click to open the download page.` });
-        n.on('click', () => external(lib.downloadPage())); n.show();
-      }
-    });
-    r.on('error', () => { });
-  });
-  q.on('error', () => { }); q.on('timeout', () => q.destroy());
+      if (process.env.HIVE_APP_TEST === '1') { mark(); return; }
+      if (!Notification.isSupported()) return;
+      shown = new Notification({ title: 'A newer Hive app is available', body: `Version ${v}. Click to open the download page.` });
+      shown.on('show', mark);
+      shown.on('click', () => { external(lib.downloadPage()); shown = null; });
+      shown.on('close', () => { shown = null; });
+      shown.show();
+    })
+    .catch(() => { });
 }
 
 // Finds the Hive and shows it; the setup screen if there's none or it won't start.
@@ -252,8 +253,12 @@ ipcMain.on('retry', e => { if (fromSetup(e)) open(); });
 ipcMain.on('copy', (e, text) => { if (fromSetup(e)) clipboard.writeText(lib.redact(text).slice(0, 200000) + '\n\nApp log (latest):\n' + lib.tailLog(logFile())); });
 ipcMain.on('version', e => { e.returnValue = fromSetup(e) ? app.getVersion() : ''; });
 ipcMain.on('download', e => { if (fromSetup(e)) external(lib.downloadPage()); });
+// The setup screen asks once its listener is up, so a notice that arrived while the page was loading isn't lost.
+ipcMain.on('newer?', e => { if (fromSetup(e) && newer) e.sender.send('newer', newer); });
 ipcMain.on('quit', e => { if (fromSetup(e)) app.quit(); });
 
+// Windows ties notifications (and their clicks) to the Start menu shortcut by this ID; it must match the installer's appId.
+if (process.platform === 'win32') app.setAppUserModelId('cc.ihsan.hive');
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });

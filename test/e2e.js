@@ -43,6 +43,7 @@ Write-Host "The Hive is installed. Open this address: http://localhost:${port}/l
 };
 const server = http.createServer((req, res) => {
   if (req.url === '/install.ps1') {
+    ps1Asked++;
     res.setHeader('content-type', 'text/plain; charset=utf-8');
     return res.end(failInstall ? "Write-Host 'Downloading the Hive'\nWrite-Host 'could not reach github.com (stub failure)'\nreturn\n" : ps1());
   }
@@ -79,6 +80,9 @@ echo "The Hive is installed. Open this address: http://localhost:${port}/login#S
     if (impostor) { res.statusCode = impostor === 'old' ? 404 : 200; return res.end(impostor === 'old' ? 'no' : 'f'.repeat(64)); }
     res.end(require('crypto').createHmac('sha256', 'SECRETKEY').update(`proof:${port}:${req.url.split('n=')[1]}`).digest('hex'));
   } else if (req.url.startsWith('/login')) { seen.push(req.url); res.setHeader('content-type', 'text/html'); res.end('<title>Hive web app</title><h1 id="app">The web app</h1><a id="out" href="https://example.com/">out</a><a id="in" href="/thread">in</a><a id="away" href="/away">away</a><a id="dl" href="/file.txt" download>file</a>'); }
+  else if (req.url === '/app-version.json' && appVersion === 'MOVED') { siteAsked.push(req.url); res.statusCode = 302; res.setHeader('location', '/v2.json'); res.end(); }
+  else if (req.url === '/v2.json') { res.setHeader('content-type', 'application/json'); res.end('{"version":"99.0.0"}'); }
+  else if (req.url === '/app-version.json' && !appVersion) { siteAsked.push(req.url); res.statusCode = 404; res.end(); }
   else if (req.url === '/app-version.json' && appVersion) { siteAsked.push(req.url); res.setHeader('content-type', 'application/json'); res.end(appVersion); }
   else if (req.url === '/file.txt') { res.setHeader('content-type', 'text/plain'); res.setHeader('content-disposition', 'attachment; filename="notes.txt"'); res.end('hello from the hive'); }
   else if (req.url === '/away') { res.statusCode = 302; res.setHeader('location', 'https://example.com/'); res.end(); }
@@ -88,6 +92,7 @@ echo "The Hive is installed. Open this address: http://localhost:${port}/login#S
 let appVersion = '', port, impostor = '', needRestart = false, failInstall = false, slowInstall = false, siteOverride = '';
 const asked = [], seen = [], siteAsked = [];   // the proof questions, and the page loads, the stand-in server got
 
+let cur = null, ps1Asked = 0;   // the window now open, and how often the stand-in site served install.ps1 (both said on a failure)
 async function start(extra = {}) {
   const env = { ...process.env, HOME: home, HIVE_APP_TEST: '1', HIVE_APP_DOWNLOADS: path.join(home, 'Downloads'), HIVE_APP_WATCH_MS: '700', ...(needRestart ? { HIVE_STUB_RESTART: '1' } : {}), HIVE_SITE: siteOverride || `http://127.0.0.1:${port}`, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local/share'), ...extra };
   delete env.HIVE_DIR;
@@ -97,6 +102,7 @@ async function start(extra = {}) {
   }
   const app = await _electron.launch(process.env.HIVE_APP_BIN ? { executablePath: process.env.HIVE_APP_BIN, args: ['--no-sandbox'], env } : { executablePath: require('electron'), args: [root, '--no-sandbox'], env });
   const page = await app.firstWindow();
+  cur = page;
   return { app, page };
 }
 // Windows: a stand-in wsl.exe (the real one needs a distro): `bash -lc 'hive open --print'` runs the stand-in Hive's hive.cmd; keeping WSL up just sleeps.
@@ -438,11 +444,15 @@ const title = page => page.locator('#title').textContent();
   // A newer app on the site: the setup screen says so (once), with a link to the download page; nothing is fetched but the version file.
   // No file, an older version or nonsense: nothing is said.
   const appLog = () => { try { return fs.readFileSync(path.join(home, '.config', 'Hive', 'app.log'), 'utf8'); } catch { return ''; } };
-  for (const [file, want] of [['', null], ['{"version":"0.0.1"}', null], ['not json', null], ['{"version":"99.0.0"}', '99.0.0']]) {
-    wipe(); appVersion = file;
+  for (const [file, want] of [['', null], ['{"version":"0.0.1"}', null], ['not json', null], ['MOVED', null], ['{"version":"99.0.0"}', '99.0.0']]) {
+    wipe(); appVersion = file; const asked0 = siteAsked.length;
     ({ app, page } = await start());
     await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
-    await new Promise(r => setTimeout(r, 2500));   // the version question runs beside the first screen
+    // The version question runs beside the first screen: wait until the site was asked, then for the notice (or a settle without one).
+    for (let i = 0; i < 100 && !siteAsked.slice(asked0).some(a => a.includes('app-version.json')); i++) await new Promise(r => setTimeout(r, 100));
+    assert.ok(siteAsked.slice(asked0).some(a => a.includes('app-version.json')), `the site was asked for the version (${JSON.stringify(file)})`);
+    if (want) await page.waitForFunction(() => document.querySelector('#newer'), null, { timeout: 10000 });
+    else await new Promise(r => setTimeout(r, 1500));
     const line = await page.locator('#ver').textContent();
     if (want) {
       assert.ok(line.includes(`A newer Hive app (${want}) is available`), 'the notice: ' + line);
@@ -451,6 +461,7 @@ const title = page => page.locator('#title').textContent();
       await page.locator('#newer').click();   // opens the download page in the browser (not in tests); the window stays on setup
       await new Promise(r => setTimeout(r, 300));
       assert.strictEqual(await title(page), 'Set up the Hive');
+      if (process.platform === 'linux') assert.strictEqual(fs.readFileSync(path.join(home, '.config', 'Hive', 'newer-seen.txt'), 'utf8'), want, 'marked seen');
     } else assert.ok(!line.includes('newer') && !(await page.locator('#newer').count()), `no notice for ${JSON.stringify(file)}: ` + line);
     await app.close();
   }
@@ -461,4 +472,7 @@ const title = page => page.locator('#title').textContent();
   if (win) wipe();
   server.close(); fs.rmSync(home, { recursive: true, force: true });
   console.log('ok e2e');
-})().catch(e => { console.error('FAILED', e); try { if (win) wipe(); } catch { } process.exit(1); });
+})().catch(async e => { console.error('FAILED', e);
+  // What the window showed when it stopped, so a runner's failure can be read from its log and artifacts.
+  try { console.error('screen:', await cur.locator('#title').textContent({ timeout: 2000 }), '| log:', await cur.locator('#log').textContent({ timeout: 2000 }), '| install.ps1 served:', ps1Asked);
+    await cur.screenshot({ path: path.join(shots, 'e2e-failed.png') }); } catch { } try { if (win) wipe(); } catch { } process.exit(1); });

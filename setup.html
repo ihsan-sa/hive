@@ -66,6 +66,7 @@ hive.on('newer', v => {
   b.textContent = `A newer Hive app (${v}) is available`; b.onclick = () => hive.download();
   $('ver').append(' · ', b);
 });
+hive.askNewer();
 hive.on('log', t => { const l = $('log'); l.textContent += t; l.scrollTop = l.scrollHeight; });
 show('starting', {});
 </script>

@@ -14,6 +14,11 @@ t('update notice: only a newer x.y.z from the version file', () => {
   assert.strictEqual(lib.newerApp('0.1.0', '{"version":"0.1.10"}'), '0.1.10');
   assert.strictEqual(lib.newerApp('0.10.0', '{"version":"0.9.9"}'), null);
   assert.strictEqual(lib.newerApp('0.1.0', '{"version":"0.1.0"}'), null);
+  assert.strictEqual(lib.newerApp('0.2.0-beta.1', '{"version":"0.2.1"}'), '0.2.1');
+  assert.strictEqual(lib.newerApp('0.2.0-beta.1', '{"version":"0.2.0"}'), null);
+  assert.strictEqual(lib.newerApp('0.1.0', '{"version":"999999.999999.999999"}'), '999999.999999.999999');
+  assert.strictEqual(lib.newerApp('0.1.0', '{"version":"1000000.0.0"}'), null);
+  for (const mine of ['', 'x', '1.0']) assert.strictEqual(lib.newerApp(mine, '{"version":"9.9.9"}'), null, mine);
   for (const bad of ['', 'nope', '{}', '{"version":"1.0"}', '{"version":"1.0.0-beta"}', '{"version":"<b>9.9.9</b>"}', '{"version":9}']) assert.strictEqual(lib.newerApp('0.1.0', bad), null, bad);
   assert.ok(lib.downloadPage().startsWith(lib.SITE + '/'));
   console.log('ok update notice logic');

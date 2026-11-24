@@ -48,3 +48,12 @@ console.log('ok page: Windows, Mac and Linux each get their button; a phone gets
   for (const f of ['install.sh', 'install.ps1', 'install-mac.sh']) assert(html.includes('https://hivelab.ca/' + f), f + ' line');
   console.log('ok page install lines');
 }
+
+{
+  // The site's /app-version.json goes up with the downloads: it must name the version they carry (build-all.sh writes it).
+  const fs = require('fs'), path = require('path');
+  const site = JSON.parse(fs.readFileSync(path.join(__dirname, '../page/app-version.json'), 'utf8')).version;
+  const pkg = require('../package.json').version;
+  assert.strictEqual(site, pkg, `page/app-version.json says ${site}, package.json ${pkg}: run build-all.sh or fix the file`);
+  console.log('ok app-version matches');
+}
