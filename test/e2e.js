@@ -89,6 +89,8 @@ echo "The Hive is installed. Open this address: http://localhost:${port}/login#S
   else if (req.url === '/thread') { res.setHeader('content-type', 'text/html'); res.end('<h1 id="thread">A thread</h1>'); }
   else { res.statusCode = 404; res.end('no'); }
 });
+// A wait for the installer to run: a cold runner under emulation (HIVE_TEST_SLOW=1, Windows on ARM) starts PowerShell slowly, each time.
+const WAIT = process.env.HIVE_TEST_SLOW === '1' ? 90000 : 20000;
 let appVersion = '', port, impostor = '', needRestart = false, failInstall = false, slowInstall = false, siteOverride = '';
 const asked = [], seen = [], siteAsked = [];   // the proof questions, and the page loads, the stand-in server got
 
@@ -151,7 +153,7 @@ const title = page => page.locator('#title').textContent();
     await page.getByRole('button', { name: 'Accept and install' }).click();
   }
 
-  await page.waitForSelector('#app', { timeout: 20000 });
+  await page.waitForSelector('#app', { timeout: WAIT });
   assert.strictEqual(new URL(page.url()).port, String(port));
   assert.strictEqual(new URL(page.url()).hostname, '127.0.0.1', 'the window uses the one address the Hive listens on, not "localhost" (which is also ::1)');
   assert.ok(asked.length && asked.every(u => !u.includes('SECRETKEY')));
@@ -190,7 +192,7 @@ const title = page => page.locator('#title').textContent();
 
   // Second start: straight in, no setup.
   ({ app, page } = await start());
-  await page.waitForSelector('#app', { timeout: 20000 });
+  await page.waitForSelector('#app', { timeout: WAIT });
   await app.close();
 
   // A Hive that won't start: says so, hides nothing, and Try again works once it's back.
@@ -201,7 +203,7 @@ const title = page => page.locator('#title').textContent();
   await page.screenshot({ path: path.join(shots, '4-nostart.png') });
   fs.unlinkSync(path.join(home, 'broken'));
   await page.getByRole('button', { name: 'Try again' }).click();
-  await page.waitForSelector('#app', { timeout: 20000 });
+  await page.waitForSelector('#app', { timeout: WAIT });
   await app.close();
 
   // Repair on the "didn't start" screen: runs the installer again (with its accept step), which puts the install right, and the Hive opens.
@@ -210,11 +212,11 @@ const title = page => page.locator('#title').textContent();
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === "The Hive didn't start");
   await page.getByRole('button', { name: /^Repair/ }).click();
   if (!mac) {
-    await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs', null, { timeout: 20000 });
+    await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs', null, { timeout: WAIT });
     assert.ok(fs.existsSync(path.join(home, 'broken')), 'nothing changed before the yes');
     await page.getByRole('button', { name: 'Accept and install' }).click();
   }
-  await page.waitForSelector('#app', { timeout: 20000 });
+  await page.waitForSelector('#app', { timeout: WAIT });
   assert.ok(!fs.existsSync(path.join(home, 'broken')), 'the installer put it right');
   console.log('ok repair');
   await app.close();
@@ -233,33 +235,33 @@ const title = page => page.locator('#title').textContent();
     // ... and once the real Hive answers there, Try again goes in.
     impostor = '';
     await page.getByRole('button', { name: 'Try again' }).click();
-    await page.waitForSelector('#app', { timeout: 20000 });
+    await page.waitForSelector('#app', { timeout: WAIT });
     await app.close();
   }
 
   // The Hive restarts under an open window and another program takes its port: the window leaves for the setup screen.
   ({ app, page } = await start());
-  await page.waitForSelector('#app', { timeout: 20000 });
+  await page.waitForSelector('#app', { timeout: WAIT });
   impostor = 'wrong';
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === "The Hive didn't start", null, { timeout: 15000 });
   assert.ok((await page.locator('#log').textContent()).includes('stopped answering'));
   impostor = '';
   await page.getByRole('button', { name: 'Try again' }).click();
-  await page.waitForSelector('#app', { timeout: 20000 });
+  await page.waitForSelector('#app', { timeout: WAIT });
   await app.close();
 
   // The Hive stops altogether under an open window (the server really closes, so the page load itself fails: the did-fail-load path).
   // The watcher is slowed right down so it is the reload that finds out. The screen says so and offers Repair, not a blank page.
   ({ app, page } = await start({ HIVE_APP_WATCH_MS: '600000', HIVE_APP_ANSWER_MS: '3000' }));
-  await page.waitForSelector('#app', { timeout: 20000 });
+  await page.waitForSelector('#app', { timeout: WAIT });
   await new Promise(r => { server.close(r); server.closeAllConnections(); });
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload());   // a reload that fails: the did-fail-load path
-  await page.waitForFunction(() => document.querySelector('#title')?.textContent === "The Hive didn't start", null, { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === "The Hive didn't start", null, { timeout: WAIT });
   assert.ok(await page.getByRole('button', { name: /^Repair/ }).count(), 'Repair is offered');
   assert.ok(new URL(page.url()).protocol === 'file:', 'the window is on the setup screen, not a blank page');
   await new Promise(r => server.listen(port, '127.0.0.1', r));
   await page.getByRole('button', { name: 'Try again' }).click();
-  await page.waitForSelector('#app', { timeout: 20000 });
+  await page.waitForSelector('#app', { timeout: WAIT });
   console.log('ok hive down');
   console.log('ok hive stopped');
   await app.close();
@@ -268,10 +270,10 @@ const title = page => page.locator('#title').textContent();
   await new Promise(r => { server.close(r); server.closeAllConnections(); });
   ({ app, page } = await start());
   const title = () => page.evaluate(() => document.querySelector('#title')?.textContent);
-  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Opening the Hive', null, { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Opening the Hive', null, { timeout: WAIT });
   for (let i = 0; i < 10; i++) { await new Promise(r => setTimeout(r, 2000)); assert.strictEqual(await title(), 'Opening the Hive', 'still starting, not "didn\'t start"'); }
   await new Promise(r => server.listen(port, '127.0.0.1', r));
-  await page.waitForSelector('#app', { timeout: 20000 });
+  await page.waitForSelector('#app', { timeout: WAIT });
   console.log('ok slow start');
   await app.close();
 
@@ -281,9 +283,9 @@ const title = page => page.locator('#title').textContent();
   ({ app, page } = await start());
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
   await page.getByRole('button', { name: 'Install' }).click();
-  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'The install stopped', null, { timeout: 20000 }).catch(async e => {
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'The install stopped', null, { timeout: WAIT }).catch(async e => {
     // Linux asks for the accept first; the stub script ignores that, so accept if it is showing.
-    if (await page.getByRole('button', { name: 'Accept and install' }).count()) { await page.getByRole('button', { name: 'Accept and install' }).click(); await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'The install stopped', null, { timeout: 20000 }); } else throw e;
+    if (await page.getByRole('button', { name: 'Accept and install' }).count()) { await page.getByRole('button', { name: 'Accept and install' }).click(); await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'The install stopped', null, { timeout: WAIT }); } else throw e;
   });
   assert.ok((await page.locator('#log').textContent()).includes('stub failure'), 'what the installer said stays on the screen');
   assert.ok(await page.getByRole('button', { name: 'Try again' }).count() && await page.getByRole('button', { name: 'Close' }).count());
@@ -309,8 +311,8 @@ const title = page => page.locator('#title').textContent();
   assert.ok(!fs.existsSync(path.join(home, 'hive', '.hive-installed')), 'no Hive left behind');
   failInstall = false;
   await page.getByRole('button', { name: 'Try again' }).click();
-  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs', null, { timeout: 20000 }).then(() => page.getByRole('button', { name: 'Accept and install' }).click()).catch(() => {});
-  await page.waitForSelector('#app', { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs', null, { timeout: WAIT }).then(() => page.getByRole('button', { name: 'Accept and install' }).click()).catch(() => {});
+  await page.waitForSelector('#app', { timeout: WAIT });
   console.log('ok install-failed screen');
   await app.close();
 
@@ -320,7 +322,7 @@ const title = page => page.locator('#title').textContent();
   ({ app, page } = await start());
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
   await page.getByRole('button', { name: 'Install' }).click();
-  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'The install stopped', null, { timeout: 30000 });
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'The install stopped', null, { timeout: WAIT + 10000 });
   const offlineLog = await page.locator('#log').textContent();
   assert.ok(offlineLog.includes("Couldn't reach http://127.0.0.1:9"), 'the offline words are on the screen: ' + offlineLog);
   assert.ok(await page.getByRole('button', { name: 'Try again' }).count(), 'Try again is offered');
@@ -330,15 +332,15 @@ const title = page => page.locator('#title').textContent();
   ({ app, page } = await start());
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
   await page.getByRole('button', { name: 'Install' }).click();
-  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs', null, { timeout: 20000 }).then(() => page.getByRole('button', { name: 'Accept and install' }).click()).catch(() => {});
-  await page.waitForSelector('#app', { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs', null, { timeout: WAIT }).then(() => page.getByRole('button', { name: 'Accept and install' }).click()).catch(() => {});
+  await page.waitForSelector('#app', { timeout: WAIT });
   console.log('ok offline');
   await app.close();
 
   // No menu on Windows and Linux: Ctrl+plus/minus/0 zoom the Hive, and Ctrl+R reloads it.
   if (process.platform !== 'darwin') {
     ({ app, page } = await start());
-    await page.waitForSelector('#app', { timeout: 20000 });
+    await page.waitForSelector('#app', { timeout: WAIT });
     // (page.keyboard goes round the window's key handling, so keys are sent to the window itself.)
     const press = (k) => app.evaluate(({ BrowserWindow }, k) => { const wc = BrowserWindow.getAllWindows()[0].webContents; for (const type of ['keyDown', 'keyUp']) wc.sendInputEvent({ type, keyCode: k, modifiers: ['control'] }); }, k);
     const zoom = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomLevel());
@@ -348,14 +350,14 @@ const title = page => page.locator('#title').textContent();
     await page.evaluate(() => { window.__mark = 1; });
     await press('r');
     await page.waitForFunction(() => !window.__mark, null, { timeout: 10000 });
-    await page.waitForSelector('#app', { timeout: 20000 });
+    await page.waitForSelector('#app', { timeout: WAIT });
     console.log('ok shortcuts');
     await app.close();
   }
 
   // One copy at a time: a second start while one runs leaves at once and the first stays (still one window); closing the window quits (Linux, Windows).
   ({ app, page } = await start());
-  await page.waitForSelector('#app', { timeout: 20000 });
+  await page.waitForSelector('#app', { timeout: WAIT });
   const second = await start().catch(e => ({ failed: e }));
   if (second.app) await second.app.close().catch(() => {});
   assert.ok(second.failed, 'a second copy did not stay open');
@@ -370,12 +372,12 @@ const title = page => page.locator('#title').textContent();
 
   // The window's size and place are remembered: set them, close, start again.
   ({ app, page } = await start());
-  await page.waitForSelector('#app', { timeout: 20000 });
+  await page.waitForSelector('#app', { timeout: WAIT });
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setBounds({ x: 60, y: 40, width: 900, height: 640 }));
   await new Promise(r => setTimeout(r, 1000));
   await app.close();
   ({ app, page } = await start());
-  await page.waitForSelector('#app', { timeout: 20000 });
+  await page.waitForSelector('#app', { timeout: WAIT });
   const b = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getNormalBounds());
   assert.strictEqual(b.width, 900); assert.strictEqual(b.height, 640);
   console.log('ok window state');
@@ -391,7 +393,7 @@ const title = page => page.locator('#title').textContent();
       await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs');
       await page.getByRole('button', { name: 'Accept and install' }).click();
     }
-    await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Installing the Hive', null, { timeout: 20000 });
+    await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Installing the Hive', null, { timeout: WAIT });
     const pidf = path.join(home, 'installer.pid');
     for (let i = 0; i < 100 && !fs.existsSync(pidf); i++) await new Promise(r => setTimeout(r, 100));
     const ipid = Number(fs.readFileSync(pidf, 'utf8'));
@@ -423,7 +425,7 @@ const title = page => page.locator('#title').textContent();
     await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs');
     await page.getByRole('button', { name: 'Accept and install' }).click();
   }
-  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Restart Windows', null, { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Restart Windows', null, { timeout: WAIT });
   const body = await page.locator('body').innerText();
   assert.ok(body.includes('WSL 2') && body.includes('has to restart') && body.includes('open Hive again and press Install'), 'the restart words: ' + body);
   assert.strictEqual(await page.getByRole('button').count(), 1); assert.ok(await page.getByRole('button', { name: 'Close' }).count(), 'only a Close button');
@@ -440,7 +442,7 @@ const title = page => page.locator('#title').textContent();
     await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs');
     await page.getByRole('button', { name: 'Accept and install' }).click();
   }
-  await page.waitForSelector('#app', { timeout: 30000 });
+  await page.waitForSelector('#app', { timeout: WAIT + 10000 });
   console.log('ok after restart');
   await app.close();
 
