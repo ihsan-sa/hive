@@ -556,10 +556,19 @@ function mcpUrlBlock(ctx) {
     try { F.mcpUrls = await post("/api/mcp-url", body); if (done) done(); say("mcpurl", body.do === "add" ? "Added. Agents can use it from their next run." : "Removed.", "good"); } catch (e) { say("mcpurl", e.message, "bad"); }
     delete F.busy[key]; ctx.update();
   };
+  // E129: the dash runs the server's sign-in and keeps the token for the agents; this tab goes to the server's page and comes back to Settings
+  const signin = async name => {
+    F.busy["mcpin-" + name] = true; ctx.update();
+    try { const r = await post("/api/mcp-url", { do: "signin", name }); if (r && typeof r.go === "string" && /^https?:\/\//.test(r.go)) { location.href = r.go; return; } say("mcpurl", "The server sent no sign-in page.", "bad"); }
+    catch (e) { say("mcpurl", e.message, "bad"); }
+    delete F.busy["mcpin-" + name]; ctx.update();
+  };
   const add = () => run({ do: "add", name: A.name.trim(), url: A.url.trim(), token: A.token }, "mcpurl-add", () => { F.mcpAdd = { name: "", url: "", token: "" }; });
   return block({ title: "Add a connector by address", sub: "A remote MCP server, like a custom connector in Claude. Your agents can use its tools from their next run, so only add a server you trust." },
     M.servers.length ? h("ul", { class: "list mcp-url-list" }, M.servers.map(x => h("li", { class: "lr mcp-url-row", "data-key": x.name },
-      h("div", { class: "lr-in" }, h("b", null, x.name), " ", h("span", { class: "meta mcp-url" }, x.url), x.token ? [" ", h("span", { class: "meta" }, "has a token")] : null),
+      h("div", { class: "lr-in" }, h("b", null, x.name), " ", h("span", { class: "meta mcp-url" }, x.url), x.token ? [" ", h("span", { class: "meta" }, "has a token")] : null,
+        x.signed === "in" ? [" ", h("span", { class: "meta" }, "signed in")] : x.signed === "lapsed" ? [" ", h("span", { class: "meta" }, "sign-in ended")] : null),
+      x.token ? null : button(x.signed === "in" ? "Sign in again" : "Sign in", () => signin(x.name), { size: "s", kind: x.signed === "lapsed" ? "primary" : "quiet", busy: F.busy["mcpin-" + x.name] }),
       button("Remove", () => confirm({ title: `Remove ${x.name}?`, body: ["Agents stop seeing its tools from their next run."], ok: "Remove", kind: "danger", onOk: () => run({ do: "remove", name: x.name }, "mcpurl-" + x.name) }), { size: "s", kind: "quiet", busy: F.busy["mcpurl-" + x.name] })))) : null,
     M.servers.length < M.max ? h("form", { class: "mcp-url-add", onsubmit: e => { e.preventDefault(); add(); } },
       h("div", { class: "frow" },

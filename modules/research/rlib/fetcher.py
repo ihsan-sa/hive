@@ -2,7 +2,7 @@
 It goes no further than that: no proxies or challenge solving. A page it can't read comes back as blocked, never as content."""
 import json, re, shutil, subprocess, tempfile, threading, unicodedata, urllib.parse
 from . import net, pdfboxes
-from .extract import domain_of, parse_html
+from .extract import domain_of, parse_date, parse_html
 from .store import now
 
 CHALLENGE = re.compile(r"just a moment\.\.\.|attention required|verify you are (a )?human|checking your browser|enable javascript and cookies|access denied|request unsuccessful|are you a robot|captcha|pardon our interruption|you have been blocked|unusual traffic|prove your humanity|complete the challenge below", re.I)
@@ -48,6 +48,18 @@ def _ok(url, final, via, http, parsed, **more):
     return dict(url=url, final_url=final, via=via, status="ok", http=http, title=parsed["title"], text=parsed["text"], date=parsed["date"], date_from=parsed["date_from"], links=parsed["links"], people_ld=parsed["people_ld"], **more)
 
 
+def _wp_date(parsed, url):
+    """A WordPress page dated only by its last edit gets the published date from its own REST record, the <link rel="alternate" type="application/json"> it prints: uConnect's episode page says og:updated_time 2026-05-05, its record "date" 2026-02-03 (Castonguay, fnwords120 review)."""
+    u = parsed.get("wp_json") or ""
+    if parsed.get("date_from") != "modified" or not u or domain_of(u) != domain_of(url): return parsed
+    r = net.get(u)
+    if r.error or r.status != 200: return parsed
+    try: rec = json.loads(r.body)
+    except ValueError: return parsed
+    d = parse_date(str(rec.get("date") or "")) if isinstance(rec, dict) else ""
+    return dict(parsed, date=d, date_from="meta") if d else parsed
+
+
 def _direct(url):
     """(page or None, why not)."""
     r = net.get(url)
@@ -62,7 +74,7 @@ def _direct(url):
     parsed = parse_html(r.text, r.url)
     if _looks_blocked(parsed): return None, "challenge page"
     if len(parsed["text"]) < THIN: return None, "almost no text (a JavaScript page?)"
-    return _ok(url, r.url, "direct", 200, parsed), ""
+    return _ok(url, r.url, "direct", 200, _wp_date(parsed, r.url)), ""
 
 
 def _browser(url):
@@ -74,7 +86,7 @@ def _browser(url):
     # The browser route can't see a status or a redirect, so a page's own word for where it lives is the best there is. http stays 0: nobody saw one. Only within the site asked for: a page can't talk its way onto someone's official domain.
     m = re.search(r"""<link[^>]+rel=["']canonical["'][^>]+href=["'](https?://[^"']+)|<meta[^>]+property=["']og:url["'][^>]+content=["'](https?://[^"']+)""", html[:200000], re.I)
     said = (m.group(1) or m.group(2)) if m else url
-    return _ok(url, said if domain_of(said) == domain_of(url) else url, "browser", 0, parsed), ""
+    return _ok(url, said if domain_of(said) == domain_of(url) else url, "browser", 0, _wp_date(parsed, url)), ""
 
 
 def archive_lookup(url):

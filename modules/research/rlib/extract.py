@@ -141,7 +141,7 @@ def page_date(url, meta, ld_items, text, title=""):
     d = parse_date(text[:1500]) or text_date(text, title)
     if d: return d, "text"
     d = parse_date(meta.get("og:updated_time", ""))   # the last edit, when nothing says when it was written: later than the truth, never a sidebar's date
-    return (d, "meta") if d else ("", "")
+    return (d, "modified") if d else ("", "")   # "modified": the fetcher asks the site's WordPress record for the published date
 
 
 _DATELINE = re.compile(r"(?m)^[ \t]*" + _TEXT_DATE.pattern + r"\s*[,\u2013\u2014-]\s*[A-Z][A-Z.'\-]+(?:\s+[A-Z][A-Z.'\-]+)*\b(?![a-z])")
@@ -199,7 +199,8 @@ def parse_html(html, url=""):
     title = " ".join(htmllib.unescape(p.title).split())
     if len(p.times) > 1: p.meta["time_many"] = "1"
     date, how = page_date(url, p.meta, items, text, title)
-    return {"title": title, "text": text, "links": list(dict(p.links).items()), "date": date, "date_from": how, "people_ld": people, "cut": cut}
+    wp = re.search(r"""<link[^>]+rel=["']alternate["'][^>]+type=["']application/json["'][^>]+href=["'](https?://[^"']+/wp-json/wp/v2/[^"']+)|<link[^>]+href=["'](https?://[^"']+/wp-json/wp/v2/[^"']+)["'][^>]+type=["']application/json["']""", html[:300000], re.I) if how == "modified" else None
+    return {"title": title, "text": text, "links": list(dict(p.links).items()), "date": date, "date_from": how, "people_ld": people, "cut": cut, "wp_json": htmllib.unescape(wp.group(1) or wp.group(2)) if wp else ""}
 
 
 def fold(s):

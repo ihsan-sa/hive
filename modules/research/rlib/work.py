@@ -439,6 +439,26 @@ def signal_page_date(page, url):
     return ""
 
 
+EVENT_AFTER = re.compile(r"\b(?:\d{1,2}(?::\d\d)?\s*[ap]\.?\s?m\b|registration|register|venue|location|ballroom|auditorium|doors open)", re.I)
+EVENT_DATE_NOTE = "signal_date is the date of the event the signal page announces; the page gives no date it was posted"
+def event_date(page, url, d):
+    """True when signal_page_date's date `d` is a date line followed by an event's time, place or registration: the day of the event, not when the page was written (a university centre's events page, "Tuesday, November 10, 2026 / Main Ballroom ... / Registration: 8:00 a.m.", stored as a head's signal_date, fnwords120 review)."""
+    if not d or (page or {}).get("date") or extract.url_date(url or ""): return False
+    text = (page or {}).get("text", "")
+    for m in DATE_LINE.finditer(text):
+        try: x = dt.date(int(m.group(3)), extract.MONTHS.index(m.group(1)[:3].lower()) + 1, int(m.group(2)))
+        except ValueError: continue
+        if x.isoformat() == d: return bool(EVENT_AFTER.search(text[m.end():m.end() + 250]))
+    return False
+
+
+def with_event_note(row, page, url):
+    """The row with EVENT_DATE_NOTE added when its signal_date is an event's day."""
+    if event_date(page, url, row.get("signal_date")) and EVENT_DATE_NOTE not in str(row.get("note") or ""):
+        row["note"] = "; ".join(x for x in (row.get("note"), EVENT_DATE_NOTE) if x)
+    return row
+
+
 WAYBACK = re.compile(r"^https?://web\.archive\.org/web/\d+[a-z_]*/", re.I)
 def gone_live(page, url=""):
     """A page read only from the Wayback Machine because the live address now answers 404 or 410, or a search hit that is itself a Wayback copy: not the organisation's page today. UF's AI media archive (gone, its Sept 2026 copy read) lent Iverson a 2023 panel blurb from her interim post as her signal (fnwords115 review)."""
@@ -782,6 +802,7 @@ def label_names(org, reg):
 _PEOPLE_URL = PEOPLE_PAGE
 
 QUOTE_MARK = re.compile(r"[\"\u201c\u201d]")
+OWN_NEXT = re.compile(r"(?:he|she|they|his|her|their)\b", re.I)  # a sentence after a quote that still speaks of the person
 FEED_HEAD = re.compile(r"^(?:recent|latest|related|more|popular|featured)(?: blog)? (?:posts|news|articles|stories|blogs)$", re.I)   # a list of post titles under a staff card: its last title sits just above the next person's name (Wesleyan's "Recent Posts" above Munafo, fnwords117 and fnwords118 reviews)
 HOSTED_IT = re.compile(r"\b(?:co-?)?(?:hosted|led|moderated|organi[sz]ed|presented|facilitated|ran)\b", re.I)   # "... hosted by Jane Doe": her sentence picks up the event the line before describes (Brooklyn's AI-careers panel, fnwords89 review)
 
@@ -1346,18 +1367,22 @@ class Hunt:
         near = people.name_regex(name)
         toks = [t for t in fold(people.clean_name(name)).split() if t.strip(".")]
         last = re.compile(rf"(?<![\w-]){re.escape(toks[-1])}(?![\w-])") if len(toks) >= 2 and len(toks[-1]) >= 4 else None
-        sents = [" ".join(x.split()) for x in re.split(r"(?<=[.!?])(?<!\b[A-Z]\.)\s+|\n+", people.without_events(people.without_boilerplate(text))) if x.strip()]   # not after a middle initial: "the Ethyle R. Wolfe Institute" split Brooklyn's AI sentence in two
+        sents = [" ".join(x.split()) for x in re.split(r"(?<=[.!?])(?<!\b[A-Z]\.)\s+|\n+", people.without_boilerplate(text)) if x.strip()]   # not after a middle initial: "the Ethyle R. Wolfe Institute" split Brooklyn's AI sentence in two
+        bare = [people.without_events(x) for x in sents]   # event names are hidden from the word test, not from the sentence kept
+        label = re.compile(rf"(?:{'|'.join(re.escape(t) for t in dict.fromkeys((toks[0], toks[-1])) if len(t) >= 3)}) ?: ") if len(toks) >= 2 and max(len(toks[0]), len(toks[-1])) >= 3 else None  # a Q&A answer under their first name or surname ("Scott: The Career Center has been ... incorporating specific AI- and ATS-related advice", Dranka's co-written story, fnwords120)
         seen = False
         for i, sn in enumerate(sents):
             low = fold(sn)
+            lab = bool(seen and label and label.match(low))
             if near.search(low): seen = True
-            elif not (seen and last and last.search(low)) or Hunt.other_first(sn, toks): continue
+            elif not (lab or (seen and last and last.search(low))) or (not lab and Hunt.other_first(sn, toks)): continue
             if EARLIER_JOB.search(sn) or people.employer_after(sn, name, org): continue  # a namesake, or this person at another employer
             cell = re.search(r"\S+@\S+\.[a-z]{2,}", sn, re.I)  # "Ann Lee at <her address>": a contact cell in a table; the next line is another column's, not their sentence (Howard's AI page, fnwords111 review)
-            for j in ((i,) if cell else (i, i + 1, i - 1)):
+            for j in ((i,) if cell or lab else (i, i + 1, i - 1)):
                 if not 0 <= j < len(sents): continue
                 if j == i - 1 and not QUOTE_MARK.search(sents[j]) and not HOSTED_IT.search(sn): continue  # the line before the name is theirs only as a quotation ('"AI changes hiring." Doe said'); on a staff page it is the end of the previous card (Wesleyan's "Recent Posts" titles above Munafo's name, fnwords117 review), and in a story the writer's own words (BU's "AI experiences embedded in their coursework" above Koppi's quote)
-                t = ASIDE.sub(" ", NAV_AI.sub(" ", sents[j] if not cell else sn[:cell.start()]))
+                if j == i + 1 and not cell and not QUOTE_MARK.search(sents[j]) and not OWN_NEXT.match(sents[j]): continue  # the line after the name is theirs only as their quote or their own "he/she ..."; otherwise it is the writer's (Kostenbauder's "While AI can help read X-rays...", Griffith's "Students being trained in the AI and Innovation Lab...", fnwords120 review)
+                t = ASIDE.sub(" ", NAV_AI.sub(" ", bare[j] if not cell else people.without_events(sn[:cell.start()])))
                 if len(t) > 25 and any(people.term_regex(m).search(fold(t)) for m in terms) and not EARLIER_JOB.search(t):
                     return " ".join(sents[min(i, j):max(i, j) + 1])[:300]
         return ""
@@ -1383,6 +1408,7 @@ class Hunt:
         keep = [n for n in str(row.get("note") or "").split("; ") if n and not n.startswith("the signal is the organisation's")]
         held = [n for n in keep[:1] if n.startswith("not listed: ")]   # a near miss's reason stays first, so stored_readmits still finds it
         row["note"] = "; ".join(held + [f"the person's own signal is from {url} {self.OWN_ON_ORG}"] + keep[len(held):])
+        with_event_note(row, self.case.page(url), url)
         return True
 
     def org_signal_pages(self, org):
@@ -1481,6 +1507,7 @@ class Hunt:
             if ex and not self.searched_signal_why(pg, url, ex, row):
                 row.update(signal=ex, signal_near_person="yes", signal_url=url, signal_date=self.signal_when(pg, url, name))
                 row["note"] = "; ".join(x for x in (f"the person's own signal is from {url} (a search for them with '{self.must[0]}')", *[n for n in (row.get("note") or "").split("; ") if n and not n.startswith("the signal is the organisation's")]) if x)
+                with_event_note(row, pg, url)
                 with self.save_lock: self.person_signal_found += 1
                 return True
         row["note"] = "; ".join(x for x in (row.get("note"), f"a search for the person with '{self.must[0]}' found no page with it in their own sentence") if x)
@@ -1580,6 +1607,7 @@ class Hunt:
             org = r["organisation"]
             keep = [n for n in str(r.get("note", "")).split("; ") if n and not n.startswith(("not listed: ", "the signal is the organisation's", "the organisation's signal"))]
             row = dict(r, signal=sig, signal_near_person="yes", signal_url=url, signal_date=when, note="; ".join([f"the person's own signal is from {url} (a search for them with '{min(self.must, key=len)}')"] + keep))
+            with_event_note(row, self.case.page(url), url)
             page = self.case.page(r["source_url"]) or {}
             res = people.check(page, r["name"], r["title"], org, self.domains) if page.get("status") == "ok" else None
             why = (self.held_back(res, row, org, False, page.get("text", ""), page.get("links")) if res else "its page can't be read again") or self.stored_why(row)
@@ -1645,7 +1673,11 @@ class Hunt:
         flat = " ".join(clean.split())  # fold() collapses whitespace: cut the excerpt from text with the same spacing, or it comes from the wrong place
         if len(flat) != len(low): flat = low
         m = next((x for x in people.term_regex(term).finditer(body) if CAREER_NEAR.search(body[max(0, x.start() - 300):x.end() + 300]) and not earlier_job_at(body, x.start(), x.end())), None)  # the word beside a careers or workforce word: AI research news (UT) is not a careers signal; nor a leader bio on an AI degree at an earlier employer (SLCC president, fnwords23)
-        return flat[max(0, m.start() - 80):m.end() + 120].strip() if m else ""
+        if not m: return ""
+        a, b = max(0, m.start() - 80), min(len(flat), m.end() + 120)
+        if a and flat[a - 1] != " " and 0 <= (sp := flat.find(" ", a, m.start())): a = sp + 1  # whole words: "ating our faculty" began Springfield's excerpt (fnwords120)
+        if b < len(flat) and flat[b] != " " and (sp := flat.rfind(" ", m.end(), b)) > 0: b = sp
+        return flat[a:b].strip()
 
     @side_search("statement")
     def menu_statement(self, org):
@@ -1879,7 +1911,7 @@ class Hunt:
             res = undated_down(res, page.get("final_url") or page["url"])
             if res["status"] not in ("verified", "secondary") and not res.get("left") and not res.get("other_employer") and not res.get("stale"): continue
             near = people.name_regex(per["name"])
-            sig = people.sentences_with(clean, hit_terms, near) if hit_terms else ""
+            sig = people.sentences_with(people.without_boilerplate(text), hit_terms, near, blank=people.without_events) if hit_terms else ""  # tested without event names, stored with them
             close = bool(sig) and bool(near.search(fold(sig)))
             if not close and hit_terms:
                 reach = 300  # a heading further off is about the site, not this person (a UTEP research-assessment director under a tech-transfer banner)
