@@ -46,7 +46,7 @@ const VIEW = new Set(["svg", "video", "audio", "pdf", "html"]);
 const kbRaw = it => "/api/kb/raw?path=" + encodeURIComponent(it.kb) + (/\.html?$/i.test(it.name) ? "&view=1" : "");   // a page runs in the preview, redacted by the server (R111)
 export const kbRawOk = it => /\.(png|jpe?g|gif|webp|pdf)$/i.test(it.name);
 export const fileHref = it => (it.kb ? kbRaw(it) : `/files/${String(it.id).split("/").map(encodeURIComponent).join("/")}/${encodeURIComponent(it.name)}`);   // id groups/<focus>: a group's file
-export const viewHref = it => (it.kb ? kbRaw(it) : fileHref(it) + (VIEW.has(kindOf(it.name)) ? "?view=1" : ""));
+export const viewHref = it => (it.kb ? kbRaw(it) + (/\.pdf$/i.test(it.name) ? "&view=1" : "") : fileHref(it) + (VIEW.has(kindOf(it.name)) ? "?view=1" : ""));
 export const keyOf = it => (it.doc ? "doc:" + it.doc : it.kb ? "kb:" + it.kb + (it.box ? "#box=" + it.box : "") : it.id + "/" + it.name);   // a Python box pinned from the chat (pybox.js) is its own item
 // Every file chip drawn in a message, by key, so the Files list can show this conversation's files with their size and sender.
 const KNOWN = new Map();

@@ -19,18 +19,20 @@ The rules are warden's ruling of 2026-11-23 (post 11231556881e, thread 112315543
              [--line "name;qty;unit price"]... [--currency usd] [--test]
   hive buy wait ID [--timeout 1800]   wait for the person's answer in Link; on approval the card goes to its 0600 file
   hive buy card ID                    where the card file is and what it may be used for (never the number itself)
+  hive buy record ID --steps STEPS.json  the checkout in Chrome on screen record, fields masked, frames OCR'd (core/buy_record.mjs)
   hive buy done ID --recording PATH --receipt PATH [--charged 37.63]
   hive buy cancel ID [--why TEXT]
   hive buy list [--all] [--json] | show ID | setup | sweep
+  hive buy audit [--scan] [--json]    every finished buy against the warden's six conditions, and the measure; exit 1 on a breach
 
 Ledger: ~/.hive/buys.jsonl, one event per line; a buy's state is its events merged in order. HIVE_LINK_CLI, HIVE_BUY_HOME and HIVE_BIN
 override the link-cli binary, the state dir and the hive used to post (the tests use stubs)."""
-import argparse, datetime as dt, json, os, re, subprocess, sys, time
+import argparse, datetime as dt, json, os, re, subprocess, sys, time, urllib.parse
 from pathlib import Path
 
 HOME = Path.home()
 STATE = Path(os.environ.get("HIVE_BUY_HOME") or HOME / ".hive")
-LEDGER, CARDS, CONF = STATE / "buys.jsonl", STATE / "buy-cards", STATE / "buy.json"
+LEDGER, CARDS, CONF, RECS = STATE / "buys.jsonl", STATE / "buy-cards", STATE / "buy.json", STATE / "buy-recordings"
 LINK = os.environ.get("HIVE_LINK_CLI") or str(HOME / ".local" / "bin" / "link-cli")
 Hive = os.environ.get("HIVE_BIN") or str(HOME / "core" / "hive")
 CAP_USD = 200.0          # hive's own ceiling per purchase (Link's is 500); the person may change it in ~/.hive/buy.json {"max": N}
@@ -276,6 +278,24 @@ def cmd_card(a):
     print(f"{p}\nonly at {b['merchant']} ({short_url(b['url'])}), only this cart, at most {fmt(b['amount'], b['currency'])} with shipping and tax;"
           f" a higher total or another cart: hive buy cancel {b['id']} and ask again. Never print, paste or screenshot the number.")
 
+def cmd_record(a):
+    """The checkout on screen record (buy_record.mjs): only this merchant's host, the place-order button only at the approved total or
+    less, every text field masked in every frame, and every frame OCR'd for a card number before anything is kept."""
+    sweep()
+    b = get(a.id, exact=True); p = card_path(b["id"])
+    if b["status"] != "approved" or not p.is_file(): die(f"{b['id']} has no live card (status {b['status']})")
+    host = (urllib.parse.urlsplit(b.get("url") or "").hostname or "").lower()
+    if not host: die(f"{b['id']} has no merchant url")
+    host = host.removeprefix("www.")  # the approved merchant and its subdomains (www., checkout., ...)
+    out = RECS / re.sub(r"[^A-Za-z0-9_-]", "_", b["id"]); out.mkdir(parents=True, exist_ok=True, mode=0o700); os.chmod(out, 0o700)
+    total = f"{b['amount'] / 100:.2f}"
+    rc = subprocess.run(["node", str(Path(__file__).resolve().parent / "buy_record.mjs"), "run", "--steps", a.steps, "--card", str(p),
+                         "--out", str(out), "--allow-host", host, "--max-total", total]).returncode
+    record({"ev": "record", "id": b["id"], "recording_exit": rc, **({"recording": str(out / "checkout.webm")} if rc in (0, 4) else {})})
+    if rc == 3: die("a card number showed in the recording; it is deleted. Post that in the thread (never the image), and finish by hand.", 3)
+    if rc == 0: print(f"then: hive buy done {b['id']} --recording {out / 'checkout.webm'} --receipt {out}/<the receipt shot>.png --charged AMOUNT")
+    sys.exit(rc)
+
 def cmd_done(a):
     b = get(a.id, exact=True)
     if b["status"] not in ("approved", "expired"): die(f"{b['id']} is {b['status']}: done is for an approved buy")
@@ -291,7 +311,8 @@ def cmd_done(a):
     lead = (f"Bought: {b['item']} at {b['merchant']}" + (f", charged {fmt(charged, b['currency'])}" if charged is not None else "") +
             ". The card file is deleted" + (" and the card is canceled at Link." if not err else f"; canceling the card at Link FAILED ({err}): hive buy sweep retries.") +
             " Recording and receipt attached." + (" CHARGED MORE THAN APPROVED: this is a breach of the rule, say why." if over else ""))
-    post(b, lead, files=[a.recording, a.receipt])
+    ok = post(b, lead, files=[a.recording, a.receipt])
+    record({"ev": "posted", "id": b["id"], "done_post": ok is not False})
 
 def cmd_cancel(a):
     b = get(a.id, exact=True)
@@ -321,6 +342,98 @@ def cmd_list(a):
     for b in rows:
         print(f"{b['id'][-12:]:12}  {b.get('status', '?'):16} {fmt(b.get('amount', 0), b.get('currency', 'usd')):>10}  {b.get('merchant', '')[:20]:20}"
               f"  {b.get('item', '')[:40]:40}  {b.get('agent', '')}  {b.get('thread', '')}")
+# ---- audit: every finished buy scored against the warden's conditions (11231556881e); it only reads, and --scan OCRs ----
+CONDS = ("link_approved", "total", "card_gone", "recorded", "scanned", "no_leak")
+def luhn(d):
+    s = 0
+    for i, c in enumerate(reversed(d)):
+        n = int(c) * (2 if i % 2 else 1); s += n - 9 if n > 9 else n
+    return s % 10 == 0
+def card_numbers(text):
+    """Digit runs that could be a card: 13-19 digits (spaces or dashes allowed), a card network's first digit, Luhn-valid."""
+    out = []
+    for m in re.finditer(r"(?<![\d.])\d(?:[ -]?\d){12,18}(?![\d.])", text or ""):
+        d = re.sub(r"\D", "", m.group())
+        if d[0] in "23456" and luhn(d): out.append(d[-4:])
+    return out
+def board_posts(thread, since):
+    path = Path(os.environ.get("HIVE_BUY_BOARD") or HOME / "board.jsonl")
+    try: f = path.open(errors="replace")
+    except OSError: return None
+    out = []
+    with f:
+        for l in f:
+            if f'"{thread}"' not in l: continue
+            try: j = json.loads(l)
+            except ValueError: continue
+            if j.get("thread") == thread and str(j.get("at") or "") >= (since or ""): out.append(j)
+    return out
+def scan_files(files, card=None):
+    """buy_record.mjs scan: 0 clean, 3 a card number in some frame, else it could not scan."""
+    cmd = ["node", str(Path(__file__).resolve().parent / "buy_record.mjs"), "scan", *([ "--card", str(card)] if card else []), *map(str, files)]
+    try: return subprocess.run(cmd, capture_output=True, text=True, timeout=1800).returncode
+    except (OSError, subprocess.TimeoutExpired): return None
+def audit_one(bid, b, evs, scan=False):
+    """{cond: ("ok"|"unmet"|"breach", why)} for one buy, from its ledger events, the card dir and the board."""
+    mine = [e for e in evs if e.get("id") == bid]; done = next((e for e in reversed(mine) if e.get("ev") == "done"), {})
+    r, cf = {}, card_path(bid)
+    if b.get("status") != "done":
+        r["card_gone"] = ("breach", f"card file still at {cf}") if os.path.lexists(cf) else ("ok", "")
+        return r
+    r["link_approved"] = ("ok", "") if any(e.get("ev") == "status" and e.get("status") == "approved" for e in mine) else \
+        ("breach", "no approval from Link in the ledger")
+    ch, amt = done.get("charged"), b.get("amount")
+    r["total"] = ("unmet", "charged not recorded") if ch is None else ("breach", f"charged {fmt(ch, b.get('currency', 'usd'))} > approved {fmt(amt, b.get('currency', 'usd'))}") \
+        if amt is None or ch > amt else ("ok", "")
+    r["card_gone"] = ("breach", f"card file still at {cf}") if os.path.lexists(cf) else ("ok", "") if b.get("revoked") else \
+        ("unmet", "card not canceled at Link: " + str(b.get("revoke_error") or "no cancel recorded"))
+    rec, rcpt = done.get("recording"), done.get("receipt")
+    files = [Path(x).expanduser() for x in (rec, rcpt) if x]
+    missing = [str(f) for f in files if not f.is_file()]
+    posted = next((e.get("done_post") for e in reversed(mine) if e.get("ev") == "posted"), None)
+    r["recorded"] = ("unmet", "missing " + ", ".join(missing)) if missing or len(files) < 2 else \
+        ("unmet", "the done post failed") if posted is False else ("ok", "")
+    clean = any(e.get("ev") == "record" and e.get("recording_exit") == 0 and e.get("recording") and rec and
+                Path(e["recording"]).expanduser() == Path(rec).expanduser() for e in mine) or \
+        any(e.get("ev") == "scan" and e.get("scan_exit") == 0 for e in mine)
+    if any(e.get("ev") == "scan" and e.get("scan_exit") == 3 for e in mine):
+        r["scanned"] = ("breach", "OCR found a card number in the kept recording or receipt"); clean = True
+    if not clean and scan and not missing:
+        rc = scan_files(files); record({"ev": "scan", "id": bid, "scan_exit": rc, "files": [str(f) for f in files]})
+        clean = rc == 0
+        if rc == 3: r["scanned"] = ("breach", "OCR found a card number in the recording or receipt")
+    if "scanned" not in r:
+        r["scanned"] = ("ok", "") if clean else ("unmet", "recording not OCR-checked (hive buy audit --scan)" if not missing else "nothing to scan")
+    leaks = card_numbers(json.dumps(mine))
+    posts = board_posts(b.get("thread") or "", mine[0].get("at") if mine else "")
+    if posts is None: r["no_leak"] = ("unmet", "board not readable")
+    else:
+        for j in posts: leaks += card_numbers(j.get("text") or "")
+        r["no_leak"] = ("breach", f"a card number ending {leaks[0]} in the ledger or thread {b.get('thread')}") if leaks else ("ok", "")
+    return r
+def cmd_audit(a):
+    st, evs = buys(), events()
+    rows, tally = [], {k: {"done": 0, "met": 0, "breaches": 0, "unmet": 0, "ended": 0} for k in ("real", "test")}
+    for bid, b in sorted(st.items(), key=lambda kv: kv[1].get("updated") or ""):
+        if b.get("status") not in ENDED: continue
+        r = audit_one(bid, b, evs, a.scan); t = tally["test" if b.get("test") else "real"]
+        br = [k for k, (v, _) in r.items() if v == "breach"]; un = [k for k, (v, _) in r.items() if v == "unmet"]
+        t["ended"] += 1; t["breaches"] += len(br); t["unmet"] += len(un)
+        if b.get("status") == "done": t["done"] += 1; t["met"] += not br and not un
+        rows.append({"id": bid, "status": b.get("status"), "test": bool(b.get("test")), "merchant": b.get("merchant"),
+                     "amount": b.get("amount"), "conditions": {k: {"v": v, "why": w} for k, (v, w) in r.items()}})
+    breaches = tally["real"]["breaches"] + tally["test"]["breaches"]
+    measure = (f"Measure: real buys done {tally['real']['done']}, all six conditions met {tally['real']['met']}; "
+               f"test buys done {tally['test']['done']} (met {tally['test']['met']}); breaches {breaches}")
+    if a.json: print(json.dumps({"buys": rows, "tally": tally, "breaches": breaches, "measure": measure}, indent=1))
+    else:
+        for x in rows:
+            c = x["conditions"]; bad = [f"{k} {v['v']}: {v['why']}" for k, v in c.items() if v["v"] != "ok"]
+            print(f"{x['id'][-12:]:12}  {x['status']:9} {'test' if x['test'] else 'real'}  {(x['merchant'] or '')[:18]:18}  "
+                  + ("all met" if not bad and x["status"] == "done" else "card gone" if not bad else "; ".join(bad)))
+        print(measure)
+    sys.exit(1 if breaches else 0)
+
 def cmd_sweep(a):
     g = sweep(); print(f"deleted {len(g)} card file(s)" + (f": {', '.join(g)}" if g else ""))
 def cmd_setup(a):
@@ -349,12 +462,18 @@ def main(argv=None):
     p = sp.add_parser("wait", help="wait for the answer in Link; on approval the card is written to its 0600 file")
     p.add_argument("id"); p.add_argument("--timeout", type=int, default=1800); p.set_defaults(f=cmd_wait)
     p = sp.add_parser("card", help="the card file's path and what it may pay for"); p.add_argument("id"); p.set_defaults(f=cmd_card)
+    p = sp.add_parser("record", help="check out on screen record from a steps file, card fields masked, every frame OCR'd (core/buy_record.mjs)")
+    p.add_argument("id"); p.add_argument("--steps", required=True, help="the checkout as JSON steps; card values only as $card.number etc.")
+    p.set_defaults(f=cmd_record)
     p = sp.add_parser("done", help="checkout finished: delete the card, post the recording and receipt")
     p.add_argument("id"); p.add_argument("--recording", required=True, help="the screen recording of the checkout, card number masked")
     p.add_argument("--receipt", required=True, help="the order confirmation or receipt"); p.add_argument("--charged", help="what the merchant charged, in dollars"); p.set_defaults(f=cmd_done)
     p = sp.add_parser("cancel", help="cancel a request or an unused card"); p.add_argument("id"); p.add_argument("--why", default=""); p.set_defaults(f=cmd_cancel)
     p = sp.add_parser("list", help="live buys (--all: every one)"); p.add_argument("--all", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_list)
     p = sp.add_parser("show", help="one buy as its card JSON"); p.add_argument("id"); p.set_defaults(f=cmd_show)
+    p = sp.add_parser("audit", help="score every finished buy against the warden's conditions and print the measure; exit 1 on a breach")
+    p.add_argument("--scan", action="store_true", help="OCR a recording and receipt the recorder didn't already check"); p.add_argument("--json", action="store_true")
+    p.set_defaults(f=cmd_audit)
     sp.add_parser("sweep", help="delete card files whose buy ended or expired").set_defaults(f=cmd_sweep)
     sp.add_parser("setup", help="is Link signed in, and the person's step if not").set_defaults(f=cmd_setup)
     a = ap.parse_args(argv)
