@@ -477,8 +477,17 @@ def shingles(path, cache):
         cache[path] = {" ".join(w[i:i + 6]) for i in range(0, max(0, len(w) - 5), 3)}
     return cache[path]
 
+def copies(a, b, editions=True):
+    """Two shingle sets are one document when they share COPY of the larger, or (K80, aff07 2026-11-23) COPY of the smaller
+    while the smaller is at least half the larger: two editions of one doc that drifted apart (ece298a-pll vs -digital
+    stages.md shared 62% of the smaller, 44-58% of the larger). A sheet quoting a note is far more than twice its size.
+    editions=False turns the second test off: two journals of one agent share their templated lines but are two records
+    (the s7 planning-handoff journals before and after 12:14Z folded and lost gate question gs59)."""
+    lo, hi = sorted((len(a), len(b))); n = len(a & b)
+    return n >= COPY * hi or (editions and lo * 2 >= hi and n >= COPY * lo)
+
 def fold_copies(top, pool, c=None):
-    """One name per document. Files that share COPY of their shingles (over the larger file, so a sheet quoting a note is not its copy) are one document: it is
+    """One name per document. Files that `copies` matches (a sheet quoting a note is not its copy) are one document: it is
     named by its best-ranked live copy (kb/, projects/, ...) over an archive or H4 one, says `(also in PATH)`, and a
     passage found on another copy is shown at its line in the named file, unless a passage near it is already shown
     there. Places freed go to the next hits of the pool."""
@@ -489,7 +498,7 @@ def fold_copies(top, pool, c=None):
         for r in group:
             if r == path: return r
             b = shingles(r, cache)
-            if len(b) >= COPY_MIN and len(a & b) >= COPY * max(len(a), len(b)): return r
+            if len(b) >= COPY_MIN and copies(a, b, live(path) and live(r)): return r
         return path
     def live(p): return not (p.startswith("archive/") or p.startswith(H4_COPY))
     cand = list(top)

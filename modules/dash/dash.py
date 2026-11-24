@@ -5916,11 +5916,21 @@ def _write_mcp(imports=None, urls=None):
 
 
 def mcp_url_view():
-    return {"servers": [{"name": n, "url": s["url"], "token": bool(s.get("token"))} for n, s in sorted(_mcp_urls().items())], "max": MCP_URL_MAX}
+    def signed(s):
+        o = s.get("oauth")
+        if not o: return ""
+        return "lapsed" if o.get("lapsed") or (o.get("expires") and o["expires"] < time.time() and not o.get("refresh")) else "in"
+    return {"servers": [{"name": n, "url": s["url"], "token": bool(s.get("token")) and not s.get("oauth"), "signed": signed(s)} for n, s in sorted(_mcp_urls().items())], "max": MCP_URL_MAX}
+
+
+def _sandboxed():
+    """The sandbox module's own rule (core/sandbox.py on()): a settings.json without "sandbox": "bare". No settings.json (Hive): never."""
+    v = settings_raw()
+    return v is not None and v.get("sandbox", "on") != "bare"
 
 
 def mcp_url_check(url):
-    """An https address with a host, or plain http on this computer only (a test server). No user:password inside it."""
+    """An https address with a host, or plain http on this computer only (a test server, and only with the sandbox off). No user:password inside it."""
     if not isinstance(url, str) or not url.strip(): raise ValueError("paste the server's address")
     url = url.strip()
     if len(url) > 500 or any(c.isspace() for c in url): raise ValueError("that address has spaces in it or is too long")
@@ -5928,6 +5938,8 @@ def mcp_url_check(url):
     except ValueError: raise ValueError("that isn't a web address")
     if not host: raise ValueError("that isn't a web address")
     if u.username or u.password: raise ValueError("leave the sign-in out of the address; paste a token in its own box")
+    if host in MCP_LOOPBACK and _sandboxed():   # E128: a boxed agent's network is the proxy's, which can't reach this machine (runs/e125)
+        raise ValueError("agents run in the sandbox, which can't reach a server on this computer; use its https address")
     if u.scheme == "https": return url
     if u.scheme == "http" and host in MCP_LOOPBACK: return url
     raise ValueError("the address must start with https:// (plain http only for a server on this computer)")
@@ -5957,6 +5969,162 @@ def mcp_url_do(d):
     if urls: write_text_private(MCP_URLS, json.dumps(urls, indent=1))
     else: MCP_URLS.unlink(missing_ok=True)
     return mcp_url_view()
+
+
+
+# ---------- sign-in for a connector added by address (E129): the MCP authorization flow, run by the dash ----------
+# A server that answers 401 names its sign-in (RFC 9728 resource metadata -> RFC 8414 server metadata). The dash registers itself
+# (RFC 7591), sends the person to sign in with PKCE, takes the code at /mcp-oauth/callback, and writes the access token into mcp.json as
+# the same header a pasted token gets: a sandboxed agent then needs no browser and no callback of its own. It refreshes before expiry.
+MCP_OAUTH_PENDING = {}   # state -> one sign-in under way, 10 minutes
+_mcp_oauth_lock = threading.Lock()
+MCP_OAUTH_PATH = "/mcp-oauth/callback"
+
+
+def _mcp_http(url, data=None, form=None, headers=None, timeout=15):
+    """(status, headers, parsed JSON or None). JSON body for data, urlencoded for form. Never follows a redirect to somewhere else silently."""
+    import urllib.request, urllib.error
+    hd = {"Accept": "application/json, text/event-stream", "User-Agent": "hive-dash", **(headers or {})}
+    body = None
+    if data is not None: body = json.dumps(data).encode(); hd["Content-Type"] = "application/json"
+    if form is not None: body = urllib.parse.urlencode(form).encode(); hd["Content-Type"] = "application/x-www-form-urlencoded"
+    req = urllib.request.Request(url, data=body, headers=hd, method="POST" if body is not None else "GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r: st, rh, raw = r.status, r.headers, r.read(200_000)
+    except urllib.error.HTTPError as e: st, rh, raw = e.code, e.headers, e.read(200_000)
+    except (OSError, ValueError) as e: raise ValueError(f"couldn't reach {urllib.parse.urlsplit(url).hostname}: {getattr(e, 'reason', e)}")
+    try: v = json.loads(raw)
+    except ValueError: v = None
+    return st, rh, v
+
+
+def _mcp_oauth_ok(url, server):
+    """An endpoint from a server's metadata: https, or plain http on this computer only when the server itself is one (a test server)."""
+    u = urllib.parse.urlsplit(url if isinstance(url, str) else "")
+    if u.scheme == "https" and u.hostname: return url
+    if u.scheme == "http" and (u.hostname or "") in MCP_LOOPBACK and urllib.parse.urlsplit(server).hostname in MCP_LOOPBACK: return url
+    raise ValueError("its sign-in gave an address that isn't https")
+
+
+def _mcp_discover(server):
+    """The server's sign-in: {"authorize", "token", "register"?, "scope"?}. Raises ValueError with words the person can act on."""
+    st, rh, _ = _mcp_http(server, data={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "hive-dash", "version": "1"}}})
+    if st < 400: raise ValueError("this server doesn't ask for a sign-in: agents can use it as it is")
+    if st not in (401, 403): raise ValueError(f"the server answered {st}, not a sign-in request")
+    www = rh.get("WWW-Authenticate") or ""
+    m = re.search(r'resource_metadata="([^"]+)"', www); scope = re.search(r'scope="([^"]+)"', www)
+    u = urllib.parse.urlsplit(server); origin = f"{u.scheme}://{u.netloc}"; path = u.path.rstrip("/")
+    prm = None
+    for cand in ([m[1]] if m else []) + [origin + "/.well-known/oauth-protected-resource" + path, origin + "/.well-known/oauth-protected-resource"]:
+        _st, _, v = _mcp_http(_mcp_oauth_ok(cand, server))
+        if _st == 200 and isinstance(v, dict): prm = v; break
+    issuer = ((prm or {}).get("authorization_servers") or [origin])[0]
+    iu = urllib.parse.urlsplit(_mcp_oauth_ok(issuer, server)); io = f"{iu.scheme}://{iu.netloc}"; ip = iu.path.rstrip("/")
+    cands = [io + "/.well-known/oauth-authorization-server" + ip, io + "/.well-known/openid-configuration" + ip] + ([io + ip + "/.well-known/openid-configuration"] if ip else [])
+    meta = None
+    for cand in cands:
+        _st, _, v = _mcp_http(cand)
+        if _st == 200 and isinstance(v, dict) and v.get("authorization_endpoint") and v.get("token_endpoint"): meta = v; break
+    if meta is None:
+        if prm is not None: raise ValueError("its sign-in server doesn't describe itself, so this app can't sign in; paste a token instead")
+        meta = {"authorization_endpoint": io + "/authorize", "token_endpoint": io + "/token", "registration_endpoint": io + "/register"}   # 2025-03-26 servers
+    if "S256" not in (meta.get("code_challenge_methods_supported") or ["S256"]): raise ValueError("its sign-in doesn't offer PKCE, so this app won't use it")
+    sc = scope[1] if scope else " ".join(x for x in ((prm or {}).get("scopes_supported") or []) if isinstance(x, str))
+    out = {"authorize": _mcp_oauth_ok(meta["authorization_endpoint"], server), "token": _mcp_oauth_ok(meta["token_endpoint"], server), "scope": sc,
+           "resource": (prm or {}).get("resource") or server}
+    if meta.get("registration_endpoint"): out["register"] = _mcp_oauth_ok(meta["registration_endpoint"], server)
+    return out
+
+
+def mcp_oauth_start(name, host):
+    """POST /api/mcp-url {"do": "signin", "name"}: {"go": the sign-in page}. host is the dash's own Host, so the callback comes back here."""
+    urls = _mcp_urls()
+    if name not in urls: raise ValueError("no connector added by address has that name")
+    s = urls[name]
+    if s.get("token") and not s.get("oauth"): raise ValueError("it has a pasted token; remove it and add it again to sign in instead")
+    if not isinstance(host, str) or not re.fullmatch(r"(127\.0\.0\.1|localhost|\[::1\]):\d{1,5}", host): raise ValueError("sign in from this computer's own address")
+    redirect = f"http://{host}{MCP_OAUTH_PATH}"
+    d = _mcp_discover(s["url"])
+    old = s.get("oauth") or {}
+    if old.get("client_id") and old.get("redirect") == redirect and old.get("token") == d["token"]: client = {k: old[k] for k in ("client_id", "client_secret") if old.get(k)}
+    elif d.get("register"):
+        st, _, v = _mcp_http(d["register"], data={"client_name": "Hive", "redirect_uris": [redirect], "grant_types": ["authorization_code", "refresh_token"],
+                                                   "response_types": ["code"], "token_endpoint_auth_method": "none"})
+        if st not in (200, 201) or not isinstance(v, dict) or not isinstance(v.get("client_id"), str): raise ValueError(f"the server wouldn't register this app ({st}); paste a token instead")
+        client = {"client_id": v["client_id"], **({"client_secret": v["client_secret"]} if isinstance(v.get("client_secret"), str) else {})}
+    else: raise ValueError("the server needs an app registered by hand, which this app can't do; paste a token instead")
+    verifier = secrets.token_urlsafe(48); state = secrets.token_urlsafe(32)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    q = {"response_type": "code", "client_id": client["client_id"], "redirect_uri": redirect, "state": state, "code_challenge": challenge,
+         "code_challenge_method": "S256", "resource": d["resource"], **({"scope": d["scope"]} if d["scope"] else {})}
+    now = time.time()
+    with _mcp_oauth_lock:
+        for k in [k for k, v in MCP_OAUTH_PENDING.items() if v["until"] < now]: MCP_OAUTH_PENDING.pop(k)
+        MCP_OAUTH_PENDING[state] = {"name": name, "url": s["url"], "verifier": verifier, "redirect": redirect, "until": now + 600, **client, **d}
+    sep = "&" if "?" in d["authorize"] else "?"
+    return {"go": d["authorize"] + sep + urllib.parse.urlencode(q)}
+
+
+def _mcp_oauth_save(name, url, p, v):
+    """A token answer into mcp-urls.json and mcp.json. False if the connector went or changed meanwhile."""
+    if not isinstance(v, dict) or not isinstance(v.get("access_token"), str) or not v["access_token"] or any(c in v["access_token"] for c in "\r\n"):
+        raise ValueError("the server's answer had no token")
+    with _mcp_oauth_lock:
+        urls = _mcp_urls()
+        if name not in urls or urls[name]["url"] != url: return False
+        old = urls[name].get("oauth") or {}
+        exp = v.get("expires_in")
+        urls[name]["token"] = v["access_token"]
+        urls[name]["oauth"] = {"client_id": p["client_id"], **({"client_secret": p["client_secret"]} if p.get("client_secret") else {}), "redirect": p["redirect"],
+                               "token": p["token"], "resource": p["resource"], "refresh": v.get("refresh_token") or old.get("refresh") or "",
+                               "expires": int(time.time() + exp) if isinstance(exp, (int, float)) and exp > 0 else 0, "at": int(time.time())}
+        _write_mcp(urls=urls); write_text_private(MCP_URLS, json.dumps(urls, indent=1))
+    return True
+
+
+def mcp_oauth_callback(q):
+    """GET /mcp-oauth/callback?code&state. The state, made by a signed local POST and good once for 10 minutes, is the proof: the dash's
+    SameSite=Strict cookie isn't sent on the way back from another site. Returns the words for the page."""
+    state = (q.get("state") or [""])[0]
+    with _mcp_oauth_lock: p = MCP_OAUTH_PENDING.pop(state, None) if state else None
+    if not p or p["until"] < time.time(): return False, "That sign-in link is old or was already used. Start the sign-in again from Settings."
+    if q.get("error"): return False, f"The server said no: {(q.get('error_description') or q['error'])[0][:200]}"
+    code = (q.get("code") or [""])[0]
+    if not code: return False, "The server sent no code back."
+    form = {"grant_type": "authorization_code", "code": code, "redirect_uri": p["redirect"], "client_id": p["client_id"], "code_verifier": p["verifier"], "resource": p["resource"]}
+    if p.get("client_secret"): form["client_secret"] = p["client_secret"]
+    try:
+        st, _, v = _mcp_http(p["token"], form=form)
+        if st != 200: return False, f"The server wouldn't give a token ({st})."
+        if not _mcp_oauth_save(p["name"], p["url"], p, v): return False, "That connector was removed or changed while you signed in."
+    except ValueError as e: return False, str(e)
+    return True, f"Signed in to {p['name']}. Agents can use it from their next run."
+
+
+def mcp_oauth_refresh(margin=900):
+    """Every connector whose sign-in ends within margin seconds and has a refresh token gets a new one. Returns the names refreshed."""
+    done = []
+    for name, s in _mcp_urls().items():
+        o = s.get("oauth") or {}
+        if not o.get("refresh") or not o.get("expires") or o["expires"] > time.time() + margin: continue
+        form = {"grant_type": "refresh_token", "refresh_token": o["refresh"], "client_id": o["client_id"], "resource": o.get("resource") or s["url"]}
+        if o.get("client_secret"): form["client_secret"] = o["client_secret"]
+        try:
+            st, _, v = _mcp_http(o["token"], form=form)
+            if st == 200 and _mcp_oauth_save(name, s["url"], o, v): done.append(name)
+            elif st in (400, 401):   # the refresh token is dead: the row says to sign in again
+                with _mcp_oauth_lock:
+                    urls = _mcp_urls()
+                    if name in urls: urls[name].setdefault("oauth", {})["refresh"] = ""; urls[name]["oauth"]["expires"] = 0; urls[name]["oauth"]["lapsed"] = True; write_text_private(MCP_URLS, json.dumps(urls, indent=1))
+        except (ValueError, KeyError): pass
+    return done
+
+
+def mcp_oauth_loop():
+    while True:
+        try: mcp_oauth_refresh()
+        except Exception: pass
+        time.sleep(300)
 
 
 def sandbox_state():
@@ -6694,12 +6862,18 @@ def serve(port):
             q = parse_qs(u.query)
             shown = re.fullmatch(r"(.+?)(/light|/dark)?/?", u.path)   # a display page takes /light or /dark on the end
             display = bool(shown) and shown[1] in DISPLAY_PAGES
-            page = u.path in ("/", "/index.html", "/login", "/old", "/new", "/new/", "/call", "/call/") or display
+            page = u.path in ("/", "/index.html", "/login", "/old", "/new", "/new/", "/call", "/call/", MCP_OAUTH_PATH) or display
             if not self.admit(u.path, page=page): return
             if u.path == "/api/proof":   # before sign-in on purpose: the asker has not sent the key yet, and learns nothing it could use as one
                 n, w = (q.get("n") or [""])[0], web_cfg()
                 if self.route != "local" or not w or not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", n): return self.send_error(404)
                 return self.send(proof_value(w, port, n).encode(), "text/plain; charset=utf-8")
+            if u.path == MCP_OAUTH_PATH:   # E129: back from a connector's sign-in. No cookie comes on this hop (SameSite=Strict); the one-time state is the proof
+                if self.route not in ("local", "open"): return self.send_error(403)
+                ok, words = mcp_oauth_callback(q)
+                page_ = ('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="refresh" content="2;url=/#settings">'
+                         f'<title>Sign-in</title><body style="font:16px system-ui;margin:3em auto;max-width:34em;padding:0 1em"><p>{words.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")}</p><p><a href="/#settings">Back to Settings</a></p>')
+                return self.send(page_.encode(), "text/html; charset=utf-8")
             m = APP_FILES.fullmatch(u.path)
             if m:
                 f = UI_DIR / ("icons/hive.ico" if m[1] == "favicon.ico" else m[1])   # /favicon.ico: browsers ask for it on pages without an icon link (sign-in, raw files); E56c
@@ -7011,7 +7185,7 @@ def serve(port):
                     elif u.path == "/api/signin/cancel": SIGNIN.cancel(); res = {"ok": True}
                     elif u.path == "/api/settings": res = set_settings(d)
                     elif u.path == "/api/import": res = do_import(d)
-                    elif u.path == "/api/mcp-url": res = mcp_url_do(d)
+                    elif u.path == "/api/mcp-url": res = mcp_oauth_start(d.get("name"), self.headers.get("Host")) if d.get("do") == "signin" else mcp_url_do(d)
                     elif u.path == "/api/share-copy": res = share_copy()
                     elif u.path == "/api/share-pack": res = share_pack()
                     elif u.path == "/api/draft": res = draft_do(d)
@@ -7073,6 +7247,7 @@ def serve(port):
         PROGRESS.get()
     threading.Thread(target=warm_progress, daemon=True).start()
     threading.Thread(target=lambda: (proj_c.get()), daemon=True).start()
+    threading.Thread(target=mcp_oauth_loop, daemon=True).start()  # E129: signed-in connectors get a fresh token before theirs ends
     threading.Thread(target=SETUP.get, daemon=True).start()  # so the first page after a restart doesn't pay for it
     threading.Thread(target=kb_mend_start, daemon=True).start()  # a wipe this dash was stopped in the middle of: its record and its line on the board
     srv = ThreadingHTTPServer(("127.0.0.1", port), H)  # loopback only: never opens the machine

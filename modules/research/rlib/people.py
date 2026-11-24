@@ -979,11 +979,11 @@ def check(page, name, title, org="", domains=None, claim="", today=None):
     return dict(res, status="verified" if res["official"] else "secondary")
 
 
-def sentences_with(text, terms, near=None, limit=300):
-    """The first sentence with one of the terms, preferring one close to `near` (a compiled pattern on folded text)."""
+def sentences_with(text, terms, near=None, limit=300, blank=None):
+    """The first sentence with one of the terms, preferring one close to `near` (a compiled pattern on folded text). `blank` (without_events) hides words from the test but not from the sentence returned: "World Economic Forum" names no one's job, yet the stored sentence keeps it (Newell's "adopts the 's future-ready skills framework", fnwords120 review)."""
     best = ""
     for s in re.split(r"(?<=[.!?])\s+|\n+", text):
-        low = fold(s)
+        low = fold(blank(s) if blank else s)
         if any(term_regex(t).search(low) for t in terms) and len(s) > 25:
             if near is None or near.search(low): return " ".join(s.split())[:limit]
             best = best or " ".join(s.split())[:limit]
