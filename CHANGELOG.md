@@ -4,6 +4,10 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Smaller fixes, 2026-11-24
+
+- A chart with two lines now draws them in clearly different colours, puts the unit (such as $) on the axis numbers, and marks the value where each line ends.
+
 ## Smaller fixes, 2026-11-23
 
 - The release check no longer picks a sign-in with no room left in its 5-hour window.

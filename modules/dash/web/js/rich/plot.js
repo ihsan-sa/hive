@@ -114,6 +114,20 @@ export function splitPanels(series) {
 
 // ---- drawing: one svg, the panels stacked on one x ----
 const axisLabel = a => a.name + (a.unit ? ` (${a.unit})` : "");
+// A money or percent unit goes on the tick itself ($15k, 40%), so the axis reads without the legend.
+const PRE = new Set(["$", "£", "€", "¥", "₹", "US$", "C$", "A$"]);
+export const tickOf = (unit, f = fmt) => PRE.has(unit) ? v => (v < 0 ? "-" + unit + f(-v) : unit + f(v)) : unit === "%" ? v => f(v) + "%" : f;
+// an end value is read as an answer, so it keeps more digits than a tick: 14,974 rather than 15k
+export const fmtEnd = v => { const a = Math.abs(v); return a >= 1000 && a < 1e7 ? Math.round(v).toLocaleString("en-US") : a >= 1 && a < 1000 ? String(+v.toPrecision(4)) : fmt(v); };
+/** Where each line's end value goes: by its last point, nudged apart so two close ends don't overprint. */
+export function endLabels(ends, gap = 13, top = -Infinity, bottom = Infinity) {
+  const o = ends.map((e, i) => ({ ...e, i, ty: e.y })).sort((a, b) => a.ty - b.ty);
+  for (let k = 1; k < o.length; k++) if (o[k].ty - o[k - 1].ty < gap) o[k].ty = o[k - 1].ty + gap;
+  const over = o.length ? o[o.length - 1].ty - bottom : 0;
+  if (over > 0) for (const e of o) e.ty -= over;
+  for (const e of o) e.ty = Math.max(top, e.ty);
+  return o.sort((a, b) => a.i - b.i);
+}
 
 function drawChart(box, c) {
   const W = Math.max(280, box.clientWidth || 600), L = 56, R = 14, panelH = c.panels.length > 1 ? 150 : 210, gap = 10, top = 24, bottom = 40;
@@ -127,9 +141,10 @@ function drawChart(box, c) {
     c.geom.push({ y0, panelH, sy, P });
     root.append(s("rect", { class: "g-frame", x: L, y: y0, width: pw, height: panelH }));
     const yt = linTicks(r[0], r[1], 4);
+    const tick = tickOf(P.unit);
     for (const v of yt) {
       root.append(s("path", { class: "g-grid", d: `M${L} ${sy(v).toFixed(1)}H${L + pw}` }));
-      root.append(s("text", { class: "g-tick", x: L - 7, y: sy(v) + 4, "text-anchor": "end" }, fmt(v)));
+      root.append(s("text", { class: "g-tick", x: L - 7, y: sy(v) + 4, "text-anchor": "end" }, tick(v)));
     }
     for (const v of xt) root.append(s("path", { class: "g-grid", d: `M${sx(v).toFixed(1)} ${y0}V${y0 + panelH}` }));
     // above the panel: a lone series is simply named; several get a legend, so nothing rests on colour alone
@@ -163,6 +178,15 @@ function drawChart(box, c) {
       }
     });
     root.append(clip);
+    // a line's end value is the number most asks are after (what it comes to), so it sits by the line's last point
+    if (c.type === "line") {
+      const ends = [];
+      P.series.forEach((sr, k) => { for (let i = sr.vals.length - 1; i >= 0; i--) { const v = sr.vals[i]; if (isFinite(v)) { if (v >= r[0] && v <= r[1] && i >= sr.vals.length * 0.9) ends.push({ k, v, x: sx(c.xs[i]), y: sy(v) }); break; } } });
+      for (const e of endLabels(ends, 13, y0 + 10, y0 + panelH - 4)) {
+        root.append(s("circle", { class: `g-f${e.k}`, cx: e.x.toFixed(1), cy: e.y.toFixed(1), r: 3 }));
+        root.append(s("text", { class: "g-end", x: (e.x - 6).toFixed(1), y: (e.ty - 6).toFixed(1), "text-anchor": "end" }, tickOf(P.unit, fmtEnd)(e.v)));
+      }
+    }
     if (pi === c.panels.length - 1) {
       if (x.labels) {
         const every = Math.max(1, Math.ceil(x.labels.length * 64 / pw));
