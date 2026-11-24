@@ -56,10 +56,12 @@ def units(rows):
         if out.get(r["thread"]) != "focus": out[r["thread"]] = r.get("kind") or "project"
     return out
 
-def scan_board(thread=None, path=None):
+def scan_board(thread=None, path=None, name=None, since=0, away=None):
     """One pass over the whole board: (the posts of one conversation, oldest first; {conversation: {thread, parent} of its first post}).
     continuation.thread_posts reads only the board's tail, and that is not enough here: a goal's conversation is often older than the tail, and
-    the focus of a side conversation hangs on the parent of its first post."""
+    the focus of a side conversation hangs on the parent of its first post. With `away` (a list) and `name`, the posts that agent made in other
+    conversations since `since` (seconds) are appended to it: a run that reports in a second thread did that part (aa4bb 11-23, woken to post a
+    release-train report it had posted 28 s earlier)."""
     posts, first = [], {}
     try:
         with open(path or C.BOARD, encoding="utf-8", errors="replace") as f:
@@ -70,6 +72,7 @@ def scan_board(thread=None, path=None):
                 if not th: continue
                 if th not in first: first[th] = {"thread": th, "parent": p.get("parent")}
                 if th == thread: posts.append(p)
+                elif away is not None and name and str(p.get("from", "")).lower() == name and (C.epoch(p.get("at")) or 0) >= since: away.append(p)
     except OSError: pass
     return posts, first
 
@@ -201,7 +204,7 @@ def open_asks(thread):
         return [f"{e.get('id')} [{e.get('status')}{', held by ' + str(e['owner']) if e.get('owner') else ''}] {trim(e.get('ask'), 240)}" for e in asks.open_items(items) if e.get("thread") == thread and e.get("kind") != "direction"]
     except Exception: return []
 
-def build_case(r, rows, posts, statuses, unit=None, is_own=False, title=None, end=None, extras=True):
+def build_case(r, rows, posts, statuses, unit=None, is_own=False, title=None, end=None, extras=True, away=()):
     """What the judge is shown for one run end, as a dict; None when the run posted nothing in its conversation. `posts` is the whole conversation,
     oldest first, and (unit, is_own) is unit_of's answer for it; `end` cuts it for a replay (seconds), and then the asks and reminders of today are
     left out (extras)."""
@@ -225,7 +228,8 @@ def build_case(r, rows, posts, statuses, unit=None, is_own=False, title=None, en
             "own_posts": [{"id": p.get("id"), "at": str(p.get("at", ""))[:16], "text": trim(p.get("text"), 3200 if p is own[-1] else 900)} for p in own[-3:]], "n_own": len(own),
             "others": [{"from": p.get("from"), "at": str(p.get("at", ""))[:16], "text": trim(p.get("text"), 500)} for p in others],
             "bar": trim(bar[0].get("text"), 700) if bar else "", "asks": open_asks(thread) if extras else [], "reminders": reminders(name, thread, end) if extras else [],
-            "post": own[-1].get("id"), "since": C.epoch(own[-1].get("at")) or 0}
+            "post": own[-1].get("id"), "since": C.epoch(own[-1].get("at")) or 0,
+            "away": [{"thread": p.get("thread") or p.get("id"), "at": str(p.get("at", ""))[:16], "text": trim(p.get("text"), 600)} for p in away if (C.epoch(p.get("at")) or 0) <= end][-3:]}
 
 RULES = """You are the stop judge of a hive of AI agents that work on long-running goals. An agent's run has just ended: the agent chose to stop. Decide, from the evidence below, whether the work it was on is finished. The agent does not get the last word on its own stop, so treat its closing line ("Done:", "Waiting:") as a claim to check, not as the answer.
 
@@ -234,11 +238,11 @@ Answer with one JSON object and nothing else:
 
 - done: what the run was woken for is delivered, and there is no further step this agent should take now in this conversation.
 - blocked: work is left, but every part of it needs something no agent can supply: the person's decision, sign-in, payment or hands, or a hold someone placed.
-- wait: work is left for this agent that depends on something that arrives by itself (a job that is running, a board or a lease that frees at a stated time, a reading on a date), nothing else can be done meanwhile, and nothing shown will wake this agent when it arrives. "step" names what is awaited and what the agent does then. "until" is the time the evidence names for it, in UTC (a time a post gives in host time, or a date alone such as "not before 2026-11-21", which means 00:00 UTC that day, is converted); "minutes" runs from "Time now" to it, plus ten; with no time named, leave "until" out and give 60. Waits are short: if what is awaited is more than 6 hours off, answer done (a date gate further off than that is the keeper's, not a wake to hold for).
+- wait: work is left for this agent that depends on something that arrives by itself (a job that is running, a board or a lease that frees at a stated time, a reading on a date), nothing else can be done meanwhile, and nothing shown will wake this agent when it arrives. "step" names what is awaited and what the agent does then. "until" is the time the evidence names for it, in UTC (a time a post gives in host time, or a date alone such as "not before 2026-11-21", which means 00:00 UTC that day, is converted); "minutes" runs from "Time now" to it, plus ten; with no time named, leave "until" out and give 60. The person's reply, confirmation or decision never arrives by itself: work left waiting on the person is blocked, not wait. Waits are short: if what is awaited is more than 6 hours off, answer done (a date gate further off than that is the keeper's, not a wake to hold for).
 - continue: work is left that this agent can do now with nobody's help. "step" is that one step, concrete enough to act on, in the words of the rung or of the run's own post.
 
 Rules, in order of weight:
-1. Makework is worse than a stop. Answer continue only when you can point at the step in the evidence: a rung marked [ready], something the run itself wrote that it would do next or left undone ("next", "left", "remaining", "not yet", "will"), or a part of what the waking post asked for that no post shows delivered. More checking of work whose check passed, re-reading, summaries and status updates are not steps. If you cannot point at one, answer done.
+1. Makework is worse than a stop. Answer continue only when you can point at the step in the evidence: a rung marked [ready], something the run itself wrote that it would do next or left undone ("next", "left", "remaining", "not yet", "will"), or a part of what the waking post asked for that no post shows delivered (a post the run made in another conversation counts as delivered there). More checking of work whose check passed, re-reading, summaries and status updates are not steps. If you cannot point at one, answer done.
 2. The person's steps stay the person's. Never name as the step something that needs the person. If the run left an item for the person and other work is open that needs nobody, answer continue on that other work; if only the person's item is left, answer blocked.
 3. In the goal's own conversation, a [ready] rung is work left, even after a run that finished the rung before it and said Done. Rungs marked "not before" a future date, [blocked] rungs, rungs marked "no check written" and a parked ladder are not work left now.
 4. In a side conversation the goal's rungs are not this run's job. Answer continue there only on the run's own unfinished work in that conversation.
@@ -260,6 +264,7 @@ def prompt(case):
     for i, p in enumerate(case["own_posts"]):
         last = i == len(case["own_posts"]) - 1
         L.append(f"\n=== {'The run' + chr(39) + 's last post' if last else 'An earlier post of the run'} ({p['at']}) ===\n{p['text']}")
+    for p in case.get("away") or []: L.append(f"\n=== The run also posted in another conversation ({p['thread']}, {p['at']}) ===\n{p['text']}")
     if case["bar"]: L.append(f"\n=== The conversation's status bar ===\n{case['bar']}")
     if case["asks"]: L.append("\n=== Asks of the person still open in this conversation ===\n" + "\n".join(f"- {a}" for a in case["asks"]))
     if case["reminders"]: L.append("\n=== Reminders set that will wake this agent here ===\n" + "\n".join(f"- {a}" for a in case["reminders"]))
@@ -312,14 +317,15 @@ def run(snap, model=None, asker=ask):
     name, thread = str(r.get("name", "")).lower(), r.get("thread")
     if not tr or not name or not thread or thread in C.SYSTEM_THREADS: return None
     rows = G.goals()["rows"]; us = units(rows)
-    posts, first = scan_board(thread)
+    away = []
+    posts, first = scan_board(thread, name=name, since=C.epoch(r.get("at", "")) or 0, away=away)
     unit, own = unit_of(thread, us, *(finder(first, rows) if thread not in us else ()))
     if not unit: return None
     if not C.claim(DIR / "done" / f"judge-{C.safe(name)}-{C.safe(r.get('at'))}"): return None
     day = day_of(t); a = arm(unit, us, day); shadow = bool(tr.get("shadow", True))
     base = {"name": name, "thread": thread, "unit": unit, "kind": us[unit], "own": own, "day": day, "arm": a, "shadow": shadow, "session": r.get("session"), "run_at": r.get("at"), "reasons": snap.get("reasons") or []}
     def skip(reason, **more): e = {**base, "skip": reason, **more}; log(**e); return e
-    case = build_case(r, rows, posts, C.jsonl(C.STATUS), unit, own)
+    case = build_case(r, rows, posts, C.jsonl(C.STATUS), unit, own, away=away)
     if not case: return skip("silent")
     base["post"] = case["post"]
     last = [C.clean(l) for l in str(case["own_posts"][-1]["text"]).splitlines() if l.strip()]
@@ -510,9 +516,10 @@ def cmd_replay(a):
 
 def cmd_case(a):
     snap = json.loads(Path(a.snapshot).read_text()); r = snap.get("run") or {}
-    rows = G.goals()["rows"]; us = units(rows); posts, first = scan_board(r.get("thread"))
+    rows = G.goals()["rows"]; us = units(rows); away = []
+    posts, first = scan_board(r.get("thread"), name=str(r.get("name", "")).lower(), since=C.epoch(r.get("at", "")) or 0, away=away)
     unit, own = unit_of(r.get("thread"), us, *finder(first, rows))
-    case = build_case(r, rows, posts, C.jsonl(C.STATUS), unit, own)
+    case = build_case(r, rows, posts, C.jsonl(C.STATUS), unit, own, away=away)
     print(prompt(case) if case else "the run posted nothing in its conversation")
 
 def cmd_run(a):

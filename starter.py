@@ -442,10 +442,18 @@ def cpu_of(name, skip):
 work = {}  # name -> [t of last sample, cpu then, t last seen working]
 
 def queued_heavy(name):
-    """A job of this agent's is waiting in the `heavy` queue (tickets w.<ns>.<pid>, f.<pid>). A waiter uses no CPU,
+    """A job of this agent's waits in the `heavy` queue (tickets w.<ns>.<pid>, f.<pid>) or holds a heavy slot. A waiter uses no CPU,
     but it isn't stuck: reaping it kills the ticket and sends the job to the back of a queue that can take an hour,
     so a job not detached could never reach a slot. A frozen queue is the watchdog's to catch."""
     key = f"HIVE_NAME={name}".encode()
+    # Holding a slot counts too (slotN.pid, quickN.pid, first.pid: the heavy shell, which carries the agent's
+    # HIVE_NAME): a job in Docker spends its CPU in containers that carry no HIVE_NAME, so cpu_of saw ~4 s in 95 min
+    # and the reaper killed a79ca's Harbor trials mid-run 3 times on 2026-11-23/24. A slot job runs under the
+    # job's own timeout, and a SIGKILLed holder leaves a dead pid, which this skips.
+    for q in (STATE / "heavy").glob("*.pid"):
+        try:
+            if key in Path(f"/proc/{int(q.read_text().split()[0])}/environ").read_bytes().split(b"\0"): return True
+        except (OSError, ValueError, IndexError): pass
     for q in (STATE / "heavy").glob("[wf].*"):
         try:
             if key in Path(f"/proc/{q.name.rsplit('.', 1)[-1]}/environ").read_bytes().split(b"\0"): return True

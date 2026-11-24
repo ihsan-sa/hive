@@ -34,10 +34,10 @@ ORDER = ["command", "many", "long", "chain", "ours", "offer"]  # commonest first
 # The test before a For you line: only these six are the person's; anything else an agent decides and writes up as Decided. A word list, so it warns and never refuses.
 THEIRS = re.compile(r"\$|\b(?:pay|buy|purchase|order|checkout|check out|invoice|budget|price|cost|bill|subscription|funds?|spend|quote"  # money
                     r"|account|github|waterlooworks|sign(?:ing)?[ -]?(?:in|up)|log[ -]?in|token|password|credentials?|api key|keys?|cookies?|secret|permission|invite|2fa"  # an account
-                    r"|your (?:own )?(?:voice|name|word|number|career|cv|resume|interview)|e-?mail|dm|slack|message|reply to|linkedin|show hn|publish(?:ing|ed)?|post on|send|own words|dictat(?:e|ion)|(?:your|their) (?:own )?predictions?"  # their voice (own words, dictation, a prediction: 2026-11-23)
+                    r"|your (?:own )?(?:voice|name|word|number|career|cv|resume|interview|site|website|domain|form|application)|in your name|submit(?:s|ting|ted)?|e-?mail|dm|slack|message|reply to|linkedin|show hn|publish(?:ing|ed)?|post on|send|own words|dictat(?:e|ion)|(?:your|their) (?:own )?predictions?"  # their voice (own words, dictation, a prediction: 2026-11-23)
                     r"|phone|iphone|laptop|mac|windows|pc|powershell|print|printer|device|call|usb|browser|bench|solder|hardware|scope"  # a device
                     r"|root|rootwarden|sudo|warden"  # root
-                    r"|hard limit|delete|history|to the outside|outside world)\b", re.I)  # a hard limit (opening the machine to the outside: 2026-11-23)
+                    r"|hard limit|delete|history|to the outside|outside world|public)\b", re.I)  # a hard limit (opening the machine to the outside: 2026-11-23; your site, in your name, submit, public: the 5 false decidables of 11-24, thread improve-survey)
 DECIDE = ("Test before a For you line: is it money, an account, their voice, a device, root or a hard limit? "
           "This one names none of them, so decide it yourself, write `Decided: <what>` and carry on; keep the For you line only if it really is one of the six.")
 
@@ -90,6 +90,18 @@ def decidable(line):
     line = str(line or "")
     return bool(line) and not NOTHING.match(line) and not THEIRS.search(line)
 
+def decidable_lines(text):
+    """decidable() over each For you line of a post, where a line ending in a colon is read with the code block after it: `run this once on the machine:` then a sudo block is root (2026-11-24: 1 of the day's 5 false decidables)."""
+    text, out = str(text or ""), []
+    for l in lines(text):
+        block = ""
+        if l.rstrip().endswith(":"):
+            at = text.find(l.split()[-1])
+            m = FENCE.search(text, at) if at >= 0 else None
+            block = m.group(0) if m else ""
+        out.append(decidable(l) and not THEIRS.search(block))
+    return out
+
 def why(kinds):
     """One plain sentence per flag kind."""
     return " ".join(WHY[k] for k in kinds if k in WHY)
@@ -97,7 +109,7 @@ def why(kinds):
 def warning(text):
     """What `hive post` says on stderr after a post whose For you line reads as more than a plain ask; None when none does. The post has landed either way."""
     kinds = list(dict.fromkeys(k for l in lines(text) for k in flags(l)))
-    decide = f"{DECIDE} " if any(decidable(l) for l in lines(text)) else ""
+    decide = f"{DECIDE} " if any(decidable_lines(text)) else ""
     if not kinds: return f"hive post: posted. {decide}".rstrip() if decide else None
     main = next(k for k in ORDER if k in kinds)
     return (f"hive post: posted. {decide}The For you line reads as {', '.join(kinds)}: it goes on the person's card as written, and a plain one-sentence ask under 30 words lands better. {why(kinds)} "
@@ -119,9 +131,9 @@ def decidable_tally(posts, t0, t1):
     n = found = 0
     for p in posts:
         if not t0 <= p.get("at", "") <= t1 or not AGENT.match(str(p.get("from", "")).lower()) or p.get("thread") in SELF_THREADS: continue
-        for l in lines(p.get("text")):
+        for l, d in zip(lines(p.get("text")), decidable_lines(p.get("text"))):
             if NOTHING.match(l): continue
-            n += 1; found += decidable(l)
+            n += 1; found += d
     return n, found
 
 def kind_tally(posts, t0, t1):

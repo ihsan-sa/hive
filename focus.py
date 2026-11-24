@@ -919,10 +919,10 @@ def asked_only(thread):
 
 SUMMARY_SLACK_S = 600   # tidy.SUMMARY_SLACK_S: without it a run that set its card and then ended with `hive post --end` was held to set it again (ad388, 11-22)
 
-def nudge(name, thread, since, posts=None, own=None):
+def nudge(name, thread, since, posts=None, own=None, st=None):
     """For the inbox hook: one line when `name` posted a result in `thread` since `since` and the thread's focus has an older summary (or none). None otherwise.
     `own` is the run's own thread: any other thread is named in the line, since "this thread" would point the agent at the wrong card."""
-    st = state(); posts = board_posts() if posts is None else posts
+    st = state() if st is None else st; posts = board_posts() if posts is None else posts
     fid = focus_of(st, thread, posts)
     if not fid or asked_only(thread): return None
     f = find(st, fid)
@@ -962,13 +962,13 @@ def threads_posted(name, thread, since, posts):
         if th and th not in out and str(p.get("from", "")).lower() == name and ts(p.get("at")) >= since: out.append(th)
     return out[:20]
 
-def summary_nudges(name, thread, since, posts):
+def summary_nudges(name, thread, since, posts, st=None):
     """The summary reminders for a run: one per focus, over every thread it posted a result in, as the file ask does (rsi-lab-pickups: a keeper or a lab run posting its result in another focus's thread left that card stale)."""
-    st, out, seen = state(), [], set()
+    st, out, seen = (state() if st is None else st), [], set()
     for th in threads_posted(name, thread, since, posts):
         fid = focus_of(st, th, posts)
         if fid in seen: continue
-        m = nudge(name, th, since, posts, own=thread)
+        m = nudge(name, th, since, posts, own=thread, st=st)
         if m: seen.add(fid); out.append(m)
     return out
 
@@ -989,18 +989,28 @@ def _still_in_asked_run(name, at):
         return ts(r.get("at")) <= at and run_live(r)
     except (OSError, ValueError, KeyError, TypeError, AttributeError): return False
 
-def file_nudge(name, thread, since, posts=None):
+def _new_run_since(name, at):
+    """True when `name` is in a live run that started after `at`: an ask from its earlier run did not reach this one."""
+    try:
+        r = json.loads((RUNS / f"{name}.json").read_text())
+        return ts(r.get("at")) > at and run_live(r)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError): return False
+
+def file_nudge(name, thread, since, posts=None, st=None):
     """For the inbox hook: one line, once per conversation ever, when `name` posted in `thread` since `since` and the thread is in no
     focus (nobody ever tagged it, so the person has not put it in Misc on purpose) or still has its board id for a title. The agent
     that worked in it files it and names it at its own hand-off: no hourly tidy pass (the person, 2026-11-08, post 1108153548ec,
     time invariance). Asks are recorded in FILE_ASKED so the audit pass can see who was asked and did not. None otherwise."""
-    st = state(); posts = board_posts() if posts is None else posts
+    st = state() if st is None else st; posts = board_posts() if posts is None else posts
     if not any(p.get("thread") == thread and str(p.get("from", "")).lower() == name and ts(p.get("at")) >= since for p in posts): return None
     try:
         # asked within the hour, this agent or one still in the run it was asked in (it may yet act). One whose run is over did not
         # act, so the next agent to stop is asked: 11-23, a79ca was asked at 19:20 for its helpers' threads, stopped at 19:35, and
         # the helpers stopping at 19:51 and 19:59 were never asked, being inside its hour (thread improve, 7 pickups in a day)
-        if any((r := json.loads(l)).get("thread") == thread and now() - r.get("at", 0) < 3600 and (r.get("name") == name or _still_in_asked_run(r.get("name"), r.get("at", 0)))
+        # the same agent is asked again when it is in a new run since the ask (11-23: a79ca, asked 19:20, ended without filing, woken
+        # again at 19:50 to post in the same threads, was not asked and the 20:19 pass found two untitled; rsi-lab keeper a6a48)
+        if any((r := json.loads(l)).get("thread") == thread and now() - r.get("at", 0) < 3600
+               and ((r.get("name") == name and not _new_run_since(name, r.get("at", 0))) or _still_in_asked_run(r.get("name"), r.get("at", 0)))
                for l in FILE_ASKED.read_text().splitlines() if l.strip()): return None
     except (OSError, ValueError): pass
     tagged = False

@@ -250,7 +250,10 @@ def options(a):
     if a[:1] in (["at"], ["every"]):  # the text starts after WHEN, two words for "at 2026-11-06 09:00"
         i = 3 if a[0] == "at" and len(a) > 3 and re.fullmatch(r"\d{4}-\d\d-\d\d", a[1]) and re.fullmatch(r"\d\d:\d\d", a[2]) else 2
         while len(a) > i and take(i): pass
-    while len(a) >= 2 and (take(len(a) - 2) if "=" not in a[-1] else take(len(a) - 1)): pass
+    # the last word is a flag only in the --to=NAME form; a value with "=" in it (`--if "grep -q rc= log"`) is still the value of the
+    # flag before it, else every flag became text and the reminder went to the person (a12a5 2026-11-24)
+    tail = lambda: take(len(a) - 1) if "=" in a[-1] and a[-1].partition("=")[0] in ("--to", "--thread", "--if", "--wait") else take(len(a) - 2)
+    while len(a) >= 2 and tail(): pass
     return a, opts
 
 

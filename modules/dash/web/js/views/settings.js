@@ -559,10 +559,32 @@ function mcpUrlBlock(ctx) {
   // E129: the dash runs the server's sign-in and keeps the token for the agents; this tab goes to the server's page and comes back to Settings
   const signin = async name => {
     F.busy["mcpin-" + name] = true; ctx.update();
-    try { const r = await post("/api/mcp-url", { do: "signin", name }); if (r && typeof r.go === "string" && /^https?:\/\//.test(r.go)) { location.href = r.go; return; } say("mcpurl", "The server sent no sign-in page.", "bad"); }
+    try { const r = await post("/api/mcp-url", { do: "signin", name });
+      if (r && typeof r.go === "string" && /^https?:\/\//.test(r.go)) { location.href = r.go; return; }
+      if (r && r.need_client && typeof r.redirect === "string") F.mcpNeed = { name, redirect: r.redirect, id: "", secret: "" };   // E135: no self-registration
+      else say("mcpurl", "The server sent no sign-in page.", "bad"); }
     catch (e) { say("mcpurl", e.message, "bad"); }
     delete F.busy["mcpin-" + name]; ctx.update();
   };
+  // E135: the client ID (and secret) of an app the person registered at the server's maker; the secret goes to dash.py and never comes back
+  const saveClient = async () => {
+    const N = F.mcpNeed; F.busy["mcpcli"] = true; ctx.update();
+    try { F.mcpUrls = await post("/api/mcp-url", { do: "client", name: N.name, client_id: N.id.trim(), client_secret: N.secret }); F.mcpNeed = null; delete F.busy["mcpcli"]; return signin(N.name); }
+    catch (e) { say("mcpurl", e.message, "bad"); }
+    delete F.busy["mcpcli"]; ctx.update();
+  };
+  const N = F.mcpNeed && M.servers.some(x => x.name === F.mcpNeed.name) ? F.mcpNeed : null;
+  // E137: a listed server that doesn't register clients itself carries a short guide for registering the app (mcp-known.json)
+  const G = N ? ((M.known || []).find(k => k.guide && M.servers.some(x => x.name === N.name && x.url === k.url)) || {}).guide : null;
+  const need = N ? h("form", { class: "mcp-client", onsubmit: e => { e.preventDefault(); saveClient(); } },
+    h("p", { class: "muted" }, "This server needs an app you register yourself on its maker's site. Give that app this return address, then paste its client ID here."),
+    h("p", null, h("code", null, N.redirect)),
+    G ? h("div", { class: "mcp-guide" }, h("ol", null, G.steps.map(t => h("li", null, t))),
+      h("p", null, h("a", { href: G.where, target: "_blank", rel: "noreferrer noopener" }, "Open the setup page"))) : null,
+    h("div", { class: "frow" },
+      h("div", { class: "frow-grow" }, field("Client ID", input({ value: N.id, autocomplete: "off", oninput: (e, n) => { N.id = n.value; } }))),
+      h("div", { class: "frow-grow" }, field("Client secret (if it gave one)", input({ type: "password", value: N.secret, autocomplete: "new-password", oninput: (e, n) => { N.secret = n.value; } }))),
+      button("Save and sign in", null, { type: "submit", size: "s", kind: "primary", busy: F.busy["mcpcli"] }))) : null;
   const add = () => run({ do: "add", name: A.name.trim(), url: A.url.trim(), token: A.token }, "mcpurl-add", () => { F.mcpAdd = { name: "", url: "", token: "" }; });
   // E132: official servers from mcp-known.json; picking one sends only its id, and one that needs a sign-in goes straight on to it
   const pick = async k => {
@@ -574,14 +596,15 @@ function mcpUrlBlock(ctx) {
   };
   const known = Array.isArray(M.known) && M.known.length ? block({ title: "Known servers", sub: "Official servers from the companies that make them. Pick one to add it; one that needs your account takes you to its sign-in page." },
     h("ul", { class: "list mcp-known-list" }, M.known.map(k => h("li", { class: "lr mcp-known-row", "data-key": k.id },
-      h("div", { class: "lr-in" }, h("b", null, k.label), " ", h("span", { class: "meta" }, k.signin ? "needs your account" : "no account needed"), h("p", { class: "muted mcp-known-line" }, k.line)),
+      h("div", { class: "lr-in" }, h("b", null, k.label), " ", h("span", { class: "meta" }, k.guide ? "needs an app you register" : k.signin ? "needs your account" : "no account needed"), h("p", { class: "muted mcp-known-line" }, k.line)),
       k.added ? h("span", { class: "meta" }, "added") : button(k.signin ? "Add and sign in" : "Add", () => pick(k), { size: "s", kind: "quiet", busy: F.busy["mcpk-" + k.id], disabled: M.servers.length >= M.max })))) ) : null;
   return [known, block({ title: "Add a connector by address", sub: "A remote MCP server, like a custom connector in Claude. Your agents can use its tools from their next run, so only add a server you trust." },
     M.servers.length ? h("ul", { class: "list mcp-url-list" }, M.servers.map(x => h("li", { class: "lr mcp-url-row", "data-key": x.name },
-      h("div", { class: "lr-in" }, h("b", null, x.name), " ", h("span", { class: "meta mcp-url" }, x.url), x.token ? [" ", h("span", { class: "meta" }, "has a token")] : null,
+      h("div", { class: "lr-in" }, h("b", null, x.name), " ", h("span", { class: "meta mcp-url" }, x.url), x.token ? [" ", h("span", { class: "meta" }, "has a token")] : null, x.client ? [" ", h("span", { class: "meta" }, "has its own app")] : null,
         x.signed === "in" ? [" ", h("span", { class: "meta" }, "signed in")] : x.signed === "lapsed" ? [" ", h("span", { class: "meta" }, "sign-in ended")] : null),
       x.token || x.open ? null : button(x.signed === "in" ? "Sign in again" : "Sign in", () => signin(x.name), { size: "s", kind: x.signed === "lapsed" ? "primary" : "quiet", busy: F.busy["mcpin-" + x.name] }),
       button("Remove", () => confirm({ title: `Remove ${x.name}?`, body: ["Agents stop seeing its tools from their next run."], ok: "Remove", kind: "danger", onOk: () => run({ do: "remove", name: x.name }, "mcpurl-" + x.name) }), { size: "s", kind: "quiet", busy: F.busy["mcpurl-" + x.name] })))) : null,
+    need,
     M.servers.length < M.max ? h("form", { class: "mcp-url-add", onsubmit: e => { e.preventDefault(); add(); } },
       h("div", { class: "frow" },
         h("div", null, field("Name", input({ value: A.name, autocomplete: "off", maxlength: 40, placeholder: "tools", oninput: (e, n) => { A.name = n.value; } }))),

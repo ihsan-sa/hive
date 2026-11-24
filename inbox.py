@@ -620,9 +620,9 @@ def focus_nudge(name, rec):
             run, last = f.read_text().split()
             if run == rec["at"]: results_from = max(since, float(last))
         except (OSError, ValueError): pass
-        posts = focus.board_posts()
-        summary = "\n\n".join(focus.summary_nudges(name, thread, results_from, posts))
-        msg = "\n\n".join(x for x in (summary, *(focus.file_nudge(name, th, since, posts) for th in focus.threads_posted(name, thread, since, posts))) if x)
+        posts = focus.board_posts(); st = focus.state()  # once: a state() per thread posted in took ~1.3 s each, and a run in 9 threads (aef1b, 11-23 19:08) ran the Stop hook past its 10 s timeout, so it was killed before asking
+        summary = "\n\n".join(focus.summary_nudges(name, thread, results_from, posts, st=st))
+        msg = "\n\n".join(x for x in (summary, *(focus.file_nudge(name, th, since, posts, st=st) for th in focus.threads_posted(name, thread, since, posts))) if x)
     except Exception: return None
     if not msg: return None
     if summary:

@@ -992,6 +992,34 @@ def _not_prose(segs, i):
     return i + 1 < len(segs) and bool(CREDIT.match(segs[i + 1].strip()))
 
 
+def _clip(s, limit):
+    """A sentence cut to `limit` characters at a whole word, with "…" to show it goes on: a bare slice ended Newell's signal mid-word, "Empathy and Active List" (fnwords122 review)."""
+    s = " ".join(s.split())
+    if len(s) <= limit: return s
+    cut = s[:limit - 1]
+    sp = cut.rfind(" ")
+    return (cut[:sp] if sp > limit // 2 else cut).rstrip(" ,;:-\u2013\u2014") + "\u2026"
+
+
+BYLINE = re.compile(r"\bby\s*$", re.I)
+
+
+def _byline(segs, i, near):
+    """True when segment i names the person only as the byline under a title: "... Workforce Development Lens by Ian Roark" (Roark's own article, fnwords122 review)."""
+    s = fold(segs[i])
+    m = near.search(s)
+    return bool(m) and _not_prose(segs, i) and bool(BYLINE.search(s[:m.start()]))
+
+
+def byline(text, near):
+    """True when the page credits the person as its writer: a line with "by" just before their name ("... Lens by Ian Roark", "By Jane Doe"). A writer's own article speaks for them, sentence by sentence (Roark, fnwords122 review)."""
+    for ln in str(text or "").split("\n"):
+        low = fold(ln)
+        for m in near.finditer(low):
+            if BYLINE.search(low[:m.start()]): return True
+    return False
+
+
 def sentences_with(text, terms, near=None, limit=300, blank=None):
     """The first sentence with one of the terms, preferring one close to `near` (a compiled pattern on folded text). `blank` (without_events) hides words from the test but not from the sentence returned: "World Economic Forum" names no one's job, yet the stored sentence keeps it (Newell's "adopts the 's future-ready skills framework", fnwords120 review).
     With `near` and no sentence naming it, the one nearest the first that does is taken, never a heading or a photo caption: the first on the page was a headline or a caption above the story (fnwords121 review)."""
@@ -1001,9 +1029,9 @@ def sentences_with(text, terms, near=None, limit=300, blank=None):
         low = fold(blank(s) if blank else s)
         if near is not None and at is None and near.search(fold(s)): at = i
         if any(term_regex(t).search(low) for t in terms) and len(s) > 25:
-            if near is None or near.search(low): return " ".join(s.split())[:limit]
+            if near is None or (near.search(low) and not _byline(segs, i, near)): return _clip(s, limit)
             hits.append(i)
     prose = [i for i in hits if not _not_prose(segs, i) or (at is not None and i == at - 1)]   # the line just above the name is their unit's label ("Artificial Intelligence Office" over "Jane Doe"), not a headline
     if not prose: return ""
     i = min(prose, key=lambda i: abs(i - at)) if at is not None else prose[0]
-    return " ".join(segs[i].split())[:limit]
+    return _clip(segs[i], limit)

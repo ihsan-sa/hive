@@ -439,8 +439,9 @@ def signal_page_date(page, url):
     return ""
 
 
+THE_INSTITUTION = re.compile(r"\bthe (?:community |technical |state )?(?:college|university|school|institute|campus)\b")   # folded text
 EVENT_AFTER = re.compile(r"\b(?:\d{1,2}(?::\d\d)?\s*[ap]\.?\s?m\b|registration|register|venue|location|ballroom|auditorium|doors open)", re.I)
-EVENT_DATE_NOTE = "signal_date is the date of the event the signal page announces; the page gives no date it was posted"
+EVENT_DATE_NOTE = "the signal page gives no date it was posted; the event it announces is on "
 def event_date(page, url, d):
     """True when signal_page_date's date `d` is a date line followed by an event's time, place or registration: the day of the event, not when the page was written (a university centre's events page, "Tuesday, November 10, 2026 / Main Ballroom ... / Registration: 8:00 a.m.", stored as a head's signal_date, fnwords120 review)."""
     if not d or (page or {}).get("date") or extract.url_date(url or ""): return False
@@ -453,9 +454,11 @@ def event_date(page, url, d):
 
 
 def with_event_note(row, page, url):
-    """The row with EVENT_DATE_NOTE added when its signal_date is an event's day."""
-    if event_date(page, url, row.get("signal_date")) and EVENT_DATE_NOTE not in str(row.get("note") or ""):
-        row["note"] = "; ".join(x for x in (row.get("note"), EVENT_DATE_NOTE) if x)
+    """The row with no signal_date when the only date on its signal page is an event's day, which goes in the note: an event date read as the signal's date looked like a fresh signal (Mack's events page, "2026-11-10", fnwords122 review)."""
+    d = row.get("signal_date")
+    if event_date(page, url, d):
+        row["signal_date"] = ""
+        if EVENT_DATE_NOTE not in str(row.get("note") or ""): row["note"] = "; ".join(x for x in (row.get("note"), EVENT_DATE_NOTE + d) if x)
     return row
 
 
@@ -1449,7 +1452,7 @@ class Hunt:
 
     def lengthen_signal(self, row, own_page):
         """A stored own signal that today's reading of the same page carries further: an older sentence split stopped it short ("... along with Dr.", Cooper, fnwords121). Only a longer sentence that holds the stored one replaces it."""
-        old = str(row.get("signal") or "").strip()
+        old = str(row.get("signal") or "").strip().rstrip("\u2026").rstrip()   # a clipped sentence ends in "…", which the whole one doesn't hold
         o = OWN_SIGNAL_NOTE.search(str(row.get("note") or ""))
         page = (self.case.page(o.group(1)) if o else own_page) or {}
         text = page.get("text", "")
@@ -1940,6 +1943,7 @@ class Hunt:
                     if any(people.term_regex(t).search(ctx) for t in hit_terms): close = True; break
             if not close and hit_terms and per.get("how") == "directory" and any(people.term_regex(t).search(fold(page.get("title") or "")) for t in hit_terms): close = True  # a contact block on a page titled for the signal: the listed head is the program's contact
             if hit_terms and not (sig and near.search(fold(sig))) and (own := self.own_sentence(text, per["name"], org, hit_terms)): sig, close = own, True  # "Campbell also addressed ... 'Employers now expect graduates to use AI tools,' she said." (fnwords89 review). Also when the word sits near their name but the stored sentence doesn't name them: Oswego's story stored a coach's "he came up with ... an artificial intelligence (AI) tool named 'Carl'" for Morris, whose own quote was "Artificial intelligence is transforming how organizations recruit, hire and operate." (fnwords119 review)
+            if close and sig and not res["official"] and re.search(r"[.!?\"\u201d\u2019')]$", sig.strip()) and not near.search(fold(sig)) and not people.names_org(org, sig) and not people.org_words_in(sig, org) and not THE_INSTITUTION.search(fold(sig)) and not people.byline(text, near): close = False   # on another site's story, a sentence that names neither them nor their college is the writer's own; a label line above their name is their unit's (Kostenbauder's "While AI can help read X-rays ...", after a quote of hers without the word; fnwords122 review); "The community college has used ..." is about theirs (Griffith), and an article they wrote is theirs throughout (Roark)
             if hit_terms and not sig and not res["official"]: close = False  # only a menu says it, as on a namesake's site
             row = dict(name=per["name"], title=people.drop_code(per["title"]), organisation=org, official_site="yes" if res["official"] else "no", signal=sig, signal_near_person="yes" if close else "no", source_url=page.get("final_url") or page["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status=res["status"], check_quote=res["quote"], angle=angle, note=res["note"])
             if close and hit_terms and roster_only(text, per["name"], hit_terms) and self.seat_page(page) and not self.own_sentence(text, per["name"], org, hit_terms):
