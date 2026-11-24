@@ -16,6 +16,7 @@ jobs:
           - { os: ubuntu-24.04, flags: "--linux", app: "dist/linux-unpacked/hive-app", run: "xvfb-run -a" }
           - { os: windows-latest, flags: "--win", app: "dist/win-unpacked/Hive.exe", run: "" }
           - { os: macos-15, flags: "--mac dmg zip --arm64 -c.mac.identity=-", app: "dist/mac-arm64/Hive.app/Contents/MacOS/Hive", run: "" }
+          - { os: windows-11-arm, flags: "--win --x64", app: "dist/win-unpacked/Hive.exe", run: "" }
           - { os: macos-15-intel, flags: "--mac dmg zip --x64 -c.mac.identity=-", app: "dist/mac/Hive.app/Contents/MacOS/Hive", run: "" }
     runs-on: ${{ matrix.os }}
     steps:
@@ -26,6 +27,11 @@ jobs:
       - run: npm test
       - run: npx electron-builder ${{ matrix.flags }} --publish never
       - run: node test/size.js dist
+      # On the ARM runner: the chip Windows reports to this (x64, translated) job and the one it keeps in the registry, which the app hands the installer.
+      - if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: 'Write-Host "process: $env:PROCESSOR_ARCHITECTURE  machine: $((Get-ItemProperty ''HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'').PROCESSOR_ARCHITECTURE)"; wsl --status; wsl -l -v'
+        continue-on-error: true
       - if: runner.os == 'macOS'
         run: codesign --verify --deep --strict --verbose=2 "$(dirname "$(dirname "$(dirname "${{ matrix.app }}")")")"
       - run: ${{ matrix.run }} node test/smoke.js "${{ matrix.app }}"
@@ -52,7 +58,7 @@ jobs:
           xvfb-run -a node test/deb.js
       # The same on Windows (its WSL 2) and on the Intel Mac (its VM; Apple silicon runners can't start one). These machines
       # differ from a person's computer, so a stop here is read, not a red build.
-      - if: matrix.os == 'windows-latest' || matrix.os == 'macos-15-intel'
+      - if: runner.os == 'Windows' || matrix.os == 'macos-15-intel'
         continue-on-error: true
         timeout-minutes: 75
         env: { HIVE_APP_REAL: "1" }
@@ -60,7 +66,7 @@ jobs:
       # The README's "Remove it" steps, run after the real install: nothing of the Hive may be left.
       - if: runner.os == 'Linux'
         run: HIVE_APP_REAL=1 node test/remove.js
-      - if: matrix.os == 'windows-latest' || matrix.os == 'macos-15-intel'
+      - if: runner.os == 'Windows' || matrix.os == 'macos-15-intel'
         continue-on-error: true
         timeout-minutes: 30
         env: { HIVE_APP_REAL: "1" }
