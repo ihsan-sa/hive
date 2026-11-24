@@ -187,7 +187,6 @@ function tableSize(t, ext, cut) {
 export async function render(it, { source, mode, signal } = {}) {
   let k = kindOf(it.name);
   if (it.kb) {   // the Knowledge API gives images and PDFs as bytes and everything else as text, so the rest shows as text
-    if (k === "pdf") return noPreview(it, "A project's PDF opens in Knowledge or downloads; it doesn't show in this panel.");
     if (["video", "audio", "xlsx", "docx", "pptx"].includes(k)) return noPreview(it, "This kind of project file doesn't show here yet. Attach it to a message to preview it.");
     if (k === "svg") k = "code";   // a project page (html) runs in the panel through the server, redacted (R111)
   }

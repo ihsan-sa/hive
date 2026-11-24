@@ -972,6 +972,23 @@ def summary_nudges(name, thread, since, posts):
         if m: seen.add(fid); out.append(m)
     return out
 
+RUNS = HOME / "run"
+
+def run_live(r):
+    """A ~/run/NAME.json record is still going: its pid lives and, when the record has it, started when the run did (the starter's
+    `proc`, /proc/PID/stat field 22), so a pid reused after a reboot is not taken for it."""
+    try:
+        st_ = Path(f"/proc/{int(r['pid'])}/stat").read_text().rsplit(")", 1)[1].split()
+        return not r.get("proc") or st_[19] == str(r["proc"])
+    except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError): return False
+
+def _still_in_asked_run(name, at):
+    """True when `name` is still in the run it was asked in (its run file started before the ask and the run lives): it may yet act."""
+    try:
+        r = json.loads((RUNS / f"{name}.json").read_text())
+        return ts(r.get("at")) <= at and run_live(r)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError): return False
+
 def file_nudge(name, thread, since, posts=None):
     """For the inbox hook: one line, once per conversation ever, when `name` posted in `thread` since `since` and the thread is in no
     focus (nobody ever tagged it, so the person has not put it in Misc on purpose) or still has its board id for a title. The agent
@@ -980,7 +997,11 @@ def file_nudge(name, thread, since, posts=None):
     st = state(); posts = board_posts() if posts is None else posts
     if not any(p.get("thread") == thread and str(p.get("from", "")).lower() == name and ts(p.get("at")) >= since for p in posts): return None
     try:
-        if any(json.loads(l).get("thread") == thread and now() - json.loads(l).get("at", 0) < 3600 for l in FILE_ASKED.read_text().splitlines() if l.strip()): return None  # asked within the hour; a first ask nobody acted on is repeated to the next agent
+        # asked within the hour, this agent or one still in the run it was asked in (it may yet act). One whose run is over did not
+        # act, so the next agent to stop is asked: 11-23, a79ca was asked at 19:20 for its helpers' threads, stopped at 19:35, and
+        # the helpers stopping at 19:51 and 19:59 were never asked, being inside its hour (thread improve, 7 pickups in a day)
+        if any((r := json.loads(l)).get("thread") == thread and now() - r.get("at", 0) < 3600 and (r.get("name") == name or _still_in_asked_run(r.get("name"), r.get("at", 0)))
+               for l in FILE_ASKED.read_text().splitlines() if l.strip()): return None
     except (OSError, ValueError): pass
     tagged = False
     try: tagged = any(r.get("kind") == "tag" and r.get("thread") == thread for r in map(json.loads, filter(str.strip, FILE.read_text().splitlines())))

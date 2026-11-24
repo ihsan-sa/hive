@@ -18,6 +18,20 @@ HOME = Path.home(); STATE = HOME / ".hive"; MARK, LOG = STATE / "tidy.json", STA
 GRACE_S = 900          # an agent still finishing its run gets its own hand-off first
 SUMMARY_SLACK_S = 600   # a summary written within 10 min before the result is not stale (R33: 3 of 5 post-ask misses were this order)
 CATCHUP_S = 2 * 86400   # the whole-board passes of a Hive new to this stop after 2 days, sorted or not
+HOLD_MAX_S = 6 * 3600   # a run still going this long after its post is not about to hand off: the miss is reported anyway
+
+def live_runs():
+    """{name: start of its current run} for every run still going (~/run/NAME.json, its pid alive). An agent that posted in a thread
+    in the run it is still in gets asked at that run's own Stop, so a pass in the middle of it is too early: GRACE_S counts from the
+    last post, and a run waiting on a test or a helper outlives it (11-23: ae757 posted 19:29, the 19:49 pass took its thread, it
+    stopped at 19:59 with the work already done for it; a79ca, live 19:50-21:36, had two of its threads taken at 20:19)."""
+    out = {}
+    for f in (HOME / "run").glob("*.json"):
+        try:
+            r = json.loads(f.read_text())
+            if fc.run_live(r): out[f.stem] = fc.ts(r.get("at"))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError): pass
+    return out
 
 AGENT = __import__("re").compile(r"a[0-9a-f]{4}")
 def is_agent(who): return bool(AGENT.fullmatch(str(who or "").lower()))
@@ -44,39 +58,54 @@ def quiet(text):
     thread does not wake its agents again (the first pass, post 110816144744, woke two more agents and rootwarden that way)."""
     return LEAD.sub("", text).replace("@", "\uff20")
 
-def due(since, t=None, posts=None):
-    """[{kind, thread|focus, what, agents: [{name, asked, ...runlog}]}] missed since `since`, settled for GRACE_S."""
+def due(since, t=None, posts=None, live=None, held=None, hold=None):
+    """[{kind, thread|focus, what, agents: [{name, asked, ...runlog}]}] missed since `since`, settled for GRACE_S.
+    live: live_runs() (read when None). A miss whose agent is still in the run that posted it is held, not reported: written into
+    `hold` as {key: since}, and the next pass passes it back as `held`, so the thread is looked at again from that since even once
+    the mark has moved past its last post (held at most HOLD_MAX_S)."""
     t = t or time.time(); st = fc.state(); posts = fc.board_posts() if posts is None else posts
+    live = live_runs() if live is None else live; hold = {} if hold is None else hold
+    held = {k: float(v) for k, v in held.items() if isinstance(v, (int, float))} if isinstance(held, dict) else {}   # a bad mark must not fail every pass after it
+    def going(ps, s):  # an agent posted here, since s and within HOLD_MAX_S (its own post, not anyone's), in the run it is still in: its own Stop asks it
+        return any(s <= (pt := fc.ts(p.get("at"))) and t - pt < HOLD_MAX_S and (n := str(p.get("from", "")).lower()) in live and pt >= live[n] for p in ps)
     tagged = set()
     try: tagged = {r.get("thread") for r in map(json.loads, filter(str.strip, fc.FILE.read_text().splitlines())) if r.get("kind") == "tag"}
     except (OSError, ValueError): pass
     by = {}
     for p in posts: by.setdefault(p["thread"], []).append(p)
     ask, out = asked(), []
-    def who(th, kind):
+    def who(th, kind, since=since):
         names = []
         for p in sorted(by.get(th, []), key=lambda p: fc.ts(p.get("at"))):
             n = str(p.get("from", "")).lower()
             if is_agent(n) and fc.ts(p.get("at")) >= since and n not in names: names.append(n)
         return [{"name": n, "asked": (th, n) in ask, **runlog(n)} for n in names[-3:]]
-    def last_agent(th):  # the newest agent post since `since` in the thread: the one to read to see why
+    def last_agent(th, since=since):  # the newest agent post since `since` in the thread: the one to read to see why
         ps = [p for p in by.get(th, []) if is_agent(p.get("from")) and fc.ts(p.get("at")) >= since]
         return max(ps, key=lambda p: fc.ts(p.get("at")))["id"] if ps else None
     for th, ps in by.items():
+        s = min(since, held.get(th, since))
         last = max(fc.ts(p.get("at")) for p in ps)
-        if last < since or t - last < GRACE_S: continue
-        if not any(is_agent(p.get("from")) and fc.ts(p.get("at")) >= since for p in ps): continue
+        if last < s: continue
+        if t - last < GRACE_S:   # still settling: a held thread keeps its hold (a reply by the person in the window would otherwise lose it for good)
+            if th in held: hold[th] = held[th]
+            continue
+        if not any(is_agent(p.get("from")) and fc.ts(p.get("at")) >= s for p in ps): continue
         first = min(ps, key=lambda p: fc.ts(p.get("at"))); title = quiet((str(first.get("text", "")).strip().splitlines() or [""])[0])[:70]
+        mine = []
         if th not in tagged and not th.endswith("-security-read") and th != "timers" and fc.focus_of(st, th, posts) is None:  # a rootwarden read of one PR is plumbing, not a line of work (R38-1)
-            out.append({"kind": "file", "thread": th, "post": last_agent(th), "what": f"in no focus: {title}", "agents": who(th, "file")})
+            mine.append({"kind": "file", "thread": th, "post": last_agent(th, s), "what": f"in no focus: {title}", "agents": who(th, "file", s)})
         if not fc._titled(th):
-            out.append({"kind": "title", "thread": th, "post": last_agent(th), "what": f"no title, shows: {title}", "agents": who(th, "title")})
+            mine.append({"kind": "title", "thread": th, "post": last_agent(th, s), "what": f"no title, shows: {title}", "agents": who(th, "title", s)})
+        if mine and going(ps, s): hold[th] = s
+        else: out += mine
     for f in st["foci"]:
         ths = {th for th, fid in st["tags"].items() if fid == f["id"]} | {x for x in (f.get("thread"), f["id"]) if x}
         ths = {x for x in ths if not fc.asked_only(x)}
         rt, p = fc.newest_result(ths, posts)
-        s = f.get("summary"); sat = float(s.get("at") or 0) if s else 0
-        if p and p.get("via") != "relay" and rt >= since and t - rt >= GRACE_S and rt - sat > SUMMARY_SLACK_S:  # a starter relay of a run that ended without posting comes after its Stop: no check could have asked (a77d0, ac623 on 11-19)  # a summary written just before the result post (the Stop nudge order) is current
+        s = f.get("summary"); sat = float(s.get("at") or 0) if s else 0; hk = "focus:" + f["id"]; hs = min(since, held.get(hk, since))
+        if p and p.get("via") != "relay" and rt >= hs and t - rt >= GRACE_S and rt - sat > SUMMARY_SLACK_S:  # a starter relay of a run that ended without posting comes after its Stop: no check could have asked (a77d0, ac623 on 11-19)  # a summary written just before the result post (the Stop nudge order) is current
+            if going([p], hs): hold[hk] = hs; continue   # the result's agent is still in the run that posted it: its Stop asks for the card
             n = str(p.get("from", "")).lower()
             out.append({"kind": "summary", "focus": f["id"], "thread": p.get("thread"), "post": p.get("id"), "what": f"summary of {f['name']} is older than {n}'s result {p.get('id')}",
                         "agents": [{"name": n, "asked": None, **runlog(n)}]})
@@ -121,10 +150,11 @@ def main(argv=None):
         except (OSError, ValueError, KeyError): m = {"catchup": t}; since = 0
         first = bool(m.get("catchup")) and t - m["catchup"] < CATCHUP_S
         if first or a.all: since = 0
-        items = due(since, t)
+        hold = {}
+        items = due(since, t, live={} if a.all else None, held={} if first or a.all else m.get("held") or {}, hold=hold)   # --all: everything unsorted, live or not
         if a.mark:
             STATE.mkdir(parents=True, exist_ok=True)
-            MARK.write_text(json.dumps({"at": t, **({"catchup": m["catchup"]} if first and items else {})}))
+            MARK.write_text(json.dumps({"at": t, **({"catchup": m["catchup"]} if first and items else {}), **({"held": hold} if hold else {})}))
             with LOG.open("a") as f:
                 # a catch-up pass lists old unsorted work, not hand-offs missed since the last pass: flagged, counts only (no 800-entry
                 # misses list per pass), and left out of report's and stats' miss totals, so the R34/R38 measure stays a hand-off measure
