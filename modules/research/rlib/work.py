@@ -814,6 +814,10 @@ _PEOPLE_URL = PEOPLE_PAGE
 QUOTE_MARK = re.compile(r"[\"\u201c\u201d]")
 OWN_NEXT = re.compile(r"(?:he|she|they|his|her|their)\b", re.I)  # a sentence after a quote that still speaks of the person
 FEED_HEAD = re.compile(r"^(?:recent|latest|related|more|popular|featured)(?: blog)? (?:posts|news|articles|stories|blogs)$", re.I)   # a list of post titles under a staff card: its last title sits just above the next person's name (Wesleyan's "Recent Posts" above Munafo, fnwords117 and fnwords118 reviews)
+UNIT_LINE = "their own words on the page don't use the term; the signal is the story's line about their unit"
+NARRATES = re.compile(r"\b(?:explains?|discuss(?:es)?|shares?|talks? (?:about|with|through)|describes?|reflects? on|joins?|joined by|offers?|outlines?|breaks? down|walks? (?:us |listeners )?through|makes? (?:a|the) (?:\w+ )?case|unpacks?|dives? into|sits? down)\b", re.I)   # a host's or writer's summary of what someone said ("Jane Doe of Triton College explains why ... an AI-driven job market"), not their words
+SPEAKER_LINE = re.compile(r"^\s*(?:(?:dr|mr|mrs|ms|prof)\.?\s+)?[A-Z][\w.'’-]*(?:\s+[A-Z][\w.'’-]*){0,3}\s*:\s*$")   # a transcript's speaker label on a line of its own ("Meredith Metsker:")
+SAID_NAME = re.compile(r"\b(?:said|says|added|adds|noted|notes|explained|according to)\b", re.I)
 HOSTED_IT = re.compile(r"\b(?:co-?)?(?:hosted|led|moderated|organi[sz]ed|presented|facilitated|ran)\b", re.I)   # "... hosted by Jane Doe": her sentence picks up the event the line before describes (Brooklyn's AI-careers panel, fnwords89 review)
 
 class Hunt:
@@ -1381,7 +1385,7 @@ class Hunt:
         sents = [" ".join(x.split()) for x in people.SENT_BREAK.split(people.without_boilerplate(text)) if x.strip()]   # not after a middle initial: "the Ethyle R. Wolfe Institute" split Brooklyn's AI sentence in two
         bare = [people.without_events(x) for x in sents]   # event names are hidden from the word test, not from the sentence kept
         label = re.compile(rf"(?:{'|'.join(re.escape(t) for t in dict.fromkeys((toks[0], toks[-1])) if len(t) >= 3)}) ?: ") if len(toks) >= 2 and max(len(toks[0]), len(toks[-1])) >= 3 else None  # a Q&A answer under their first name or surname ("Scott: The Career Center has been ... incorporating specific AI- and ATS-related advice", Dranka's co-written story, fnwords120)
-        seen = False
+        seen, summary = False, ""
         for i, sn in enumerate(sents):
             low = fold(sn)
             lab = bool(seen and label and label.match(low))
@@ -1395,8 +1399,39 @@ class Hunt:
                 if j == i + 1 and not cell and not QUOTE_MARK.search(sents[j]) and not OWN_NEXT.match(sents[j]): continue  # the line after the name is theirs only as their quote or their own "he/she ..."; otherwise it is the writer's (Kostenbauder's "While AI can help read X-rays...", Griffith's "Students being trained in the AI and Innovation Lab...", fnwords120 review)
                 t = ASIDE.sub(" ", NAV_AI.sub(" ", bare[j] if not cell else people.without_events(sn[:cell.start()])))
                 if len(t) > 25 and any(people.term_regex(m).search(fold(t)) for m in terms) and not EARLIER_JOB.search(t):
-                    got = strip_speaker(" ".join(sents[min(i, j):max(i, j) + 1]), name); return got if len(got) <= 300 else got[:301].rsplit(" ", 1)[0]   # at a whole word ("Dr. Gregory Newman of The Universi", Cooper, fnwords121)
+                    got = strip_speaker(" ".join(sents[min(i, j):max(i, j) + 1]), name); got = got if len(got) <= 300 else got[:301].rsplit(" ", 1)[0]   # at a whole word ("Dr. Gregory Newman of The Universi", Cooper, fnwords121)
+                    if j == i and not lab and not QUOTE_MARK.search(got) and NARRATES.search(got):  # a host's or writer's summary of them ("Jane Doe of Triton College explains why ..."): their own quoted line, or their transcript answer, comes first
+                        summary = summary or got; continue
+                    return got
+        return Hunt.transcript_line(text, name, terms) or summary
+
+    @staticmethod
+    def transcript_line(text, name, terms):
+        """The person's own sentence with one of the terms in a transcript, where their answers sit under a line holding only their name and a colon ("Jane Doe:"), up to the next speaker's line; "" if none. A podcast page gave the host's summary as Castonguay's signal while her transcript answers on the same page spoke of AI at length (fnwords126 review)."""
+        near = people.name_regex(name)
+        toks = [t for t in fold(people.clean_name(name)).split() if t.strip(".")]
+        mine = False
+        for ln in str(text or "").split("\n"):
+            if SPEAKER_LINE.match(ln):
+                lab = fold(ln.strip().rstrip(":").strip())
+                mine = bool(near.search(lab)) or (len(toks) >= 2 and lab in (toks[0], toks[-1])); continue
+            if not mine or not ln.strip(): continue
+            for sn in people.SENT_BREAK.split(ln):
+                sn = " ".join(sn.split())
+                if len(sn) > 25 and not sn.endswith("?") and not EARLIER_JOB.search(sn) and any(people.term_regex(m).search(fold(people.without_events(sn))) for m in terms):
+                    return sn if len(sn) <= 300 else sn[:301].rsplit(" ", 1)[0]
         return ""
+
+    @staticmethod
+    def quoted_here(text, name):
+        """True when the page quotes the person ('..." said Jane Doe', '"...," Doe said'): a story where they speak, so a line of the story's own about their unit is the writer's, not theirs."""
+        near = people.name_regex(name)
+        toks = [t for t in fold(people.clean_name(name)).split() if t.strip(".")]
+        last = re.compile(rf"(?<![\w-]){re.escape(toks[-1])}(?![\w-])") if len(toks) >= 2 and len(toks[-1]) >= 4 else None
+        for s in people.SENT_BREAK.split(people.without_boilerplate(text or "")):
+            low = fold(s)
+            if QUOTE_MARK.search(s) and SAID_NAME.search(s) and (near.search(low) or (last and last.search(low))): return True
+        return False
 
     NOT_A_FIRST = {"dr", "mr", "mrs", "ms", "mx", "prof", "professor", "dean", "director", "president", "provost", "chancellor", "coach", "vice", "chief", "and", "said", "says", "the", "by", "with", "from", "to", "of", "for", "according", "also", "however", "but", "as", "when", "while", "then", "so", "in", "at", "on", "after", "since", "yet", "if"}
     @staticmethod
@@ -2025,7 +2060,8 @@ class Hunt:
             res = undated_down(res, page.get("final_url") or page["url"])
             if res["status"] not in ("verified", "secondary") and not res.get("left") and not res.get("other_employer") and not res.get("stale"): continue
             near = people.name_regex(per["name"])
-            sig = people.sentences_with(people.without_boilerplate(text), hit_terms, near, blank=people.without_events) if hit_terms else ""  # tested without event names, stored with them
+            mine = False
+            sig = people.sentences_with(people.without_boilerplate(text), hit_terms, near, limit=500, blank=people.without_events) if hit_terms else ""  # tested without event names, stored with them; whole up to 500, as at 300 a story line ended mid-list (Newell, fnwords126 review)
             close = bool(sig) and bool(near.search(fold(sig)))
             if not close and hit_terms:
                 reach = 300  # a heading further off is about the site, not this person (a UTEP research-assessment director under a tech-transfer banner)
@@ -2038,10 +2074,11 @@ class Hunt:
                     ctx = above[-reach:] + " " + ln[max(0, m.start() - reach):m.end() + reach] + " " + " ".join(lines[li + 1:li + 5])[:reach]  # the next few lines are the person's block; further down is the next unit
                     if any(people.term_regex(t).search(ctx) for t in hit_terms): close = True; break
             if not close and hit_terms and per.get("how") == "directory" and any(people.term_regex(t).search(fold(page.get("title") or "")) for t in hit_terms): close = True  # a contact block on a page titled for the signal: the listed head is the program's contact
-            if hit_terms and not (sig and near.search(fold(sig))) and (own := self.own_sentence(text, per["name"], org, hit_terms)): sig, close = own, True  # "Campbell also addressed ... 'Employers now expect graduates to use AI tools,' she said." (fnwords89 review). Also when the word sits near their name but the stored sentence doesn't name them: Oswego's story stored a coach's "he came up with ... an artificial intelligence (AI) tool named 'Carl'" for Morris, whose own quote was "Artificial intelligence is transforming how organizations recruit, hire and operate." (fnwords119 review)
+            if hit_terms and not (sig and near.search(fold(sig))) and (own := self.own_sentence(text, per["name"], org, hit_terms)): sig, close, mine = own, True, True  # "Campbell also addressed ... 'Employers now expect graduates to use AI tools,' she said." (fnwords89 review). Also when the word sits near their name but the stored sentence doesn't name them: Oswego's story stored a coach's "he came up with ... an artificial intelligence (AI) tool named 'Carl'" for Morris, whose own quote was "Artificial intelligence is transforming how organizations recruit, hire and operate." (fnwords119 review)
             if close and sig and not res["official"] and re.search(r"[.!?\"\u201d\u2019')]$", sig.strip()) and not near.search(fold(sig)) and not people.names_unit(sig, per["title"], org) and not people.byline(text, near): close = False   # on another site's story, a sentence that names neither them nor their unit is the writer's own (Kostenbauder's "While AI can help read X-rays ...", after a quote of hers without the word; fnwords122 review); one about the whole college is the college's, not theirs ("The community college has used that money ... to build out an AI lab" for Griffith, a VP of workforce development; fnwords123 review); an article they wrote is theirs throughout (Roark)
             if hit_terms and not sig and not res["official"]: close = False  # only a menu says it, as on a namesake's site
             row = dict(name=per["name"], title=people.drop_code(per["title"]), organisation=org, official_site="yes" if res["official"] else "no", signal=sig, signal_near_person="yes" if close else "no", source_url=page.get("final_url") or page["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status=res["status"], check_quote=res["quote"], angle=angle, note=res["note"])
+            if close and sig and not mine and not near.search(fold(sig)) and self.quoted_here(text, per["name"]): row["note"] = "; ".join(x for x in (row.get("note"), UNIT_LINE) if x)   # kept: the rubric takes an organisation's signal, but the reader is told the words are the story's, not theirs (Newell, whose quote on SDSU's story had no "AI", fnwords126 review)
             if close and hit_terms and roster_only(text, per["name"], hit_terms) and self.seat_page(page) and not self.own_sentence(text, per["name"], org, hit_terms):
                 self.seat(row, page, row["source_url"])  # the signal page itself lists them in a member table: a seat, not their words (a council roster, Margolin)
             self.dir_entry = per.get("how") == "directory"
