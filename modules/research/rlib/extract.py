@@ -125,7 +125,10 @@ def page_date(url, meta, ld_items, text, title=""):
     """When the page says it was published, and how it knows. A copyright line is not a date."""
     if "wikipedia.org" in url: return "", ""  # the first date there is from the article's subject (an infobox's founding year)
     # A staff list is kept up to date, not written once: its last edit says it is current. TCNJ's career staff directory was published 2011-05-26 and modified 2025-12-03 (fnwords107). A story keeps its first date: an edit doesn't make old news new.
-    if PEOPLE_PAGE.search(url) or re.search(r"\b(?:staff|directory|our team|leadership)\b", title, re.I):
+    # Not a story with "Staff" in its headline: Purdue Today's "Staff Excellence: Center for Career Opportunities" took its edit of 2025-10-22 over its publication on 10-23 (fnwords123 review). A story URL is a story, and an edit dated before the publication is a scheduled post's draft.
+    story = re.search(r"/(?:news|newsroom|stories|story|press|blog|articles?)/", url, re.I)
+    pub = parse_date(meta.get("article:published_time", ""))
+    if (PEOPLE_PAGE.search(url) or (not story and re.search(r"\b(?:staff|directory|our team|leadership)\b", title, re.I))) and not (story and pub):
         for d in [parse_date(meta.get(k, "")) for k in ("article:modified_time", "og:updated_time", "datemodified")] + [parse_date(str(it.get("dateModified", ""))) for it in ld_items]:
             if d: return d, "meta"
     for k in DATE_META:
@@ -156,16 +159,25 @@ def _past(m, today):
     return d.isoformat() if d <= today else ""
 
 
+def _heads(title):
+    """The headline inside a page title, longest guess first: "The Rise of the Lifelong Learner || St. Petersburg College", or a site name first and the headline cut short ("Mason Korea | News: Strengthening career connections:...", fnwords123 review)."""
+    out = []
+    for part in re.split(r"\s+\|+\s+", title or ""):
+        part = re.sub(r"(?:\.\.\.|\u2026)\s*$", "", part.strip()).strip()
+        for h in (part, re.sub(r"^[A-Z][\w&' ]{0,20}:\s+", "", part)):   # "News: ..." is a section label
+            if len(h) >= 20 and h not in out: out.append(h)
+    return sorted(out, key=len, reverse=True)   # a site name is shorter than a story's headline
+
+
 def text_date(text, title="", today=None):
     """A date the body gives as the story's own, past the first 1500 characters a menu can fill: a press dateline ("Jan. 10, 2022, GRAND RAPIDS, Mich. –", a line opening with a date then a place in capitals), or a date on a short line of its own in the 300 characters after the headline (the title before its " | Site" tail). Not any date in the text: an event, a deadline or a © year is not when the page was written, and a future date never is (Parks' GRCC news page, fnwords74, read as undated)."""
     if not text: return ""
     today = today or dt.date.today()
     for m in _DATELINE.finditer(text):
         if (d := _past(m, today)): return d
-    head = re.split(r"\s+\|+\s+", title or "")[0].strip()   # "The Rise of the Lifelong Learner || St. Petersburg College"
-    if len(head) >= 20:
+    for head in _heads(title):
         i = text.find(head)
-        if i >= 0:
+        if i >= 0:   # only the first head found in the text: the site name's place in a menu is no headline
             for line in text[i + len(head): i + len(head) + 300].split("\n"):   # a date line of its own ("Published on: January 27, 2015"), not a date inside a sentence ("join us on Mar. 3")
                 m = _TEXT_DATE.search(line)
                 if m and len((line[:m.start()] + line[m.end():]).split()) <= 4 and (d := _past(m, today)): return d
@@ -174,6 +186,7 @@ def text_date(text, title="", today=None):
                     try: x = dt.date(int(n.group(3)), int(n.group(1)), int(n.group(2)))
                     except ValueError: continue
                     if x <= today: return x.isoformat()
+            break
     return ""
 
 

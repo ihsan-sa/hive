@@ -65,7 +65,7 @@ def clean_title(t):
     t = re.split(r"(?<![A-Z])(?<!Assist)(?<!Asst)(?<!Assoc)(?<!Exec)(?<!Coord)(?<!Dept)(?<!aka)[.;:|•]\s|\s[–—-]\s|\s(?:said|says|who|and has|has|is|was|will|at|in|on)\s|(?<![Aa]ssistant)\sto\s|[\"“”(]|,\s+(?:sees|see|feels|believes|notes|adds|hopes|expects|thinks|wants|plans|looks|knows|argues|stresses)\b|,?\s(?:said|says|added|explained)\b|,\s+(?:Dr|Prof|Mr|Ms|Mrs)\.?\s|,\s+[a-z]+s\s+(?:the|a|an|its)\b|,\s+the\s+[a-z]|,\s+(?:where|which|whose|when)\b|\suntil\s|\sand\s+(?:highly|widely|also|one)\b", t)[0].strip(" ,.")
     t = re.sub(r"\b((?:co-?)?founder)\s+of\s+[a-z][a-z -]*(?:,.*)?$", r"\1", t, flags=re.I)  # "co-founder of advanced materials supplier"
     t = re.sub(r"\s+\S+@\S+.*$", "", t)  # "Interim Director jdoe@example.com": the email is no part of the post
-    if len(t) > 110: t = t[:110].rsplit(" ", 1)[0].strip(" ,")  # whole words only: a cut "Inno" read as another employer
+    if len(t) > 160: t = t[:160].rsplit(" ", 1)[0].strip(" ,")  # whole words only: a cut "Inno" read as another employer. 160, not 110: UF's "Associate Vice President for ... and Executive Director of the Career Connections Center" is 120 (fnwords123 review cut it at "the Career")
     return t
 
 
@@ -82,6 +82,8 @@ _LAST_FIRST = re.compile(r"([A-Z][\w'’]+(?:-[A-Z][\w'’]+)?),\s+((?:[A-Z][a-z
 
 _STACKED_LAST_FIRST = re.compile(r"([A-Z][\w'’]+(?:[ -][A-Z][\w'’]+)?),\s+([A-Z][a-z][\w'’-]*(?:\s+(?:[A-Z]\.?|[A-Z][a-z][\w'’-]*))?)")  # a line that is only "Blanchard Smith, Korrie L": a two-word surname is fine on a line of its own
 _STAFF_HEAD = re.compile(r"(?:Meet\s+(?:the|our)\s+)?([A-Z][\w&',. -]{2,60}?)\s+(?:Staff|Team|Staff Directory)")
+_WRAP_TAIL = re.compile(r"([A-Z][\w&'’-]*(?:\s+(?:of\s+|for\s+|and\s+|&\s+)?[A-Z][\w&'’-]*){0,2}),\s")  # the start of a line that ends a wrapped post: "Development, Henry M. Example College"
+_ORGISH = re.compile(r"\b(?:University|College|Institute|School|Academy|Inc|LLC|Ltd|Corporation|Company|Foundation|Department|Office|Center|Centre|Services|Division)\b")
 _CONTACT = re.compile(r"@|\bemail\b|\[email|^\(?\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}$", re.I)
 
 
@@ -164,6 +166,9 @@ def people_in(text, ld=()):
             if b.endswith(",") and c and len(c) <= 90 and not _LINE_ROLE.match(c) and not _CONTACT.search(c) and not _cell_name(c)[0]:
                 b = b.rstrip(", ") + ", " + c
                 if inv := re.match(r"([^,]+),\s+(Senior|Associate|Assistant|Executive|Interim|Acting|Deputy|Managing)\s*,\s*(.+)$", b): b = f"{inv.group(2)} {inv.group(1)}, {inv.group(3)}"
+            # A long post the page wrapped mid-phrase, its last words opening the next line before the employer: "Associate Dean for Industry Partnerships and Workforce" / "Development, Example College of Engineering" (a college's event PDF, Mack in the fnwords123 review).
+            elif len(b) >= 40 and not re.search(r"[,.;:)]$", b) and (w := _WRAP_TAIL.match(c)) and not _ORGISH.search(w.group(1)) and not _LINE_ROLE.match(c) and not _cell_name(c)[0]:
+                b = b + " " + w.group(1)
             add(a, b + (", " + unit if unit and not re.search(r"\b(?:of|for)\b|,", b) and fold(unit) not in fold(b) else ""), "directory")  # a bare post on a unit's staff list is that unit's: "Interim Executive Director" on "Continuing Education & Workforce Training Staff" (DMACC, fnwords106)
     # A directory that stacks "Last, First M", the email, then the post and its unit on lines of their own (Wake Tech's /directory/dept/ pages: "Blanchard Smith, Korrie L" / "[email protected]" / "Dean of Career Services" / "Career Services"). fnwords106 read no one there.
     rows = [l.strip() for l in lines]
@@ -635,6 +640,21 @@ def org_words_in(text, org):
     """Does the text name the organisation by its distinctive words? A staff newsletter says "Harper", not "Harper College"."""
     low = fold(text)
     return all(re.search(rf"\b{re.escape(w)}\b", low) for w in org_words(org))
+
+
+def unit_words(title, org=""):
+    """The words naming a person's unit in their title: 'workforce development' for a Vice President of Workforce Development at Temple College."""
+    skip = RANK | _BODY | set(org_words(org)) | set("director dean head manager coordinator officer chief provost chair lead founding executive".split())
+    return [w for w in _title_words(title) if w not in skip and len(w) > 2]
+
+
+def names_unit(text, title, org=""):
+    """Does the text name the person's unit: two of its words, or its one word ('Career Services' through the initiative)?"""
+    words = unit_words(title, org)
+    if not words: return False
+    low = fold(text)
+    hits = sum(bool(re.search(rf"\b{re.escape(w)}\b", low)) for w in set(words))
+    return hits >= min(2, len(set(words)))
 
 
 def org_near(text, name, org, window=300):
