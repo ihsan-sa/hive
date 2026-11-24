@@ -844,6 +844,7 @@ RECALL_KNN, RECALL_KCTX, RECALL_FILES = 8, 0.3, 40  # neighbours that vote, weig
 RECALL_QUIET = {"status-timer"}  # senders whose briefs are a list of thread names to refresh: their words match whatever those threads are about, so nothing recall shows them bears on the job (0 of 9 opened, 11-13..15, continuity.md R42)
 RECALL_BAR = 1.6  # score an agent's post must reach to be shown (word match + past readers, 2 is top on both); 30% opened above it against 2-6% below, 7 days to 2026-11-10
 PERSON_BAR = 0.8  # a person's post needs this much: 0 of 21 pointers under it were opened, 18 of 83 from 0.8 to 1.2 (59 recalls with logged scores, 11-18..21; rsi-lab kb2)
+PERSON_DUDS = {"kb/hive-install.md", "kb/rsi.md"}  # shown to a person's post and never opened: 0 of 7 pointers, 11-21..24 (rsi-lab REPORT.md, recall pointers by kind and sender)
 FILLER = set("""ive idk like just really thing things stuff something anything everything want wants wanted need needs needed make makes made making
 get gets got getting going goes went know think thought see seen look looks looking way ways lot lots bit kind kinda sort maybe also still even much many please thanks
 thank hey hello yes yeah okay sure now today tomorrow yesterday soon later already always never ever one two three four five first second third new old good better best
@@ -988,6 +989,7 @@ def recall_gate(hits, bad, person, midrun, n, quiet=False):
     of known duds stays silent rather than falling back on them, a run already at work does not get pointers (3% opened against 10% at a fresh start),
     and an agent's post needs RECALL_BAR, a person's post PERSON_BAR. Measured in projects/rsi-lab/kb_rules.py."""
     if midrun or quiet: return []
+    if person: bad = bad | PERSON_DUDS
     return [h for h in hits if fmt_path(h["path"]) not in bad and h["s"] >= (PERSON_BAR if person else RECALL_BAR)][:n]
 
 def recall_wall(c, hits, first):

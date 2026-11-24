@@ -635,7 +635,7 @@ def unit_named(title, text, url=""):
 def roster_only(text, name, terms):
     """True when a page names the person only in short lines or sentences without the signal's word: a seat in a member table or list, not their own words and not plainly the organisation's alone (Margolin on HCCC's AI Strategy and Governance Council: the fnwords89 and fnwords93 reviewers called it weak, fnwords86's confirmed it)."""
     rx = people.name_regex(name)
-    hits = [b for b in (" ".join(x.split()) for x in re.split(r"(?<=[.!?])(?<!\b[A-Z]\.)\s+|\n+", text or "")) if b and rx.search(fold(b))]
+    hits = [b for b in (" ".join(x.split()) for x in people.SENT_BREAK.split(text or "")) if b and rx.search(fold(b))]
     return bool(hits) and all(len(b.split()) <= 12 and not any(people.term_regex(m).search(fold(b)) for m in terms) for b in hits)
 
 
@@ -1367,7 +1367,7 @@ class Hunt:
         near = people.name_regex(name)
         toks = [t for t in fold(people.clean_name(name)).split() if t.strip(".")]
         last = re.compile(rf"(?<![\w-]){re.escape(toks[-1])}(?![\w-])") if len(toks) >= 2 and len(toks[-1]) >= 4 else None
-        sents = [" ".join(x.split()) for x in re.split(r"(?<=[.!?])(?<!\b[A-Z]\.)\s+|\n+", people.without_boilerplate(text)) if x.strip()]   # not after a middle initial: "the Ethyle R. Wolfe Institute" split Brooklyn's AI sentence in two
+        sents = [" ".join(x.split()) for x in people.SENT_BREAK.split(people.without_boilerplate(text)) if x.strip()]   # not after a middle initial: "the Ethyle R. Wolfe Institute" split Brooklyn's AI sentence in two
         bare = [people.without_events(x) for x in sents]   # event names are hidden from the word test, not from the sentence kept
         label = re.compile(rf"(?:{'|'.join(re.escape(t) for t in dict.fromkeys((toks[0], toks[-1])) if len(t) >= 3)}) ?: ") if len(toks) >= 2 and max(len(toks[0]), len(toks[-1])) >= 3 else None  # a Q&A answer under their first name or surname ("Scott: The Career Center has been ... incorporating specific AI- and ATS-related advice", Dranka's co-written story, fnwords120)
         seen = False
@@ -1384,7 +1384,7 @@ class Hunt:
                 if j == i + 1 and not cell and not QUOTE_MARK.search(sents[j]) and not OWN_NEXT.match(sents[j]): continue  # the line after the name is theirs only as their quote or their own "he/she ..."; otherwise it is the writer's (Kostenbauder's "While AI can help read X-rays...", Griffith's "Students being trained in the AI and Innovation Lab...", fnwords120 review)
                 t = ASIDE.sub(" ", NAV_AI.sub(" ", bare[j] if not cell else people.without_events(sn[:cell.start()])))
                 if len(t) > 25 and any(people.term_regex(m).search(fold(t)) for m in terms) and not EARLIER_JOB.search(t):
-                    return " ".join(sents[min(i, j):max(i, j) + 1])[:300]
+                    got = " ".join(sents[min(i, j):max(i, j) + 1]); return got if len(got) <= 300 else got[:301].rsplit(" ", 1)[0]   # at a whole word ("Dr. Gregory Newman of The Universi", Cooper, fnwords121)
         return ""
 
     NOT_A_FIRST = {"dr", "mr", "mrs", "ms", "mx", "prof", "professor", "dean", "director", "president", "provost", "chancellor", "coach", "vice", "chief", "and", "said", "says", "the", "by", "with", "from", "to", "of", "for", "according", "also", "however", "but", "as", "when", "while", "then", "so", "in", "at", "on", "after", "since", "yet", "if"}
@@ -1447,6 +1447,19 @@ class Hunt:
         row["signal_near_person"] = "roster"
         row["note"] = "; ".join(x for x in (row.get("note"), f"{self.ROSTER} {seat} ({url})") if x)
 
+    def lengthen_signal(self, row, own_page):
+        """A stored own signal that today's reading of the same page carries further: an older sentence split stopped it short ("... along with Dr.", Cooper, fnwords121). Only a longer sentence that holds the stored one replaces it."""
+        old = str(row.get("signal") or "").strip()
+        o = OWN_SIGNAL_NOTE.search(str(row.get("note") or ""))
+        page = (self.case.page(o.group(1)) if o else own_page) or {}
+        text = page.get("text", "")
+        if len(old) < 25 or not text: return False
+        for new in (self.own_sentence(text, row["name"], row["organisation"], self.must), people.sentences_with(text, self.must, limit=400)):
+            if new and len(new) > len(old) and old in new:
+                row["signal"] = new
+                return True
+        return False
+
     def stored_own_signals(self):
         """Stored rows and near misses whose signal is the organisation's are read again on their own stored page and on the organisation's signal page: one that names them beside the word gives them their own signal. No search: pages already in the case."""
         if not self.must: return 0
@@ -1465,7 +1478,9 @@ class Hunt:
                 r["note"] = "; ".join([x for x in str(r.get("note") or "").split("; ") if x and not x.startswith("the person's own signal is from")] + ["the signal is the organisation's, from another of its pages, not this person's"])
                 self.mark_roster(r, own.group(1)); n += 1
                 continue
-            if r.get("signal_near_person") == "yes": continue
+            if r.get("signal_near_person") == "yes":
+                if self.lengthen_signal(r, sp): n += 1
+                continue
             if ex:
                 r.update(signal=ex, signal_near_person="yes")
                 r["note"] = "; ".join(x for x in str(r.get("note") or "").split("; ") if x and not x.startswith("the signal is the organisation's"))

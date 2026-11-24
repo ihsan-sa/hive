@@ -1,0 +1,17 @@
+{
+ "_note": "Settings > Connectors > Known servers (E132, projects/everyday/runs/e132). Official remote MCP servers on the maker's own domain. Each was probed on 2026-11-24: the open ones answered an MCP initialize; the sign-in ones gave a 401 whose sign-in this dash's _mcp_discover reads and whose registration took a 127.0.0.1 callback. Left out, with the reason: Figma (refuses outside apps, 403), Slack, GitHub, Asana and Box (an app registered by hand; no self-registration). Add by address still takes any other.",
+ "checked": "2026-11-24",
+ "servers": [
+  {"id": "deepwiki", "label": "DeepWiki", "url": "https://mcp.deepwiki.com/mcp", "signin": false, "line": "Explains any public GitHub project from its code."},
+  {"id": "mslearn", "label": "Microsoft Learn", "url": "https://learn.microsoft.com/api/mcp", "signin": false, "line": "Searches Microsoft's official documentation."},
+  {"id": "context7", "label": "Context7", "url": "https://mcp.context7.com/mcp", "signin": false, "line": "Up-to-date docs and examples for programming libraries."},
+  {"id": "huggingface", "label": "Hugging Face", "url": "https://huggingface.co/mcp", "signin": false, "line": "Searches AI models, datasets and papers."},
+  {"id": "notion", "label": "Notion", "url": "https://mcp.notion.com/mcp", "signin": true, "line": "Reads and writes your Notion pages and databases."},
+  {"id": "zapier", "label": "Zapier", "url": "https://mcp.zapier.com/api/mcp/mcp", "signin": true, "line": "Reaches the apps you connect in your Zapier account, such as Gmail, Google Drive or Slack. Uses your Zapier plan."},
+  {"id": "atlassian", "label": "Atlassian", "url": "https://mcp.atlassian.com/v1/mcp", "signin": true, "line": "Jira issues and Confluence pages."},
+  {"id": "linear", "label": "Linear", "url": "https://mcp.linear.app/mcp", "signin": true, "line": "Your Linear issues and projects."},
+  {"id": "canva", "label": "Canva", "url": "https://mcp.canva.com/mcp", "signin": true, "line": "Finds and makes Canva designs."},
+  {"id": "monday", "label": "monday.com", "url": "https://mcp.monday.com/mcp", "signin": true, "line": "Your monday.com boards and items."},
+  {"id": "sentry", "label": "Sentry", "url": "https://mcp.sentry.dev/mcp", "signin": true, "line": "Errors and issues from your Sentry projects."}
+ ]
+}
