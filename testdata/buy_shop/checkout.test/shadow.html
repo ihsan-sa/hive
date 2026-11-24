@@ -1,0 +1,6 @@
+<!doctype html><html><head><style>body{font:22px sans-serif;margin:30px} input{font:22px monospace;width:420px}</style></head><body><h1>Card fields in shadow roots</h1>
+<div id="open"></div>
+<div id="decl"><template shadowrootmode="open"><label>Declarative <input id="in"></label><style>input{font:22px monospace;width:420px}</style></template></div>
+<p>Total $37.63</p>
+<script>const r = document.getElementById('open').attachShadow({mode: 'open'}); r.innerHTML = '<style>input{font:22px monospace;width:420px}</style><label>Open <input id="in"></label>';</script>
+</body></html>

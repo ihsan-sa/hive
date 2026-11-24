@@ -623,8 +623,8 @@ function answersPerson(p) {
 /** A timer or checker posting under its own name (asks, progress, release-train, report-triage...), as against an agent, the person or another Hive.
  * What a script writes is for agents, so it is Agent comms, unless it names the person, replies to them or carries a "For you:" line. Any sender that
  * isn't known to be someone counts as a script: the lists of system senders here went stale and a new script's notes then landed in the person's chat
- * as Updates (the person, 11101818169f). The two scripts that write for the person without naming them are listed. */
-const FOR_PERSON = new Set(["phone", "morning"]);
+ * as Updates (the person, 11101818169f). The scripts that write for the person without naming them are listed (x-comment-finder: its daily list of X posts to answer, a732a 112319591b0f). */
+const FOR_PERSON = new Set(["phone", "morning", "x-comment-finder"]);
 export const isScript = n => !/^[a-z][0-9a-f]{4,5}$/.test(n) && !OUTSIDE.has(n) && !FOR_PERSON.has(n) && !/^hive-/.test(n) && !isAgent(n);
 /** Which one a post is. For you: from or to the person, or an agent answering them. Updates: an agent or outsider saying how it's going. Agent comms: agents talking to each other, and the hive's own notices, a script's among them. */
 export function postKind(p) {

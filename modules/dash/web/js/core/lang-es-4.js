@@ -669,6 +669,7 @@ export default {
     [/^(\d+) notes? link here$/, (_, n) => `${n} ${pl(n, "nota enlaza", "notas enlazan")} aquí`],
     [/^(\d+) notes? link here · links to (\d+)$/, (_, n, m) => `${n} ${pl(n, "nota enlaza", "notas enlazan")} aquí · enlaza a ${m}`],
     [/^Show all (\d+)$/, "Mostrar las $1"],
+    [/^Show all (\d+) topics$/, "Mostrar los $1 temas"],   // Knowledge on a phone: the topic cards past the first 8 (views/knowledge.js mapView)
     [/^(.+) · (\d+(?:[.,]\d)?[smhd]) ago$/, "$1 · hace $2"],
     [/^(~\/\S+) · (\S+ \S+) · changed (\S+) ago( · linked from (\d+))?$/, (_, p, b, t, l, n) => `${p} · ${b} · cambiada hace ${t}` + (l ? ` · enlazada desde ${n}` : "")],
     [/^Week (\S+)$/, "Semana $1"],

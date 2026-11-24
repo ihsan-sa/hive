@@ -175,11 +175,20 @@ def carry_on(r):
 WAIT_CLOCK = re.compile(r"\b(\d{1,2}):(\d{2})\s*(UTC|Z\b)?", re.I)
 WAIT_IN = re.compile(r"(?:\bin\s+|~\s*|\babout\s+)(\d+)\s*(h|hr|hrs|hours?|m|mins?|minutes?)\b", re.I)
 WAIT_DATE = re.compile(r"\b(20\d\d)-(\d\d)-(\d\d)(?:[T ](\d{2}):(\d{2}))?")
+WAIT_MD = re.compile(r"(?<![\d:-])(?:(\d{1,2})-(\d{2})|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* (\d{1,2}))(?![\d:-])(?:[T ](\d{2}):(\d{2}))?")
+MD_MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+
 def wait_date(line, base):
     """The earliest calendar date (UTC, 00:00 unless it has a time) after base that a `Waiting:` line names, or None. A date already past names nothing to wait for."""
     best = None
     for m in WAIT_DATE.finditer(line):
         try: t = dt.datetime(int(m[1]), int(m[2]), int(m[3]), int(m[4] or 0), int(m[5] or 0), tzinfo=dt.timezone.utc).timestamp()
+        except ValueError: continue
+        if t > base and (best is None or t < best): best = t
+    yr = dt.datetime.fromtimestamp(base, dt.timezone.utc).year
+    for m in WAIT_MD.finditer(WAIT_DATE.sub(" ", line)):
+        mo, d = (int(m[1]), int(m[2])) if m[1] else (MD_MONTHS.index(m[3]) + 1, int(m[4]))
+        try: t = dt.datetime(yr, mo, d, int(m[5] or 0), int(m[6] or 0), tzinfo=dt.timezone.utc).timestamp()
         except ValueError: continue
         if t > base and (best is None or t < best): best = t
     return best

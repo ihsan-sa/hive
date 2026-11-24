@@ -26,5 +26,8 @@ ul,ol{padding:0}
 .skip-link{position:absolute;left:var(--s2,8px);top:-100px;z-index:1000;padding:var(--s2,8px) var(--s3,12px);background:var(--surface,#fff);color:var(--ink,#000);border:2px solid currentColor;border-radius:var(--r-s,6px)}
 .skip-link:focus{top:var(--s2,8px)}
 #main:focus{outline:none}
-.vh{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.vh{position:absolute!important;top:0;left:0;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+/* top:0;left:0 (R-1124-c): left at its static place, a .vh deep in a scroll box escaped the box's clip to the nearest positioned ancestor and made the
+   page scroll (#comms 6506 px at 390, 1185 at 1440, from the foci headings' and the timeline sections' words). Pinned to that ancestor's corner it
+   can't reach past it. No .vh is focusable, so nothing scrolls to it. */
 @container (max-width:640px){.desk-only{display:none!important}}

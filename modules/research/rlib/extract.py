@@ -16,6 +16,7 @@ class _Page(HTMLParser):
         self.open = collections.Counter()  # how many of each tag are open: a long page of unclosed tags mustn't mean searching the stack each time
         self.stack, self.skip, self.in_title, self.in_ld, self.href, self.anchor = [], 0, False, False, None, []
         self.ld = []
+        self.times = set()   # the days of every <time datetime>: more than one is a list (a podcast page's "Latest episodes" sidebar), and its first is not the page's date
 
     def handle_starttag(self, tag, attrs):
         a = {k.lower(): (v or "") for k, v in attrs}
@@ -24,7 +25,9 @@ class _Page(HTMLParser):
         if tag == "meta":
             k = (a.get("property") or a.get("name") or a.get("itemprop") or "").lower()
             if k and a.get("content"): self.meta.setdefault(k, a["content"])
-        if tag == "time" and a.get("datetime"): self.meta.setdefault("time", a["datetime"])
+        if tag == "time" and a.get("datetime"):
+            self.meta.setdefault("time", a["datetime"])
+            self.times.add(a["datetime"][:10])
         if tag == "script" and "ld+json" in a.get("type", ""): self.in_ld, self.ld = True, []
         if tag in VOID: 
             if tag in BLOCK: self.chunks.append("\n")
@@ -126,6 +129,7 @@ def page_date(url, meta, ld_items, text, title=""):
         for d in [parse_date(meta.get(k, "")) for k in ("article:modified_time", "og:updated_time", "datemodified")] + [parse_date(str(it.get("dateModified", ""))) for it in ld_items]:
             if d: return d, "meta"
     for k in DATE_META:
+        if k == "time" and meta.get("time_many"): continue   # the first of several <time> tags is the first item of a list: uConnect's episode page took 2026-11-03 from its "Latest episodes" sidebar for an episode of 2026-02-03 (fnwords119 review)
         d = parse_date(meta.get(k, ""))
         if d: return d, "meta"
     for it in ld_items:
@@ -135,10 +139,15 @@ def page_date(url, meta, ld_items, text, title=""):
     d = url_date(url)
     if d: return d, "url"
     d = parse_date(text[:1500]) or text_date(text, title)
-    return (d, "text") if d else ("", "")
+    if d: return d, "text"
+    d = parse_date(meta.get("og:updated_time", ""))   # the last edit, when nothing says when it was written: later than the truth, never a sidebar's date
+    return (d, "meta") if d else ("", "")
 
 
 _DATELINE = re.compile(r"(?m)^[ \t]*" + _TEXT_DATE.pattern + r"\s*[,\u2013\u2014-]\s*[A-Z][A-Z.'\-]+(?:\s+[A-Z][A-Z.'\-]+)*\b(?![a-z])")
+
+
+_NUM_DATE = re.compile(r"(?<![\d/])(\d{1,2})/(\d{1,2})/(20\d\d)(?![\d/])")
 
 
 def _past(m, today):
@@ -153,13 +162,18 @@ def text_date(text, title="", today=None):
     today = today or dt.date.today()
     for m in _DATELINE.finditer(text):
         if (d := _past(m, today)): return d
-    head = (title or "").split(" | ")[0].strip()
+    head = re.split(r"\s+\|+\s+", title or "")[0].strip()   # "The Rise of the Lifelong Learner || St. Petersburg College"
     if len(head) >= 20:
         i = text.find(head)
         if i >= 0:
             for line in text[i + len(head): i + len(head) + 300].split("\n"):   # a date line of its own ("Published on: January 27, 2015"), not a date inside a sentence ("join us on Mar. 3")
                 m = _TEXT_DATE.search(line)
                 if m and len((line[:m.start()] + line[m.end():]).split()) <= 4 and (d := _past(m, today)): return d
+                n = _NUM_DATE.search(line)   # a byline's US numeric date: "Lori Trimmier | 8/31/2026" under SPC's story (fnwords119 review)
+                if n and len((line[:n.start()] + line[n.end():]).split()) <= 4:
+                    try: x = dt.date(int(n.group(3)), int(n.group(1)), int(n.group(2)))
+                    except ValueError: continue
+                    if x <= today: return x.isoformat()
     return ""
 
 
@@ -183,6 +197,7 @@ def parse_html(html, url=""):
         if (t == "Person" or (isinstance(t, list) and "Person" in t)) and isinstance(it.get("name"), str) and isinstance(it.get("jobTitle"), str):
             people.append({"name": it["name"], "title": it["jobTitle"]})
     title = " ".join(htmllib.unescape(p.title).split())
+    if len(p.times) > 1: p.meta["time_many"] = "1"
     date, how = page_date(url, p.meta, items, text, title)
     return {"title": title, "text": text, "links": list(dict(p.links).items()), "date": date, "date_from": how, "people_ld": people, "cut": cut}
 
