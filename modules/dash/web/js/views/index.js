@@ -20,6 +20,7 @@ import timeline from "./timeline.js";
 import start from "./start.js";
 import settings from "./settings.js";
 import secrets from "./secrets.js";
+import orders from "./orders.js";
 import deck from "./deck.js";
 import knowledge from "./knowledge.js";
 import kbtime from "./kbtime.js";
@@ -49,6 +50,7 @@ export default [
   made,
   docs,
   secrets,
+  orders,
   settings,
   knowledge,
   kbtime,

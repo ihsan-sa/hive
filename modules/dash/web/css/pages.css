@@ -10,8 +10,8 @@
 .banner-t b{font-weight:var(--w-bold,600)}
 .banner .btn{flex:none}
 .banner>.st{flex:none}
-.new-ver.banner{max-width:none;border:0;border-top:1px solid var(--line);border-radius:0;box-shadow:none;padding:6px var(--s4,16px)}   /* a row of the sticky top bar, like .band */
-@container app (width < 700px){.banner{padding:6px 12px;gap:8px;font-size:var(--fs-meta)}.new-ver-more{display:none}}
+.new-ver.banner,.star-note.banner{max-width:none;border:0;border-top:1px solid var(--line);border-radius:0;box-shadow:none;padding:6px var(--s4,16px)}   /* a row of the sticky top bar, like .band */
+@container app (width < 700px){.banner{padding:6px 12px;gap:8px;font-size:var(--fs-meta)}.new-ver-more,.star-more{display:none}}
 
 /* ---- Usage (R7 step 5, design-d-usage): two meters, accounts as rows, the detail folded ---- */
 .usage-hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:var(--s5,20px) var(--s6,24px);margin-top:var(--s4,16px)}
@@ -105,3 +105,6 @@
   :focus-visible,
   .setup-opt:has(input:focus-visible){outline:2px solid CanvasText !important;outline-offset:2px !important}
 }
+/* Orders (views/orders.js) */
+.order-items{margin:0;padding-left:1.2em;color:var(--ink);overflow-wrap:anywhere}
+.order-host,.order-meta{font-size:var(--fs-small);overflow-wrap:anywhere}

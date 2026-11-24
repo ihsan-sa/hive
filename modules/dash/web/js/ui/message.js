@@ -6,7 +6,7 @@
 import { h, copyText, tr } from "../core/dom.js";
 import { S, can, jget, SYS, OUTSIDE, post as apiPost } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
-import { isScript, isAgent, isWarden, isRunning, inConversation, parkedCarry, capFirst, agentLabel, displayText, typedText, editNote, chatText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
+import { isScript, isAgent, isWarden, isRunning, inConversation, parkedCarry, capFirst, agentLabel, displayText, typedText, editNote, chatText, savedFacts, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
 import { focusById, focusName, focusOf } from "../core/foci.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN, fix, int } from "../core/format.js";
 import { markdown, mdCut, filesNamed } from "./markdown.js";
@@ -482,6 +482,7 @@ function appMessage(p, opts) {
       EDIT.id === p.id ? editBox(p, opts) : boxes.length && !q.disp ? null : body(q, ws),
       boxes.length ? h("div", { class: "msg-boxes", "data-key": "boxes" }, boxes.map(id => boxEmbed(p.id, id))) : null,
       files.length || docs.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f)), docs) : null,
+      kind === "agent" ? savedNote(p) : null,
       tagChips(p),
       split ? didFold(p, split) : null,
       kind === "agent" ? ranFold(p) : null,
@@ -617,6 +618,11 @@ async function ranFetch() {
       for (const slot of document.querySelectorAll(`.msg[data-key="${CSS.escape(id)}"] .msg-ran-slot`)) { const p = S.byId[id]; if (p) slot.replaceWith(ranFold(p)); }
     }
   }
+}
+// E179: what the reply saved to memory, as a small note under the bubble. Copy and the message text leave it out; Settings → Memory lists and deletes them.
+function savedNote(p) {
+  const fs = savedFacts(p);
+  return fs.length ? h("div", { class: "msg-saved", "data-key": "saved" }, fs.map(f => h("div", { class: "msg-saved-i" }, icon("archive"), h("span", { class: "msg-saved-l" }, "Saved to memory"), h("span", null, f)))) : null;
 }
 function ranFold(p) {
   const e = RAN.get(p.id);

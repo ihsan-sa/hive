@@ -15,7 +15,7 @@ The web page is web/ next to this file (ui.html, the previous page, is at /old);
   hive-dash serve [--port P] web UI on http://127.0.0.1:P/ (loopback only; default 8077)
   hive-dash --json          the snapshot as JSON
 """
-import base64, ipaddress, socket, urllib.parse, email.utils, shlex, errno, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time, zlib
+import base64, math, ipaddress, socket, urllib.parse, email.utils, shlex, errno, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time, zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -2892,6 +2892,11 @@ def tail_lines(path, offset, last=0, upto=None):
     return offset + cut, [ln.decode("utf-8", "replace") for ln in data[:cut].splitlines() if ln.strip()], offset
 
 
+def _json_line(ln):
+    try: json.loads(ln); return True
+    except ValueError: return False
+
+
 def tail_json(path, offset, last=0, upto=None, gz=False, step=1 << 20):
     """/api/board and /api/log's answer, '{"offset":..,"start":..,"items":[..]}', yielded a megabyte at a time (gzipped as it
     goes with gz=True); joined, the same bytes tail_lines gives. The whole board is 27 MB and every page load asks for all of
@@ -2927,7 +2932,7 @@ def tail_json(path, offset, last=0, upto=None, gz=False, step=1 << 20):
             blk, carry = buf[:k], buf[k:]
             try: blk.decode("utf-8")
             except UnicodeDecodeError: blk = blk.decode("utf-8", "replace").encode()
-            lines = [ln for ln in blk.splitlines() if ln.strip()]
+            lines = [ln for ln in blk.splitlines() if ln.strip() and _json_line(ln)]   # one torn line (a write cut off by a full disk, h4 2026-11-24) must not break the whole answer
             if lines:
                 yield pack((b"" if first else b",") + b",".join(lines)); first = False
         yield pack(b"]}")
@@ -2957,12 +2962,12 @@ FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcoun
 GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read", "/api/ran": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/work-tiers": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/subagents": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/export": "config", "/api/modules": "modules", "/api/connectors": "modules", "/api/mcp-url": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
-           "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
+           "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/buy": "logins", "/api/orders": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/shop-signin": "logins", "/api/shop-signin/frame": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/kb/wipe": "files", "/api/kb/copies": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files", "/api/docs": "files", "/api/docs/doc": "files", "/api/docs/page": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/kb/wipe": "files", "/api/kb/putback": "files", "/api/docs/notes": "files", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/side-ask": "post", "/api/door": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/mcp-url": "modules", "/api/voice": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/kb/save": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
-            "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
+            "/api/signin-codex": "logins", "/api/buy": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/shop-signin": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/mcp-url", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
 
 
@@ -3899,6 +3904,20 @@ def secrets_view():
     return sorted(({"name": f.name, "at": f.stat().st_mtime} for f in files), key=lambda r: r["name"])
 
 
+# Cloudflare credentials belong to a root-run broker that holds the only key: a copy in the secrets folder is readable (and writable) by
+# every agent, so the broker's owner can't trust it. Cloudflare's scannable formats are a prefix, 40 characters and a
+# checksum (cfk_ API key, cfut_ user token, cfat_ account token, cfast_ Access service-token secret); older unprefixed tokens are caught
+# by a name that says Cloudflare or CF.
+CF_SECRET = re.compile(r"(?<![A-Za-z0-9])cf(?:k|ut|at|ast)_[A-Za-z0-9]{40}")
+CF_NAME = re.compile(r"(?:^|[^a-z])(?:cf|cloudflare)(?:[^a-z]|$)|cloudflare", re.I)
+ROOT_HELD_SAY = ("Cloudflare keys don't go here: every agent could read them. On the machine, in a terminal, run "
+                 "`sudo h2cf-broker-admin set-token` and paste the token there only.")
+
+
+def root_held_secret(name, value):
+    return bool(CF_NAME.search(str(name or "")) or CF_SECRET.search(str(value or "")))
+
+
 def set_secret(name, value, signer, delete=False):
     name = str(name or "")
     if not SECRET_NAME.fullmatch(name): raise ValueError("a secret's name is letters, digits and . _ -, starting with a letter or digit")
@@ -3910,6 +3929,7 @@ def set_secret(name, value, signer, delete=False):
         return {"ok": True}
     if not isinstance(value, str) or not value.strip(): raise ValueError("the value is empty")
     if len(value.encode()) > MAX_SECRET: raise ValueError("a secret can be up to 64 KB")
+    if root_held_secret(name, value): raise ValueError(ROOT_HELD_SAY)
     SECRETS.mkdir(parents=True, exist_ok=True)
     SECRETS.chmod(0o700)
     had = f.exists()
@@ -5730,6 +5750,175 @@ class DesignRoom:
 DESIGN = DesignRoom()
 
 
+class ShopSignin:
+    """Sign in to a shop from the dashboard (thread 11241110ade5, warden 11241330fa1c): tools/shop_signin.mjs runs a visible Chrome in the
+    shop's own kept profile, in its own unit (memory far over the dash's), and the page shows its screen and sends clicks and typing.
+    The person types the password and solves the captcha; nothing keeps or logs what they type. One at a time; it closes itself a few
+    seconds after the shop shows signed in, after IDLE_S with no input, or after LIFE_S, so it is never a standing window onto the browser.
+    Only the person's own app may use it (buy_person, like Buying): agents on this machine can reach the local route."""
+    SITES = {"jlc": "JLCPCB"}
+    INPUTS = {"click", "wheel", "drag", "text", "key", "back"}
+    LIFE_S, IDLE_S, SIGNED_CLOSE_S = 900, 300, 4
+    POLL_S = 90   # no screen asked for this long: the page that showed it is gone (closed tab, lost phone), so the browser goes too
+    LOG = HOME / ".hive" / "shop-signin.json"   # {site: {"signed_at": epoch}}: when each shop was last signed in here, for the session-lifetime measure
+
+    def __init__(self):
+        self.lock, self.cond, self.wlock = threading.Lock(), threading.Condition(), threading.Lock()
+        self.proc = self.site = self.unit = self.closing = None
+        self.n = 0
+        self.state, self.why, self.frame, self.seq, self.size, self.started, self.touched, self.polled = "idle", "", b"", 0, (0, 0), 0.0, 0.0, 0.0
+
+    def cmd(self, site):
+        env = os.environ.get("HIVE_SHOP_SIGNIN_CMD")   # tests: the helper on a fake page, no unit
+        if env: self.unit = None; return json.loads(env) + [site]
+        node, tool = shutil.which("node") or "/usr/bin/node", str(Path(__file__).resolve().parent / "tools" / "shop_signin.mjs")
+        self.n += 1; self.unit = f"hive-shop-signin-{int(time.time())}-{self.n}-{secrets.token_hex(3)}"
+        return ["systemd-run", "--user", "--quiet", "--collect", "--pipe", f"--unit={self.unit}", "-p", "MemoryMax=1500M",
+                "-p", f"RuntimeMaxSec={self.LIFE_S + 120}", f"--setenv=HOME={HOME}", f"--setenv=PATH={os.environ.get('PATH', '/usr/bin:/bin')}", node, tool, site]
+
+    def signed_log(self):
+        try: return json.loads(self.LOG.read_text())
+        except Exception: return {}
+
+    def view(self):
+        log = self.signed_log()
+        return {"site": self.site, "state": self.state, "why": self.why, "seq": self.seq, "w": self.size[0], "h": self.size[1],
+                "left": max(0, int(self.started + self.LIFE_S - time.time())) if self.proc else 0,
+                "sites": [{"site": k, "name": v, "signed_at": (log.get(k) or {}).get("signed_at")} for k, v in self.SITES.items()]}
+
+    def start(self, site):
+        if not isinstance(site, str) or site not in self.SITES: raise ValueError("no such shop")
+        old = self.closing
+        if old and old.poll() is None:   # the last one is still shutting down (it saves its cookies first): wait for it rather than hand it back
+            try: old.wait(timeout=20)
+            except subprocess.TimeoutExpired: raise ValueError("the last sign-in is still closing: try again in a moment")
+        with self.lock:
+            c = self.closing   # a close that began after the wait above (the watchdog): its helper may still hold the profile
+            if c and c.poll() is None and c is not old: raise ValueError("the last sign-in is still closing: try again in a moment")
+            if self.proc and self.proc.poll() is None and self.proc is not self.closing:
+                if self.site == site: return self.view()
+                raise ValueError(f"a sign-in to {self.SITES[self.site]} is open: close it first")
+            try: proc = subprocess.Popen(self.cmd(site), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+            except OSError as e: raise ValueError(f"can't start the browser: {e.strerror or e}")
+            with self.cond:
+                self.proc, self.closing = proc, None
+                self.site, self.state, self.why, self.frame, self.size = site, "starting", "", b"", (0, 0)
+                self.started = self.touched = self.polled = time.time()
+            threading.Thread(target=self.read, args=(self.proc,), daemon=True).start()
+            threading.Thread(target=self.watch, args=(self.proc,), daemon=True).start()
+        return self.view()
+
+    def read(self, proc):
+        for line in proc.stdout:
+            try: m = json.loads(line)
+            except Exception: continue
+            if proc is not self.proc: break
+            if not isinstance(m, dict): continue   # one odd line must not stop the reading (a full pipe would stall the helper)
+            if m.get("t") == "frame":
+                try: data, size = base64.b64decode(m.get("data") or ""), (int(m.get("w") or 0), int(m.get("h") or 0))
+                except Exception: continue
+                with self.cond:
+                    self.frame, self.seq, self.size = data, self.seq + 1, size
+                    if self.state == "starting": self.state = "open"
+                    self.cond.notify_all()
+                continue
+            with self.cond:
+                if m.get("t") == "state":
+                    st = m.get("state")
+                    if st == "signed" and self.state != "signed":   # the helper says so only once the page has held a signed-in address a while
+                        self.state = "signed"
+                        log = self.signed_log(); log[self.site] = {"signed_at": int(time.time())}
+                        try: self.LOG.parent.mkdir(parents=True, exist_ok=True); self.LOG.write_text(json.dumps(log))
+                        except OSError: pass
+                        threading.Timer(self.SIGNED_CLOSE_S, self.close_if_signed, args=(proc,)).start()
+                    elif st == "open" and self.state == "signed": self.state = "open"
+                    elif st in ("gone", "timeout", "closed") and self.state != "signed": self.state, self.why = "closed", {"timeout": "it was open too long", "gone": "the browser closed"}.get(st, self.why)
+                elif m.get("t") == "error": self.state, self.why = "failed", str(m.get("why") or "")[:200]
+                self.cond.notify_all()
+        proc.wait()
+        with self.cond:
+            if proc is self.proc:
+                if self.state in ("starting", "open"): self.state, self.why = "closed", self.why or "the browser closed"
+                self.proc, self.frame = None, b""
+            if proc is self.closing: self.closing = None
+            self.cond.notify_all()
+
+    def watch(self, proc):
+        while proc.poll() is None:
+            time.sleep(min(5, self.POLL_S / 3))
+            if proc is not self.proc or proc is self.closing: continue
+            now, why = time.time(), None
+            if now - self.touched > self.IDLE_S: why = "nobody used it for a while"
+            elif now - self.started > self.LIFE_S + 30: why = "it was open too long"
+            elif now - self.polled > self.POLL_S: why = "the page showing it went away"
+            if why and proc is self.proc and proc is not self.closing: self.why = why; self.close(proc)
+
+    def tell(self, msg):
+        with self.wlock:   # one line at a time: two requests at once must not interleave their bytes
+            p = self.proc
+            if not p or p.poll() is not None or p is self.closing: raise ValueError("no sign-in is open")
+            try: p.stdin.write((json.dumps(msg) + "\n").encode()); p.stdin.flush()
+            except (BrokenPipeError, OSError, ValueError): raise ValueError("the browser closed")
+
+    def close_if_signed(self, proc):
+        if self.state == "signed": self.close(proc)   # still signed in a few seconds on: the shop didn't send it back to its sign-in page
+
+    def close(self, proc=None):
+        with self.wlock:
+            p = proc or self.proc
+            if not p or p.poll() is not None or p is not self.proc or p is self.closing: return {"ok": True}
+            self.closing, unit = p, self.unit
+            try: p.stdin.write(b'{"t":"close"}\n'); p.stdin.flush(); p.stdin.close()
+            except (BrokenPipeError, OSError, ValueError): pass
+        def hard():
+            time.sleep(12)   # the helper gives Chrome 6 s to close cleanly and save its cookies
+            if p.poll() is None:
+                if unit:   # the helper runs in its own unit: killing systemd-run here would leave it running
+                    try: subprocess.run(["systemctl", "--user", "stop", unit], timeout=30, capture_output=True)
+                    except (OSError, subprocess.SubprocessError): pass
+                try: os.killpg(p.pid, signal.SIGTERM)
+                except OSError: pass
+        threading.Thread(target=hard, daemon=True).start()
+        return {"ok": True}
+
+    def act(self, d):
+        what = d.get("do")
+        if what == "start": return self.start(d.get("site"))
+        if what == "close": return self.close()
+        if what == "input":
+            t = d.get("t")
+            if t not in self.INPUTS: raise ValueError("click, wheel, drag, text, key or back")
+            msg = {"t": t}
+            for k in ("fx", "fy", "dy"):
+                if isinstance(d.get(k), (int, float)) and not isinstance(d[k], bool) and math.isfinite(d[k]): msg[k] = float(d[k])
+            if t == "drag":   # the person's path while the mouse was down: up to 80 points of [fx, fy, ms since the last], under 5 s in all
+                pts = d.get("pts")
+                ok = isinstance(pts, list) and 2 <= len(pts) <= 80 and all(isinstance(q, list) and len(q) == 3 and all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in q) for q in pts)
+                if not ok: raise ValueError("drag: 2 to 80 points of [x, y, ms]")
+                msg["pts"] = [[min(1.0, max(0.0, float(x))), min(1.0, max(0.0, float(y))), min(200.0, max(0.0, float(ms)))] for x, y, ms in pts]
+                if sum(q[2] for q in msg["pts"]) > 5000: raise ValueError("drag: under 5 seconds")
+            if t == "text":
+                if not isinstance(d.get("s"), str) or not 0 < len(d["s"]) <= 500: raise ValueError("text: 1 to 500 characters")
+                msg["s"] = d["s"]
+            if t == "key":
+                if d.get("key") not in ("Enter", "Backspace", "Tab", "Escape", "Delete", "ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Home", "End"): raise ValueError("no such key")
+                msg["key"] = d["key"]
+            self.touched = time.time(); self.tell(msg)
+            return {"ok": True}
+        raise ValueError("start, input or close")
+
+    def next_frame(self, after, wait=2.0):
+        """The newest screen once it is newer than `after` (or after `wait` s, whatever there is): (seq, jpeg bytes)."""
+        self.polled = time.time()
+        with self.cond:
+            self.cond.wait_for(lambda: self.seq > after or not self.proc, timeout=wait)
+            self.polled = time.time()
+            return self.seq, self.frame
+
+
+SHOP = ShopSignin()
+
+
 def login_ok(path):
     """Is this login directory signed in? `claude auth status`, which uses no model usage."""
     env = {**{k: v for k, v in child_env().items() if k != "ANTHROPIC_API_KEY"}, "CLAUDE_CONFIG_DIR": str(path)}
@@ -6411,6 +6600,179 @@ class CodexSignIn:
 
 
 CODEX = CodexSignIn()
+
+
+# ---- Buying (modules/buy; Settings > Buying). Signing the Hive in to Stripe Link, the delivery details, the buys list.
+# Warden 112409231096: only the person's own signed-in app starts the sign-in (outside or tailnet, full: the Handler checks), the phrase and
+# link live in memory here and go only to that page, the session token stays in link-cli's own file (only booleans are kept), and nothing
+# here approves a buy: Link's app on the person's phone is the only go.
+BUY_PY = HOME / "modules" / "buy" / "buy.py"
+LINK_CLI = HOME / ".local" / "bin" / "link-cli"
+
+
+# Orders (the Orders page): one card per order, from `hive order view --json`. Read only: no route changes a card, and nothing here pays.
+ORDER_PY = HOME / "modules" / "buy" / "order.py"
+
+
+def orders_installed(): return ORDER_PY.is_file() and not ORDER_PY.is_symlink()
+
+
+def orders_view():
+    if not orders_installed(): return {"installed": False}
+    try:
+        r = subprocess.run([sys.executable, "-I", str(ORDER_PY), "view", "--json"], capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL, env=buy_env())
+        v = json.loads(r.stdout) if r.returncode == 0 else None
+        if not isinstance(v, dict): return {"installed": True, "error": (r.stderr or r.stdout).strip()[-300:] or "order.py view failed"}
+    except (OSError, subprocess.SubprocessError, ValueError) as e: return {"installed": True, "error": str(e)[:300]}
+    return {**v, "installed": True}
+
+
+def link_host_ok(url):
+    """A sign-in link is only passed on if it is https on link.com or one of its subdomains."""
+    try: p = urllib.parse.urlsplit(str(url))
+    except ValueError: return False
+    h = (p.hostname or "").lower()
+    return p.scheme == "https" and not p.username and not p.password and (h == "link.com" or h.endswith(".link.com"))
+
+
+def buy_env():
+    """link-cli and buy.py as the person's own step: no agent name, no door."""
+    return {k: v for k, v in os.environ.items() if k not in ("HIVE_NAME", "HIVE_DOOR")}
+
+
+def link_json(out):
+    """link-cli --format json prints one object, or a list of them when it polls: the last one counts."""
+    try: j = json.loads(out)
+    except ValueError: return None
+    if isinstance(j, list): j = j[-1] if j else None
+    return j if isinstance(j, dict) else None
+
+
+class LinkSignIn:
+    """`link-cli auth login`: Link gives a link and a phrase; the person opens the link, checks the phrase and approves in the Link app.
+    login returns at once (it saves a pending device code); `auth status` then finishes it once approved. One at a time, 15 minutes."""
+    def __init__(self): self.lock, self.slock, self.st, self.gen, self.signed, self.signed_t, self.buys, self.buys_t = threading.Lock(), threading.Lock(), {"state": "idle"}, 0, None, 0, None, 0
+
+    def installed(self): return BUY_PY.is_file() and not BUY_PY.is_symlink()
+
+    def status(self, fresh=False):
+        """Signed in or not (a cached boolean, 30 s). Never keeps the token preview or anything else link-cli says."""
+        with self.slock:   # one `auth status` at a time: it may be finishing the exchange and writing link-cli's token file
+            if not fresh and self.signed is not None and time.time() - self.signed_t < 30: return self.signed
+            return self._status()
+
+    def _status(self):
+        if not LINK_CLI.is_file(): self.signed = False
+        else:
+            try:
+                r = subprocess.run([str(LINK_CLI), "auth", "status", "--format", "json"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL, env=buy_env())
+                j = link_json(r.stdout) if r.returncode == 0 else None
+                self.signed = bool(j and j.get("authenticated") is True)
+            except (OSError, subprocess.SubprocessError, ValueError): self.signed = False
+        self.signed_t = time.time()
+        return self.signed
+
+    def module_view(self):
+        """buy.py view --json: the cap, the masked delivery summary and the buys. Read only (no sweep, no Link call); cached 5 s."""
+        if self.buys is not None and time.time() - self.buys_t < 5: return self.buys
+        try:
+            r = subprocess.run([sys.executable, "-I", str(BUY_PY), "view", "--json"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL, env=buy_env())
+            v = json.loads(r.stdout) if r.returncode == 0 else {"error": (r.stderr or r.stdout).strip()[-300:] or "buy.py view failed"}
+        except (OSError, subprocess.SubprocessError, ValueError) as e: v = {"error": str(e)[:300]}
+        self.buys, self.buys_t = v, time.time()
+        return v
+
+    def view(self, show=False):
+        """show: this request is the person's own signed-in app (outside or tailnet, full), so the phrase and link may go to it."""
+        if not self.installed(): return {"installed": False}
+        with self.lock: st = dict(self.st)
+        if not show: st.pop("phrase", None); st.pop("url", None)
+        return {**self.module_view(), "installed": True, "here": bool(show), "link_cli": LINK_CLI.is_file(), "signed_in": self.status(), "signin": st}
+
+    def start(self):
+        if not self.installed(): raise ValueError("the buy module isn't installed (hive module add buy)")
+        if not LINK_CLI.is_file(): raise ValueError("link-cli isn't installed for this account (npm install -g @stripe/link-cli)")
+        with self.lock:
+            if self.st.get("state") in ("starting", "waiting"): raise ValueError("a Link sign-in is already running")
+            self.st = {"state": "starting"}; self.gen += 1; gen = self.gen
+        if self.status(fresh=True):
+            with self.lock: self.st = {"state": "idle"}
+            raise ValueError("this Hive is already signed in to Link: sign out first to sign in again")
+        try:
+            r = subprocess.run([str(LINK_CLI), "auth", "login", "--client-name", "Hive", "--no-financial-insights", "--format", "json"],
+                               capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, env=buy_env())
+            j = link_json(r.stdout) if r.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError, ValueError): j = None   # ValueError: output that isn't UTF-8
+        url, phrase = (j or {}).get("verification_url"), (j or {}).get("phrase")
+        with self.lock:   # view() takes self.lock too (a plain Lock): decide here, answer after it's released
+            ok = self.gen == gen and isinstance(url, str) and link_host_ok(url) and isinstance(phrase, str) and 0 < len(phrase) < 200
+            if ok: self.st = {"state": "waiting", "url": url, "phrase": phrase, "until": int(time.time()) + 900}
+            elif self.gen == gen: self.st = {"state": "failed", "error": "Link didn't give a sign-in link on link.com. Try again in a minute."}
+        if ok: threading.Thread(target=self.watch, args=(gen,), daemon=True).start()
+        return self.view(show=True)
+
+    def watch(self, gen):
+        """Asks Link every 5 s whether the person approved, for up to 15 minutes. Keeps only the yes/no."""
+        end = time.time() + 900
+        while time.time() < end:
+            time.sleep(5)
+            with self.lock:
+                if self.gen != gen or self.st.get("state") != "waiting": return
+            if self.status(fresh=True):
+                with self.lock:
+                    if self.gen == gen: self.st = {"state": "done"}
+                return
+        with self.lock:
+            if self.gen == gen and self.st.get("state") == "waiting": self.st = {"state": "failed", "error": "The sign-in wasn't approved within 15 minutes. Try again."}
+
+    def cancel(self):
+        """Stops watching, and drops link-cli's pending code (logout) so a later `auth status` can't finish this sign-in. start() refused
+        while signed in, so there is no session to lose."""
+        with self.lock:
+            self.gen += 1; was = self.st.get("state") == "waiting"
+            if self.st.get("state") in ("starting", "waiting"): self.st = {"state": "cancelled"}
+        if was and LINK_CLI.is_file():
+            try: subprocess.run([str(LINK_CLI), "auth", "logout", "--format", "json"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL, env=buy_env())
+            except (OSError, subprocess.SubprocessError): pass
+            self.status(fresh=True)
+        return self.view(show=True)
+
+    def signout(self):
+        if not LINK_CLI.is_file(): raise ValueError("link-cli isn't installed for this account")
+        with self.lock: self.gen += 1; self.st = {"state": "idle"}
+        try: subprocess.run([str(LINK_CLI), "auth", "logout", "--format", "json"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL, env=buy_env())
+        except (OSError, subprocess.SubprocessError) as e: raise ValueError(f"link-cli logout didn't run: {e}")
+        if self.status(fresh=True): raise ValueError("Link still says this Hive is signed in")
+        return self.view(show=True)
+
+    def contact(self, d, clear=False):
+        """The delivery details: buy.py contact writes ~/.hive/buy-contact.json (0600) and answers with the masked summary only."""
+        if not self.installed(): raise ValueError("the buy module isn't installed (hive module add buy)")
+        fields = {k: d[k] for k in ("name", "email", "phone", "line1", "line2", "city", "state", "postal_code", "country") if isinstance(d.get(k), str)} if not clear else {}
+        if not clear and d.get("clear_line2") is True: fields["clear_line2"] = True
+        try:
+            r = subprocess.run([sys.executable, "-I", str(BUY_PY), "contact"] + (["--clear"] if clear else []), input=json.dumps(fields),
+                               capture_output=True, text=True, timeout=30, env=buy_env())
+        except (OSError, subprocess.SubprocessError) as e: raise ValueError(f"buy.py didn't run: {e}")
+        if r.returncode != 0: raise ValueError((r.stderr or r.stdout).strip().splitlines()[-1][:300] if (r.stderr or r.stdout).strip() else "couldn't save the details")
+        self.buys = None
+        return self.view(show=True)
+
+    def renew(self, bid):
+        """The card's Ask Link again: buy.py renew sends Link a fresh prompt for the same cart and total (it approves nothing; the
+        Link app stays the only go). Allowed only for an ask whose prompt lapsed unanswered, within 24 h of the first ask."""
+        if not self.installed(): raise ValueError("the buy module isn't installed (hive module add buy)")
+        if not isinstance(bid, str) or not re.fullmatch(r"lsrq_[A-Za-z0-9]{1,64}", bid): raise ValueError("id: a Link spend request id (lsrq_...)")
+        try:
+            r = subprocess.run([sys.executable, "-I", str(BUY_PY), "renew", bid], capture_output=True, text=True, timeout=120, env=buy_env())
+        except (OSError, subprocess.SubprocessError) as e: raise ValueError(f"buy.py didn't run: {e}")
+        if r.returncode != 0: raise ValueError(((r.stderr or r.stdout).strip().splitlines() or ["couldn't ask Link again"])[-1].removeprefix("hive buy: ")[:300])
+        self.buys = None
+        m = re.match(r"(lsrq_\w+)\s+(\w+)", r.stdout.strip())
+        return {"ok": True, "id": m.group(1) if m else None, "status": m.group(2) if m else None}
+
+
+LINKIN = LinkSignIn()
 KEY_DIR = STATE / "keys"
 # The kinds of API key Settings takes. Each saved key is its own provider, named by kind (anthropic, openrouter-2, ...), so `--model NAME:MODEL` reaches it.
 ACCOUNT_KINDS = {
@@ -6621,7 +6983,9 @@ const go=async k=>{const r=await fetch("/login",{method:"POST",headers:{"Content
 document.getElementById("f").addEventListener("submit",e=>{e.preventDefault();go(document.getElementById("s").value.trim());});
 (async()=>{const k=location.hash.slice(1);if(k){history.replaceState(null,"","/login");return go(k);}
  // the session cookie is SameSite=Strict, so a link from elsewhere arrives without it: this request has it, if there is one
- const r=await fetch("/api/app");if(r.ok)location.replace("/");})();
+ // Link's approval pop-up comes back here that way (/?linkback=1, modules/buy): close it, else carry the linkback on to the app
+ const lb=new URLSearchParams(location.search).get("linkback")==="1";if(lb)try{window.close()}catch(e){}
+ const r=await fetch("/api/app");if(r.ok)location.replace(lb?"/"+location.search:"/");})();
 </script></body></html>
 """
 
@@ -6860,6 +7224,11 @@ def serve(port):
             except OSError: return self.deny(503, "the phone service isn't running (systemctl --user start hive-phone)")
             return self.send(b, "audio/wav" if b[:4] == b"RIFF" else "application/json", status=st)   # /say answers with wav (Read aloud)
 
+        def buy_person(self):
+            """Buying's sign-in, sign-out and delivery details: only the person's own app, through Cloudflare (full) or a pinned tailnet device.
+            Not the local cookie: agents on this machine can read it, so a curl from here must never start a Link sign-in (warden 112409231096)."""
+            return "logins" in self.can and getattr(self, "route", None) in ("outside", "tailnet") and self.full_signin() and getattr(self, "own_site", False)   # not a site's own full person
+
         def full_signin(self):
             """The owner's full sign-in: outside in full mode, or the local session. The board page's bridge and the doors need it."""
             return (getattr(self, "route", None) == "outside" and getattr(self, "mode", None) == "full") or (getattr(self, "route", None) in ("local", "tailnet") and self.signed)
@@ -6925,6 +7294,7 @@ def serve(port):
             if self.route != "open": info.update(setup={**SETUP.get(), "starter": starter_up()}, secrets_on=self.secrets_on, settings=settings_brief())  # the starter heartbeat is one stat, so read it fresh: from the 20 s cache "isn't running" and "back" took ~35-43 s to show
             if self.route != "open" and "modules" in self.can: info["features"] = ["slack-door"]; info["slack_door"] = slack_door_view()  # Settings > Modules > slack-door "Set up" (POST /api/slack-door)
             if self.route in ("local", "tailnet"): info["phone_link"] = phone_qr(web)   # E122: the QR code in Settings › This device; not to an outside visitor, who may be a friend and needn't learn the other names
+            if self.route != "open" and "logins" in self.can and orders_installed(): info["orders"] = True   # the Orders page (views/orders.js)
             if self.route != "open" and install_id(): info["install"] = install_id()   # the report module's install code, shown at the foot of Settings so the owner can match this Hive to its reports
             if self.route != "open": info["default_model"] = default_model(); info["voice"] = voice_ready(); info["phone"] = phone_ready() and "post" in self.can
             if self.route != "open" and "post" in self.can and word_shell(): info["word_shell"] = word_shell()
@@ -7003,7 +7373,7 @@ def serve(port):
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
             elif u.path == "/api/brand/logo":
                 self.send_logo()
-            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/connectors", "/api/voice", "/api/signin", "/api/plans", "/api/secrets", "/api/slack-door", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/accounts", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history", "/api/mail", "/api/export") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/connectors", "/api/voice", "/api/signin", "/api/plans", "/api/secrets", "/api/slack-door", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/buy", "/api/orders", "/api/accounts", "/api/design", "/api/shop-signin", "/api/shop-signin/frame", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history", "/api/mail", "/api/export") and self.route == "open":
                 self.send_error(404)
             elif u.path == "/api/kb/home":
                 self.send(json.dumps(kb_home()).encode(), J)
@@ -7086,8 +7456,18 @@ def serve(port):
                 self.send(json.dumps(settings_page()).encode(), J)
             elif u.path == "/api/design":
                 self.send(json.dumps(DESIGN.view()).encode(), J)
+            elif u.path in ("/api/shop-signin", "/api/shop-signin/frame"):   # the person's own app only (buy_person): a local curl must never see or drive it (warden 11241330fa1c)
+                if not self.buy_person(): return self.deny(403, "signing in to a shop is only from your own app, signed in")
+                if u.path == "/api/shop-signin": return self.send(json.dumps(SHOP.view()).encode(), J)
+                after = int(q["after"][0]) if q.get("after", [""])[0].isdigit() else 0
+                seq, img = SHOP.next_frame(after)   # waits up to 2 s for a newer screen: the page asks again as each answer comes
+                return self.send(json.dumps({**SHOP.view(), "seq": seq, "img": base64.b64encode(img).decode() if img and seq > after else None}).encode(), J)
             elif u.path == "/api/signin-codex":
                 self.send(json.dumps(CODEX.view()).encode(), J)
+            elif u.path == "/api/orders":
+                self.send(json.dumps(orders_view()).encode(), J)
+            elif u.path == "/api/buy":   # Settings > Buying; the phrase and link only to the person's own signed-in app (warden 112409231096)
+                self.send(json.dumps(LINKIN.view(show=self.buy_person())).encode(), J)
             elif u.path == "/api/accounts":
                 self.send(json.dumps(accounts_view()).encode(), J)
             elif u.path == "/api/live":
@@ -7217,6 +7597,19 @@ def serve(port):
                 try: return self.send(door_call(d.get("door"), d.get("path"), d.get("body")), J)
                 except KeyError: return self.send_error(404)
                 except (ValueError, OSError) as e: return self.deny(502, str(e))
+            if u.path == "/api/buy":   # Settings > Buying (modules/buy). Nothing here approves a buy: the Link app is the only go.
+                if not self.buy_person(): return self.deny(403, "Link sign-in and the delivery details work only from your own signed-in app, through Cloudflare or Tailscale, in full mode")
+                try:
+                    do = d.get("do")
+                    if do == "signin": res = LINKIN.start()
+                    elif do == "cancel": res = LINKIN.cancel()
+                    elif do == "signout": res = LINKIN.signout()
+                    elif do == "contact": res = LINKIN.contact(d.get("contact") if isinstance(d.get("contact"), dict) else {})
+                    elif do == "contact_clear": res = LINKIN.contact({}, clear=True)
+                    elif do == "renew": res = LINKIN.renew(d.get("id"))   # Ask Link again on a lapsed card: a new prompt, same cart; nothing approved here
+                    else: raise ValueError("do: signin, cancel, signout, contact, contact_clear or renew")
+                except ValueError as e: return self.deny(400, str(e))
+                return self.send(json.dumps(res).encode(), J)
             if u.path == "/api/kb/save":   # the file preview's Edit tab (web/js/preview/edit.js): a note or project text file, written back
                 try: return self.send(json.dumps(kb_save(d.get("path"), d.get("text"), d.get("version"), self.signer)).encode(), J)
                 except KeyError: return self.deny(404, "that isn't here, or isn't shown")
@@ -7234,7 +7627,7 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/starter", "/api/module", "/api/voice", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/mcp-url", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
+            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/starter", "/api/module", "/api/voice", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/mcp-url", "/api/signin-codex", "/api/account-key", "/api/design", "/api/shop-signin", "/api/brand", "/api/slack-door"):
                 try:
                     if u.path == "/api/post" and isinstance(d.get("page"), dict): res = page_edit_post(d.get("page"), d.get("thread"), limited="config" not in self.can)
                     elif u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True, edit_of=d.get("edit_of"), retry_of=d.get("retry_of"), files_from=d.get("files_from"), focus=d.get("focus"))
@@ -7276,6 +7669,9 @@ def serve(port):
                     elif u.path == "/api/share-pack": res = share_pack()
                     elif u.path == "/api/draft": res = draft_do(d)
                     elif u.path == "/api/design": res = DESIGN.act(d)
+                    elif u.path == "/api/shop-signin":
+                        if not self.buy_person(): return self.deny(403, "signing in to a shop is only from your own app, signed in")
+                        res = SHOP.act(d)
                     elif u.path == "/api/signin-codex":
                         if d.get("cancel"): res = CODEX.cancel()
                         elif isinstance(d.get("remove"), str): res = CODEX.remove(d["remove"])
@@ -7321,6 +7717,10 @@ def serve(port):
             self.send(b'{"ok":true}', "application/json")
 
         def log_message(self, *a): pass
+        def log_error(self, fmt, *a):  # keep 5xx and timeouts in the journal, so a failed page load leaves a trace; 4xx refusals stay quiet
+            if a and isinstance(a[0], int) and a[0] < 500: return
+            try: sys.stderr.write("hive-dash error %s %s: %s\n" % (self.address_string(), getattr(self, "path", "?")[:120], fmt % a)); sys.stderr.flush()
+            except Exception: pass
 
     threading.Thread(target=live_usage, daemon=True).start()
     threading.Thread(target=record_usage, daemon=True).start()

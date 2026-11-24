@@ -19,6 +19,7 @@ import { offer as offerDeckTour } from "./deck/tour.js";
 import { offerTour } from "./ui/tour.js";
 import { initSwitcher } from "./ui/switcher.js";
 import { watchVersion } from "./ui/newversion.js";
+import { tellShell } from "./ui/rootword.js";
 
 const byId = new Map(views.map(v => [v.id, v]));
 const top = document.getElementById("top"), main = document.getElementById("main");
@@ -41,6 +42,7 @@ function render(force) {
   let page;
   try { page = cur.render(ctx); } catch (e) { console.error("view " + cur.id + " failed:", e); page = crashPage(cur, e); }
   mount(main, page);
+  tellShell();   // framed by the word shell: where its box goes on this page (nothing otherwise)
   where();
   // On a phone the page head's row (.subnav) scrolls sideways: bring the page you are on into view once, when you arrive. Sideways only, so it never moves the page.
   const here = main.querySelector(".subnav a[aria-current=page]"), row = here && here.parentNode;

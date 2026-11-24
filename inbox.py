@@ -767,11 +767,19 @@ def wait_note(name, rec, payload, ps):
             t = dt.datetime.fromisoformat(str(p.get("at", "")))
             return time.time() - (t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)).timestamp()
         except ValueError: return 0
-    if max((age(p) for p in ps), default=0) < 120: return ""
+    held = max((age(p) for p in ps), default=0) >= 120
+    # 11-24 read-back (a1b7b): held posts were rare (the note fired once in 3 days, 0 `hive wait --until` uses) while 100 foreground
+    # loops ran 300 s+ in 34 runs. A loop given a timeout of 5 min or more is the same risk before any post lands: point then too.
+    try: long_timeout = float(ti.get("timeout") or 0) >= 300000
+    except (TypeError, ValueError): long_timeout = False
+    if not (held or long_timeout): return ""
     f = STATE / "wait-noted" / f"{name}-{re.sub(r'[^0-9A-Za-z]', '', str(rec.get('at', '')))}"
     if f.exists(): return ""
     try: f.parent.mkdir(parents=True, exist_ok=True); f.touch()
     except OSError: pass
+    if not held:
+        return ("\n\nA foreground wait loop holds any post for you until it ends: posts reach you only when a tool call ends. Wait with "
+                "`hive wait --until 'CMD' --timeout 590` instead: it returns as soon as CMD succeeds or a post for you arrives (exit 2).")
     return ("\n\nThese waited behind your foreground wait loop: posts reach you only when a tool call ends. Wait with "
             "`hive wait --until 'CMD' --timeout 590` instead: it returns as soon as CMD succeeds or a post for you arrives (exit 2).")
 
@@ -837,8 +845,13 @@ def main():
         elif event == "Stop":
             try: run_end_bars(name, rec)
             except Exception: pass  # a bar never holds up a stop
-        elif first or check or sk:
-            print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": "\n\n".join(x for x in (first, check, sk) if x)}}))
+        else:
+            wn = ""
+            if event == "PostToolUse":
+                try: wn = wait_note(name, rec, payload, []).strip()
+                except Exception: pass  # a note never holds up a tool call
+            if first or check or sk or wn:
+                print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": "\n\n".join(x for x in (first, check, sk, wn) if x)}}))
         return
     note = person_note(ps)
     msg = ("New on the board for you while you work (you'll get these automatically; answer with "

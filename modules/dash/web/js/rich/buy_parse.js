@@ -44,8 +44,13 @@ export function parseBuy(code, now = Date.now()) {
   const [tone, label] = STATUS[st] || ["off", "Unknown"];
   const t = s => { const v = Date.parse(str(s, 40)); return Number.isFinite(v) ? v : null; };
   const approveBy = t(j.approve_by), expires = t(j.expires_at);
+  const renewUntil = t(j.renew_until), renewedBy = str(j.renewed_by, 80);
+  // Link's prompt lasts 30 min; the same cart can be sent again (buy.py renew) until renew_until, 24 h from the first ask
+  const lapsed = st === "expired" || (tone === "waiting" && approveBy != null && approveBy <= now);
+  const renewable = lapsed && renewUntil != null && renewUntil > now && !renewedBy && /^lsrq_[A-Za-z0-9]{1,64}$/.test(str(j.id, 80));
   let when = "";
-  if (tone === "waiting" && approveBy) when = approveBy > now ? `Lapses ${rel(approveBy, now)}` : "Should have lapsed";
+  if (tone === "waiting" && approveBy) when = approveBy > now ? `Lapses ${rel(approveBy, now)}` : renewable ? "Lapsed in Link" : "Should have lapsed";
+  else if (renewable) when = `Can be asked again for ${rel(renewUntil, now).replace(/^in /, "")}`;
   else if (st === "approved" && expires) when = expires > now ? `Card valid until use, ${rel(expires, now)} at most` : "Card expired";
   const lines = Array.isArray(j.lines) ? j.lines.slice(0, 30).map(l => ({
     name: str(l && l.name, 200), qty: int(l && (l.quantity ?? l.qty)) ?? 1, unit: int(l && (l.unit_amount ?? l.unit)),
@@ -60,7 +65,8 @@ export function parseBuy(code, now = Date.now()) {
     agent: str(j.agent, 40) || "An agent", merchant: str(j.merchant, 120), url: safeUrl(j.url), urlText: str(j.url, 200).replace(/^https?:\/\/(www\.)?/, ""),
     item: str(j.item, 200), detail: str(j.detail, 600), lines, parts, cur,
     amount, total: money(amount, cur), charged: int(j.charged) != null ? money(j.charged, cur) : "",
-    last4, approval: tone === "waiting" ? linkUrl(j.approval_url) : null,
+    last4, approval: tone === "waiting" && !lapsed ? linkUrl(j.approval_url) : null,
     receipt: str(j.receipt, 300), recording: str(j.recording, 300), whyCancel: str(j.why_cancel, 300),
+    renewable, renewedBy, renews: str(j.renews, 80),
   };
 }

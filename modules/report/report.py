@@ -168,7 +168,40 @@ EXPECTED = {"limited", "logins-paused", "killed"}   # normal operation: a login 
 EXPECTED_EXIT = {"-15", "143"}                       # SIGTERM: a stop or restart
 # Why an agent exited non-zero, as one fixed label read from the run's own output and the starter's events around it (k1920: a Mac
 # install sent 49 failed exits in 67 runs and nothing said why). Only a label from this list is ever sent, never the output's text.
-EXIT_CAUSES = ("login rejected", "never started", "resume failed", "stalled", "connection error", "turn budget", "error result", "no result")
+# Each broad cause has exact ones in brackets, matched from fixed patterns (thread 112416015163: "as specific and deterministic
+# as possible"); the bare broad label is what an older Hive sends, and what a run says when no pattern matches it.
+NEVER_TEXT = (("node missing", r"env: '?node'?: no such file|\bnode: (command )?not found"),   # an npm install of claude whose node isn't on the starter's PATH
+              ("claude missing", r"command not found|claude: not found|spawn \S*claude ENOENT|(ENOENT|no such file or directory).{0,120}(?<![.\w])claude(?![\w./-])|(?<![.\w])claude(?![\w./-]).{0,40}(ENOENT|no such file)"),
+              ("file missing", r"ENOENT|no such file or directory"),
+              ("permission denied", r"permission denied|EACCES|EPERM|operation not permitted"),
+              ("disk full", r"ENOSPC|no space left"),
+              ("out of memory", r"heap out of memory|ENOMEM|cannot allocate memory"),
+              ("config rejected", r"invalid (mcp )?config|invalid .{0,20}settings|is not valid json|in json at position|json\.parse|unexpected (token|end of) .{0,40}json"),
+              ("flag rejected", r"unknown option|unrecognized option|unknown argument|invalid option|too many arguments|error: option|missing required argument"),
+              ("claude broken", r"cannot find module|err_module_not_found|syntaxerror|referenceerror|typeerror|segmentation fault|illegal instruction|glibc|core dumped|bus error"))
+ERROR_TEXT = (("context too long", r"prompt is too long|context (length|window) (exceeded|limit)|exceeds? .{0,30}context (length|window)|maximum context length|input is too long"),
+              ("rate limited", r"API Error: 429|rate_limit_error|rate limit(ed| exceeded| reached)|too many requests"),
+              ("credit too low", r"credit balance is too low|insufficient (credit|funds|quota)|API Error: 402|billing_error|payment required"),
+              ("access denied", r"API Error: 403|permission_error|organization (has been )?disabled"),
+              ("model unavailable", r"not_found_error|API Error: 404|model.{0,40}(not found|does not exist|not available|not supported)|invalid model|unknown model"),
+              ("request rejected", r"API Error: 400|invalid_request_error"))
+NORESULT_TEXT = (("out of memory", r"heap out of memory|ENOMEM|cannot allocate memory"),
+                 ("disk full", r"ENOSPC|no space left"),
+                 ("crashed", r"uncaught|unhandled|^\s*at .+:\d+:\d+|traceback|panic|segmentation fault|core dumped|^\w*error:"))
+SIGNALS = {9: "killed by SIGKILL", 6: "crashed (SIGABRT)", 11: "crashed (SIGSEGV)", 1: "hung up (SIGHUP)", 2: "interrupted (SIGINT)"}
+_EXACT = {"never started": [x for x, _ in NEVER_TEXT] + ["no output", "other"],
+          "error result": [x for x, _ in ERROR_TEXT] + ["error during run", "other"],
+          "no result": [x for x, _ in NORESULT_TEXT] + list(SIGNALS.values()) + ["killed by the Hive", "output stopped"],
+          "connection error": ["network", "API 5xx"]}
+EXIT_CAUSES = ("login rejected", "never started", "resume failed", "stalled", "connection error", "turn budget", "error result", "no result") + tuple(
+    "%s (%s)" % (k, x) for k, v in _EXACT.items() for x in v)
+# Which side a cause is on, so a Hive can tell its own fault from its Claude plan's or the network's (thread 112416015163)
+PLAN_CAUSES = {"login rejected", "error result (rate limited)", "error result (credit too low)", "error result (access denied)"}
+NET_CAUSES = {"connection error", "connection error (network)", "connection error (API 5xx)"}
+STOP_CAUSES = {"no result (killed by the Hive)"}
+def cause_side(cause):
+    """hive, plan, network or stopped for an exit cause (None: no cause, which is read as the Hive's)."""
+    return "plan" if cause in PLAN_CAUSES else "network" if cause in NET_CAUSES else "stopped" if cause in STOP_CAUSES else "hive"
 MSG = {
     "agent-exit": re.compile(r"^an agent ended with exit code (?P<code>-?\d{1,4})(?:: (?P<cause>%s))?$" % "|".join(map(re.escape, EXIT_CAUSES))),
     "lost-subagents": re.compile(r"^background helpers were lost when an agent ended$"),
@@ -244,17 +277,29 @@ def unit_failures(st):
 AUTH_TEXT = re.compile(r"not logged in|login expired|please run /login|failed to authenticate|authentication_failed|invalid api key|oauth token (has|is|was)", re.I)
 NET_TEXT = re.compile(r"connection|network|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|socket|overloaded|API Error: 5\d\d", re.I)
 
-def exit_cause(out, events=()):
-    """One label from EXIT_CAUSES for a run that exited non-zero, read from its output file's tail and the starter's events
-    for the same run (stalled, login_rejected, launch_failed, wake_failed). The text is matched here and never leaves."""
+def _first(table, said):
+    return next((label for label, rx in table if any(re.search(rx, x, re.I | re.M) for x in said)), None)
+
+def _signal(code):
+    try: c = int(code)
+    except (TypeError, ValueError): return None
+    return -c if c < 0 else c - 128 if 128 < c < 160 else None
+
+def exit_cause(out, events=(), code=None):
+    """One label from EXIT_CAUSES for a run that exited non-zero, read from its output file's tail, its exit code and the starter's
+    events for the same run (stalled, login_rejected, launch_failed, wake_failed, killed). The text is matched here and never leaves."""
     events = set(events)
     if "login_rejected" in events: return "login rejected"
     if "stalled" in events: return "stalled"
-    if "launch_failed" in events: return "never started"
+    if events & {"killed", "reaped"}: return "no result (killed by the Hive)"   # reaped: the starter ended a run that stayed up after its turn
+    lines, cut = None, False
     try:
         with open(out, "rb") as f:
             f.seek(0, 2); cut = f.tell() > 262144; f.seek(max(0, f.tell() - 262144)); lines = f.read().decode(errors="replace").splitlines()
-    except (OSError, TypeError, ValueError): return None
+    except (OSError, TypeError, ValueError): pass
+    if lines is None:
+        if "launch_failed" in events: return "never started"
+        return ("no result (%s)" % SIGNALS[_signal(code)]) if _signal(code) in SIGNALS else None
     lines = lines[1 if cut else 0:][-200:]   # a cut tail starts mid-line
     js, said, result = 0, [], None
     for line in lines:
@@ -271,13 +316,93 @@ def exit_cause(out, events=()):
             er = e.get("error"); said.append(str(e.get("message") or (er.get("message", "") if isinstance(er, dict) else er or "")))
     if result is not None and result.get("type") == "result" and not result.get("is_error"): return None   # it finished cleanly: its text is the agent's own words
     if result is not None: said.append(str(result.get("result", "")))
-    said = said[-6:]
+    said = [x[:2000] for x in said[-6:]]
     if "wake_failed" in events: return "resume failed"   # most often "No conversation found", with no JSON line at all
     if any(AUTH_TEXT.search(x) for x in said): return "login rejected"
-    if not js and not cut: return "never started"
-    if any(NET_TEXT.search(x) for x in said): return "connection error"
+    if "launch_failed" not in events and not js and _signal(code) in SIGNALS: return "no result (%s)" % (_first(NORESULT_TEXT[:2], said) or SIGNALS[_signal(code)])   # killed before its first line
+    if "launch_failed" in events or (not js and not cut):
+        if not any(x.strip() for x in said): return "never started (no output)"
+        return "never started (%s)" % (_first(NEVER_TEXT, said) or "other")
     if result is not None and str(result.get("subtype", "")).startswith("error_max"): return "turn budget"
-    return "error result" if result is not None else "no result"
+    hit = _first(ERROR_TEXT, said) if result is not None else None   # an API's own 4xx before the network: a proxy's 403 is still a 403
+    if hit: return "error result (%s)" % hit
+    if any(NET_TEXT.search(x) for x in said):
+        return "connection error (%s)" % ("API 5xx" if any(re.search(r"overloaded|API Error: 5\d\d|\b5(00|02|03|29)\b|internal server error", x, re.I) for x in said) else "network")
+    if result is not None: return "error result (%s)" % ("error during run" if result.get("subtype") == "error_during_execution" else "other")
+    # out of memory and a full disk first: Node aborts on both, so the signal alone would say a crash
+    return "no result (%s)" % (_first(NORESULT_TEXT[:2], said) or SIGNALS.get(_signal(code)) or _first(NORESULT_TEXT[2:], said) or "output stopped")
+
+PLAN_KINDS, STOP_KINDS = {"limited", "logins-paused", "provider-held"}, {"killed"}
+def side(r):
+    """hive, plan, network or stopped for a failure report ("" for any other): whose fault it is, from its kind and fixed message only."""
+    if r.get("type") != "failure": return ""
+    k = r.get("kind") or ""
+    if k in PLAN_KINDS: return "plan"
+    if k in STOP_KINDS: return "stopped"
+    if k == "agent-exit":
+        m = MSG[k].match(" ".join(str(r.get("message") or "").split()))
+        if m and m.group("code") in EXPECTED_EXIT: return "stopped"
+        if m and m.group("cause"): return cause_side(m.group("cause"))
+    return "hive"
+
+def _run(cmd, t=10):
+    import subprocess
+    try: return subprocess.run(cmd, capture_output=True, text=True, timeout=t)
+    except subprocess.TimeoutExpired: return "timeout"
+    except Exception: return None
+
+def starter_unit():
+    """The starter's unit name: hive-starter in a release, hive-starter where the core runs itself. None when neither is installed."""
+    for u in ("hive-starter.service", "hive-starter.service"):
+        if os.path.exists(os.path.join(home(), ".config", "systemd", "user", u)): return u
+    return None
+
+def claude_path(unit):
+    """The claude the starter runs: found on the PATH its drop-in sets (install.sh writes it), then this one, then ~/.local/bin."""
+    import shutil
+    paths = []
+    try:
+        for l in open(os.path.join(home(), ".config", "systemd", "user", unit + ".d", "local.conf")) if unit else ():
+            m = re.match(r"\s*Environment=PATH=(\S+)", l)
+            if m: paths += m.group(1).replace("%h", home()).split(":")
+    except OSError: pass
+    paths += os.environ.get("PATH", "").split(":") + [os.path.join(home(), ".local", "bin")]
+    return shutil.which("claude", path=":".join(p for p in paths if p))
+
+RESTART_WAIT = 5   # seconds a restarted starter gets before it is looked at again
+def self_check(fix=True):
+    """What a Hive finds when it checks itself after one of its own faults, as fixed labels only (no names, paths or output):
+    claude starts, disk and memory have room, the starter runs, how many of its units have failed. One repair is tried, once per
+    check: a starter in the failed state is reset and started again, and the label says whether that worked."""
+    got, unit = [], starter_unit()
+    c = claude_path(unit)
+    if not c: got.append("claude missing")
+    else:
+        r = _run([c, "--version"], 10)
+        got.append("claude hangs" if r == "timeout" else "claude ok" if r is not None and r.returncode == 0 else "claude fails")
+    try:
+        import shutil; free = shutil.disk_usage(home()).free
+        got.append("disk full (<200 MB free)" if free < 200e6 else "disk low (<1 GB free)" if free < 1e9 else "disk ok")
+    except OSError: got.append("disk unknown")
+    try:
+        mem = int(re.search(r"MemAvailable:\s+(\d+)", open("/proc/meminfo").read()).group(1)) * 1024
+        got.append("memory low (<300 MB free)" if mem < 300e6 else "memory ok")
+    except (OSError, AttributeError, ValueError): got.append("memory unknown")
+    if not unit: got.append("no starter unit")
+    else:
+        r = _run(["systemctl", "--user", "is-active", unit])
+        now = r.stdout.strip() if hasattr(r, "stdout") else "unknown"
+        if now == "failed" and fix:
+            _run(["systemctl", "--user", "reset-failed", unit]); _run(["systemctl", "--user", "start", unit], 20); time.sleep(RESTART_WAIT)
+            r = _run(["systemctl", "--user", "is-active", unit])
+            got.append("starter was failed, restarted" if hasattr(r, "stdout") and r.stdout.strip() == "active" else "starter failed, restart failed")
+        else: got.append({"active": "starter running", "failed": "starter failed", "inactive": "starter stopped", "activating": "starter starting"}.get(now, "starter unknown"))
+    r = _run(["systemctl", "--user", "list-units", "--failed", "--no-legend", "--plain"])
+    if not hasattr(r, "stdout"): got.append("units unknown")   # no systemd here (a Mac, WSL without it), or it didn't answer
+    else:
+        n = len([l for l in r.stdout.splitlines() if l.split() and re.match(r"^(hive|hive)-", l.split()[0])])
+        got.append("no units failed" if not n else "1 unit failed" if n == 1 else "%d units failed" % min(n, 99))
+    return "self-check: " + "; ".join(got)
 
 def around(evs, end):
     """Event names the starter logged about one run: from its start to the next start of the same agent, so a stall before
@@ -321,7 +446,7 @@ def build(st, want_fail, want_use):
         elif ev == "fallback": use["fallbacks"] += 1
         elif ev == "end" and e.get("exit") not in (0, None) and (e.get("name"), e.get("session")) not in limited and (e.get("name"), e.get("pid")) not in woken:
             use["failed_exits"] += 1
-            try: cause = exit_cause(outs.get("%s:%s" % (e.get("name"), e.get("pid"))), around(near.get(e.get("name"), []), e))
+            try: cause = exit_cause(outs.get("%s:%s" % (e.get("name"), e.get("pid"))), around(near.get(e.get("name"), []), e), e.get("exit"))
             except Exception: cause = None   # a cause is a nicety: never let it stop the reports
             fails.append(("agent-exit", at, "an agent ended with exit code %s" % e.get("exit") + (": " + cause if cause in EXIT_CAUSES else "")))
         if ev == "end": outs.pop("%s:%s" % (e.get("name"), e.get("pid")), None)
@@ -332,7 +457,7 @@ def build(st, want_fail, want_use):
     reps = []
     if want_fail:
         for kind, at, msg in fails:
-            r = base(st, "failure"); r.update(kind=kind, at=at[:19] + "Z", message=clip(scrub(msg), MAX_TEXT)); reps.append(r)
+            r = base(st, "failure"); r.update(kind=kind, at=at[:19] + "Z", message=clip(msg if kind in MSG and MSG[kind].match(msg) else scrub(msg), MAX_TEXT)); reps.append(r)   # a fixed message is all template: scrubbing a user named "claude" would break its label
     if want_use and any(use.values()):
         r = base(st, "usage"); r.update(at=last[:19] + "Z", message="events from %s to %s" % (first[:19] + "Z", last[:19] + "Z"), usage=use); reps.append(r)
     return reps, off + len(raw)
@@ -385,6 +510,11 @@ def send(dry=False):
     st = installed_state()
     new, off = build(st, wf or wg, wu)
     if wf or wg: new += unit_failures(st)
+    own = [r for r in new if side(r) == "hive"] if wf else []   # the check's answer only travels with shared failures
+    if own:                                           # a fault of the Hive's own: it checks itself once, repairs what it safely can, and says what it found
+        try: chk = self_check(fix=not dry)
+        except Exception: chk = "self-check: could not run"
+        for r in own: r["log"] = chk
     gh_note, fails = "", [r for r in new if r["type"] == "failure"]
     if wg and not dry: gh_note = "; github: " + github(st, fails)
     if not wf: new = [r for r in new if r["type"] != "failure"]

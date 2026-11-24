@@ -97,7 +97,7 @@ function copyPage(scale) {
   const drop = [], stuck = [], modals = [], b = body.getBoundingClientRect(), ox = -b.left - body.clientLeft, oy = -b.top - body.clientTop, moved = scrollX || scrollY;
   all.forEach((el, i) => {
     const t = twins[i];
-    if (el.matches("script,noscript,dialog.fb,.fb-sent,.new-ver")) { drop.push(t); return; }
+    if (el.matches("script,noscript,dialog.fb,.fb-sent,.new-ver,.star-note")) { drop.push(t); return; }
     if (el.scrollLeft || el.scrollTop) keepScroll(el, t);
     if (el.matches("dialog:modal")) modals.push([el, t]);
     const cs = getComputedStyle(el);

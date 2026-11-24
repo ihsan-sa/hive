@@ -16,6 +16,7 @@ import { getTheme, cycleTheme, setTheme, THEMES } from "../core/theme.js";
 import { statusDot, button, icon, scrim, setPageRow, signInAgain } from "./kit.js";
 import { banner } from "./banner.js";
 import { newVersionNote } from "./newversion.js";
+import { starNote } from "./starnote.js";
 import { startCall, phoneReady, inCall } from "./phone.js";
 import { D as deck, supported as deckSupported } from "../deck/control.js";
 import { oneKey } from "../core/onekey.js";
@@ -115,7 +116,9 @@ function loginMarks() {
 }
 /** The band under the bar when the hive has stopped: says why in words, and where to look. */
 function band(current) {
-  if (S.failed) return banner({ tone: "bad", cls: "lost", text: [h("b", null, "Can't reach your Hive."), S.fresh ? ` What you see is from ${clock(S.fresh)}.` : "", " Trying again every few seconds; your typing is kept."],
+  if (S.failed && S.signedOut) return banner({ tone: "bad", cls: "lost", text: [h("b", null, "Your sign-in has run out."), " Sign in again to see your Hive; your typing is kept."],
+    actions: button("Sign in again", () => location.reload(), { size: "s", kind: "quiet" }) });
+  if (S.failed) return banner({ tone: "bad", cls: "lost", text: [h("b", null, "Can't reach your Hive."), S.fresh ? ` What you see is from ${clock(S.fresh)}.` : "", S.failWhy ? " " + S.failWhy : "", " Trying again every few seconds; your typing is kept."],
     actions: button("Try now", () => poll(), { size: "s", kind: "quiet" }) });
   const sign = signInWords(); if (sign) return h("div", { class: "band banner", role: "status", "data-tone": "bad", "data-key": "band" }, statusDot("limited"), h("span", null, sign),
     can("logins") ? button("Sign in", null, { href: href("settings"), size: "s", kind: "quiet" }) : null);
@@ -234,5 +237,5 @@ export function topBar({ views, current, update, nav }) {
     h("div", { class: "top-sub", "aria-hidden": "true" }, bits()),
     extra,
     app ? band(current) : null,
-    newVersionNote(update));   // its own row under the bar, so nothing on the page is covered
+    newVersionNote(update) || starNote(update));   // its own row under the bar, so nothing on the page is covered; one row at a time
 }
