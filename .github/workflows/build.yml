@@ -59,6 +59,10 @@ jobs:
           xvfb-run -a node test/deb.js
       # The same on Windows (its WSL 2) and on the Intel Mac (its VM; Apple silicon runners can't start one). These machines
       # differ from a person's computer, so a stop here is read, not a red build.
+      # Which Linux systems the Windows runner already has before the install (the installer makes its own, "Hive").
+      - if: runner.os == 'Windows'
+        continue-on-error: true
+        run: 'wsl -l -v; exit 0'
       - if: runner.os == 'Windows' || matrix.os == 'macos-15-intel'
         continue-on-error: true
         timeout-minutes: 75

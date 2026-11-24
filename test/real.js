@@ -38,6 +38,8 @@ let logText = '';
   await shot('hive');
   if (html.length < 500) throw new Error('the Hive\'s page is nearly empty: ' + html);
   console.log(`ok real ${process.platform}: the window shows ${await where()} (${await page.title()})`);
+  // The installer's own words, so the run shows which path it took (on Windows: "Getting Ubuntu" means it built its own Linux system).
+  console.log('the installer said:\n' + logText.split('\n').map(l => l.trim()).filter(l => l && l.length < 160).slice(-40).join('\n'));
   await app.close();
   // Second launch: the Hive is installed now, so the app must go straight to it, never showing the install step.
   const app2 = await _electron.launch({ executablePath: bin, args: process.platform === 'linux' ? ['--no-sandbox'] : [], env });
