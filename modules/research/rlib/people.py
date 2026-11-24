@@ -62,7 +62,7 @@ def drop_code(t):
 def clean_title(t):
     t = drop_code(t.split("\n")[0])
     # Where the post ends ("Special Assistant to the President" goes on past its "to"): "CEO of Nexeon, said:", "..., Dr Alex Groombridge, CTO" (the next person), "CEO, spearheads the ...".
-    t = re.split(r"(?<![A-Z])(?<!Assist)(?<!Asst)(?<!Assoc)(?<!Exec)(?<!Coord)(?<!Dept)(?<!aka)[.;:|•]\s|\s[–—-]\s|\s(?:said|says|who|and has|has|is|was|will|at|in|on)\s|(?<![Aa]ssistant)\sto\s|[\"“”(]|,\s+(?:sees|see|feels|believes|notes|adds|hopes|expects|thinks|wants|plans|looks|knows|argues|stresses)\b|,?\s(?:said|says|added|explained)\b|,\s+(?:Dr|Prof|Mr|Ms|Mrs)\.?\s|,\s+[a-z]+s\s+(?:the|a|an|its)\b|,\s+the\s+[a-z]|,\s+(?:where|which|whose|when)\b|\suntil\s|\sand\s+(?:highly|widely|also|one)\b", t)[0].strip(" ,.")
+    t = re.split(r"(?<![A-Z])(?<!Assist)(?<!Asst)(?<!Assoc)(?<!Exec)(?<!Coord)(?<!Dept)(?<!aka)[.;:|•]\s|\s[–—-]\s|(?<!Associates)(?<!Associate)(?<!Bachelors)(?<!Bachelor)(?<!Masters)(?<!Master)\sin\s|\s(?:said|says|who|and has|has|is|was|will|at|on)\s|(?<![Aa]ssistant)\sto\s|[\"“”(]|,\s+(?:sees|see|feels|believes|notes|adds|hopes|expects|thinks|wants|plans|looks|knows|argues|stresses)\b|,?\s(?:said|says|added|explained)\b|,\s+(?:Dr|Prof|Mr|Ms|Mrs)\.?\s|,\s+[a-z]+s\s+(?:the|a|an|its)\b|,\s+the\s+[a-z]|,\s+(?:where|which|whose|when)\b|\suntil\s|\sand\s+(?:highly|widely|also|one)\b", t)[0].strip(" ,.")
     t = re.sub(r"\b((?:co-?)?founder)\s+of\s+[a-z][a-z -]*(?:,.*)?$", r"\1", t, flags=re.I)  # "co-founder of advanced materials supplier"
     t = re.sub(r"\s+\S+@\S+.*$", "", t)  # "Interim Director jdoe@example.com": the email is no part of the post
     if len(t) > 160: t = t[:160].rsplit(" ", 1)[0].strip(" ,")  # whole words only: a cut "Inno" read as another employer. 160, not 110: UF's "Associate Vice President for ... and Executive Director of the Career Connections Center" is 120 (fnwords123 review cut it at "the Career")
@@ -72,7 +72,8 @@ def clean_title(t):
 # The title sits in a lookahead: a match takes only the name, so the 90-character tail can't swallow the next "Sam Roe, director ..." in the same paragraph (fnwords41).
 _PATS = [
     re.compile(rf"(?P<name>{HONOR}{NAME}){SUFFIX}\s*(?:,|\s[–—|-]\s)\s*(?:the\s+|an?\s+|[A-Z][\w&.-]*['’]s\s+)?(?=(?P<title>(?:[A-Z][\w&'-]*\s+|of\s+|for\s+|and\s+){{0,3}}{IROLE}\b[^\n]{{0,90}}))"),
-    re.compile(rf"(?P<name>{HONOR}{NAME}){SUFFIX}\s+(?:is|was|serves as|served as|has been named|was named|was appointed|has been appointed|became|joined as)\s+(?:the\s+|an?\s+|as\s+)*(?:new\s+)?(?=(?P<title>(?:[A-Z][\w&'-]*\s+|of\s+|for\s+|and\s+){{0,3}}{IROLE}\b[^\n]{{0,90}}))"),
+    # The comma after a degree is allowed: "Sammi Morrill, Ph.D., serves as the ... Vice Chancellor" (Alamo, fnwords128).
+    re.compile(rf"(?P<name>{HONOR}{NAME}){SUFFIX},?\s+(?:is|was|serves as|served as|has been named|was named|was appointed|has been appointed|became|joined as)\s+(?:the\s+|an?\s+|as\s+)*(?:new\s+)?(?=(?P<title>(?:[A-Z][\w&'-]*\s+|of\s+|for\s+|and\s+){{0,3}}{IROLE}\b[^\n]{{0,90}}))"),
     re.compile(rf"(?<![A-Za-z] )(?P<title>{ROLE}(?:{_SP}(?:of|for){_SP}[A-Z][\w&'-]*(?:{_SP}(?:and{_SP})?[A-Z][\w&'-]*){{0,4}})?){_SP}(?P<name>(?:Dr\.\s+)?{NAME})\b(?!\s+(?:of|for)\b)"),
 ]
 
@@ -82,6 +83,8 @@ _LAST_FIRST = re.compile(r"([A-Z][\w'’]+(?:-[A-Z][\w'’]+)?),\s+((?:[A-Z][a-z
 
 _STACKED_LAST_FIRST = re.compile(r"([A-Z][\w'’]+(?:[ -][A-Z][\w'’]+)?),\s+([A-Z][a-z][\w'’-]*(?:\s+(?:[A-Z]\.?|[A-Z][a-z][\w'’-]*))?)")  # a line that is only "Blanchard Smith, Korrie L": a two-word surname is fine on a line of its own
 _STAFF_HEAD = re.compile(r"(?:Meet\s+(?:the|our)\s+)?([A-Z][\w&',. -]{2,60}?)\s+(?:Staff|Team|Staff Directory)")
+_UNIT_LINE = re.compile(r"(?:[A-Z][\w&'.-]*\s+){1,5}(?:Center|Centre|Studio|Services|Office|Department|Division|Hub)")
+_BARE_RANK = re.compile(r"(?:(?:Senior|Executive|Interim|Acting|Managing)\s+)*(?:Director|Dean|Vice President|Vice Chancellor|Head)")  # a heading line that names a unit: "MDC WORKS Career Studio", "Career Development Center"
 _WRAP_TAIL = re.compile(r"([A-Z][\w&'’-]*(?:\s+(?:of\s+|for\s+|and\s+|&\s+)?[A-Z][\w&'’-]*){0,2}),\s")  # the start of a line that ends a wrapped post: "Development, Henry M. Example College"
 _ORGISH = re.compile(r"\b(?:University|College|Institute|School|Academy|Inc|LLC|Ltd|Corporation|Company|Foundation|Department|Office|Center|Centre|Services|Division)\b")
 _CONTACT = re.compile(r"@|\bemail\b|\[email|^\(?\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}$", re.I)
@@ -90,7 +93,7 @@ _CONTACT = re.compile(r"@|\bemail\b|\[email|^\(?\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}$"
 def _cell_name(cell, flip=False):
     """(name, interim) when a table cell is just a person: "Richard White, Interim", "Dr. Deborah Copeland,". ("", False) otherwise.
     flip: the cell sits in a staff list's name column, where "Seado, Christina" is Christina Seado (Palm Beach State)."""
-    if flip and (m := _LAST_FIRST.fullmatch(cell.strip())) and m.group(2).lower() != "interim": cell = m.group(2) + " " + m.group(1)
+    if flip and (m := _LAST_FIRST.fullmatch(cell.strip())) and m.group(2).lower() != "interim" and not re.fullmatch(SUFFIX, ", " + m.group(2)): cell = m.group(2) + " " + m.group(1)
     bare = re.sub(r",?\s*interim\b.*$", "", cell, flags=re.I).strip(" ,")
     if bare and re.fullmatch(HONOR + LINE_NAME + SUFFIX, bare) and plausible_name(clean_name(bare)): return bare, bare != cell.strip(" ,")
     return "", False
@@ -148,11 +151,21 @@ def people_in(text, ld=()):
         m = _STAFF_HEAD.fullmatch(re.sub(r"^The\s+", "", l.strip()))
         if m and not _ROLE_RE.search(m.group(1)) and not re.search(r"\b(?:of|for|and|the|to)$", m.group(1)) and fold(m.group(1)).split()[0] not in ("our", "the", "meet", "all", "faculty", "leadership", "support", "full", "part", "administrative"): return m.group(1)
         return ""
-    heads = [head_unit(l) for l in lines]
+    def menu_link(i, u):  # "Navigate Staff" beside "Navigate Student" in a portal menu is a link, not a staff list's heading: it named MDC's career studio director "Director, Navigate" (fnwords129, Miami Dade)
+        return any(j != i and lines[j].strip() != lines[i].strip() and not head_unit(lines[j]) and re.fullmatch(re.escape(u) + r"\s+[A-Z][\w&'-]*", lines[j].strip()) for j in range(max(0, i - 8), min(len(lines), i + 9)))  # a sibling that is itself a staff heading ("Career Services Staff" twice on Boise State's page) is no menu
+    def near_unit(li):  # a unit's heading a few lines over a contact block: "MDC WORKS Career Studio" / an office / a phone line / "Yvonne Malave" / "Director" (fnwords129, Miami Dade); another person's post or name above stops the look
+        for j in range(li - 1, max(-1, li - 5), -1):
+            l = lines[j].strip()
+            if _LINE_ROLE.match(l) or re.fullmatch(HONOR + LINE_NAME + SUFFIX, l): return ""
+            if len(l) <= 60 and _UNIT_LINE.fullmatch(l) and not _ROLE_RE.search(l):
+                above = next((x.strip() for x in reversed(lines[max(0, j - 3):j]) if x.strip()), "")
+                return "" if _LINE_ROLE.match(above) else l  # a unit under another's post is that person's: "Kier Byrnes" / "Director" / "Robsham Theater Arts Center" / "Katie Dalton" (BC's staff page prints each unit under the post)
+        return ""
+    heads = [(lambda u: "" if u and menu_link(i, u) else u)(head_unit(l)) for i, l in enumerate(lines)]
     unit, units = "", []
     for h in heads: unit = h or unit; units.append(unit)  # the nearest "<Unit> Staff" heading above a line names its unit: "The Workforce Development Center Team" over Brackman, not the "Administrative Team" under him (Cincinnati State, fnwords108)
     for li, (a, b, c) in enumerate(zip(lines, lines[1:], lines[2:] + [""])):
-        unit = units[li]
+        unit = (near_unit(li) if _BARE_RANK.fullmatch(b.strip()) else "") or units[li]  # only a bare rank: "Project Manager" under a degree's "BFA ... Art Institute", a post under another's "Clerk III Box Office" took them (fnwords129 recheck over six cases)
         margin, a, b, c = a[:1] not in " \t\u00a0", a.strip(), b.strip(), c.strip()
         # A PDF table row: the name is the one cell that is a name ("Connection | Jim Bayne", "Bernadette Russell | Russell"), the post the first cell under it.
         row = _GAP.split(a)
@@ -170,11 +183,19 @@ def people_in(text, ld=()):
             elif len(b) >= 40 and not re.search(r"[,.;:)]$", b) and (w := _WRAP_TAIL.match(c)) and not _ORGISH.search(w.group(1)) and not _LINE_ROLE.match(c) and not _cell_name(c)[0]:
                 b = b + " " + w.group(1)
             add(a, b + (", " + unit if unit and not re.search(r"\b(?:of|for)\b|,", b) and fold(unit) not in fold(b) else ""), "directory")  # a bare post on a unit's staff list is that unit's: "Interim Executive Director" on "Continuing Education & Workforce Training Staff" (DMACC, fnwords106)
+    # A cabinet page of boxes, each the post, the name and a link word, a blank line between boxes: "Vice Chancellor for Economic Mobility and Workforce Development" / "Sammi Morrill, Ph.D." / "Profile" (Alamo's administration page, fnwords128). The rules above want the line under the name to be a post, so they read only the boxes whose link word was missing.
+    starts_at = [i for i in range(len(lines)) if i == 0 or gap[i]] + [len(lines)]
+    for s0, s1 in zip(starts_at, starts_at[1:]):
+        box = [l.strip() for l in lines[s0:s1]]
+        if len(box) not in (2, 3) or len(box[0]) >= 160 or not _LINE_ROLE.match(box[0]): continue
+        if not re.fullmatch(HONOR + LINE_NAME + SUFFIX, box[1]) or _LINE_ROLE.match(box[1]): continue
+        if len(box) == 3 and not re.fullmatch(r"(?:View\s+|Read\s+|Full\s+)?(?:Profile|Bio|Biography|More|Read More|Learn More)\.?", box[2], re.I): continue
+        add(box[1], box[0], "directory")
     # A directory that stacks "Last, First M", the email, then the post and its unit on lines of their own (Wake Tech's /directory/dept/ pages: "Blanchard Smith, Korrie L" / "[email protected]" / "Dean of Career Services" / "Career Services"). fnwords106 read no one there.
     rows = [l.strip() for l in lines]
     for i, a in enumerate(rows):
         m = _STACKED_LAST_FIRST.fullmatch(a)
-        if not m or m.group(2).lower() == "interim": continue
+        if not m or m.group(2).lower() == "interim" or re.fullmatch(SUFFIX, ", " + m.group(2)): continue  # "Erin Tipton, EdD" is a name and its degree, not "Last, First" (a uky.edu event page gave "EdD Erin Tipton", fnwords129)
         name = _cell_name(m.group(2) + " " + m.group(1))[0]
         j = i + 1
         while j < len(rows) and j <= i + 2 and _CONTACT.search(rows[j]): j += 1
@@ -225,6 +246,10 @@ def people_in(text, ld=()):
                 if inv and _ROLE_RE.fullmatch(inv.group(1)): post = inv.group(2) + " " + inv.group(1)
                 if (_ROLE_RE.fullmatch(post) or len(post.split()) <= 2) and not _LINE_ROLE.match(cells[1]) and not re.fullmatch(r"[A-Z]{2,6}(?:,\s*[A-Z]{2,6})*", cells[1]): post += ", " + cells[1].rstrip(" &,-–")  # "Director      eLearning": the unit cell says director of what (not a code like "CCE")
                 add(names[0], post, "directory")
+    # A "Role Name" read whose name is the tail of a post the page prints whole for someone else: "Associate Vice Chancellor of Workforce Training Network" under Patricia Parma gave a person "Training Network" (Alamo's NLC catalog, fnwords129).
+    posts = [fold(v["title"]) for v in out.values()]
+    for k, v in list(out.items()):
+        if v["how"] == "prose" and any(fold(v["title"] + " " + v["name"]) in t for t in posts): del out[k]
     return list(out.values())
 
 
@@ -458,7 +483,7 @@ def title_slot(text, name, title, org=""):
     lines, opens = _page_lines(text, starts=True)
     # A bare post on a staff list took its unit from the heading above it ("Director/Senior Business Manager" under "The Workforce Development Center Team", Cincinnati State, fnwords108): the card prints the post alone.
     base, _, unit = title.rpartition(", ")
-    bare_post = fold(base).strip(" .") if base and any(_STAFF_HEAD.fullmatch(re.sub(r"^The\s+", "", l.strip())) and fold(unit) in fold(l) for l in text.split("\n")) else ""
+    bare_post = fold(base).strip(" .") if base and any((_STAFF_HEAD.fullmatch(re.sub(r"^The\s+", "", l.strip())) and fold(unit) in fold(l)) or (_UNIT_LINE.fullmatch(l.strip()) and fold(l.strip()) == fold(unit)) for l in text.split("\n")) else ""  # or under the unit's own heading line ("MDC WORKS Career Studio", fnwords129)
     def role(candidate, appt=False):
         candidate = long_form(fold(candidate)).strip(" .")
         candidate = re.sub(r"^(?:the|a|an)\s+", "", candidate)
@@ -528,7 +553,7 @@ def title_slot(text, name, title, org=""):
             # '"...," said Dr. Jane Doe, Dean ...': what was quoted is not the slot; what follows "said" is.
             quoted = re.fullmatch(r"(?:.*[\"”’,]\s*)?" + _SAID + r"\s*(.*)", head, flags=re.I | re.S)
             if quoted: head = quoted.group(1).strip()
-            head = re.sub(r"^(?:[—–-]+|(?:.*[,.]\s+)?(?:please\s+)?contact)\s*", "", head, flags=re.I | re.S).strip()  # "—Jane Doe, Dean", "contact Jane Doe, Dean, at ..."
+            head = re.sub(r"^(?:[—–-]+|(?:.*[\s,.])?(?:please\s+)?contact\b)\s*", "", head, flags=re.I | re.S).strip()  # "—Jane Doe, Dean", "contact Jane Doe, Dean, at ...", "visit the website or contact Jane Doe, Dean, at 555-..." (Century, fnwords131)
             head = re.sub(r"^(?:said\s+)?(?:Dr|Prof|Mr|Ms|Mrs)\.?$", "", head, flags=re.I).strip()
             if head.lower() == "said": head = ""
             tail = re.sub(rf"^{SUFFIX}", "", " " + tail).strip()
@@ -780,6 +805,7 @@ def employer_listed(text, name, org, official=False):
     rx = re.compile(name_regex(name).pattern, re.I)
     own_name = {t for t in re.findall(r"[a-z]+", fold(clean_name(name))) if len(t) > 2}
     def foreign(label):
+        if label.rstrip().endswith(":") or re.search(r"\w/\w", label): return ""  # a directory field label ("Number:", Bucks's cards) or a menu entry ("Presentations/Workshops"), not a body
         label = label.strip(" ,.;:|-–—")
         words = label.split()
         if not 1 <= len(words) <= 5 or not words[0][0].isupper() or label.lower() == initials: return ""
@@ -879,8 +905,42 @@ def _rival_initials(org, initials, text):
     return rival > mine
 
 
-def official(org, url, domains=None, text=None):
-    """Is this page the organisation's own site? Known domains win; otherwise the site's name must spell the org and, where a word in it is common, sit on an institutional domain."""
+_SCHOOL_WORD = re.compile(r"\b(?:colleges?|university|school|institute|campus)\b")
+
+
+def other_school_page(org, url, title):
+    """True when a page sits on another college's or school's part of a shared domain: a subdomain (not www) that doesn't spell the org, on a domain that names only part of the org or none of it, whose title names a college or school but none of the org's words the domain doesn't spell.
+    Reynolds' site was guessed as vccs.edu, Virginia's system domain, so Scott Hall on es.vccs.edu ("President's Office - Eastern Shore Community College") was filed as Reynolds'; Yas Hardaway on gsep.pepperdine.edu ("... Pepperdine Graduate School of Education and Psychology") was filed under Seaver College (fnwords130). A domain that is the whole org's (asu.edu for Arizona State University, harper.edu for Harper College) keeps every subdomain."""
+    if not org or not title: return False
+    host = domain_of(url)
+    reg = registrable(host)
+    if not host.endswith("." + reg): return False
+    sub = host[:-len(reg) - 1].split(".")[-1]
+    if re.fullmatch(r"www\d*", sub): return False
+    label = re.sub(r"[^a-z0-9]", "", reg.split(".")[0])
+    toks = re.findall(r"[a-z0-9]+", fold(org).lower())
+    words = [w for w in toks if w not in ORG_NOISE and len(w) > 2]
+    rest = [w for w in words if w not in label]
+    if not rest or label == "".join(words): return False
+    if len(rest) == len(words) and _abbrev(label, [x for x in toks if x not in ("the", "of", "and", "at", "for", "in")]): return False  # ufl.edu, asu.edu: the org's own short name, so warrington.ufl.edu is still the University of Florida's
+    if any(sub == w or sub.startswith(w) or w.startswith(sub) and len(sub) >= 4 for w in words): return False  # the college's own subdomain: reynolds.vccs.edu, seaver.pepperdine.edu
+    t = fold(title).lower()
+    if len(rest) == len(words) and label in {x.replace("-", "") for x in re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", t)}: return False  # the title names the domain's owner, which spells none of the org: "School of Nursing | Tri-C" is Cuyahoga's
+    return bool(_SCHOOL_WORD.search(t)) and not any(re.search(rf"\b{re.escape(w)}\b", t) for w in rest)
+
+
+def _abbrev(label, toks):
+    """Can the label be spelled from the starts of these words, in order, skipping some (ufl from University of Florida, asu from Arizona State University)?"""
+    if not label: return True
+    if not toks: return False
+    t = toks[0]
+    return any(_abbrev(label[i:], toks[1:]) for i in range(1, min(len(t), len(label)) + 1) if label[:i] == t[:i]) or _abbrev(label, toks[1:])
+
+
+def official(org, url, domains=None, text=None, title=None):
+    """Is this page the organisation's own site? Known domains win; otherwise the site's name must spell the org and, where a word in it is common, sit on an institutional domain.
+    A page whose title shows it is another college's or school's part of a shared domain is never the org's (`other_school_page`)."""
+    if title and other_school_page(org, url, title): return False
     host = domain_of(url)
     if domains:
         d = (domains.get(org) or domains.get(org_core(org))) if isinstance(domains, dict) else domains
@@ -956,7 +1016,7 @@ def check(page, name, title, org="", domains=None, claim="", today=None):
     if page.get("status") != "ok":
         return dict(res, status="blocked" if page.get("status") != "refused" else "refused", note=page.get("note", ""))
     text = page["text"]
-    res["official"] = bool(org) and official(org, page.get("final_url") or page["url"], domains, text)
+    res["official"] = bool(org) and official(org, page.get("final_url") or page["url"], domains, text, page.get("title"))
     if len([t for t in fold(clean_name(name)).split() if len(t.strip(".")) > 1]) < 2: return dict(res, status="not-found", note="that isn't a full name, so there's nothing to check")
     if not name_regex(name).search(fold(text)): return dict(res, status="not-found", note="the page has no such name")
     if named_not_person(text, name): return dict(res, status="not-a-person", note="the name appears only as part of a named post or place")

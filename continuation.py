@@ -366,6 +366,51 @@ def not_before(line, t=None):
     except ValueError: return None
     return min(when, t + DEFER_MAX_D * 86400) if when > t else None
 
+RUNG_STOP = frozenset("the a an and or of to in on for with by at from is be it this that each one run check if then".split())
+RUNG_MATCH = 0.6   # share of the step's words found in the gated rung
+MON = r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)"
+STEP_DAY = re.compile(r"(?<![\w-])(?:(\d{4})-)?(\d{1,2})-(\d{2})(?!\d)|\b" + MON + r"[a-z]*\.?\s+(\d{1,2})(?!\d)|\b(\d{1,2})\s+" + MON + r"[a-z]*\b", re.I)
+def rung_tokens(s): return {w for w in re.findall(r"\w+", s.lower()) if w not in RUNG_STOP and w != "next" and not re.fullmatch(r"\d{1,2}", w)}
+def step_days(step, t):
+    """Every calendar day a step's words name, bare or not ("the 11-30 follow-ups", "2026-11-25", "Nov 30", "30 Nov"), as "YYYY-MM-DD"; a yearless
+    one only within 30 days back to 60 ahead of t, as short_date reads them."""
+    out, y = set(), dt.datetime.fromtimestamp(t, dt.timezone.utc).year
+    for m in STEP_DAY.finditer(step):
+        try:
+            if m.group(2):
+                if m.group(1): out.add(f"{m.group(1)}-{int(m.group(2)):02d}-{m.group(3)}"); continue
+                mo, d = int(m.group(2)), int(m.group(3))
+            elif m.group(4): mo, d = MONTHS.get(m.group(4).lower()), int(m.group(5))
+            else: mo, d = MONTHS.get(m.group(7).lower()), int(m.group(6))
+            if not mo: continue
+            out |= {w.date().isoformat() for w in (dt.datetime(y + k, mo, d, tzinfo=dt.timezone.utc) for k in (-1, 0, 1)) if t - 30 * 86400 < w.timestamp() < t + 60 * 86400}
+        except ValueError: continue
+    return out
+def rung_gate(thread, line, t=None):
+    """not_before's third reading: the step names, in words not_before doesn't read as a wait ("the 11-30 follow-ups"), the very day an open rung of its
+    thread's ladder is gated to (after:), and shares RUNG_MATCH of its words (past small words and bare numbers) with that rung: that rung's gate holds it,
+    as the keeper holds the rung. A dated rung alone is not enough: acfaf on 11-24 03:43 gated "Fix decay.py" to 11-25 and wrote an undated
+    "Next: fix decay.py" in the same post, and the hop delivered it that hour. a313b on 11-24 14:01 wrote "Next: the 11-30 follow-ups (`outreach status`,
+    `frame --follow-up`)" for the rung `after:2026-11-30 Run outreach status...`; the hop could only say it wasn't due (graded nothing, afb07)."""
+    t = t or now().timestamp()
+    step = re.split(r"check:", line, maxsplit=1, flags=re.I)[0]
+    a, days = rung_tokens(step), step_days(step, t)
+    if len(a) < 4 or not days or not thread: return None
+    best, gate = 0.0, None
+    for f in sorted(PROJECTS.glob("*/goals.md")):
+        try: txt = f.read_text(errors="replace")
+        except OSError: continue
+        for lad in [G.ladder(txt)] + G.ladders(txt):
+            if not lad or (lad.get("thread") or f.parent.name) != str(thread).lower(): continue
+            for r in lad["rungs"]:
+                if r["state"] != " " or not r["after"] or r["after"][:10] not in days: continue
+                share = len(a & rung_tokens(r["text"])) / len(a)
+                if share > best: best, gate = share, r["after"]
+    if best < RUNG_MATCH or not gate: return None
+    try: when = dt.datetime.fromisoformat(f"{gate}+00:00" if "T" in gate else f"{gate}T00:00+00:00").timestamp()
+    except ValueError: return None
+    return min(when, t + DEFER_MAX_D * 86400) if when > t else None
+
 JOB_GATE = re.compile(r"\b(?:when|once|after|until)\b[^.;]{0,120}?(?<![/\w])(?:finish(?:es|ed)?|completes?|is done|ends|exists)\b(?!`)", re.I)
 JOB_TICK = re.compile(r"`([^`\s]+)`")
 JOB_CAP = 4 * 3600   # a marker that never comes holds the step this long after the post, then it launches anyway
@@ -463,7 +508,7 @@ def _on_run_end(r, c, st, alive):
     if not claim(DIR / "done" / f"run-{safe(r.get('name'))}-{safe(r.get('at'))}"): drop(seen, "run_claimed"); return None
     chain, hop = chain_of(r, got["post"])
     intent = {"chain": chain, "hop": hop, "run": r.get("session"), "post": got["post"], "name": r.get("name"), "thread": r.get("thread"), "line": got["line"], "since": got["since"], "at": iso()}
-    if (nb := not_before(got["line"])): intent["not_before"] = nb   # a dated step waits for its date in enqueue rather than waking an agent that can only say it isn't due
+    if (nb := not_before(got["line"]) or rung_gate(r.get("thread"), got["line"])): intent["not_before"] = nb   # a dated step waits for its date in enqueue rather than waking an agent that can only say it isn't due
     if (wf := job_marker(got["line"])): intent["wait_file"] = wf   # a step on a running job waits for its finished marker (JOB_CAP at most)
     why = check(intent, st, c, alive)
     if not why and any(not q.get("continue") for q in (st.get("pending") or {}).get(r.get("name"), [])): why = "agent_queued"  # it wakes anyway

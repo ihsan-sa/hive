@@ -1,4 +1,4 @@
-// Settings: Everyday, Accounts, Power and sandbox, Data sharing, Secrets, This device, Set once, Connectors, Modules, Access from outside (R7). Shown only where can() allows each part.
+// Settings: Everyday, Accounts, Buying, Power and sandbox, Data sharing, Secrets, This device, Set once, Connectors, Modules, Access from outside (R7). Shown only where can() allows each part.
 import { status as st } from "../core/status.js";
 import { h, s } from "../core/dom.js";
 import { S, can, built, jget, needsAccount, post, loadApp, said, fullEnded, unreached, kept, keep, KEPT_NOTE } from "../core/store.js";
@@ -22,6 +22,7 @@ import { copyButton } from "../ui/refs.js";
 import { MODELS, POWER, accountsData, codexPart, forget, keysPart, loadPage, modelPart, pageData, powerPart, reading, rootNote, sandboxPart, sharePart } from "../ui/setup.js";
 import { forgetSecrets, secretParts, secretsLost } from "./secrets.js";
 import { kbWipeSection } from "../ui/kbwipe.js";
+import { buyingSection, loadBuying, forgetBuying } from "../ui/buying.js";
 
 // Everything the person is typing lives here, so a poll never loses it.
 // T: words typed here and not saved yet (the style, the Hive name). enter() clears F; T lasts the session, so coming back to Settings shows them
@@ -872,17 +873,17 @@ function navDots(ctx) {
 
 export default {
   id: "settings", label: "Settings", about: "accounts, modules, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.navShown = null; F.keysOpen = null; F.flash = {}; F.ed = null; F.lost = false; F.name = null; F.saved = null; if (!F.accessTyped) F.access = null;   /* unsaved access edits stay for the session (3.3.7) */ F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); loadConns(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
+  enter(ctx) { F.navShown = null; F.keysOpen = null; F.flash = {}; F.ed = null; F.lost = false; F.name = null; F.saved = null; if (!F.accessTyped) F.access = null;   /* unsaved access edits stay for the session (3.3.7) */ F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); loadConns(ctx); loadBuying(ctx.update); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
   },
-  back(ctx) { loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); loadConns(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update); },   // what enter reads, without enter's clearing: what the person is typing stays
-  leave() { F.goTo = null; clearInterval(upTimer); upTimer = null; clearTimeout(voiceTimer); voiceTimer = null; forget(); forgetSecrets(); F.connIn = {}; },   // tokens typed in Connectors but not saved don't outlive the screen
+  back(ctx) { loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); loadConns(ctx); loadBuying(ctx.update); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update); },   // what enter reads, without enter's clearing: what the person is typing stays
+  leave() { F.goTo = null; clearInterval(upTimer); upTimer = null; clearTimeout(voiceTimer); voiceTimer = null; forget(); forgetSecrets(); forgetBuying(); F.connIn = {}; },   // tokens typed in Connectors but not saved don't outlive the screen
   render(ctx) {
     if (S.app.can == null) return h("div", { class: "page", "data-width": "narrow" }, waiting(S.failed));   // /api/app hasn't answered: don't say "only in the app" yet
     if (!S.app.app) return h("div", { class: "page", "data-width": "narrow" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));
     const [slug, row] = (ctx.arg || "").split("/");   // #settings/modules/slack-door: the section, then a row to open on (modulesSection's F.goRow)
     if (row && slug === "modules" && F.goTo !== ctx.arg) { F.goTo = ctx.arg; F.goRow = row; }   // once per link, so "Hide the full list" stays hidden
     const hive = hiveSection(ctx), [everyday, setOnce] = Array.isArray(hive) ? hive : [hive, null];
-    const secs = [everyday, loginsSection(ctx), useSection(), tiersSection(ctx), ...setupSections(ctx), secretsSection(ctx), viewSection(ctx), setOnce, connectorsSection(ctx), modulesSection(ctx), accessSection(ctx), kbWipeSection(ctx)].filter(Boolean);
+    const secs = [everyday, loginsSection(ctx), buyingSection(ctx), useSection(), tiersSection(ctx), ...setupSections(ctx), secretsSection(ctx), viewSection(ctx), setOnce, connectorsSection(ctx), modulesSection(ctx), accessSection(ctx), kbWipeSection(ctx)].filter(Boolean);
     const header = pageHeader({ title: "Settings" });
     if (!secs.length) return form({ header, sections: [empty("This connection can't change any settings.")] });
     const nav = secs.map(n => n.dataset.name || n.getAttribute("aria-label")),   // data-name: the English title, which the interface language (core/lang.js) leaves alone, so #settings/this-device works in any language

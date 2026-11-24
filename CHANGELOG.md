@@ -6,7 +6,11 @@ A release can ship several times a day. A Hive installs each one as soon as it's
 
 ## Smaller fixes, 2026-11-24
 
+- One damaged line in the activity log (for example from a write cut off when the disk was full) no longer makes the whole app say "Can't reach your Hive": the dashboard skips that line and shows the rest.
+- When the app can't reach your Hive, the note now says which read got no answer or why it failed. If your sign-in from outside has run out, it says so and offers a button to sign in again.
+- A `chart` block can now be a stacked bar: put `type: stack` before the CSV and each row becomes one bar of up to eight coloured parts, with its total on top and every part and the total readable on hover.
 - A chart with two lines now draws them in clearly different colours, puts the unit (such as $) on the axis numbers, and marks the value where each line ends.
+- A `chart` block whose column headings end in a unit in brackets, such as `5% a year ($)`, now shows that unit on its axis and end values, and so does one whose title names an amount of money. A chart with only a few points now marks where each line ends as well.
 
 ## Smaller fixes, 2026-11-23
 

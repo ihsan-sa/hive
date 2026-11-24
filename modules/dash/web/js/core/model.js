@@ -518,6 +518,9 @@ const SOURCE_LABEL = { "web app": "Web", "in Slack": "Slack", "via the box": "Bo
 export const EDIT_NOTE = /^(?:\(edited message [0-9a-f]+: [^\n]*\)\n)+/i;
 // The note an edit carries for the agent; must match EDIT_NOTE in dash.py byte for byte, since the page signs it with the words.
 export const editNote = v => `(edited message ${v}: this version replaces it. Answer it instead, as if that message and your answer to it were never sent; anything already done for it stays done, so don't redo it.)\n`;
+const SAVED_LINE = /^[ \t]*(?:\*{1,2}|_)Saved to memory:\s*(.+?)\s*(?:\*{1,2}|_)[ \t.]*$\n?/gm;
+/** The facts a reply saved to memory (E179): p.memory from `hive post`, else the lines displayText took out of an older post. */
+export const savedFacts = p => (p.memory && p.memory.length ? p.memory : (displayText(p), p.saved || []));
 export function displayText(p) {
   if (!S.app.app) return String(p.text || "");
   if (p.disp != null) return p.disp;
@@ -536,6 +539,12 @@ export function displayText(p) {
   if (p.from !== "person") t = t.replace(/^([ \t]*)@person\b[,:]?[ \t]*/gm, "$1").replace(/[ \t]+@person[.!]?[ \t]*$/gm, "");
   // an ask id (k1812) means nothing to a person; the timer's note says "a request" instead
   if (p.from !== "person" && isScript(p.from)) t = t.replace(/\bk\d{4}\b/g, "a request");
+  // E179: "*Saved to memory: …*" is a note under the reply (ui/message.js savedNote), not part of the message or its Copy.
+  // `hive post` moves the lines into p.memory; an older post still has them in its text, so they come out here too.
+  if (p.from !== "person" && /Saved to memory:/.test(t)) {
+    const got = [], cut = t.replace(SAVED_LINE, (m, f) => (got.push(f.trim()), "")).replace(/\n{3,}/g, "\n\n").replace(/\s+$/, "");
+    if (got.length && cut.trim()) { t = cut; p.saved = got; }
+  }
   return (p.disp = t);
 }
 // An agent's closing "Done: …" line is its reason for stopping, for the status bar and the log, not for the chat (the person, 110814274633).

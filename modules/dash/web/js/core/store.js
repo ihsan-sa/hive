@@ -200,11 +200,19 @@ async function backfill(boardUpto, logUpto) {
 
 // ---- polling: live + appended log and board every 1.5 s, usage every 3 s, only while the tab is visible ----
 let polling = false;
+// Which read failed and how, for the band ("Can't reach your Hive" alone left nobody able to tell a lapsed sign-in from a broken read).
+const named = (p, what) => p.catch(e => { e.what = what; throw e; });
+const failWords = e => e && e.what ? (e.unreached ? `The ${e.what} read got no answer.` : `The ${e.what} read failed: ${e.message || "no reason given"}.`) : (e && e.message) || null;
+// Behind Cloudflare Access, a lapsed sign-in turns every read into a redirect to the Access sign-in, which fetch can't follow across sites, so it looks like no answer.
+// A read with redirect: "manual" tells the two apart; reloading the page then goes through the sign-in.
+async function signInLapsed() {
+  try { return (await fetch("/api/app", { cache: "no-store", redirect: "manual" })).type === "opaqueredirect"; } catch (e) { return false; }
+}
 export async function poll() {
   if (polling) return; polling = true;
   try {
     // All read together, then applied in one go: S.live set with a wait before the board is ingested let a page draw "No conversations yet" while they were still on their way.
-    const [l, lg, b, a, d] = await Promise.all([jget("/api/live"), jget("/api/log?from=" + S.logOff + (S.logOff || S.logStart != null ? "" : "&last=" + LOG_FIRST_BYTES)), jget("/api/board?from=" + S.off + (S.off || S.boardStart != null ? "" : "&last=" + FIRST_BYTES)), jget("/api/approvals").catch(() => null), jget("/api/feedback-drafts").catch(() => null)]);
+    const [l, lg, b, a, d] = await Promise.all([named(jget("/api/live"), "agents"), named(jget("/api/log?from=" + S.logOff + (S.logOff || S.logStart != null ? "" : "&last=" + LOG_FIRST_BYTES)), "activity"), named(jget("/api/board?from=" + S.off + (S.off || S.boardStart != null ? "" : "&last=" + FIRST_BYTES)), "conversations"), jget("/api/approvals").catch(() => null), jget("/api/feedback-drafts").catch(() => null)]);
     S.stCache.clear(); S.live = l;
     if (typeof l.starter === "boolean" && S.app.setup && S.app.setup.starter !== l.starter) { S.app.setup.starter = l.starter; emit({ app: true }); }   // the Hive stopped or is back: from the live read, not /api/app's 15 s one
     S.approvals = a === null ? S.approvals || [] : Array.isArray(a) ? a : [];
@@ -221,9 +229,9 @@ export async function poll() {
     S.history ||= !filling;
     if (older || olderLog) setTimeout(() => backfill(older ? b.start : 0, olderLog ? lg.start : 0), 50);
     if (changed) S.ver++;
-    S.fresh = now(); S.failed = false;
+    S.fresh = now(); S.failed = false; S.failWhy = null; S.signedOut = false;
     emit({ live: true, posts: b.items, log: lg.items });
-  } catch (e) { S.failed = true; emit({ failed: true }); }
+  } catch (e) { S.failed = true; S.failWhy = failWords(e); S.signedOut = !!e.unreached && await signInLapsed(); emit({ failed: true }); }
   finally { polling = false; }
 }
 export async function pollUsage() {

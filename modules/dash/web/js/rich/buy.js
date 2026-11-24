@@ -1,9 +1,46 @@
 // A buy fence (core/buy.py, the buy command): an agent's one-time spend request through Link, drawn like Link's own approval sheet.
 // There is no Approve button here on purpose: the warden's ruling (11231556881e) makes approval in the person's Link app the only
 // go to spend, so the card can only show the request and open it in Link. Everything goes in as text; links are http(s) only.
+// Ask Link again (the person's ask, 24 h): on a request whose 30 min prompt lapsed it sends Link a fresh prompt for the same cart and
+// total (POST /api/buy do=renew, the person's signed-in app only); that approves nothing, the Link app is still the only go.
+// Open in Link opens Link's own page in a pop-up over the dashboard (openInLink below); Link's page can't be framed.
 import { h } from "../core/dom.js";
+import { can, post } from "../core/store.js";
 import { codeBlock } from "./code.js";
 import { parseBuy, money as fmt } from "./buy_parse.js";
+
+/** Open in Link: Link's own page for approving the buy in a small window over the dashboard (the person's 11241042be25, as Zeus shows it).
+ *  Link's page refuses to be framed (frame-ancestors 'self'), so a pop-up is as close as it gets. When the request was made with
+ *  a completion callback (buy.py), Link sends that window back to /?linkback=1 and index.html closes it. A blocked pop-up falls
+ *  back to the plain link, a new tab. Nothing here approves: the person still presses Approve on Link's page or in the app. */
+function openInLink(url) {
+  const a = h("a", { class: "rc-buy-open", href: url, target: "_blank", rel: "noopener noreferrer" }, "Open in Link");
+  a.addEventListener("click", (e) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;   // a new tab on purpose: leave it to the browser
+    const W = 460, H = 760;
+    const left = Math.max(0, Math.round((window.screenX || 0) + ((window.outerWidth || W) - W) / 2));
+    const top = Math.max(0, Math.round((window.screenY || 0) + ((window.outerHeight || H) - H) / 2));
+    let w = null;
+    try { w = window.open(url, "h2-link", `popup,width=${W},height=${H},left=${left},top=${top}`); } catch { w = null; }
+    if (!w) return;   // blocked: the link opens a tab as before
+    try { w.opener = null; } catch { /* already cut */ }
+    e.preventDefault();
+    try { w.focus(); } catch { /* fine */ }
+  });
+  return a;
+}
+
+/** The Ask Link again button and the line that says how it went. */
+function renewButton(d) {
+  const note = h("span", { class: "rc-buy-note", role: "status" });
+  const b = h("button", { type: "button", class: "rc-buy-open" }, "Ask Link again");
+  b.addEventListener("click", async () => {
+    b.disabled = true; note.textContent = "Asking Link…";
+    try { await post("/api/buy", { do: "renew", id: d.id }); b.remove(); note.textContent = "Sent: approve or decline the new prompt in your Link app."; }
+    catch (e) { b.disabled = false; note.textContent = e.message || "Couldn't ask Link again."; }
+  });
+  return h("div", { class: "rc-buy-act" }, b, note);
+}
 
 const row = (k, ...v) => h("div", { class: "rc-buy-row" }, h("div", { class: "rc-buy-k" }, k), h("div", { class: "rc-buy-v" }, ...v));
 
@@ -34,5 +71,7 @@ export function buyCard(code, { lang, title }) {
     h("p", { class: "rc-buy-fine" }, waiting
       ? `Approve or decline in your Link app; nothing here can approve it. Approving lets ${d.agent} pay ${d.merchant} this amount once, with a one-time card from Link. Your real card details are never shared.`
       : `Paid, if at all, with a one-time card from Link for this amount at ${d.merchant} only. Your real card details are never shared.`),
-    d.approval ? h("div", { class: "rc-buy-act" }, h("a", { class: "rc-buy-open", href: d.approval, target: "_blank", rel: "noopener noreferrer" }, "Open in Link")) : null);
+    d.renewedBy ? h("p", { class: "rc-buy-fine" }, "Asked again: the newer card below is the live one.") : null,
+    d.renewable && can("post") ? renewButton(d) : null,
+    d.approval ? h("div", { class: "rc-buy-act" }, openInLink(d.approval)) : null);
 }

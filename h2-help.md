@@ -56,7 +56,7 @@ hive read [--thread T] [--since 2h|ISO] [--from X] [--to X] [--id ID] [-n 30, 0 
 
 ## hive search
 
-hive search [--brief] words... (all words, case-insensitive; tag:focus:site matches the post's tags, tag:site that id under any kind; --brief: one line per post) Flags: `--brief`: one line per post: id, time, from, thread, start of the text.
+hive search [--brief] [--since 2d|ISO] [--thread T] [--from X] [--to X] words... (all words, case-insensitive; tag:focus:site matches the post's tags, tag:site that id under any kind; --brief: one line per post) Flags: `--brief`: one line per post: id, time, from, thread, start of the text; `--since`: only posts after this: 30m, 8h, 2d or an ISO time (as hive read).
 
 ## hive done
 
@@ -152,7 +152,11 @@ hive subagents [NAME...] [--since 24h] [--running] [--all] [--json] [-v]: helper
 
 ## hive buy
 
-hive buy ask --thread T --merchant M --url U --item I --amount TOTAL --shipping S --tax X --why W [--test] | wait ID | card ID | done ID --recording F --receipt F | cancel ID | list | setup: buy parts with a one-time Link card once the person approves that exact purchase in their Link app (core/buy.py; warden 11231556881e)
+hive buy ask --thread T --merchant M --url U --item I --amount TOTAL --shipping S --tax X --why W [--test] | wait ID | card ID | done ID --recording F --receipt F | cancel ID | list | setup: buy parts with a one-time Link card once the person approves that exact purchase in their Link app (module buy; warden 11231556881e)
+
+## hive order
+
+hive order new --shop S --item I --total T --url U --why W | move ID STATE [--total --url --tracking --receipt --note] | list [--all] | show ID: a card for any order with a button into the shop, listed on the dashboard's Orders page; the person pays at the shop, nothing here pays or sends (module buy)
 
 ## hive continue
 

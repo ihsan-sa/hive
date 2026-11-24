@@ -502,7 +502,7 @@ def brief(row):
     prev = to if to != "new" and stuck(to, row.get("thread")) else None
     if prev: to = "new"
     head = f"@{to} Keeper round on {row['name']}. The ladder is the `## {row.get('section') or 'Ladder'}` section of {row.get('goals_path') or 'this focus project goals.md (create it, one line a rung)'}: read that whole file, and obey any notes in the section.\n\n"
-    rung = f"**Your rung:** {row['rung']}\n\nDo this rung. Land real work, then run its check." if row.get("rung") else "**The ladder has no rung you can take.** Your work this round is to write the next 3 to 5 rungs from the measure in that file, then do the first one."
+    rung = f"**Your rung:** {row['rung']}\n\nDo this rung. Land real work, then run its check." if row.get("rung") else "**The ladder has no rung you can take.** Your work this round is to write the next 3 to 5 rungs from the measure in that file, then do the first one. Each rung is a line `- [ ] what. check: how to tell`; a numbered list is not read, so convert one that is there."
     if row.get("ask_more") and not row.get("rung"):
         rung = (f"**The ladder has no rung you can take.** {ASK}; the first opens {row['gated_until'].replace('T', ' ')} UTC. A date is when a reading can be taken, not a reason for the goal to stand still until then. "
                 "Your work this round is to ask what else would move the Measure in that file before then (a cause nobody has tried, a check that can run on what exists now, a part of the goal the dated rungs leave out), "
@@ -721,7 +721,8 @@ def main():
         return
     if a.brief or a.post:
         th = a.post or a.brief
-        r = next((r for r in g["rows"] if r["thread"] == th and (r["kind"] == "focus" or r.get("ladder"))), None)
+        # needs_ladder rows are on --ladder-threads, so their round has to post: x-comment-finder was refused here for four keeper rounds (2026-11-24)
+        r = next((r for r in g["rows"] if r["thread"] == th and (r["kind"] == "focus" or r.get("ladder") or r.get("needs_ladder"))), None)
         if not r: sys.exit(f"no focus or ladder in thread {th}")
         b = brief(r)
         if not a.post: print(b); return
