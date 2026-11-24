@@ -1679,6 +1679,28 @@ def person_choice_note(posts):
             "they can undo, or take their words as given and go on, then show it and say in one line what you'd change on their word. "
             "Ask back only for what only they have (their own facts, money, an account).")
 
+SHORT_ASK = re.compile(r"\b(in (a|one|two|three|a couple of) (few )?(lines?|sentences?|words)|in a few lines|briefly|short answer|in short|tl;?dr|quick(ly)? explain|one[- ]liner|keep it (short|brief))\b", re.I)
+
+def short_ask_note(posts):
+    """everyday E146 (aae7b 2026-11-24): "difference between a Roth and a traditional IRA, in a few lines" got five bold-labelled
+    bullets and a closing question twice, though orientation says 3 to 6 lines; a blind reader picked the plain chat answer both times.
+    A rule deep in orientation doesn't move it, so the ask's own words are said back at the top of the prompt."""
+    ids = {p.get("id") for p in posts if str(p.get("from", "")).lower() == "person" and not p.get("text")}
+    said = [str(p.get("text", "")) for p in posts if str(p.get("from", "")).lower() == "person" and p.get("text")]
+    if ids:  # the starter's posts carry ids, not text (the first box run got no note): read them from the board's tail
+        try:
+            with open(BOARD, "rb") as f:
+                f.seek(max(0, f.seek(0, 2) - 262144)); lines = f.read().decode("utf-8", "replace").splitlines()
+        except OSError: lines = []
+        for l in lines:
+            if not any(i and i in l for i in ids): continue
+            try: q = json.loads(l)
+            except ValueError: continue
+            if q.get("id") in ids: said.append(str(q.get("text", "")))
+    if not any(SHORT_ASK.search(t) for t in said): return ""
+    return (" The person asked for a short answer: reply in 3 to 6 short lines of plain sentences, no headings, no bold labels, "
+            "no bullet per detail, and no closing question; keep only what answers the ask.")
+
 def start_model(c, posts):
     """The model a start runs on: a provider wins (main loop picked it), then a model a post asked for, then the default."""
     return (next((p["model"] for p in posts if provider_of(c, p.get("model"))), None)
@@ -1964,7 +1986,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
         if str(first.get("from", "")).lower() == "person":   # R46: "He said yes to $150" in a new thread got a question back (aadf9, 11-13)
             prompt += ("If it reads as the next step of an earlier chat, find that chat (`hive search`, `hive read --since 2d`) and act on the best match, "
                        "saying which one; ask only when nothing matches. ")
-    if not resume: prompt += person_choice_note(posts)
+    if not resume: prompt += person_choice_note(posts) + short_ask_note(posts)
     if heir_of:
         prompt += (f" You are a new agent taking over from @{heir_of['name']}, which isn't being brought back because {heir_of['why']}. You have none of its memory. "
                    f"Its stream log, if a detail isn't in the thread or on disk, is {heir_of['out']}: search it, don't read it whole.")
@@ -1981,7 +2003,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
                   # posted a wait, or answered a different question (a732a, a81d2, a87dc), or said done without checking (a38af).
                   "Do what that post asks first, in its thread, before your own rung or wait: answer its question, or do its work, "
                   "or say plainly why you can't. Check before you say something is done."
-                  + reply_back_note(name, posts) + person_choice_note(posts))
+                  + reply_back_note(name, posts) + person_choice_note(posts) + short_ask_note(posts))
     elif resume and woken and any(p.get("supersede") for p in woken["posts"]):
         sup = [p for p in woken["posts"] if p.get("supersede")]; other = [p for p in woken["posts"] if not p.get("supersede")]
         new = "; ".join(f"{p['id']} in thread {p.get('thread', p['id'])}" for p in sup)

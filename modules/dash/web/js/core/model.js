@@ -231,6 +231,9 @@ export function agentStatus(n) {
 export function agentOn(n) {
   const me = S.agentStatus[n], s = S.lastSess[n];
   if (me && me.text) return { text: me.text, at: me.at * 1e3, said: true, before: !!(s && S.running.get(n) && me.at * 1e3 < s.start - MIN) };
+  // no `hive me` line (13% of the week's agents set one, 2026-11-24): the status bar this agent itself wrote in its run is its own summary of the work
+  const own = s && S.threadStatus[s.thread || (S.byId[s.post] || {}).thread], ownLine = own && own.from === n && own.at * 1e3 >= s.start && own.text && own.text.split("\n").map(x => x.trim()).find(Boolean);
+  if (ownLine) return { text: ownLine, at: own.at * 1e3, said: false, before: false, asked: "", bar: true };
   const p = s && S.byId[s.post]; if (!p) return null;
   const asked = firstSentence(displayText(p));
   // these posts don't say what this one is on, so its thread's status bar does: a reply from another agent or rootwarden on a wake (often a result, "Rung done: ..."), a post meant for the agent an heir took over from, a person's question that names no work.
