@@ -450,16 +450,20 @@ function make(base, side = null) {
   }
   function revPicker(d) {
     const latest = d.revs[d.revs.length - 1], old = !!(v.rev && v.rev !== latest.rev);
+    // What each build answered (the person's round: CP 2, CQ 1, ...): notes addressed in that revision, by its letter.
+    const did = {}; for (const n of d.notes) if (n.status === "addressed" && n.addressedIn) did[n.addressedIn] = (did[n.addressedIn] || 0) + 1;
     return h("label", { class: "dv-revw", "data-old": old ? "" : null }, h("span", { class: "vh" }, "Revision"),
       h("select", { class: "dv-rev", "data-key": "rev", onchange: e => { v.rev = e.target.value === latest.rev ? null : e.target.value; v.banner = null; load(v); } },
         ...d.revs.map(r => h("option", { value: r.rev, selected: r.rev === d.rev || null },
-          r.rev === "next" ? "rev " + nextName(d) + " · being filed" : "rev " + r.rev + (old && r.rev === d.rev ? " · older" : "")))));
+          (r.rev === "next" ? "rev " + nextName(d) + " · being filed" : "rev " + r.rev + (old && r.rev === d.rev ? " · older" : "")) + (did[r.rev] ? ` · ${did[r.rev]} addressed` : "")))));
   }
   function panel(posts) {
     const d = v.d;
     if (!d) return h("div", { class: "dv-pn" }, h("p", { class: "meta" }, v.err ? "Couldn't open this document: " + v.err : "Opening…"));
     const drafts = d.notes.filter(n => n.status === "draft"), sent = d.notes.filter(n => n.status === "sent"), done = d.notes.filter(n => n.status === "addressed");
     const latest = d.revs[d.revs.length - 1];
+    /* A sent note made on an earlier revision than the one shown: the agent filed a build and left it, so say so (rung "Carried notes stand out"). */
+    const at = r => d.revs.findIndex(x => x.rev === r), carried = n => n.status === "sent" && n.rev !== d.rev && at(n.rev) >= 0 && at(n.rev) < at(d.rev);
     const side = !!v.side, open = side ? v.tray : true, did = "dv-drawer-" + v.base;
     const item = n => h("li", { class: "dv-item", "data-key": n.id, "data-kind": n.kind, "data-status": n.status, "data-on": v.open === n.id ? "" : null },
       h("button", { type: "button", class: "dv-item-go", onclick: () => v.focusNote(n.id), disabled: n.p == null || null, title: n.p == null ? null : "Show it on the page" },
@@ -470,6 +474,8 @@ function make(base, side = null) {
           h("span", { class: "dv-item-w" },
             n.status === "addressed" ? h("span", { class: "dv-item-st" }, icon("check"), n.addressedIn === "by hand" ? "Marked addressed by you" : "Addressed in rev " + n.addressedIn) : null,
             n.status === "addressed" ? " · " : null,
+            carried(n) ? h("span", { class: "dv-item-st", "data-carried": "" }, "Still open from rev " + n.rev) : null,
+            carried(n) ? " · " : null,
             KINDWORD[n.kind] + " · " + where(n) + (n.status === "sent" && n.sentAt ? " · sent " + ago(Date.parse(n.sentAt)) : "")))),
       n.status === "draft" ? h("button", { type: "button", class: "dv-mini", onclick: () => send([n.id]), disabled: v.sending || null }, "Send") : null,
       n.status === "draft" ? h("button", { type: "button", class: "dv-mini", "data-kind": "x", onclick: () => act({ do: "delete", note_id: n.id }), title: "Delete", "aria-label": `Delete note ${n.n}` }, icon("close")) : null,

@@ -450,6 +450,89 @@ def diversify(hits, n, perdoc=None):
         if h["source"] not in have: top.append(h); have.add(h["source"])
     return top
 
+def add_newer(c, top, n):
+    """K78 (aff07 2026-11-23): a shown passage marked `[superseded by X]` gets X's best passage right after it when X is
+    not shown (set d1 showed kb/person-asks.md three times and never kb/asks.md). X's passage is its head, which says
+    what it is and what it replaces (a body passage that matched the words was weaker, or X would be shown); a list already at n lines loses its last ones."""
+    shown = {h["path"] for h in top}; out = []
+    for h in top:
+        out.append(h); x = h.get("sup")
+        if not x or x in shown: continue
+        r = c.execute("SELECT chunk.id FROM chunk JOIN doc ON doc.id=chunk.doc WHERE doc.path=? ORDER BY chunk.line LIMIT 1", (x,)).fetchone()
+        got = hydrate(c, [(r[0], 0.0)]) if r else []
+        if not got: continue
+        new = got[0]
+        out.append({**new, "newer": h["path"]}); shown.add(x)
+    return out[:max(n, len(top))]
+
+COPY, COPY_MIN = 0.6, 20  # K76 (aff07 2026-11-24): 18% of finds showed two drifted copies of one doc and were read 24% vs 33%
+def shingles(path, cache):
+    """6-word shingles (every third start) of a file, at most its first 200 KB; empty for board posts and missing files."""
+    if path not in cache:
+        w = []
+        if not path.startswith("board:"):
+            try:
+                with open(f"{H}/{path}", errors="ignore") as f: w = re.findall(r"\w+", f.read(200_000).lower())
+            except OSError: pass
+        cache[path] = {" ".join(w[i:i + 6]) for i in range(0, max(0, len(w) - 5), 3)}
+    return cache[path]
+
+def fold_copies(top, pool, c=None):
+    """One name per document. Files that share COPY of their shingles (over the larger file, so a sheet quoting a note is not its copy) are one document: it is
+    named by its best-ranked live copy (kb/, projects/, ...) over an archive or H4 one, says `(also in PATH)`, and a
+    passage found on another copy is shown at its line in the named file, unless a passage near it is already shown
+    there. Places freed go to the next hits of the pool."""
+    cache, rep, group, keep = {}, {}, {}, []
+    def root(path):
+        a = shingles(path, cache)
+        if len(a) < COPY_MIN: return path
+        for r in group:
+            if r == path: return r
+            b = shingles(r, cache)
+            if len(b) >= COPY_MIN and len(a & b) >= COPY * max(len(a), len(b)): return r
+        return path
+    def live(p): return not (p.startswith("archive/") or p.startswith(H4_COPY))
+    cand = list(top)
+    for h in cand + list(pool):
+        if h["path"] in rep: continue
+        r = root(h["path"]); rep[h["path"]] = r; group.setdefault(r, [])
+        if h["path"] not in group[r]: group[r].append(h["path"])
+    if all(len(m) == 1 for m in group.values()): return top
+    name = {r: next((p for p in m if live(p)), m[0]) for r, m in group.items()}
+    lines = {}
+    def moved(h, to):
+        """h's passage at its line in file `to`, or None when its text isn't there."""
+        if c is None: return None
+        r = c.execute("SELECT body FROM fts WHERE rowid=?", (h["id"],)).fetchone()
+        j, key = next(((j, l.strip()[:60]) for j, l in enumerate((r[0] if r else "").splitlines()) if len(l.strip()) >= 30), (0, None))
+        if not key: return None
+        if to not in lines:
+            try:
+                with open(f"{H}/{to}", errors="ignore") as f: lines[to] = f.read().splitlines()
+            except OSError: lines[to] = []
+        i = next((k for k, l in enumerate(lines[to]) if key in l), None)
+        if i is None: return None
+        at = max(1, i + 1 - j)   # the chunk starts j lines above its first full line
+        return {**h, "path": to, "line": at, "end": at + max(0, h["end"] - h["line"]), "moved": h["path"]}
+    shown, ids = {}, set()
+    def add(h):
+        r = rep[h["path"]]; to = name[r]
+        if h["path"] != to:
+            h = moved(h, to)
+            if h is None: return
+        s = shown.setdefault(to, [])
+        if len(s) >= (2 * PERDOC if "moved" in h else PERDOC) or any(abs(h["line"] - x) <= 12 for x in s): return
+        s.append(h["line"]); keep.append(h); ids.add(h["id"])
+    for h in cand: add(h)
+    for h in pool:
+        if len(keep) >= len(top): break
+        if h["id"] not in ids: add(h)
+    marked = set()
+    for h in keep:
+        m = [p for p in group[rep.get(h.get("moved") or h["path"], h["path"])] if p != h["path"]]
+        if m and h["path"] not in marked: h["also"] = m; marked.add(h["path"])
+    return keep
+
 SNIP_TOP = 260
 def snippet(c, h, words, width=130):
     r = c.execute("SELECT head, body FROM fts WHERE rowid=?", (h["id"],)).fetchone()
@@ -621,6 +704,8 @@ def render(c, q, n=12, frm=None, to=None, src=None):
             except Exception: r = None   # whatever goes wrong in there, the find prints the live order
             if r: top = r; RERANK["used"] = True
             RERANK["ms"] = int((time.time() - t1) * 1000)
+    top = fold_copies(top, diversify(hits, len(top) + 40), c)
+    top = add_newer(c, top, n)
     by, files = Counter(), Counter()
     for h in hits: by[h["source"]] += 1; files[h["path"]] += 1
     cap = "+" if total >= 400 else ""
@@ -630,7 +715,7 @@ def render(c, q, n=12, frm=None, to=None, src=None):
         if len(words) <= 2 and k < 3 and h["source"] != "board":   # a518b audit-unread: a one- or two-word query gives six notes that look alike; the file's title says which one
             r = c.execute("SELECT title FROM fts WHERE rowid=?", (h["id"],)).fetchone()
             if r and r[0] and r[0].lower()[:30] not in t.lower(): t = f"«{r[0][:70]}» " + t
-        out.append(f"{fmt_path(h['path'])}:{line}" + (f" {h['date']}" if h['date'] else "") + f"  {t}" + (f"  [superseded by {fmt_path(h['sup'])}]" if h.get("sup") else "") + ("  [draft]" if h["source"] == "draft" else ""))
+        out.append(f"{fmt_path(h['path'])}:{line}" + (f" {h['date']}" if h['date'] else "") + f"  {t}" + (f"  [superseded by {fmt_path(h['sup'])}]" if h.get("sup") else "") + ("  [draft]" if h["source"] == "draft" else "") + (f"  (also in {', '.join(fmt_path(x) for x in h['also'][:3])}{' +%d' % (len(h['also']) - 3) if len(h['also']) > 3 else ''})" if h.get("also") else ""))
     if not hits and not top:
         out.append("Nothing. Not proof it isn't there: try other words, a shorter form, or `rg -il WORD ~/kb ~/archive/knowledge`. If you give up: kb miss \"QUESTION\"")
         out.append(ABSENT)

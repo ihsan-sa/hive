@@ -3570,7 +3570,7 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .cm-foci-told>span{flex:1;min-width:0}
 .cm-foci-told>.btn{flex:none}
 .fo-g{display:grid;min-width:0}
-.fo-gh{display:flex;align-items:baseline;gap:8px;margin:0;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.fo-gh{position:relative;display:flex;align-items:baseline;gap:8px;margin:0;padding-bottom:6px;border-bottom:1px solid var(--line)}   /* holds its .vh count: unpositioned, the 6 hidden counts escaped .cm-home's scroll clip and stretched the page to 6474 px at 390, 4245 at 1440 (R-1124-c) */
 .fo-gh .sw{font-size:var(--fs-small);font-weight:var(--w-bold);color:var(--ink)}
 .fo-gn{font-size:var(--fs-meta);font-weight:var(--w-reg,400);color:var(--ink-3);font-variant-numeric:tabular-nums}
 .fo-rows{list-style:none;margin:0;padding:0;display:grid}
@@ -3808,6 +3808,7 @@ button.dv-count:hover{background:var(--hover);color:var(--ink)}
 .dv-dot[data-done]{background:var(--sunken)!important;color:var(--ink-3)}   /* addressed: a grey number; the inline colour is for open notes */
 .dv-item-st{display:inline-flex;align-items:center;gap:4px}
 .dv-item-st>svg{width:12px;height:12px}
+.dv-item-st[data-carried]{color:var(--warn, #b45309);font-weight:600}
 /* a row's own actions are quiet text, shown on hover or focus; always shown on touch */
 .dv-mini{flex:none;align-self:center;display:inline-flex;align-items:center;gap:4px;height:var(--ctl-s);padding:0 8px;border:0;border-radius:var(--r-s);background:none;color:var(--ink-2);font:var(--fs-meta)/1 var(--font);white-space:nowrap;cursor:pointer;opacity:0;transition:opacity var(--dur)}
 .dv-mini>svg{width:14px;height:14px}

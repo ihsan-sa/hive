@@ -13,7 +13,7 @@ import { markWords } from "../ui/message.js";
 import { kbChat } from "./kbchat.js";
 import { oneKeyOn } from "../core/onekey.js";
 
-const K = { map: null, mapAt: 0, topics: new Set(), home: null, seen: new Map(), failed: new Map(), q: "", res: null, timer: 0, worktrees: false, limit: 300, source: false, edit: null, shown: null, memo: {}, mentions: { key: "", v: [] } };
+const K = { map: null, mapAt: 0, topics: new Set(), allTopics: false, home: null, seen: new Map(), failed: new Map(), q: "", res: null, timer: 0, worktrees: false, limit: 300, source: false, edit: null, shown: null, memo: {}, mentions: { key: "", v: [] } };
 const open = (path, line) => href("knowledge", line ? `${path}::${line}` : path);
 const parse = arg => { const m = /^(.*)::(\d+)$/.exec(arg || ""); return m ? { path: m[1], line: +m[2] } : { path: arg || "", line: 0 }; };
 const parent = p => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
@@ -288,9 +288,12 @@ function mapView(ctx) {
   const groups = new Map(), now = Date.now() / 1e3, big = Math.log(Math.max(...m.notes.map(n => n.size), 2));
   for (const n of m.notes) { if (!groups.has(n.topic)) groups.set(n.topic, []); groups.get(n.topic).push(n); }
   const order = [...groups].sort((a, b) => (a[0] === "general") - (b[0] === "general") || b[1].length - a[1].length || a[0].localeCompare(b[0]));
-  return h("div", { class: "kb-map" }, order.map(([t, ns]) => {
+  // On a phone the topics stack one card a row (about 350 px each with 6 notes): 56 of them made Knowledge 15009 px at 390 (R-1124-c), so the
+  // biggest 6 show with their 3 newest notes, and the rest are one tap away (the page's Show all, or a topic's own).
+  const phone = order.length > 10 && matchMedia("(max-width: 640px)").matches, cut = phone && !K.allTopics, few = cut ? 3 : 6;
+  return [h("div", { class: "kb-map" }, (cut ? order.slice(0, 6) : order).map(([t, ns]) => {
     ns.sort((a, b) => b.t - a.t);
-    const all = K.topics.has(t), shown = all ? ns : ns.slice(0, 6), folder = ns[0].path.split("/").length > 2;
+    const all = K.topics.has(t), shown = all ? ns : ns.slice(0, few), folder = ns[0].path.split("/").length > 2;
     return h("section", { class: "kb-topic", "data-key": "t:" + t },
       h("header", { class: "kb-topic-h" }, folder ? h("a", { href: open("kb/" + t) }, topicName(t, true)) : h("span", null, topicName(t)), h("span", { class: "meta" }, `${ns.length} · ${age(ns[0].t)}`)),
       h("ul", { class: "kb-notes" }, shown.map(n => {
@@ -299,8 +302,8 @@ function mapView(ctx) {
           h("span", { class: "kb-nr-t" }, labelCodes(n.title) || n.path.split("/").pop()),
           h("span", { class: "meta" }, age(n.t))));
       })),
-      ns.length > 6 ? button(all ? "Show fewer" : `Show all ${ns.length}`, () => { all ? K.topics.delete(t) : K.topics.add(t); ctx.update(); }, { kind: "quiet", size: "s", cls: "kb-more" }) : null);
-  }));
+      ns.length > few ? button(all ? "Show fewer" : `Show all ${ns.length}`, () => { all ? K.topics.delete(t) : K.topics.add(t); ctx.update(); }, { kind: "quiet", size: "s", cls: "kb-more" }) : null);
+  })), phone ? button(cut ? `Show all ${order.length} topics` : "Show fewer", () => { K.allTopics = !K.allTopics; ctx.update(); }, { kind: "quiet", size: "s", cls: "kb-more kb-topics-more" }) : null];
 }
 function hubRows() {
   const hubs = (K.map ? K.map.notes : []).filter(n => n.back.length + n.links.length >= 2).sort((a, b) => b.back.length - a.back.length || b.links.length - a.links.length).slice(0, 8);

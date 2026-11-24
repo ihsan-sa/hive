@@ -1,0 +1,2 @@
+<!doctype html><html><head><style>body{font:22px sans-serif;margin:30px} input{font:22px monospace;width:420px}</style></head><body><h1>The total changes as the button goes down</h1><p id="t">Total $37.63</p>
+<button id="place" onmousedown="document.getElementById('t').textContent='Total $52.00'" onclick="setTimeout(()=>document.body.innerHTML='<h1>Order placed</h1><p>Total charged $52.00</p>',100)">Place order</button></body></html>

@@ -781,6 +781,10 @@ def label_names(org, reg):
 
 _PEOPLE_URL = PEOPLE_PAGE
 
+QUOTE_MARK = re.compile(r"[\"\u201c\u201d]")
+FEED_HEAD = re.compile(r"^(?:recent|latest|related|more|popular|featured)(?: blog)? (?:posts|news|articles|stories|blogs)$", re.I)   # a list of post titles under a staff card: its last title sits just above the next person's name (Wesleyan's "Recent Posts" above Munafo, fnwords117 and fnwords118 reviews)
+HOSTED_IT = re.compile(r"\b(?:co-?)?(?:hosted|led|moderated|organi[sz]ed|presented|facilitated|ran)\b", re.I)   # "... hosted by Jane Doe": her sentence picks up the event the line before describes (Brooklyn's AI-careers panel, fnwords89 review)
+
 class Hunt:
     """A list to a target. It keeps trying other angles and other organisations until it reaches the target or truly runs out, and it never pads: a row is in the list only if a saved page backs it.
     Running again on the same case picks up where the last run stopped; pages and searches are reused."""
@@ -1352,6 +1356,7 @@ class Hunt:
             cell = re.search(r"\S+@\S+\.[a-z]{2,}", sn, re.I)  # "Ann Lee at <her address>": a contact cell in a table; the next line is another column's, not their sentence (Howard's AI page, fnwords111 review)
             for j in ((i,) if cell else (i, i + 1, i - 1)):
                 if not 0 <= j < len(sents): continue
+                if j == i - 1 and not QUOTE_MARK.search(sents[j]) and not HOSTED_IT.search(sn): continue  # the line before the name is theirs only as a quotation ('"AI changes hiring." Doe said'); on a staff page it is the end of the previous card (Wesleyan's "Recent Posts" titles above Munafo's name, fnwords117 review), and in a story the writer's own words (BU's "AI experiences embedded in their coursework" above Koppi's quote)
                 t = ASIDE.sub(" ", NAV_AI.sub(" ", sents[j] if not cell else sn[:cell.start()]))
                 if len(t) > 25 and any(people.term_regex(m).search(fold(t)) for m in terms) and not EARLIER_JOB.search(t):
                     return " ".join(sents[min(i, j):max(i, j) + 1])[:300]
@@ -1883,10 +1888,11 @@ class Hunt:
                     m = near.search(ln)
                     if not m: continue
                     # before the name only the line just above counts (a label); a unit heading higher up is not this person's job (Francis, Toledo)
-                    ctx = (lines[li - 1][-reach:] if li else "") + " " + ln[max(0, m.start() - reach):m.end() + reach] + " " + " ".join(lines[li + 1:li + 5])[:reach]  # the next few lines are the person's block; further down is the next unit
+                    above = lines[li - 1] if li and not any(FEED_HEAD.match(x.strip()) for x in lines[max(0, li - 6):li]) else ""   # the line above is a label, unless it is the last title of a post feed
+                    ctx = above[-reach:] + " " + ln[max(0, m.start() - reach):m.end() + reach] + " " + " ".join(lines[li + 1:li + 5])[:reach]  # the next few lines are the person's block; further down is the next unit
                     if any(people.term_regex(t).search(ctx) for t in hit_terms): close = True; break
             if not close and hit_terms and per.get("how") == "directory" and any(people.term_regex(t).search(fold(page.get("title") or "")) for t in hit_terms): close = True  # a contact block on a page titled for the signal: the listed head is the program's contact
-            if not close and hit_terms and (own := self.own_sentence(text, per["name"], org, hit_terms)): sig, close = own, True  # "Campbell also addressed ... 'Employers now expect graduates to use AI tools,' she said." (fnwords89 review)
+            if hit_terms and not (sig and near.search(fold(sig))) and (own := self.own_sentence(text, per["name"], org, hit_terms)): sig, close = own, True  # "Campbell also addressed ... 'Employers now expect graduates to use AI tools,' she said." (fnwords89 review). Also when the word sits near their name but the stored sentence doesn't name them: Oswego's story stored a coach's "he came up with ... an artificial intelligence (AI) tool named 'Carl'" for Morris, whose own quote was "Artificial intelligence is transforming how organizations recruit, hire and operate." (fnwords119 review)
             if hit_terms and not sig and not res["official"]: close = False  # only a menu says it, as on a namesake's site
             row = dict(name=per["name"], title=people.drop_code(per["title"]), organisation=org, official_site="yes" if res["official"] else "no", signal=sig, signal_near_person="yes" if close else "no", source_url=page.get("final_url") or page["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status=res["status"], check_quote=res["quote"], angle=angle, note=res["note"])
             if close and hit_terms and roster_only(text, per["name"], hit_terms) and self.seat_page(page) and not self.own_sentence(text, per["name"], org, hit_terms):
@@ -2004,6 +2010,7 @@ class Hunt:
                 if row.get("signal_near_person") in ("yes", "roster"):  # the quote stays the signal: say where it is from, and how old
                     row["signal_url"] = row.get("signal_url") or row["source_url"]
                     note += f"; the quote is from {row['signal_url']}" + (f", dated {row['page_date']}" if row.get("page_date") and row["signal_url"] == row["source_url"] else "")
+                    if row["signal_url"] == row["source_url"] and not row.get("signal_date"): row["signal_date"] = row.get("page_date") or ""   # the quote's date goes with it: Arminio's WHIO quote (2026-10-07) kept an empty signal_date once his profile page (2026-07-30) became the source (fnwords119 review)
                 with self.save_lock: self.official_upgrades += 1
                 row.update(title=title, official_site="yes", source_url=h["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status="verified", check_quote=res["quote"], note="; ".join(x for x in (note, row.get("note")) if x))
                 return True
@@ -2220,9 +2227,9 @@ class Hunt:
         self._save()
         return len(fresh)
 
-    PEOPLE_FIRST = ('"{w} services" director "{m}" said', '"{w} development" director "{m}" said', '"{w} services" dean "{m}" college', '"{w} development" "vice president" "{m}" college')  # the unit's name, not the bare word: "career" director "AI" said read 8 pages of AI-careers advice and no head; "career services" director "artificial intelligence" said named Cedarville's and SUNY Oswego's
+    PEOPLE_FIRST = ('"{w} services" director "{m}" said', '"{w} development" director "{m}" said', '"{w} center" director "{m}" college said', '"{w} services" dean "{m}" college', '"{w} development" "vice president" "{m}" college', '"vice president of {w}" "{m}" college said')  # the unit's name, not the bare word: "career" director "AI" said read 8 pages of AI-careers advice and no head; "career services" director "artificial intelligence" said named Cedarville's and SUNY Oswego's. "{w} center" and "vice president of {w}" are the titles the other four never spell: of 5 college heads quoted on AI that people-first missed in fnwords116, Springfield's career center director and Temple College's vice president of workforce development came only from those (hop 10)
     def people_first_queries(self):
-        """Searches for the signal sentence itself, not for an organisation: a careers head quoted on AI in the news ("career services" director "artificial intelligence" said). The spec's `people_first` list, or by default its first two focus words in each of four phrasings with each `must` word. Ten such searches named 8 careers or workforce heads beside "AI" that fnwords116's 91 organisations, searched one by one, never listed (hop 9 of chain 112310401a21)."""
+        """Searches for the signal sentence itself, not for an organisation: a careers head quoted on AI in the news ("career services" director "artificial intelligence" said). The spec's `people_first` list, or by default its first two focus words in each of six phrasings with each `must` word. Ten such searches named 8 careers or workforce heads beside "AI" that fnwords116's 91 organisations, searched one by one, never listed (hop 9 of chain 112310401a21)."""
         q = self.s.get("people_first")
         if q is not None:
             if not isinstance(q, list) or not all(isinstance(x, str) for x in q): raise ValueError("spec people_first must be a list of search strings ([] turns them off)")
@@ -2232,7 +2239,7 @@ class Hunt:
         return [t.format(w=w, m=m) for w in words for t in self.PEOPLE_FIRST for m in self.must[:2]]
 
     def person_org(self, page, per):
-        """The college a person on a news page works at: one named in their title, else the one named nearest after their name in its sentence or the next, else the institution the page's own .edu site spells; "" if none."""
+        """The college a person on a news page works at: one named in their title, else the one named nearest after their name in its sentence or the next, else the institution the page's own .edu site spells, else the short name or acronym the page gives it ("SUNY Poly's assistant vice president", "director of career services at UNLV"); "" if none."""
         if (m := self.pattern.search(per["title"])) and not not_an_org(m.group(0)): return " ".join(m.group(0).split())
         text = page.get("text") or ""
         near = people.name_regex(per["name"])
@@ -2250,6 +2257,10 @@ class Hunt:
             for seg in reversed(re.split(r"\s+[|\u2013\u2014-]\s+", page.get("title") or "")[1:]):  # "... | SUNY Oswego" on oswego.edu: the site's own name in its page title
                 seg = " ".join(seg.split())
                 if 2 <= len(seg.split()) <= 6 and (label_names(seg, reg) or label in re.findall(r"[a-z0-9]+", fold(seg).lower())): return seg
+        if (m := re.match(r"((?:[A-Z][A-Za-z]*[A-Z]|[A-Z]{2,})(?:\s+[A-Z][a-z]+)?)['\u2019]s\s", per["title"])): return m.group(1)  # "SUNY Poly's assistant vice president": the college by the short name the page gives it; people_first keeps it only if that name finds a .edu site
+        for m in near.finditer(low):
+            got = re.match(r"[^.;\n]{0,160}?\bat\s+(?:the\s+)?([A-Z][A-Za-z]*[A-Z])\b(?!\s+[A-Z][a-z])", text[m.end():m.end() + 200])  # "Kass Moore, director of Career Services and Workforce Development at UNLV": an acronym the college pattern can't read
+            if got and 3 <= len(got.group(1)) <= 8 and got.group(1).upper() not in ("CEO", "USA", "NASA", "IBM", "AT&T"): return got.group(1)
         return ""
 
     def people_first(self, q):
@@ -2328,7 +2339,9 @@ class Hunt:
     def report(self):
         out_dir = Path(self.s.get("out") or self.case.root)
         out_dir.mkdir(parents=True, exist_ok=True)
-        for r in list(self.leads.values()) + list(self.near.values()): r["signal_kind"] = signal_kind(r.get("signal"), r.get("source_url"))
+        for r in list(self.leads.values()) + list(self.near.values()):
+            r["signal_kind"] = signal_kind(r.get("signal"), r.get("source_url"))
+            if not r.get("signal_date") and r.get("signal") and not str(r["signal"]).startswith("(") and (r.get("signal_url") or r.get("source_url")) == r.get("source_url"): r["signal_date"] = r.get("page_date") or ""   # a signal read on the row's own page is as old as that page: fnwords119 left signal_date empty on 4 of 6 verified rows
         rows = sorted(self.leads.values(), key=lambda r: (r["check_status"] != "verified", r["signal_near_person"] != "yes", r["organisation"]))
         with open(out_dir / "leads.csv", "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=LEAD_COLS, extrasaction="ignore"); w.writeheader(); w.writerows(map(safe_row, rows))

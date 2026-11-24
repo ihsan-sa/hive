@@ -316,9 +316,9 @@ def _page_lines(text, starts=False):
 
 
 def _sentences(line):
-    """A line cut into sentences, not at Dr. or Inc. or an initial."""
+    """A line cut into sentences, not at Dr. or Inc. or an initial; an all-capital name of three letters or more ends one ("... director of Career Services at UNLV. “It's ...", hop 10)."""
     out, at = [], 0
-    for m in re.finditer(r"(?<=[a-z0-9)])[.!?]\s+(?=[A-Z\"“])", line):
+    for m in re.finditer(r"(?:(?<=[a-z0-9)])|(?<=\b[A-Z]{3})|(?<=[A-Z]{4}))[.!?]\s+(?=[A-Z\"“])", line):
         word = re.search(r"[A-Za-z]+$", line[at:m.start()])
         if word and word.group().lower() in _ABBR: continue
         out.append(line[at:m.start() + 1]); at = m.end()

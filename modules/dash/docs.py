@@ -9,7 +9,8 @@ so a note keeps its number on every revision until the agent marks it addressed.
 The agent that edits the document uses the command line (projects/doc-review-view/AGENT.md):
     docs.py show 006-0002                      open notes, with page, quote, box and text
     docs.py pending 006-0002 path/to/new.pdf   the page shows this PDF as the next revision until the library files it
-    docs.py addressed 006-0002 1 3 [--rev CM]  these notes are done in the new revision; the rest stay open
+    docs.py addressed 006-0002 1 3 [--rev CM] [--pdf new.pdf]  these notes are done in the new revision; the rest stay open
+                                               (--pdf also does `pending` with that PDF, in the same call)
 """
 import fcntl, hashlib, json, os, re, subprocess, sys, threading, time
 from pathlib import Path
@@ -201,11 +202,22 @@ def _resolve_next(notes, revs, pend):
     by = {}
     for r in revs.values(): by.setdefault(r["sha"], r["rev"]); by.setdefault(_filesha(HOME / r["path"]), r["rev"])
     cur = pend["sha"] if pend else None
+    def t(x):
+        try: return time.mktime(time.strptime(x or "", "%Y-%m-%dT%H:%M:%S"))
+        except (ValueError, OverflowError): return None
+    filed = sorted((t(r["at"]), r["rev"]) for r in revs.values() if r.get("status") == "filed" and t(r["at"]))
+    def after(stamp):   # no build sha kept (no `pending` was set): the first revision the library filed at or after that moment
+        s = t(stamp)
+        return next((rv for ft, rv in filed if s is not None and ft >= s - 5), None)
     out = []
     for n in notes:
         n = dict(n)
-        if n.get("rev") == "next" and n.get("revSha") != cur: n["rev"] = by.get(n.get("revSha"), "build")
-        if n.get("addressedIn") == "next" and n.get("addressedSha") != cur: n["addressedIn"] = by.get(n.get("addressedSha"), "a newer build")
+        if n.get("rev") == "next":
+            if not n.get("revSha"): n["rev"] = after(n.get("made")) or "next"
+            elif n["revSha"] != cur: n["rev"] = by.get(n["revSha"], "build")
+        if n.get("addressedIn") == "next":
+            if not n.get("addressedSha"): n["addressedIn"] = after(n.get("addressedAt")) or "next"
+            elif n["addressedSha"] != cur: n["addressedIn"] = by.get(n["addressedSha"], "a newer build")
         out.append(n)
     return out
 
@@ -391,7 +403,7 @@ def cli_pending(base, pdf):
     print(f"{base}: the Documents page now shows {p.relative_to(HOME)} as the next revision")
 
 
-def cli_addressed(base, nums, rev):
+def cli_addressed(base, nums, rev, sha=None):
     if not BASE.match(base or ""): sys.exit("bad document id: " + str(base))
     if rev is not None and not REV.match(rev): sys.exit("bad --rev (a revision letter like CM): " + rev)
     with _Lock(base) as nd:
@@ -402,7 +414,11 @@ def cli_addressed(base, nums, rev):
             if not n: missing.append(k); continue
             if n.get("status") == "draft": unsent.append(k); continue
             n.update(status="addressed", addressedIn=rev or "next", addressedAt=time.strftime("%Y-%m-%dT%H:%M:%S")); done.append(k)
-            if pend and (rev or "next") == "next": n["addressedSha"] = pend["sha"]   # which build "next" was, for the letter once filed
+            if (rev or "next") == "next" and (sha or pend): n["addressedSha"] = sha or pend["sha"]   # which build "next" was, for the letter once filed
+            # (--pdf gives it even when the library already filed that PDF and the pending mark is gone)
+        if not rev and not pend and not sha and done:
+            print(f"{base}: no pending build is set, so these show as addressed in the first revision the library files from now"
+                  f" (pass --pdf NEW.pdf, or --rev)", file=sys.stderr)
         _save_notes(base, nd)
         left = [x["n"] for x in nd["notes"] if x.get("status") == "sent"]
     print(f"{base}: addressed {done or 'none'}" + (f"; no such note {missing}" if missing else "")
@@ -418,9 +434,16 @@ def main(a):
             i = a.index("--rev")
             if i + 1 >= len(a): sys.exit("--rev needs a revision letter, like --rev CM")
             rev = a[i + 1]; a = a[:i] + a[i + 2:]
+        pdf = None
+        if "--pdf" in a:   # one step: record the new build and mark the notes in it (the person's round: agents skipped `pending`)
+            i = a.index("--pdf")
+            if i + 1 >= len(a): sys.exit("--pdf needs the new PDF, like --pdf path/to/new.pdf")
+            pdf = a[i + 1]; a = a[:i] + a[i + 2:]
         try: nums = [int(x.lstrip("#")) for x in a[2:]]
         except ValueError: sys.exit("note numbers, like: addressed 006-0002 1 3")
-        return cli_addressed(a[1], nums, rev)
+        if pdf and not BASE.match(a[1] or ""): sys.exit("bad document id: " + str(a[1]))
+        if pdf: cli_pending(a[1], pdf)
+        return cli_addressed(a[1], nums, rev, _sha(_safe_pdf(pdf)) if pdf else None)
     if a and a[0] == "list":
         for r in documents()["docs"]: print(r["id"], r["rev"], r["title"], f"drafts={r['drafts']} open={r['open']}")
         return

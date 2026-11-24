@@ -19,7 +19,10 @@ The rules are warden's ruling of 2026-11-23 (post 11231556881e, thread 112315543
              [--line "name;qty;unit price"]... [--currency usd] [--test]
   hive buy wait ID [--timeout 1800]   wait for the person's answer in Link; on approval the card goes to its 0600 file
   hive buy card ID                    where the card file is and what it may be used for (never the number itself)
-  hive buy record ID --steps STEPS.json  the checkout in Chrome on screen record, fields masked, frames OCR'd (core/buy_record.mjs)
+  hive buy record ID --steps STEPS.json [--contact FILE]  the checkout in Chrome on screen record, fields masked, frames OCR'd
+                                    (core/buy_record.mjs); $contact.* tokens come from ~/.hive/buy-contact.json (0600, the person's)
+  hive buy record --dry --url URL --steps STEPS.json [--contact FILE] [--max-total N]  a practice run: no card, placeholders for who
+                                    and where; only an explicit --contact gives its city, state and zip for the shipping and tax quote
   hive buy done ID --recording PATH --receipt PATH [--charged 37.63]
   hive buy cancel ID [--why TEXT]
   hive buy list [--all] [--json] | show ID | setup | sweep
@@ -27,12 +30,13 @@ The rules are warden's ruling of 2026-11-23 (post 11231556881e, thread 112315543
 
 Ledger: ~/.hive/buys.jsonl, one event per line; a buy's state is its events merged in order. HIVE_LINK_CLI, HIVE_BUY_HOME and HIVE_BIN
 override the link-cli binary, the state dir and the hive used to post (the tests use stubs)."""
-import argparse, datetime as dt, json, os, re, subprocess, sys, time, urllib.parse
+import argparse, datetime as dt, json, os, re, shutil, subprocess, sys, time, urllib.parse
 from pathlib import Path
 
 HOME = Path.home()
 STATE = Path(os.environ.get("HIVE_BUY_HOME") or HOME / ".hive")
 LEDGER, CARDS, CONF, RECS = STATE / "buys.jsonl", STATE / "buy-cards", STATE / "buy.json", STATE / "buy-recordings"
+CONTACT = STATE / "buy-contact.json"  # the person's email, phone, name and delivery address (0600, filled by the person)
 LINK = os.environ.get("HIVE_LINK_CLI") or str(HOME / ".local" / "bin" / "link-cli")
 Hive = os.environ.get("HIVE_BIN") or str(HOME / "core" / "hive")
 CAP_USD = 200.0          # hive's own ceiling per purchase (Link's is 500); the person may change it in ~/.hive/buy.json {"max": N}
@@ -278,9 +282,47 @@ def cmd_card(a):
     print(f"{p}\nonly at {b['merchant']} ({short_url(b['url'])}), only this cart, at most {fmt(b['amount'], b['currency'])} with shipping and tax;"
           f" a higher total or another cart: hive buy cancel {b['id']} and ask again. Never print, paste or screenshot the number.")
 
+def contact_file(a, dry=False):
+    """--contact FILE; a real run falls back to ~/.hive/buy-contact.json when the person has filled it in. A dry run reads only an
+    explicit --contact (and from it only the city, state, zip and country): it never picks up the person's file by itself."""
+    f = Path(a.contact).expanduser() if a.contact else None if dry else CONTACT if CONTACT.is_file() else None
+    if a.contact and not f.is_file(): die(f"--contact: no file {a.contact}")
+    return f
+def contact_values(path):
+    """The contact file's email, phone, name and street, for the audit; None if it is missing, a symlink or not JSON."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, encoding="utf-8") as f: j = json.load(f)
+    except (OSError, ValueError, TypeError): return None
+    if not isinstance(j, dict): return None
+    ad = j.get("address") if isinstance(j.get("address"), dict) else {}
+    t = lambda x: "" if x is None or isinstance(x, (dict, list)) else str(x).strip()
+    name = t(j.get("name")); w = name.split()
+    return {"email": t(j.get("email")), "phone": t(j.get("phone")), "name": name, "first": t(j.get("first_name")) or (w[0] if w else ""),
+            "last": t(j.get("last_name")) or (w[-1] if len(w) > 1 else ""), "line1": t(ad.get("line1"))}
+_nw = lambda s: " " + re.sub(r"[^a-z0-9@\u00c0-\uffff]+", " ", str(s or "").lower()).strip() + " "
+_cmp = lambda s: re.sub(r"[^a-z0-9@\u00c0-\uffff]", "", str(s or "").lower())
+def contact_hits(text, c):
+    """Which of the person's contact values a text holds, as buy_record.mjs's contactLeaks reads them: the email, the phone's last
+    7 digits, the first and last name on one line (or run together), the street's house number and first word."""
+    if not c or not text: return []
+    hits, email, ph = set(), _cmp(c["email"]), re.sub(r"\D", "", c["phone"])[-7:]
+    f, l, whole = _nw(c["first"]).strip(), _nw(c["last"]).strip(), _cmp(c["name"])
+    k = _nw(c["line1"]).split()
+    street = re.compile(rf"(^|[^a-z0-9]){re.escape(k[0])}\s+{re.escape(k[1])}([^a-z0-9]|$)") if len(k) >= 2 and re.fullmatch(r"\d+[a-z]?", k[0]) else None
+    for line in str(text).split("\n"):
+        lw, lc = _nw(line), _cmp(line)
+        if len(email) >= 6 and email in lc: hits.add("email")
+        if len(ph) == 7 and ph in re.sub(r"\D", "", line): hits.add("phone")
+        if (len(f) >= 2 and len(l) >= 2 and f" {f} " in lw and f" {l} " in lw) or (len(whole) >= 6 and whole in lc): hits.add("name")
+        if street and street.search(line.lower()): hits.add("street")
+    return sorted(hits)
+
 def cmd_record(a):
     """The checkout on screen record (buy_record.mjs): only this merchant's host, the place-order button only at the approved total or
     less, every text field masked in every frame, and every frame OCR'd for a card number before anything is kept."""
+    if a.dry: return record_dry(a)
+    if not a.id: die("record needs the buy id (or --dry --url URL for a practice run with no card)")
     sweep()
     b = get(a.id, exact=True); p = card_path(b["id"])
     if b["status"] != "approved" or not p.is_file(): die(f"{b['id']} has no live card (status {b['status']})")
@@ -288,12 +330,32 @@ def cmd_record(a):
     if not host: die(f"{b['id']} has no merchant url")
     host = host.removeprefix("www.")  # the approved merchant and its subdomains (www., checkout., ...)
     out = RECS / re.sub(r"[^A-Za-z0-9_-]", "_", b["id"]); out.mkdir(parents=True, exist_ok=True, mode=0o700); os.chmod(out, 0o700)
-    total = f"{b['amount'] / 100:.2f}"
+    for d in list(out.glob(".stage-*")) + list(out.glob(".video-*")): shutil.rmtree(d, ignore_errors=True)  # a killed run's unscanned files
+    total = f"{b['amount'] / 100:.2f}"; cf = contact_file(a)
     rc = subprocess.run(["node", str(Path(__file__).resolve().parent / "buy_record.mjs"), "run", "--steps", a.steps, "--card", str(p),
-                         "--out", str(out), "--allow-host", host, "--max-total", total]).returncode
-    record({"ev": "record", "id": b["id"], "recording_exit": rc, **({"recording": str(out / "checkout.webm")} if rc in (0, 4) else {})})
-    if rc == 3: die("a card number showed in the recording; it is deleted. Post that in the thread (never the image), and finish by hand.", 3)
+                         *(["--contact", str(cf)] if cf else []), "--out", str(out), "--allow-host", host, "--max-total", total,
+                         "--currency", (b.get("currency") or "usd").lower()]).returncode
+    kept = rc in (0, 4, 5) and (out / "checkout.webm").is_file()
+    record({"ev": "record", "id": b["id"], "recording_exit": rc, **({"recording": str(out / "checkout.webm")} if kept else {}),
+            **({"contact": str(cf)} if cf else {})})
+    if rc == 3: die("a card number or the person's contact details showed in the recording; it is deleted. Post that in the thread (never the image), and finish by hand.", 3)
+    if rc == 5: die(f"the page showed a total above the approved {fmt(b['amount'], b.get('currency', 'usd'))} after the order button: check the order,"
+                    f" post the recording ({out / 'checkout.webm'}) and say so in the thread", 5)
     if rc == 0: print(f"then: hive buy done {b['id']} --recording {out / 'checkout.webm'} --receipt {out}/<the receipt shot>.png --charged AMOUNT")
+    sys.exit(rc)
+
+def record_dry(a):
+    """A practice walk through a real merchant's checkout with no card and no buy: placeholders for the address, the card fields only
+    checked, nothing pressed at the order button. Nothing goes in the ledger; the recording is scanned like a real one."""
+    if a.id: die("--dry takes no buy id: it holds no card and buys nothing")
+    if not a.url: die("--dry needs --url, the merchant's page; only https on its host and subdomains is allowed")
+    host = (urllib.parse.urlsplit(a.url).hostname or "").lower().removeprefix("www.")
+    if not host or not a.url.startswith("https://"): die(f"--url {a.url} is not an https url")
+    out = RECS / f"dry-{re.sub(r'[^A-Za-z0-9_-]', '_', host)}-{time.strftime('%Y%m%d-%H%M%S')}"; out.mkdir(parents=True, mode=0o700)
+    cmd = ["node", str(Path(__file__).resolve().parent / "buy_record.mjs"), "run", "--dry", "--steps", a.steps, *(["--contact", str(cf)] if (cf := contact_file(a, dry=True)) else []), "--out", str(out), "--allow-host", host]
+    if a.max_total: cmd += ["--max-total", f"{money(a.max_total, '--max-total') / 100:.2f}"]
+    rc = subprocess.run(cmd).returncode
+    print(f"dry run in {out}")
     sys.exit(rc)
 
 def cmd_done(a):
@@ -368,9 +430,10 @@ def board_posts(thread, since):
             except ValueError: continue
             if j.get("thread") == thread and str(j.get("at") or "") >= (since or ""): out.append(j)
     return out
-def scan_files(files, card=None):
-    """buy_record.mjs scan: 0 clean, 3 a card number in some frame, else it could not scan."""
-    cmd = ["node", str(Path(__file__).resolve().parent / "buy_record.mjs"), "scan", *([ "--card", str(card)] if card else []), *map(str, files)]
+def scan_files(files, card=None, contact=None):
+    """buy_record.mjs scan: 0 clean, 3 a card number or the contact file's details in some frame, else it could not scan."""
+    cmd = ["node", str(Path(__file__).resolve().parent / "buy_record.mjs"), "scan", *([ "--card", str(card)] if card else []),
+           *(["--contact", str(contact)] if contact and Path(contact).is_file() else []), *map(str, files)]
     try: return subprocess.run(cmd, capture_output=True, text=True, timeout=1800).returncode
     except (OSError, subprocess.TimeoutExpired): return None
 def audit_one(bid, b, evs, scan=False):
@@ -397,19 +460,22 @@ def audit_one(bid, b, evs, scan=False):
                 Path(e["recording"]).expanduser() == Path(rec).expanduser() for e in mine) or \
         any(e.get("ev") == "scan" and e.get("scan_exit") == 0 for e in mine)
     if any(e.get("ev") == "scan" and e.get("scan_exit") == 3 for e in mine):
-        r["scanned"] = ("breach", "OCR found a card number in the kept recording or receipt"); clean = True
+        r["scanned"] = ("breach", "OCR found a card number or contact details in the kept recording or receipt"); clean = True
+    cpath = next((e.get("contact") for e in reversed(mine) if e.get("ev") == "record" and e.get("contact")), None) or CONTACT
     if not clean and scan and not missing:
-        rc = scan_files(files); record({"ev": "scan", "id": bid, "scan_exit": rc, "files": [str(f) for f in files]})
+        rc = scan_files(files, contact=cpath); record({"ev": "scan", "id": bid, "scan_exit": rc, "files": [str(f) for f in files]})
         clean = rc == 0
-        if rc == 3: r["scanned"] = ("breach", "OCR found a card number in the recording or receipt")
+        if rc == 3: r["scanned"] = ("breach", "OCR found a card number or contact details in the recording or receipt")
     if "scanned" not in r:
         r["scanned"] = ("ok", "") if clean else ("unmet", "recording not OCR-checked (hive buy audit --scan)" if not missing else "nothing to scan")
-    leaks = card_numbers(json.dumps(mine))
+    cv = contact_values(cpath)
+    leaks, said = card_numbers(json.dumps(mine)), contact_hits("\n".join(json.dumps(e) for e in mine), cv)
     posts = board_posts(b.get("thread") or "", mine[0].get("at") if mine else "")
     if posts is None: r["no_leak"] = ("unmet", "board not readable")
     else:
-        for j in posts: leaks += card_numbers(j.get("text") or "")
-        r["no_leak"] = ("breach", f"a card number ending {leaks[0]} in the ledger or thread {b.get('thread')}") if leaks else ("ok", "")
+        for j in posts: leaks += card_numbers(j.get("text") or ""); said += contact_hits(j.get("text") or "", cv)
+        r["no_leak"] = ("breach", f"a card number ending {leaks[0]} in the ledger or thread {b.get('thread')}") if leaks else \
+            ("breach", f"the person's {', '.join(sorted(set(said)))} in the ledger or thread {b.get('thread')}") if said else ("ok", "")
     return r
 def cmd_audit(a):
     st, evs = buys(), events()
@@ -463,7 +529,12 @@ def main(argv=None):
     p.add_argument("id"); p.add_argument("--timeout", type=int, default=1800); p.set_defaults(f=cmd_wait)
     p = sp.add_parser("card", help="the card file's path and what it may pay for"); p.add_argument("id"); p.set_defaults(f=cmd_card)
     p = sp.add_parser("record", help="check out on screen record from a steps file, card fields masked, every frame OCR'd (core/buy_record.mjs)")
-    p.add_argument("id"); p.add_argument("--steps", required=True, help="the checkout as JSON steps; card values only as $card.number etc.")
+    p.add_argument("id", nargs="?"); p.add_argument("--steps", required=True, help="the checkout as JSON steps; card values only as $card.number etc.")
+    p.add_argument("--dry", action="store_true", help="practice run with no card and no buy: card fields only checked, nothing pressed at the order button")
+    p.add_argument("--url", help="with --dry: the merchant's https page (its host is the one allowed)")
+    p.add_argument("--max-total", help="with --dry: the total the place step checks against")
+    p.add_argument("--contact", help=f"the person's email, phone, name and address for $contact.* tokens (0600 JSON; a real run's default is {CONTACT} if it exists;"
+                                       " a dry run uses only an explicit --contact, and from it only the city, state and zip)")
     p.set_defaults(f=cmd_record)
     p = sp.add_parser("done", help="checkout finished: delete the card, post the recording and receipt")
     p.add_argument("id"); p.add_argument("--recording", required=True, help="the screen recording of the checkout, card number masked")
