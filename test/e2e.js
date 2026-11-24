@@ -104,6 +104,7 @@ async function start(extra = {}) {
   }
   const app = await _electron.launch(process.env.HIVE_APP_BIN ? { executablePath: process.env.HIVE_APP_BIN, args: ['--no-sandbox'], env } : { executablePath: require('electron'), args: [root, '--no-sandbox'], env });
   const page = await app.firstWindow();
+  if (process.env.HIVE_TEST_SLOW === '1') page.setDefaultTimeout(WAIT);   // the waits with no timeout of their own too
   cur = page;
   return { app, page };
 }
