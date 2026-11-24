@@ -5922,7 +5922,7 @@ def mcp_url_view():
         return "lapsed" if o.get("lapsed") or (o.get("expires") and o["expires"] < time.time() and not o.get("refresh")) else "in"
     urls = _mcp_urls(); have = {s["url"] for s in urls.values()}
     opn = {k["url"] for k in mcp_known() if not k["signin"]}   # a listed server known to need no sign-in shows no Sign in button
-    return {"servers": [{"name": n, "url": s["url"], "token": bool(s.get("token")) and not s.get("oauth"), "signed": signed(s), "open": s["url"] in opn} for n, s in sorted(urls.items())], "max": MCP_URL_MAX,
+    return {"servers": [{"name": n, "url": s["url"], "token": bool(s.get("token")) and not s.get("oauth"), "signed": signed(s), "open": s["url"] in opn, "client": bool(s.get("client"))} for n, s in sorted(urls.items())], "max": MCP_URL_MAX,
             "known": [{**k, "added": k["url"] in have} for k in mcp_known()]}
 
 
@@ -5935,7 +5935,14 @@ def mcp_known():
     for k in v.get("servers", []) if isinstance(v, dict) else []:
         if not isinstance(k, dict) or not all(isinstance(k.get(f), str) for f in ("id", "label", "url", "line")): continue
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}", k["id"]) or not k["url"].startswith("https://"): continue   # a bad edit there is dropped
-        out.append({f: k[f] for f in ("id", "label", "url", "line")} | {"signin": bool(k.get("signin"))})
+        e = {f: k[f] for f in ("id", "label", "url", "line")} | {"signin": bool(k.get("signin"))}
+        g = k.get("guide")   # E137: how to register an app by hand, for a server that doesn't register clients itself (E134, E135)
+        if isinstance(g, dict) and isinstance(g.get("where"), str) and g["where"].startswith("https://") and isinstance(g.get("steps"), list) \
+                and 0 < len(g["steps"]) <= 6 and all(isinstance(x, str) and x for x in g["steps"]):
+            e["guide"] = {"where": g["where"], "steps": list(g["steps"])}
+        sc = k.get("scope")   # E138: the scopes the sign-in asks for, narrower than all the server lists (from the maker's docs)
+        if isinstance(sc, str) and 0 < len(sc) <= 2000 and re.fullmatch(r"[\x21-\x7e]+( [\x21-\x7e]+)*", sc): e["scope"] = sc
+        out.append(e)
     return out
 
 
@@ -5985,6 +5992,13 @@ def mcp_url_do(d):
         tok = d.get("token") or ""
         if not isinstance(tok, str) or len(tok) > 4000 or any(c in tok for c in "\r\n"): raise ValueError("that token can't be used")
         urls[name] = {"url": url, **({"token": tok.strip()} if tok.strip() else {})}
+    elif what == "client":   # E135: an app the person registered by hand at the server's maker, for a server that registers no app itself
+        if name not in urls: raise ValueError("no connector added by address has that name")
+        cid, sec = d.get("client_id") or "", d.get("client_secret") or ""
+        if not isinstance(cid, str) or len(cid.strip()) > 500 or not re.fullmatch(r"[\x21-\x7e]*", cid.strip()): raise ValueError("that client ID can't be used")
+        if not isinstance(sec, str) or len(sec.strip()) > 1000 or not re.fullmatch(r"[\x21-\x7e]*", sec.strip()): raise ValueError("that client secret can't be used")
+        if cid.strip(): urls[name]["client"] = {"client_id": cid.strip(), **({"client_secret": sec.strip()} if sec.strip() else {})}
+        else: urls[name].pop("client", None)
     else: raise ValueError("do: add or remove")
     _write_mcp(urls=urls)   # mcp.json first: if it can't be written, the list doesn't claim a connector agents don't have
     if urls: write_text_private(MCP_URLS, json.dumps(urls, indent=1))
@@ -6030,15 +6044,18 @@ def _mcp_oauth_ok(url, server):
 def _mcp_discover(server):
     """The server's sign-in: {"authorize", "token", "register"?, "scope"?}. Raises ValueError with words the person can act on."""
     st, rh, _ = _mcp_http(server, data={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "hive-dash", "version": "1"}}})
-    if st < 400: raise ValueError("this server doesn't ask for a sign-in: agents can use it as it is")
-    if st not in (401, 403): raise ValueError(f"the server answered {st}, not a sign-in request")
-    www = rh.get("WWW-Authenticate") or ""
+    if st >= 400 and st not in (401, 403): raise ValueError(f"the server answered {st}, not a sign-in request")
+    www = (rh.get("WWW-Authenticate") or "") if st >= 400 else ""
     m = re.search(r'resource_metadata="([^"]+)"', www); scope = re.search(r'scope="([^"]+)"', www)
     u = urllib.parse.urlsplit(server); origin = f"{u.scheme}://{u.netloc}"; path = u.path.rstrip("/")
     prm = None
     for cand in ([m[1]] if m else []) + [origin + "/.well-known/oauth-protected-resource" + path, origin + "/.well-known/oauth-protected-resource"]:
         _st, _, v = _mcp_http(_mcp_oauth_ok(cand, server))
         if _st == 200 and isinstance(v, dict): prm = v; break
+    # E137: Google's Gmail and Drive servers answer initialize without a token and ask only at a tool call (runs/e134/probe.md), so a
+    # server that lets initialize through still needs a sign-in when it publishes resource metadata (RFC 9728) naming a sign-in server
+    if st < 400 and not (isinstance((prm or {}).get("authorization_servers"), list) and prm["authorization_servers"]):
+        raise ValueError("this server doesn't ask for a sign-in: agents can use it as it is")
     issuer = ((prm or {}).get("authorization_servers") or [origin])[0]
     iu = urllib.parse.urlsplit(_mcp_oauth_ok(issuer, server)); io = f"{iu.scheme}://{iu.netloc}"; ip = iu.path.rstrip("/")
     cands = [io + "/.well-known/oauth-authorization-server" + ip, io + "/.well-known/openid-configuration" + ip] + ([io + ip + "/.well-known/openid-configuration"] if ip else [])
@@ -6057,6 +6074,16 @@ def _mcp_discover(server):
     return out
 
 
+def _mcp_scope(url, listed):
+    """E138: a known server's own narrower scope in place of every scope it lists (Gmail lists full mail access, Slack write scopes).
+    Only scopes the server lists are kept when it lists any; an unknown server, or none left, keeps what it listed."""
+    k = next((x for x in mcp_known() if x["url"] == url and x.get("scope")), None)
+    if not k: return listed
+    have = set(listed.split())
+    keep = [x for x in k["scope"].split() if not have or x in have]
+    return " ".join(keep) if keep else listed
+
+
 def mcp_oauth_start(name, host):
     """POST /api/mcp-url {"do": "signin", "name"}: {"go": the sign-in page}. host is the dash's own Host, so the callback comes back here."""
     urls = _mcp_urls()
@@ -6066,14 +6093,17 @@ def mcp_oauth_start(name, host):
     if not isinstance(host, str) or not re.fullmatch(r"(127\.0\.0\.1|localhost|\[::1\]):\d{1,5}", host): raise ValueError("sign in from this computer's own address")
     redirect = f"http://{host}{MCP_OAUTH_PATH}"
     d = _mcp_discover(s["url"])
+    d["scope"] = _mcp_scope(s["url"], d["scope"])
     old = s.get("oauth") or {}
-    if old.get("client_id") and old.get("redirect") == redirect and old.get("token") == d["token"]: client = {k: old[k] for k in ("client_id", "client_secret") if old.get(k)}
+    hand = s.get("client") or {}
+    if isinstance(hand.get("client_id"), str) and hand["client_id"]: client = {k: hand[k] for k in ("client_id", "client_secret") if isinstance(hand.get(k), str) and hand[k]}
+    elif old.get("client_id") and old.get("redirect") == redirect and old.get("token") == d["token"]: client = {k: old[k] for k in ("client_id", "client_secret") if old.get(k)}
     elif d.get("register"):
         st, _, v = _mcp_http(d["register"], data={"client_name": "Hive", "redirect_uris": [redirect], "grant_types": ["authorization_code", "refresh_token"],
                                                    "response_types": ["code"], "token_endpoint_auth_method": "none"})
         if st not in (200, 201) or not isinstance(v, dict) or not isinstance(v.get("client_id"), str): raise ValueError(f"the server wouldn't register this app ({st}); paste a token instead")
         client = {"client_id": v["client_id"], **({"client_secret": v["client_secret"]} if isinstance(v.get("client_secret"), str) else {})}
-    else: raise ValueError("the server needs an app registered by hand, which this app can't do; paste a token instead")
+    else: return {"need_client": True, "redirect": redirect}   # E135: Settings asks for the client ID of an app the person registers there
     verifier = secrets.token_urlsafe(48); state = secrets.token_urlsafe(32)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     q = {"response_type": "code", "client_id": client["client_id"], "redirect_uri": redirect, "state": state, "code_challenge": challenge,

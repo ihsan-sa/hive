@@ -76,7 +76,7 @@ def section(txt, m, heading, t=None):
     live = [p for p in PARKED.finditer(body) if today < p.group(1) <= (t.date() + dt.timedelta(days=PARK_MAX_D)).isoformat()]
     p = max(live, key=lambda m: m.group(1), default=None); parked = {"until": p.group(1), "why": p.group(2).strip()} if p else None
     return {"thread": th.group(1).lower() if th else None, "rungs": rungs, "next": nxt, "parked": parked, "done": sum(r["state"] == "x" for r in rungs),
-            "due_more": [r["text"] for r in due[1:]], "left": sum(r["state"] == " " for r in rungs), "no_check": sum(r["state"] == " " and not r["checked"] for r in rungs)}
+            "due_more": [r["text"] for r in due[1:]], "blocked": [r["text"] for r in rungs if r["state"] == "!"][:5], "left": sum(r["state"] == " " for r in rungs), "no_check": sum(r["state"] == " " and not r["checked"] for r in rungs)}
 
 def rounds(board, threads, since):
     """Keeper rounds in these threads since `since` (ISO): one per brief, graded on the last post of the agent that took it. {thread: [work, wait, silent]}"""
@@ -314,7 +314,7 @@ def with_ladder(row, g, t=None):
     lad = g["ladder"] if g else None
     row["ladder"] = bool(lad); row["goals_path"] = g["path"] if g else None
     if lad:
-        row.update(rung=lad["next"]["text"] if lad["next"] else None, due_more=lad.get("due_more", []), rungs_left=lad["left"], rungs_done=lad["done"], rungs_no_check=lad["no_check"], parked=lad["parked"], **({"section": lad["section"]} if lad.get("section") else {}))
+        row.update(rung=lad["next"]["text"] if lad["next"] else None, due_more=lad.get("due_more", []), blocked=lad.get("blocked", []), rungs_left=lad["left"], rungs_done=lad["done"], rungs_no_check=lad["no_check"], parked=lad["parked"], **({"section": lad["section"]} if lad.get("section") else {}))
         if lad["parked"]: row["idle"] = False
         # every open rung carries a future after: gate and none is open now: a round could only write more rungs, so hold the keeper until the earliest gate (ae5ec, 2026-11-15: 18 idle rounds a day on improve-survey)
         open_ = [r for r in lad["rungs"] if r["state"] == " "]
@@ -508,6 +508,10 @@ def brief(row):
                 "Your work this round is to ask what else would move the Measure in that file before then (a cause nobody has tried, a check that can run on what exists now, a part of the goal the dated rungs leave out), "
                 "write the next 3 to 5 rungs from that, each with a `check:`, and do the first one. If you weigh real candidates and none would move it, write one line under the rungs, in place of any older one, "
                 "`Weighed YYYY-MM-DD: what you considered and why each would not move the Measure`, so tomorrow's round starts from there. \"The rungs are dated\" is not a finding.")
+        # a `[!]` whose block lifted is a rung nobody is shown: 2 of the focus lanes' 24 `[!]` rungs were stale on 11-24 (fund-rsi sealed rows, its nightly back on; ui-redesign `hive me` count, blocked only by a past date) (ad388, meta-moving)
+        if row.get("blocked"):
+            rung += (f"\n\n**Blocked rungs on this ladder ({len(row['blocked'])}):** " + "; ".join('"' + re.sub(r"\s+", " ", x.replace("`", ""))[:100] + '"' for x in row["blocked"][:3]) +
+                     ". Check whether each block still holds (a date passed, a job back on, a fix landed); reopen any that no longer does as `- [ ]` and take it before writing new rungs.")
     more = row.get("due_more") or []   # hive-meta Moving ladder, ad388 11-17: rounds took one rung and ended `Waiting:` while more were due (rsi-loop a0efb 10:04, 4 due since 08:00Z; rsi-lab a12a7 13:04, 2 due since 12:00Z): Goal 1 ran 7.1% of the day
     if more and row.get("rung"):
         rung += (f"\n\n**Also due now on this ladder ({len(more)} more):** " + "; ".join('"' + re.sub(r"\s+", " ", x.replace("`", ""))[:110] + '"' for x in more[:3]) +
