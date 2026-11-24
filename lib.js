@@ -182,4 +182,16 @@ function downloadPath(dir, name, exists) {
   return out;
 }
 
-module.exports = { downloadPath, appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };
+// The site says which app is current in /app-version.json ({"version": "1.2.3"}). Returns that version when it is newer than
+// this app's, else null (a missing, odd or older file says nothing). Only plain x.y.z numbers count.
+function newerApp(mine, text) {
+  let v; try { v = JSON.parse(String(text)).version; } catch { return null; }
+  const num = x => /^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(String(x)) ? String(x).split('.').map(Number) : null;
+  const a = num(mine), b = num(v);
+  if (!a || !b) return null;
+  for (let i = 0; i < 3; i++) if (b[i] !== a[i]) return b[i] > a[i] ? v : null;
+  return null;
+}
+const downloadPage = () => SITE + '/download';
+
+module.exports = { newerApp, downloadPage, downloadPath, appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };

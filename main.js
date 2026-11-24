@@ -7,7 +7,7 @@ const path = require('path');
 const fs = require('fs');
 const lib = require('./lib');
 
-let win = null, hiveUrl = null, child = null, kept = false, fails = 0;
+let win = null, hiveUrl = null, child = null, kept = false, fails = 0, newer = null;
 const logFile = () => path.join(app.getPath('userData'), 'app.log');
 const log = t => lib.appendLog(logFile(), t);
 const setupFile = path.join(__dirname, 'setup.html');
@@ -73,6 +73,35 @@ async function showSetup(state, note) {
   log('screen ' + state + (note ? ': ' + note : ''));
   if (!isSetup(win.webContents)) await win.loadFile(setupFile);
   send('state', state, { platform: process.platform, note: note || '' });
+  if (newer) send('newer', newer);
+}
+
+// Once a launch, ask the site (and only the site) which app is current. A newer one is said on the setup screen and, once per
+// version, in a system notification that opens the download page. Nothing installs itself.
+function checkNewer() {
+  const u = lib.SITE + '/app-version.json';
+  const get = u.startsWith('https:') ? require('https').get : require('http').get;
+  const q = get(u, { timeout: 5000 }, r => {
+    let b = ''; r.setEncoding('utf8');
+    r.on('data', d => { b += d; if (b.length > 4000) q.destroy(); });
+    r.on('end', () => {
+      const v = r.statusCode === 200 ? lib.newerApp(app.getVersion(), b) : null;
+      if (!v) return;
+      newer = v; log('update notice ' + v);
+      send('newer', v);
+      const seenFile = path.join(app.getPath('userData'), 'newer-seen.txt');
+      let seen = ''; try { seen = fs.readFileSync(seenFile, 'utf8').trim(); } catch { }
+      if (seen === v) return;
+      try { fs.writeFileSync(seenFile, v); } catch { }
+      const { Notification } = require('electron');
+      if (process.env.HIVE_APP_TEST !== '1' && Notification.isSupported()) {
+        const n = new Notification({ title: 'A newer Hive app is available', body: `Version ${v}. Click to open the download page.` });
+        n.on('click', () => external(lib.downloadPage())); n.show();
+      }
+    });
+    r.on('error', () => { });
+  });
+  q.on('error', () => { }); q.on('timeout', () => q.destroy());
 }
 
 // Finds the Hive and shows it; the setup screen if there's none or it won't start.
@@ -222,6 +251,7 @@ ipcMain.on('install', (e, accept) => { if (fromSetup(e)) install(accept); });
 ipcMain.on('retry', e => { if (fromSetup(e)) open(); });
 ipcMain.on('copy', (e, text) => { if (fromSetup(e)) clipboard.writeText(lib.redact(text).slice(0, 200000) + '\n\nApp log (latest):\n' + lib.tailLog(logFile())); });
 ipcMain.on('version', e => { e.returnValue = fromSetup(e) ? app.getVersion() : ''; });
+ipcMain.on('download', e => { if (fromSetup(e)) external(lib.downloadPage()); });
 ipcMain.on('quit', e => { if (fromSetup(e)) app.quit(); });
 
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -230,7 +260,7 @@ else {
   app.whenReady().then(() => {
     if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
     else Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }])); // no View menu: its Reload would skip our guard
-    permissions(); create();
+    permissions(); create(); checkNewer();
     app.on('activate', () => { if (!win) create(); });
   });
   // Closing the window closes the app. The Hive itself keeps running in the background, as it does without the app.

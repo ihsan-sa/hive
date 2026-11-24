@@ -18,6 +18,7 @@
   pre { margin: 18px 0 0; padding: 14px; background: var(--prebg); border: 1px solid var(--prebd); border-radius: 10px; max-height: 44vh; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace; color: var(--pre); }
   pre:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
   pre:empty { display: none; }
+  button.link { padding: 0; border: 0; background: none; color: inherit; text-decoration: underline; font-size: inherit; }
   .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--spin); border-top-color: #f5b800; border-radius: 50%; animation: s 0.9s linear infinite; vertical-align: -2px; margin-right: 8px; }
   @keyframes s { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
@@ -59,6 +60,12 @@ function show(state, p) {
 }
 $('ver').textContent = 'Hive app ' + hive.version;
 hive.on('state', show);
+hive.on('newer', v => {
+  if ($('newer')) return;
+  const b = document.createElement('button'); b.id = 'newer'; b.className = 'link';
+  b.textContent = `A newer Hive app (${v}) is available`; b.onclick = () => hive.download();
+  $('ver').append(' · ', b);
+});
 hive.on('log', t => { const l = $('log'); l.textContent += t; l.scrollTop = l.scrollHeight; });
 show('starting', {});
 </script>

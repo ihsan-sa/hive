@@ -6,5 +6,6 @@ if (location.protocol === 'file:') contextBridge.exposeInMainWorld('hive', {
   copy: text => ipcRenderer.send('copy', String(text)),
   version: ipcRenderer.sendSync('version'),
   quit: () => ipcRenderer.send('quit'),
+  download: () => ipcRenderer.send('download'),
   on: (name, fn) => ipcRenderer.on(name, (_e, ...a) => fn(...a)),
 });

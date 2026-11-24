@@ -9,6 +9,15 @@ t('windows: Hive', () => {
   const c = lib.openCommand('win32', { LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local' }, has('C:\\Users\\a\\AppData\\Local\\Hive\\bin\\hive.cmd'));
   assert.strictEqual(c.file, 'wsl.exe'); assert.deepStrictEqual(c.args.slice(0, 4), ['-d', 'Hive', '-u', 'hive']); assert.strictEqual(c.args.at(-1), 'hive open --print');
 });
+t('update notice: only a newer x.y.z from the version file', () => {
+  assert.strictEqual(lib.newerApp('0.1.0', '{"version":"0.2.0"}'), '0.2.0');
+  assert.strictEqual(lib.newerApp('0.1.0', '{"version":"0.1.10"}'), '0.1.10');
+  assert.strictEqual(lib.newerApp('0.10.0', '{"version":"0.9.9"}'), null);
+  assert.strictEqual(lib.newerApp('0.1.0', '{"version":"0.1.0"}'), null);
+  for (const bad of ['', 'nope', '{}', '{"version":"1.0"}', '{"version":"1.0.0-beta"}', '{"version":"<b>9.9.9</b>"}', '{"version":9}']) assert.strictEqual(lib.newerApp('0.1.0', bad), null, bad);
+  assert.ok(lib.downloadPage().startsWith(lib.SITE + '/'));
+  console.log('ok update notice logic');
+});
 t('mac', () => {
   assert.strictEqual(lib.openCommand('darwin', { HOME: '/Users/a' }, has()), null);
   assert.deepStrictEqual(lib.openCommand('darwin', { HOME: '/Users/a' }, has('/Users/a/.hive/bin/hive')), { file: '/Users/a/.hive/bin/hive', args: ['web'] });
