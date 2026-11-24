@@ -133,13 +133,16 @@ const title = page => page.locator('#title').textContent();
 
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
   const startupMs = Date.now() - t0;   // launch to the setup screen showing (cold, packaged or not)
-  assert.ok(startupMs < 10000, `the window shows its first screen within 10 s (took ${startupMs} ms)`);
+  // The Windows on ARM runner (HIVE_TEST_SLOW=1) starts a just-unpacked Electron cold under its virus scan: about 10 s there
+  // against 0.5 to 5 s elsewhere, so it gets twice the budget; the number is in the log either way.
+  const budget = process.env.HIVE_TEST_SLOW === '1' ? 20000 : 10000;
+  assert.ok(startupMs < budget, `the window shows its first screen within ${budget / 1000} s (took ${startupMs} ms)`);
   console.log(`ok startup time (${startupMs} ms)`);
   await page.screenshot({ path: path.join(shots, '1-welcome.png') });
   await page.getByRole('button', { name: 'Install' }).click();
 
-  if (!mac) {
-    await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs');
+  if (!mac) {   // the first PowerShell start on a cold runner can be slow: up to 90 s there
+    await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs', null, { timeout: process.env.HIVE_TEST_SLOW === '1' ? 90000 : 30000 });
     const warn = await page.locator('#log').textContent();
     assert.ok(warn.includes('The Hive will run in your own account'), 'the installer\'s own warning is on the screen');
     assert.ok(!warn.includes('BUG'), warn);

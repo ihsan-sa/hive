@@ -16,7 +16,7 @@ jobs:
           - { os: ubuntu-24.04, flags: "--linux", app: "dist/linux-unpacked/hive-app", run: "xvfb-run -a" }
           - { os: windows-latest, flags: "--win", app: "dist/win-unpacked/Hive.exe", run: "" }
           - { os: macos-15, flags: "--mac dmg zip --arm64 -c.mac.identity=-", app: "dist/mac-arm64/Hive.app/Contents/MacOS/Hive", run: "" }
-          - { os: windows-11-arm, flags: "--win --x64", app: "dist/win-unpacked/Hive.exe", run: "" }
+          - { os: windows-11-arm, flags: "--win --x64", app: "dist/win-unpacked/Hive.exe", run: "", slow: "1" }
           - { os: macos-15-intel, flags: "--mac dmg zip --x64 -c.mac.identity=-", app: "dist/mac/Hive.app/Contents/MacOS/Hive", run: "" }
     runs-on: ${{ matrix.os }}
     steps:
@@ -42,6 +42,7 @@ jobs:
       - if: runner.os != 'Linux'
         shell: bash
         continue-on-error: true
+        env: { HIVE_TEST_SLOW: "${{ matrix.slow }}" }
         run: node test/e2e.js && HIVE_APP_BIN="$PWD/${{ matrix.app }}" node test/e2e.js
       # The real install through the packaged app, on this throwaway machine: the site's installer, then the Hive's own web app in the window.
       - if: runner.os == 'Linux'
