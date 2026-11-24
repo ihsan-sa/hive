@@ -564,11 +564,23 @@ function mcpUrlBlock(ctx) {
     delete F.busy["mcpin-" + name]; ctx.update();
   };
   const add = () => run({ do: "add", name: A.name.trim(), url: A.url.trim(), token: A.token }, "mcpurl-add", () => { F.mcpAdd = { name: "", url: "", token: "" }; });
-  return block({ title: "Add a connector by address", sub: "A remote MCP server, like a custom connector in Claude. Your agents can use its tools from their next run, so only add a server you trust." },
+  // E132: official servers from mcp-known.json; picking one sends only its id, and one that needs a sign-in goes straight on to it
+  const pick = async k => {
+    F.busy["mcpk-" + k.id] = true; ctx.update();
+    try { F.mcpUrls = await post("/api/mcp-url", { do: "add", known: k.id }); } catch (e) { say("mcpurl", e.message, "bad"); delete F.busy["mcpk-" + k.id]; ctx.update(); return; }
+    delete F.busy["mcpk-" + k.id];
+    if (k.signin) return signin(k.id);
+    say("mcpurl", "Added. Agents can use it from their next run.", "good"); ctx.update();
+  };
+  const known = Array.isArray(M.known) && M.known.length ? block({ title: "Known servers", sub: "Official servers from the companies that make them. Pick one to add it; one that needs your account takes you to its sign-in page." },
+    h("ul", { class: "list mcp-known-list" }, M.known.map(k => h("li", { class: "lr mcp-known-row", "data-key": k.id },
+      h("div", { class: "lr-in" }, h("b", null, k.label), " ", h("span", { class: "meta" }, k.signin ? "needs your account" : "no account needed"), h("p", { class: "muted mcp-known-line" }, k.line)),
+      k.added ? h("span", { class: "meta" }, "added") : button(k.signin ? "Add and sign in" : "Add", () => pick(k), { size: "s", kind: "quiet", busy: F.busy["mcpk-" + k.id], disabled: M.servers.length >= M.max })))) ) : null;
+  return [known, block({ title: "Add a connector by address", sub: "A remote MCP server, like a custom connector in Claude. Your agents can use its tools from their next run, so only add a server you trust." },
     M.servers.length ? h("ul", { class: "list mcp-url-list" }, M.servers.map(x => h("li", { class: "lr mcp-url-row", "data-key": x.name },
       h("div", { class: "lr-in" }, h("b", null, x.name), " ", h("span", { class: "meta mcp-url" }, x.url), x.token ? [" ", h("span", { class: "meta" }, "has a token")] : null,
         x.signed === "in" ? [" ", h("span", { class: "meta" }, "signed in")] : x.signed === "lapsed" ? [" ", h("span", { class: "meta" }, "sign-in ended")] : null),
-      x.token ? null : button(x.signed === "in" ? "Sign in again" : "Sign in", () => signin(x.name), { size: "s", kind: x.signed === "lapsed" ? "primary" : "quiet", busy: F.busy["mcpin-" + x.name] }),
+      x.token || x.open ? null : button(x.signed === "in" ? "Sign in again" : "Sign in", () => signin(x.name), { size: "s", kind: x.signed === "lapsed" ? "primary" : "quiet", busy: F.busy["mcpin-" + x.name] }),
       button("Remove", () => confirm({ title: `Remove ${x.name}?`, body: ["Agents stop seeing its tools from their next run."], ok: "Remove", kind: "danger", onOk: () => run({ do: "remove", name: x.name }, "mcpurl-" + x.name) }), { size: "s", kind: "quiet", busy: F.busy["mcpurl-" + x.name] })))) : null,
     M.servers.length < M.max ? h("form", { class: "mcp-url-add", onsubmit: e => { e.preventDefault(); add(); } },
       h("div", { class: "frow" },
@@ -577,7 +589,7 @@ function mcpUrlBlock(ctx) {
       h("div", { class: "frow" },
         h("div", { class: "frow-grow" }, field("Token (if the server needs one)", input({ type: "password", value: A.token, autocomplete: "new-password", oninput: (e, n) => { A.token = n.value; } }))),
         button("Add", null, { type: "submit", size: "s", kind: "primary", busy: F.busy["mcpurl-add"] }))) : h("p", { class: "muted" }, `${M.max} is the most. Remove one to add another.`),
-    msg("mcpurl"));
+    msg("mcpurl"))];
 }
 const CONN_STATE = { on: ["working", "Running"], ready: ["queued", "Ready to turn on"], usable: ["working", "Ready to use"], nothing: ["off", "Nothing to turn on"],
   off: ["off", "Not set up"], two_way: ["off", "Needs a separate account first"], cant_load: ["failed", "Can't load"], token_missing: ["stuck", "Token missing"],

@@ -159,6 +159,27 @@ def parked(run, log):
                                                     and run["started"] <= r.get("at", "") <= run["ended"] for r in log)
 
 RESUME_S = 120   # the starter restarts a reaped agent on the same post within seconds (ab5b4 01:55:30 -> 01:55:32, 2026-11-22)
+PARK_WAIT_S = 6 * 3600   # a parked run whose resume is still going after this is graded with the posts so far
+
+def parked_through(run, log, until):
+    """A parked run's work goes on in the same session's resumed run, which the starter grades against the new post that woke it, not this one's ask.
+    Graded alone, the parked part read as short: ac009's 5i rerun "nothing ... only posted a plan" though its resume delivered the step (2026-11-24),
+    10 of the 16 parked runs graded to 11-24 were partial or nothing. Returns (end, next start) of the last run in the resume chain, so this run is
+    graded with all its posts; ("", None) while that chain is still running (grade it later), or None if nothing resumed it."""
+    cur, last = run, None
+    for _ in range(10):
+        t1 = dt.datetime.fromisoformat(cur["ended"])
+        s = next((r for r in log if r.get("event") == "start" and r.get("name") == run["name"] and r.get("session") == run.get("session")
+                  and r.get("at", "") >= cur["ended"] and (dt.datetime.fromisoformat(r["at"]) - t1).total_seconds() <= RESUME_S), None)
+        if not s: break
+        e = next((r for r in log if r.get("event") == "end" and (r.get("session"), r.get("pid")) == (s.get("session"), s.get("pid"))), None)
+        if not e or e.get("at", "") > until:
+            return ("", None) if (dt.datetime.fromisoformat(until) - dt.datetime.fromisoformat(run["ended"])).total_seconds() < PARK_WAIT_S else (until, None)
+        cur = {**run, "started": s["at"], "ended": e["at"]}; last = cur
+        if not parked(cur, log): break
+    if not last: return None
+    nx = sorted(r.get("at", "") for r in log if r.get("event") == "start" and r.get("name") == run["name"] and r.get("at", "") > last["started"])
+    return (last["ended"], nx[0] if nx else None)
 
 def reap_resumed(run, log):
     """The starter reaped this run while it sat idle on a background shell, then started the same agent again on the same post (its resume after
@@ -384,7 +405,7 @@ def completion_share(since, log=None, posts=None):
 def clip(s, n): s = str(s or "").strip(); return s if len(s) <= n else s[:n] + " …"
 
 def block(run, post, mine, after):
-    lines = [f"RUN {run['key']}: agent {run['name']}, woken by {run['from']} in thread {run['thread']}, ran {run['started'][11:16]} to {run['ended'][11:16]} UTC, " + ("ended its turn waiting on a background job, then was restarted to hand it a new post (not a crash: its work goes on in its next run)" if run.get("parked") else f"exit {run['exit']}"),
+    lines = [f"RUN {run['key']}: agent {run['name']}, woken by {run['from']} in thread {run['thread']}, ran {run['started'][11:16]} to {run['ended'][11:16]} UTC, " + (f"ended its turn waiting on a background job, then was restarted to hand it a new post and carried on to {run['parked_through'][11:16]} UTC (not a crash: the posts below include that resumed run's)" if run.get("parked_through") else "ended its turn waiting on a background job, then was restarted to hand it a new post (not a crash: its work goes on in its next run)" if run.get("parked") else f"exit {run['exit']}"),
              f"  WAKING POST ({post.get('from') if post else '?'}): {clip((post or {}).get('text'), 1500)}{attached(post)}"]
     shown = mine if len(mine) <= 6 else mine[:5] + mine[-1:]   # the first few, and the last: the result comes at the end
     for i, p in enumerate(shown):
@@ -495,6 +516,7 @@ def cmd_grade(a):
     graded, model_runs, cost, ticks, drafts, limited = 0, [], 0.0, ticked_rungs(), 0, False
     root, lims, nexts = roots(log, by_id), limit_times(log), launches()
     pauses = person_pauses(posts)
+    held = []   # ends of parked runs whose resume is still going: the cursor stays before them
     for r in todo:
         post, mine, after = posts_of(r, posts, by_id)
         ask = origin(r, post, log, by_id) if post and carried(post, r["name"]) else post   # resumed after a switch or woken by its own job notice: graded on the ask carried over
@@ -504,7 +526,11 @@ def cmd_grade(a):
             r = {**r, "reap_of": ro}; post, mine, after = posts_of({**r, "started": ro}, posts, by_id)
         sw = switch_only(r, mine, log); sup = not sw and superseded(r, log, by_id); pz = not (sw or sup) and person_paused(r, mine, pauses)
         rp = not (sw or sup or pz) and bool(reap_resumed(r, log))
-        if parked(r, log): r = {**r, "parked": True}
+        if parked(r, log):
+            r = {**r, "parked": True}
+            if not (sw or sup or pz or rp) and (pt := parked_through(r, log, until)):
+                if not pt[0]: held.append(r["ended"]); continue   # its resume is still running: graded on a later hour, with that run's posts
+                r = {**r, "parked_through": pt[0]}; mine, after = posts_of({**r, "ended": pt[0], "next": pt[1]}, posts, by_id)[1:]
         post = ask
         g = "not_asked" if sw or sup or pz or rp else "not_run" if not_run(r, mine, lims, log) else mechanical(r, post, mine)
         if g:
@@ -541,7 +567,7 @@ def cmd_grade(a):
         closers = could_close(jsonl(LEDGER), [x for x in model_runs if id(x) not in ids], posted_in(posts))[:CLOSER_MAX]
         grade(closers, {"closer": True})
     # Claude at its limit is when fallback runs most need grading: hold the cursor, and the next hour picks them up (the ledger's keys stop a run being graded twice)
-    if not a.dry and todo and not limited and not other and not back: CURSOR.write_text(json.dumps({"at": max(r["ended"] for r in todo), "run": iso()}))
+    if not a.dry and todo and not limited and not other and not back: CURSOR.write_text(json.dumps({"at": min([max(r["ended"] for r in todo)] + [iso(dt.datetime.fromisoformat(h) - dt.timedelta(seconds=1)) for h in held]), "run": iso()}))
     if not a.dry and graded and not other and not back: step_up(graded)
     print(f"{graded} runs graded ({len(chosen) + len(closers)} by the model, {len(chosen) if back else len(closers)} of them closers, {len(model_runs) - len(chosen) - len(closers)} left ungraded: chain not chosen or past ROOT_MAX), {drafts} drafts, ${cost:.2f}")
 

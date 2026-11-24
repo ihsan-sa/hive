@@ -5920,7 +5920,23 @@ def mcp_url_view():
         o = s.get("oauth")
         if not o: return ""
         return "lapsed" if o.get("lapsed") or (o.get("expires") and o["expires"] < time.time() and not o.get("refresh")) else "in"
-    return {"servers": [{"name": n, "url": s["url"], "token": bool(s.get("token")) and not s.get("oauth"), "signed": signed(s)} for n, s in sorted(_mcp_urls().items())], "max": MCP_URL_MAX}
+    urls = _mcp_urls(); have = {s["url"] for s in urls.values()}
+    opn = {k["url"] for k in mcp_known() if not k["signin"]}   # a listed server known to need no sign-in shows no Sign in button
+    return {"servers": [{"name": n, "url": s["url"], "token": bool(s.get("token")) and not s.get("oauth"), "signed": signed(s), "open": s["url"] in opn} for n, s in sorted(urls.items())], "max": MCP_URL_MAX,
+            "known": [{**k, "added": k["url"] in have} for k in mcp_known()]}
+
+
+# E132: a short list of official remote servers (mcp-known.json), so connecting one is pick it, then Sign in. Picking one is Add by address
+# with the list's own name and address: the browser sends only the id, never an address the list didn't hold.
+MCP_KNOWN = Path(__file__).resolve().parent / "mcp-known.json"
+def mcp_known():
+    v = jload(MCP_KNOWN, {}) or {}
+    out = []
+    for k in v.get("servers", []) if isinstance(v, dict) else []:
+        if not isinstance(k, dict) or not all(isinstance(k.get(f), str) for f in ("id", "label", "url", "line")): continue
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}", k["id"]) or not k["url"].startswith("https://"): continue   # a bad edit there is dropped
+        out.append({f: k[f] for f in ("id", "label", "url", "line")} | {"signin": bool(k.get("signin"))})
+    return out
 
 
 def _sandboxed():
@@ -5953,6 +5969,11 @@ def mcp_url_do(d):
         if name not in urls: raise ValueError("no connector added by address has that name")
         urls.pop(name)
     elif what == "add":
+        if d.get("known") is not None:
+            k = next((k for k in mcp_known() if k["id"] == d.get("known")), None)
+            if k is None: raise ValueError("that server isn't on the list")
+            if any(s["url"] == k["url"] for s in urls.values()): raise ValueError("that server is already added")
+            name, d = k["id"], {"url": k["url"]}
         if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}", name.strip()):
             raise ValueError("give it a short name: letters, digits, - and _ (up to 40)")
         name = name.strip()
@@ -6079,7 +6100,39 @@ def _mcp_oauth_save(name, url, p, v):
                                "token": p["token"], "resource": p["resource"], "refresh": v.get("refresh_token") or old.get("refresh") or "",
                                "expires": int(time.time() + exp) if isinstance(exp, (int, float)) and exp > 0 else 0, "at": int(time.time())}
         _write_mcp(urls=urls); write_text_private(MCP_URLS, json.dumps(urls, indent=1))
+    mcp_unmark_needs_auth([name])
     return True
+
+
+def _claude_dirs():
+    """The Claude config folders agents run with: each login in config.json, else ~/.claude (and this process's own CLAUDE_CONFIG_DIR)."""
+    c = jload(HOME / "core" / "config.json", {}) or {}
+    dirs = {str(Path(l).expanduser()) for l in c.get("logins") or [] if isinstance(l, str)} or {str(Path.home() / ".claude")}
+    if os.environ.get("CLAUDE_CONFIG_DIR"): dirs.add(os.environ["CLAUDE_CONFIG_DIR"])
+    return [Path(d) for d in sorted(dirs)]
+
+
+def mcp_unmark_needs_auth(names):
+    """The claude CLI keeps a server that once answered 401 in <config>/mcp-needs-auth-cache.json and skips it (its log says cached needs-auth),
+    even once mcp.json gives it a token: so a signed-in connector is taken out of that list. A running CLI can write its old list back,
+    so mcp_oauth_loop repeats this. Returns the files changed."""
+    changed = []
+    for d in _claude_dirs():
+        f = d / "mcp-needs-auth-cache.json"
+        try: v = json.loads(f.read_text())
+        except (OSError, ValueError): continue
+        if not isinstance(v, dict) or not any(n in v for n in names): continue
+        for n in names: v.pop(n, None)
+        try:
+            tmp = f.with_name(f.name + f".{os.getpid()}.tmp"); tmp.write_text(json.dumps(v)); os.replace(tmp, f); changed.append(str(f))
+        except OSError: pass
+    return changed
+
+
+def mcp_signed_in():
+    """Names of the connectors with a live sign-in token."""
+    return [n for n, s in _mcp_urls().items() if s.get("token") and (s.get("oauth") or {}) and not s["oauth"].get("lapsed")
+            and not (s["oauth"].get("expires") and s["oauth"]["expires"] < time.time())]
 
 
 def mcp_oauth_callback(q):
@@ -6121,10 +6174,13 @@ def mcp_oauth_refresh(margin=900):
 
 
 def mcp_oauth_loop():
+    n = 0
     while True:
-        try: mcp_oauth_refresh()
+        try:
+            if n % 5 == 0: mcp_oauth_refresh()
+            mcp_unmark_needs_auth(mcp_signed_in())
         except Exception: pass
-        time.sleep(300)
+        n += 1; time.sleep(60)
 
 
 def sandbox_state():

@@ -979,12 +979,31 @@ def check(page, name, title, org="", domains=None, claim="", today=None):
     return dict(res, status="verified" if res["official"] else "secondary")
 
 
+SENT_BREAK = re.compile(r"(?<=[.!?])(?<!\b[A-Z]\.)(?<!\bDr\.)(?<!\bMr\.)(?<!\bMs\.)(?<!\bMrs\.)(?<!\bProf\.)\s+|(?<!,)\s*\n\s*(?![a-z])")   # not after a middle initial or a title, nor at a line break inside a sentence (after a comma, or before a lowercase word): "... along with Dr." and "Dr. Gregory Newman\nof The University of Texas" cut Cooper's sentence (fnwords121)
+
+
+CREDIT = re.compile(r"\((?:(?:photo|image|file|credit|courtesy)\b[^()]{0,120}|[^()/]{1,60}/[^()/]{1,60})\)\s*$", re.I)   # a photo credit, "(Spectrum News 1/Geraldine Torrellas)" or "(Photo courtesy of ...)"
+
+
+def _not_prose(segs, i):
+    """A heading or a photo caption, which a story's signal for someone it names elsewhere may not be: a line with no closing stop ("Planning a career in the age of AI: How new tech is changing what students choose to study", Kostenbauder's headline) or a line a credit follows ("Temple College's AI and Innovation Lab, paid for by Meta. (Spectrum News 1/...)", Griffith's caption; fnwords121 review)."""
+    s = segs[i].strip()
+    if not re.search(r"[.!?…\"”’')]$", s): return True
+    return i + 1 < len(segs) and bool(CREDIT.match(segs[i + 1].strip()))
+
+
 def sentences_with(text, terms, near=None, limit=300, blank=None):
-    """The first sentence with one of the terms, preferring one close to `near` (a compiled pattern on folded text). `blank` (without_events) hides words from the test but not from the sentence returned: "World Economic Forum" names no one's job, yet the stored sentence keeps it (Newell's "adopts the 's future-ready skills framework", fnwords120 review)."""
-    best = ""
-    for s in re.split(r"(?<=[.!?])\s+|\n+", text):
+    """The first sentence with one of the terms, preferring one close to `near` (a compiled pattern on folded text). `blank` (without_events) hides words from the test but not from the sentence returned: "World Economic Forum" names no one's job, yet the stored sentence keeps it (Newell's "adopts the 's future-ready skills framework", fnwords120 review).
+    With `near` and no sentence naming it, the one nearest the first that does is taken, never a heading or a photo caption: the first on the page was a headline or a caption above the story (fnwords121 review)."""
+    segs = SENT_BREAK.split(text)
+    hits, at = [], None
+    for i, s in enumerate(segs):
         low = fold(blank(s) if blank else s)
+        if near is not None and at is None and near.search(fold(s)): at = i
         if any(term_regex(t).search(low) for t in terms) and len(s) > 25:
             if near is None or near.search(low): return " ".join(s.split())[:limit]
-            best = best or " ".join(s.split())[:limit]
-    return best
+            hits.append(i)
+    prose = [i for i in hits if not _not_prose(segs, i) or (at is not None and i == at - 1)]   # the line just above the name is their unit's label ("Artificial Intelligence Office" over "Jane Doe"), not a headline
+    if not prose: return ""
+    i = min(prose, key=lambda i: abs(i - at)) if at is not None else prose[0]
+    return " ".join(segs[i].split())[:limit]
