@@ -665,7 +665,7 @@ def main():
     ap = argparse.ArgumentParser(prog="hive goals", description=__doc__.split("\n")[0])
     ap.add_argument("--json", action="store_true"); ap.add_argument("--idle", action="store_true", help="only the idle goals")
     ap.add_argument("--brief", metavar="THREAD", help="print the keeper round's brief for this focus or ladder thread, with its next rung"); ap.add_argument("--ladder-threads", action="store_true", help="idle focus and ladder threads, one a line: each gets a round")
-    ap.add_argument("--post", metavar="THREAD", help="post that brief to its thread; --model applies only to a fresh agent, so a woken worker keeps its own (a grader step-up, its own hive model)")
+    ap.add_argument("--post", metavar="THREAD", nargs="?", const="", help="post that brief to its thread; --model applies only to a fresh agent, so a woken worker keeps its own (a grader step-up, its own hive model). Bare: print the command for each --ladder-threads line, posting nothing")
     ap.add_argument("--model", help="with --post: the model for a fresh agent")
     ap.add_argument("--force", action="store_true", help="with --post: post even to a parked ladder")
     ap.add_argument("--continue", dest="cont", action="store_true", help="each focus ladder (a `## Ladder` with open rungs in a focus thread): on, off with its reason, or MISSING")
@@ -706,15 +706,18 @@ def main():
         tot = [sum(v[i] for v in res.values()) for i in range(3)]; n = sum(tot)
         for th, v in res.items(): print(f"{th}: {v[0]} work, {v[1]} wait, {v[2]} silent")
         print(f"all: {tot[0]} of {n} rounds did work ({100 * tot[0] // n if n else 0}%), {tot[1]} wait, {tot[2]} silent, over {a.rounds:g} days"); return
-    if a.ladder_threads:
+    if a.ladder_threads or a.post == "":
+        # bare `--post`: 7 keeper rounds in 24 h put it in their opening batch of checks and lost a turn to argparse's "expected one argument"
+        # (cli_errors.py, 2026-11-24); it now prints the round commands to run, posting nothing, so the keeper still picks --model per rung
         seen, out = set(), []   # a thread once: two rows can share one (a focus and a project whose latest thread it is), and two lines were two rounds within seconds
         for r in g["rows"]:
             if r["idle"] and (r["kind"] == "focus" or r.get("ladder") or r.get("needs_ladder")) and r["thread"] not in seen: seen.add(r["thread"]); out.append(r["thread"])
         held, ph = tier_held_of(out), person_held_of(out)
+        if a.post == "": print("--post needs a thread; nothing posted. One round per idle ladder (--model opus for a design or a build from a spec):", file=sys.stderr)
         for th in out:
             if th in held: print(f"skipped {th}: its work tier is {held[th]} (`hive tier why {th}`)", file=sys.stderr)
             elif th in ph: print(f"skipped {th}: {ph[th]}", file=sys.stderr)
-            else: print(th)
+            else: print(f"hive goals --post {th} --model sonnet" if a.post == "" else th)
         return
     if a.brief or a.post:
         th = a.post or a.brief

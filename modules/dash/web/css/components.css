@@ -904,7 +904,7 @@ rc-lazy[data-mode=inline]{display:inline}
 .rc-filter{width:128px;height:24px;padding:0 6px;border:1px solid var(--line-2);border-radius:var(--r-s);background:var(--surface);font-size:var(--fs-meta)}
 @container (max-width:640px){.rc-filter{width:96px;height:36px}}
 /* plots: three series colours, checked for colour blindness on both themes; dashes give the second and third a second cue */
-.rc-plotb{--g0:var(--tier1);--g1:light-dark(oklch(66% .16 45),oklch(65% .15 45));--g2:light-dark(oklch(62% .1 180),oklch(66% .1 180));min-height:220px;touch-action:pan-y;cursor:crosshair}
+.rc-plotb{--g0:var(--tier1);--g1:light-dark(oklch(52% .15 255),oklch(72% .12 250));--g2:light-dark(oklch(62% .1 180),oklch(66% .1 180));min-height:220px;touch-action:pan-y;cursor:crosshair}
 .rc-plotsvg{display:block;max-width:100%}
 .g-frame{fill:none;stroke:var(--line-2);stroke-width:1}
 .g-s0,.g-s1,.g-s2{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
@@ -939,6 +939,7 @@ rc-lazy[data-mode=inline]{display:inline}
 .g-axis{stroke:var(--line-2);stroke-width:1;fill:none}
 .g-tick{fill:var(--ink-3);font:11px var(--font);font-variant-numeric:tabular-nums}
 .g-lab{fill:var(--ink-2);font:12px var(--font)}
+.g-end{fill:var(--ink);font:600 11px var(--font);font-variant-numeric:tabular-nums;paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round}
 .g-l0{stroke:var(--tier1);stroke-width:1.8;fill:none;stroke-linejoin:round}
 .g-l1{stroke:var(--tier2);stroke-width:1.6;fill:none;stroke-dasharray:6 3;stroke-linejoin:round}
 .g-d0{fill:var(--tier1)}.g-d1{fill:var(--tier2)}
@@ -3957,6 +3958,7 @@ a.ref[data-kind=doc][data-pv-on]{background:color-mix(in oklab,var(--accent) 16%
 .rc-buy-k{color:var(--ink-3);font-size:var(--fs-meta)}
 .rc-buy-v{min-width:0;overflow-wrap:anywhere}
 .rc-buy-url,.rc-buy-detail{color:var(--ink-2);font-size:var(--fs-meta)}
+a.rc-buy-url{display:inline-block;min-height:24px;line-height:24px}   /* a link alone in its row: 24 px target (WCAG 2.5.8; drive_app_a11y_pages 390 #comms/rich-test, keeper 2026-11-24) */
 .rc-buy-lines{margin:var(--s1) 0 0;padding-left:1.1em;font-size:var(--fs-meta);color:var(--ink-2)}
 .rc-buy-sum{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s3);margin-top:var(--s2);font-size:var(--fs-meta);color:var(--ink-2)}
 .rc-buy-sum b{color:var(--ink)}

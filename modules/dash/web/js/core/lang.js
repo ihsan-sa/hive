@@ -32,6 +32,7 @@ import FR9 from "./lang-fr-9.js";
 import FR10 from "./lang-fr-10.js";
 import FR11 from "./lang-fr-11.js";
 import FR12 from "./lang-fr-12.js";   // the 11-21 document viewer and the Edit tab, after FR11 was built (nightly 2026-11-22, lang_left.mjs count)
+import FR13 from "./lang-fr-13.js";   // the Link buy card, Settings repo line, docviewer carried note (keeper 2026-11-24, lang_left.mjs count 23)
 import DE1 from "./lang-de.js";   // German (rung E111, 2026-11-22): the whole app, built from the Spanish tables
 import DE2 from "./lang-de-2.js";
 import DE3 from "./lang-de-3.js";
@@ -42,6 +43,7 @@ import DE7 from "./lang-de-7.js";
 import DE8 from "./lang-de-8.js";
 import DE9 from "./lang-de-9.js";
 import DE10 from "./lang-de-10.js";   // the 11-21 document viewer and the Edit tab (nightly 2026-11-22, lang_left.mjs count)
+import DE11 from "./lang-de-11.js";   // the Link buy card, Settings repo line, docviewer carried note (keeper 2026-11-24, lang_left.mjs count 23)
 import IT1 from "./lang-it.js";   // Italian (rung E112, 2026-11-22): the whole app, built from the Spanish tables as German was
 import IT2 from "./lang-it-2.js";
 import IT3 from "./lang-it-3.js";
@@ -52,6 +54,7 @@ import IT7 from "./lang-it-7.js";
 import IT8 from "./lang-it-8.js";
 import IT9 from "./lang-it-9.js";
 import IT10 from "./lang-it-10.js";   // the 11-21 document viewer and the Edit tab (nightly 2026-11-22, lang_left.mjs count)
+import IT11 from "./lang-it-11.js";   // the Link buy card, Settings repo line, docviewer carried note (keeper 2026-11-24, lang_left.mjs count 23)
 import PT1 from "./lang-pt.js";
 import PT2 from "./lang-pt-2.js";
 import PT3 from "./lang-pt-3.js";
@@ -62,6 +65,7 @@ import PT7 from "./lang-pt-7.js";
 import PT8 from "./lang-pt-8.js";
 import PT9 from "./lang-pt-9.js";
 import PT10 from "./lang-pt-10.js";   // the 11-21 document viewer and the Edit tab (nightly 2026-11-22, lang_left.mjs count)
+import PT11 from "./lang-pt-11.js";   // the Link buy card, Settings repo line, docviewer carried note (keeper 2026-11-24, lang_left.mjs count 23)
 import JA1 from "./lang-ja.js";
 import JA2 from "./lang-ja-2.js";
 import JA3 from "./lang-ja-3.js";
@@ -72,6 +76,7 @@ import JA7 from "./lang-ja-7.js";
 import JA8 from "./lang-ja-8.js";
 import JA9 from "./lang-ja-9.js";
 import JA10 from "./lang-ja-10.js";   // the 11-21 document viewer and the Edit tab (nightly 2026-11-22, lang_left.mjs count)
+import JA11 from "./lang-ja-11.js";   // the Link buy card, Settings repo line, docviewer carried note (keeper 2026-11-24, lang_left.mjs count 23)
 import KO1 from "./lang-ko.js";
 import KO2 from "./lang-ko-2.js";
 import KO3 from "./lang-ko-3.js";
@@ -82,6 +87,7 @@ import KO7 from "./lang-ko-7.js";
 import KO8 from "./lang-ko-8.js";
 import KO9 from "./lang-ko-9.js";
 import KO10 from "./lang-ko-10.js";   // the 11-21 document viewer and the Edit tab (nightly 2026-11-22, lang_left.mjs count)
+import KO11 from "./lang-ko-11.js";   // the Link buy card, Settings repo line, docviewer carried note (keeper 2026-11-24, lang_left.mjs count 23)
 import HI1 from "./lang-hi.js";
 import HI2 from "./lang-hi-2.js";
 import HI3 from "./lang-hi-3.js";
@@ -92,6 +98,7 @@ import HI7 from "./lang-hi-7.js";
 import HI8 from "./lang-hi-8.js";
 import HI9 from "./lang-hi-9.js";
 import HI10 from "./lang-hi-10.js";   // the 11-21 document viewer and the Edit tab (nightly 2026-11-22, lang_left.mjs count)
+import HI11 from "./lang-hi-11.js";   // the Link buy card, Settings repo line, docviewer carried note (keeper 2026-11-24, lang_left.mjs count 23)
 import ID1 from "./lang-id.js";
 import ID2 from "./lang-id-2.js";
 import ID3 from "./lang-id-3.js";
@@ -102,6 +109,7 @@ import ID7 from "./lang-id-7.js";
 import ID8 from "./lang-id-8.js";
 import ID9 from "./lang-id-9.js";
 import ID10 from "./lang-id-10.js";   // the 11-21 document viewer and the Edit tab (nightly 2026-11-22, lang_left.mjs count)
+import ID11 from "./lang-id-11.js";   // the Link buy card, Settings repo line, docviewer carried note (keeper 2026-11-24, lang_left.mjs count 23)
 import ESMCP from "./lang-es-mcp.js";   // Settings > Connectors > Add a connector by address (E120a)
 import FRMCP from "./lang-fr-mcp.js";   // Settings > Connectors > Add a connector by address (E120a)
 import DEMCP from "./lang-de-mcp.js";   // Settings > Connectors > Add a connector by address (E120a)
@@ -126,18 +134,18 @@ export const LANGS = [["en", "English"], ["es", "Español"], ["fr", "Français"]
 // Spanish comes in two files (the main screens, then the rest); the first wins on a shared key, and its patterns are tried first.
 const ES = { ...ESQR, ...ESMCP, ...ES16, ...ESKB, ...ES15, ...ES14, ...ES13, ...ES12, ...ES11, ...ES10, ...ES9, ...ES8, ...ES7, ...ES6, ...ES5, ...ES4, ...ES3, ...ES2, ...ES1, __patterns: [...ES1.__patterns, ...ES2.__patterns, ...ES3.__patterns, ...ES4.__patterns, ...ES5.__patterns, ...ES6.__patterns, ...ES7.__patterns, ...ES8.__patterns, ...ES9.__patterns, ...ES10.__patterns, ...ES11.__patterns, ...ES12.__patterns, ...ES13.__patterns, ...ES14.__patterns, ...ES15.__patterns, ...ESKB.__patterns, ...ES16.__patterns, ...ESMCP.__patterns, ...ESQR.__patterns] };
 // French covers the whole app as Spanish does (E58, then the tail in E110); a word it lacks shows in English. Same merge rule: the first file wins on a shared key.
-const FR = { ...FRQR, ...FRMCP, ...FR12, ...FR11, ...FR10, ...FR9, ...FR8, ...FR7, ...FR6, ...FR5, ...FR4, ...FR3, ...FR2, ...FR1, __patterns: [...FR1.__patterns, ...FR2.__patterns, ...FR3.__patterns, ...FR4.__patterns, ...FR5.__patterns, ...FR6.__patterns, ...FR7.__patterns, ...FR8.__patterns, ...FR9.__patterns, ...FR10.__patterns, ...FR11.__patterns, ...FR12.__patterns, ...FRMCP.__patterns, ...FRQR.__patterns] };
+const FR = { ...FRQR, ...FRMCP, ...FR13, ...FR12, ...FR11, ...FR10, ...FR9, ...FR8, ...FR7, ...FR6, ...FR5, ...FR4, ...FR3, ...FR2, ...FR1, __patterns: [...FR1.__patterns, ...FR2.__patterns, ...FR3.__patterns, ...FR4.__patterns, ...FR5.__patterns, ...FR6.__patterns, ...FR7.__patterns, ...FR8.__patterns, ...FR9.__patterns, ...FR10.__patterns, ...FR11.__patterns, ...FR12.__patterns, ...FR13.__patterns, ...FRMCP.__patterns, ...FRQR.__patterns] };
 // German, the same way (E111).
-const DE = { ...DEQR, ...DEMCP, ...DE10, ...DE9, ...DE8, ...DE7, ...DE6, ...DE5, ...DE4, ...DE3, ...DE2, ...DE1, __patterns: [...DE1.__patterns, ...DE2.__patterns, ...DE3.__patterns, ...DE4.__patterns, ...DE5.__patterns, ...DE6.__patterns, ...DE7.__patterns, ...DE8.__patterns, ...DE9.__patterns, ...DE10.__patterns, ...DEMCP.__patterns, ...DEQR.__patterns] };
-const IT = { ...ITQR, ...ITMCP, ...IT10, ...IT9, ...IT8, ...IT7, ...IT6, ...IT5, ...IT4, ...IT3, ...IT2, ...IT1, __patterns: [...IT1.__patterns, ...IT2.__patterns, ...IT3.__patterns, ...IT4.__patterns, ...IT5.__patterns, ...IT6.__patterns, ...IT7.__patterns, ...IT8.__patterns, ...IT9.__patterns, ...IT10.__patterns, ...ITMCP.__patterns, ...ITQR.__patterns] };
+const DE = { ...DEQR, ...DEMCP, ...DE11, ...DE10, ...DE9, ...DE8, ...DE7, ...DE6, ...DE5, ...DE4, ...DE3, ...DE2, ...DE1, __patterns: [...DE1.__patterns, ...DE2.__patterns, ...DE3.__patterns, ...DE4.__patterns, ...DE5.__patterns, ...DE6.__patterns, ...DE7.__patterns, ...DE8.__patterns, ...DE9.__patterns, ...DE10.__patterns, ...DE11.__patterns, ...DEMCP.__patterns, ...DEQR.__patterns] };
+const IT = { ...ITQR, ...ITMCP, ...IT11, ...IT10, ...IT9, ...IT8, ...IT7, ...IT6, ...IT5, ...IT4, ...IT3, ...IT2, ...IT1, __patterns: [...IT1.__patterns, ...IT2.__patterns, ...IT3.__patterns, ...IT4.__patterns, ...IT5.__patterns, ...IT6.__patterns, ...IT7.__patterns, ...IT8.__patterns, ...IT9.__patterns, ...IT10.__patterns, ...IT11.__patterns, ...ITMCP.__patterns, ...ITQR.__patterns] };
 // Brazilian Portuguese, the same way (E112b-pt).
-const PT = { ...PTQR, ...PTMCP, ...PT10, ...PT9, ...PT8, ...PT7, ...PT6, ...PT5, ...PT4, ...PT3, ...PT2, ...PT1, __patterns: [...PT1.__patterns, ...PT2.__patterns, ...PT3.__patterns, ...PT4.__patterns, ...PT5.__patterns, ...PT6.__patterns, ...PT7.__patterns, ...PT8.__patterns, ...PT9.__patterns, ...PT10.__patterns, ...PTMCP.__patterns, ...PTQR.__patterns] };
-const JA = { ...JAQR, ...JAMCP, ...JA10, ...JA9, ...JA8, ...JA7, ...JA6, ...JA5, ...JA4, ...JA3, ...JA2, ...JA1, __patterns: [...JA1.__patterns, ...JA2.__patterns, ...JA3.__patterns, ...JA4.__patterns, ...JA5.__patterns, ...JA6.__patterns, ...JA7.__patterns, ...JA8.__patterns, ...JA9.__patterns, ...JA10.__patterns, ...JAMCP.__patterns, ...JAQR.__patterns] };
+const PT = { ...PTQR, ...PTMCP, ...PT11, ...PT10, ...PT9, ...PT8, ...PT7, ...PT6, ...PT5, ...PT4, ...PT3, ...PT2, ...PT1, __patterns: [...PT1.__patterns, ...PT2.__patterns, ...PT3.__patterns, ...PT4.__patterns, ...PT5.__patterns, ...PT6.__patterns, ...PT7.__patterns, ...PT8.__patterns, ...PT9.__patterns, ...PT10.__patterns, ...PT11.__patterns, ...PTMCP.__patterns, ...PTQR.__patterns] };
+const JA = { ...JAQR, ...JAMCP, ...JA11, ...JA10, ...JA9, ...JA8, ...JA7, ...JA6, ...JA5, ...JA4, ...JA3, ...JA2, ...JA1, __patterns: [...JA1.__patterns, ...JA2.__patterns, ...JA3.__patterns, ...JA4.__patterns, ...JA5.__patterns, ...JA6.__patterns, ...JA7.__patterns, ...JA8.__patterns, ...JA9.__patterns, ...JA10.__patterns, ...JA11.__patterns, ...JAMCP.__patterns, ...JAQR.__patterns] };
 // Korean, the same way (E112b-ko).
-const KO = { ...KOQR, ...KOMCP, ...KO10, ...KO9, ...KO8, ...KO7, ...KO6, ...KO5, ...KO4, ...KO3, ...KO2, ...KO1, __patterns: [...KO1.__patterns, ...KO2.__patterns, ...KO3.__patterns, ...KO4.__patterns, ...KO5.__patterns, ...KO6.__patterns, ...KO7.__patterns, ...KO8.__patterns, ...KO9.__patterns, ...KO10.__patterns, ...KOMCP.__patterns, ...KOQR.__patterns] };
+const KO = { ...KOQR, ...KOMCP, ...KO11, ...KO10, ...KO9, ...KO8, ...KO7, ...KO6, ...KO5, ...KO4, ...KO3, ...KO2, ...KO1, __patterns: [...KO1.__patterns, ...KO2.__patterns, ...KO3.__patterns, ...KO4.__patterns, ...KO5.__patterns, ...KO6.__patterns, ...KO7.__patterns, ...KO8.__patterns, ...KO9.__patterns, ...KO10.__patterns, ...KO11.__patterns, ...KOMCP.__patterns, ...KOQR.__patterns] };
 // Hindi, the same way (E112b-hi).
-const HI = { ...HIQR, ...HIMCP, ...HI10, ...HI9, ...HI8, ...HI7, ...HI6, ...HI5, ...HI4, ...HI3, ...HI2, ...HI1, __patterns: [...HI1.__patterns, ...HI2.__patterns, ...HI3.__patterns, ...HI4.__patterns, ...HI5.__patterns, ...HI6.__patterns, ...HI7.__patterns, ...HI8.__patterns, ...HI9.__patterns, ...HI10.__patterns, ...HIMCP.__patterns, ...HIQR.__patterns] };
-const ID = { ...IDQR, ...IDMCP, ...ID10, ...ID9, ...ID8, ...ID7, ...ID6, ...ID5, ...ID4, ...ID3, ...ID2, ...ID1, __patterns: [...ID1.__patterns, ...ID2.__patterns, ...ID3.__patterns, ...ID4.__patterns, ...ID5.__patterns, ...ID6.__patterns, ...ID7.__patterns, ...ID8.__patterns, ...ID9.__patterns, ...ID10.__patterns, ...IDMCP.__patterns, ...IDQR.__patterns] };
+const HI = { ...HIQR, ...HIMCP, ...HI11, ...HI10, ...HI9, ...HI8, ...HI7, ...HI6, ...HI5, ...HI4, ...HI3, ...HI2, ...HI1, __patterns: [...HI1.__patterns, ...HI2.__patterns, ...HI3.__patterns, ...HI4.__patterns, ...HI5.__patterns, ...HI6.__patterns, ...HI7.__patterns, ...HI8.__patterns, ...HI9.__patterns, ...HI10.__patterns, ...HI11.__patterns, ...HIMCP.__patterns, ...HIQR.__patterns] };
+const ID = { ...IDQR, ...IDMCP, ...ID11, ...ID10, ...ID9, ...ID8, ...ID7, ...ID6, ...ID5, ...ID4, ...ID3, ...ID2, ...ID1, __patterns: [...ID1.__patterns, ...ID2.__patterns, ...ID3.__patterns, ...ID4.__patterns, ...ID5.__patterns, ...ID6.__patterns, ...ID7.__patterns, ...ID8.__patterns, ...ID9.__patterns, ...ID10.__patterns, ...ID11.__patterns, ...IDMCP.__patterns, ...IDQR.__patterns] };
 const TABLES = { es: ES, fr: FR, de: DE, it: IT, pt: PT, ja: JA, ko: KO, hi: HI, id: ID };
 
 export function getLang() {
