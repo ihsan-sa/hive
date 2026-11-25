@@ -19,10 +19,13 @@ apt-get update -qq >/dev/null 2>&1
 case "$HOW" in
   gdebi) apt-get install -y -qq gdebi-core > /dev/null 2>&1 || { echo "FAILED gdebi-core install"; exit 1; }
          gdebi -n /w/app.deb > /tmp/apt.log 2>&1 ;;
-  pkcon) apt-get install -y -qq packagekit packagekit-tools polkitd dbus > /dev/null 2>&1 || { echo "FAILED packagekit install"; exit 1; }
+  pkcon) apt-get install -y -qq packagekit polkitd dbus > /dev/null 2>&1 || { echo "FAILED packagekit install"; exit 1; }
+         # PackageKit 1.3.4 (Ubuntu 26.04) has pkgcli in place of pkcon; older ones keep pkcon in packagekit-tools.
+         command -v pkgcli > /dev/null || apt-get install -y -qq packagekit-tools > /dev/null 2>&1
          mkdir -p /run/dbus; dbus-daemon --system --fork; sleep 1
          pk=$(ls /usr/libexec/packagekitd /usr/lib/packagekit/packagekitd 2>/dev/null | head -1); $pk > /tmp/pk.log 2>&1 & sleep 3
-         cp /w/app.deb /tmp/app.deb; pkcon -y --noninteractive install-local /tmp/app.deb > /tmp/apt.log 2>&1 ;;
+         cp /w/app.deb /tmp/app.deb
+         if command -v pkgcli > /dev/null; then pkgcli -y install /tmp/app.deb; else pkcon -y --noninteractive install-local /tmp/app.deb; fi > /tmp/apt.log 2>&1 ;;
   *) apt-get install -y -qq /w/app.deb > /tmp/apt.log 2>&1 ;;
 esac || { echo "FAILED ${HOW:-apt} install: $(grep -v '^$' /tmp/apt.log | tail -3 | tr '\n' ' ')"; exit 1; }
 dpkg -s hive-app 2>/dev/null | grep -q '^Status: install ok installed' || { echo "FAILED ${HOW:-apt} install left hive-app not installed: $(grep -v '^$' /tmp/apt.log | tail -3 | tr '\n' ' ')"; exit 1; }
