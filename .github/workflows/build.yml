@@ -70,9 +70,17 @@ jobs:
         run: node test/real.js "${{ matrix.app }}"
       # The file a Windows person downloads: Hive-Setup.exe with the browser's download mark, installed, opened from its
       # Start menu shortcut (the Hive from the step above, or the setup screen where there is none), then uninstalled.
+      # On windows-latest it is also the update a person does: a second Hive-Setup.exe, one patch version on, goes over it.
+      - if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          NEXT=$(node -p "require('./package.json').version.replace(/[0-9]+$/, n => +n + 1)")
+          echo "HIVE_NEXT=$NEXT" >> "$GITHUB_ENV"
+          npx electron-builder --win --publish never -c.extraMetadata.version=$NEXT -c.directories.output=dist-next
       - if: runner.os == 'Windows'
-        timeout-minutes: 20
-        run: node test/setupexe.js dist/Hive-Setup.exe
+        timeout-minutes: 25
+        shell: bash
+        run: node test/setupexe.js dist/Hive-Setup.exe ${HIVE_NEXT:+dist-next/Hive-Setup.exe $HIVE_NEXT}
       # The zip a Mac person downloads: unpacked with the download mark, moved into /Applications, the README's Open
       # Anyway (its command-line form), then opened from there: it must go straight to the Hive from the step above.
       # Read, not a red build, like the real install it stands on.
