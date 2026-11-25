@@ -156,7 +156,7 @@ hive buy ask --thread T --merchant M --url U --item I --amount TOTAL --shipping 
 
 ## hive order
 
-hive order new --shop S --item I --total T --url U --why W | move ID STATE [--total --url --tracking --receipt --note] | list [--all] | show ID: a card for any order with a button into the shop, listed on the dashboard's Orders page; the person pays at the shop, nothing here pays or sends (module buy)
+hive order new --shop S --item I --total T --url U --why W (or --from-post POSTID [--dry] to fill them from a post) | move ID STATE [--total --url --tracking --receipt --note] | list [--all] | show ID: a card for any order with a button into the shop, listed on the dashboard's Orders page; the person pays at the shop, nothing here pays or sends (module buy)
 
 ## hive continue
 

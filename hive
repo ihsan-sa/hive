@@ -1892,7 +1892,7 @@ sp.add_parser("buy", help="hive buy ask --thread T --merchant M --url U --item I
 if sys.argv[1:2] == ["buy"]:
     if not (MODULES / "buy" / "buy.py").is_file(): sys.exit("hive buy is the buy module now: hive module add buy (the person's steps are at Settings › Buying in the app)")
     os.execv(sys.executable, [sys.executable, "-I", str(MODULES / "buy" / "buy.py")] + sys.argv[2:])
-sp.add_parser("order", help="hive order new --shop S --item I --total T --url U --why W | move ID STATE [--total --url --tracking --receipt --note] | list [--all] | show ID: a card for any order with a button into the shop, listed on the dashboard's Orders page; the person pays at the shop, nothing here pays or sends (module buy)")
+sp.add_parser("order", help="hive order new --shop S --item I --total T --url U --why W (or --from-post POSTID [--dry] to fill them from a post) | move ID STATE [--total --url --tracking --receipt --note] | list [--all] | show ID: a card for any order with a button into the shop, listed on the dashboard's Orders page; the person pays at the shop, nothing here pays or sends (module buy)")
 if sys.argv[1:2] == ["order"]:
     if not (MODULES / "buy" / "order.py").is_file(): sys.exit("hive order comes with the buy module: hive module add buy")
     os.execv(sys.executable, [sys.executable, "-I", str(MODULES / "buy" / "order.py")] + sys.argv[2:])
