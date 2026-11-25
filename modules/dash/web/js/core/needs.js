@@ -9,7 +9,7 @@
 // faded, a system thread, or one the summary dropped as obsolete until the thread said something newer.
 // /api/needs-you is read once here, every five minutes, for every page that wants it (S.needsYou).
 import { S, jget, emit } from "./store.js";
-import { threadState, isSystemThread, btwParent, displayText, agentLabel, stRead, ASK_FOR } from "./model.js";
+import { threadState, isSystemThread, btwParent, displayText, agentLabel, stRead, ASK_FOR, FOR_YOU } from "./model.js";
 import { seen, IB } from "./inbox.js";
 import { simpleOn } from "./simple.js";
 import { firstSentence, askSentence, mdPlain, now, DAY, MIN } from "./format.js";
@@ -62,11 +62,18 @@ function liveStates() {
   }
   return m;
 }
+/** The step a post's "For you:" line asks of the person, as one sentence: the line and the rest of its paragraph ("in a terminal on the machine, run
+ *  `sudo …` then say done here."). The post's first sentence was news ("It's built and tested."), not the step (friction review, 2026-11-25). */
+export function forYouStep(text) {
+  const s = String(text || ""), m = FOR_YOU.exec(s); if (!m) return "";
+  const para = s.slice(m.index + m[0].length - m[1].length).split(/\n\s*\n/)[0];
+  const one = firstSentence(para); return one ? one[0].toUpperCase() + one.slice(1) : "";
+}
 /** The words for a live entry: who asks or says what, or how the agent stopped. */
 function liveText({ st }) {
   const who = (w => w && w[0].toUpperCase() + w.slice(1))(agentLabel(st.who || ""));   // the app look says what the agent is on, not its code
   if (st.key === "asks") return `${who} asks: ${askSentence(mdPlain(displayText(st.post)))}`;
-  if (st.key === "foryou") return `${who}: ${firstSentence(mdPlain(displayText(st.post)))}`;
+  if (st.key === "foryou") return `${who}: ${forYouStep(displayText(st.post)) || firstSentence(mdPlain(displayText(st.post)))}`;
   return `${who} ${st.label}`;
 }
 /** Everything that waits on the person, one entry per thread, newest first: {th, text, t, src: "live"|"file"|"bar", st?, post?}. */

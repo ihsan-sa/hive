@@ -65,6 +65,35 @@ function cast(th) {
 export const inScope = () => HERE != null;
 /** A step that is only the agent talking to its Hive (reading the board, posting, setting its status): nothing a person needs to read in the app look. */
 export const ownStep = d => /^Running:\s*(?:cd\s+\S+\s*(?:&&|;)\s*)?(?:hive|h2|kb)\b/.test(String(d || ""));
+/**
+ * A step in plain words for the app look: a shell command the agent gave no description for read "Running: cd ~/core; sed -n 296,345p away.py" in the
+ * strip (a0ad9's re-check, friction-dash-review2). The command's first real word says what kind of work it is; a file it reads is named by its last
+ * part. Anything not a bare command comes back as it was. The full command stays on hover where the developer look shows it.
+ */
+export function plainStep(d) {
+  const m = /^Running:\s*([\s\S]*)$/.exec(String(d || "")); if (!m) return d;
+  let c = m[1].trim().split(/\s*(?:&&|;|\|\|?|\n)\s*/).map(x => x.trim()).filter(x => x && !/^(?:cd|export|set|source|\.)\b/.test(x))[0] || "";
+  c = c.replace(/^(?:\w+=\S*\s+)+/, "").replace(/^(?:(?:heavy|nice|time|env|sudo|setsid|nohup)(?:\s+--?\w[\w-]*)*\s+|timeout\s+\S+\s+)+/, "").replace(/^timeout\s+\S+\s+/, "");
+  const w = c.split(/\s+/), cmd = (w[0] || "").split("/").pop(), args = w.slice(1).filter(x => !/^-/.test(x));
+  const file = (args.filter(x => /[\w~]\/|\.\w{1,5}$/.test(x) && !/^['"]/.test(x)).pop() || "").replace(/['"]/g, "").split("/").pop();
+  if (/^(?:sed|cat|head|tail|less|wc|awk|jq|diff|cmp|stat|file|xxd|od)$/.test(cmd)) return file ? `Reading ${file}` : "Reading files";
+  if (/^(?:grep|rg|egrep|find|ls|tree|fd|du|locate)$/.test(cmd)) return "Looking through the files";
+  if (cmd === "git") return /^(?:commit|add|merge|rebase|cherry-pick|stash)$/.test(args[0] || "") ? "Saving the changes" : /^(?:push|pull|fetch|clone)$/.test(args[0] || "") ? "Syncing the code" : "Checking the history";
+  if (/^(?:pytest|npm|npx|node|python3?|bash|sh|make|cargo|go|deno)$/.test(cmd)) {
+    if (/\btest|spec|drive_|check/i.test(c)) return "Running the tests";
+    if (/shot|playwright|chrom/i.test(c)) return "Taking screenshots";
+    return file && cmd !== "make" ? `Running ${file}` : "Running a program";
+  }
+  if (/^(?:curl|wget)$/.test(cmd)) return "Fetching a page";
+  if (cmd === "systemctl" || cmd === "journalctl") return /restart|start|stop|reload/.test(c) ? "Restarting a service" : "Checking a service";
+  if (/^(?:ps|pgrep|pkill|kill|top|free|uptime|lsof)$/.test(cmd)) return "Checking what's running";
+  if (/^(?:mkdir|cp|mv|rm|ln|touch|chmod|tar|unzip|rsync)$/.test(cmd)) return "Moving files around";
+  if (cmd === "sleep") return "Waiting";
+  if (cmd === "gh") return "Checking GitHub";
+  if (cmd === "h2" || cmd === "hive") return "Reading the board";
+  if (cmd === "kb") return "Looking things up";
+  return "Running a command";
+}
 // A title too long to say whole: its first words, cut at a word and never on a little word ("Fix the bug in's agent").
 const titleName = t => { let w = t.split(/\s+/).slice(0, 4); while (w.length > 1 && /^(a|an|the|of|in|on|to|for|and|or|with|at|by|from|is|its)$/i.test(w.at(-1))) w.pop(); return w.join(" ").replace(/[\s,;:.\u2013\u2014-]+$/, ""); };
 export function agentLabel(n) {
@@ -206,7 +235,7 @@ export function agentState(a) {
   return { key: "quiet", text: "quiet " + dur(q) + (S.app.app ? "" : ", no job in the queue") };
 }
 /** Why the starter stopped a run it will resume by itself (the "died" log event's why), in the starter's own words (core/starter.py WHY_WORDS). */
-const RETRY_WORDS = { connection: "no connection to Claude", restart: "the machine restarted", stalled: "went silent with nothing running", other: "ended before it finished", budget: "reached its budget or turn limit" };
+const RETRY_WORDS = { connection: "no connection to Claude", restart: "the machine restarted", stalled: "went silent with nothing running", other: "ended before it finished", budget: "reached its budget or turn limit", oom: "the machine ran out of memory and killed it", killed: "killed by a signal the starter didn't send", unseen: "ended mid-turn, most likely killed" };
 export const retryWords = why => RETRY_WORDS[why] || RETRY_WORDS.other;
 /** Whether a run is parked: it stopped at a usage limit, or broke off in a way the starter retries, and the starter will carry it on by itself. */
 const parkedSess = s => !!(s && s.end && ((s.limited && S.limitedNow.has(s.session)) || (s.retry && S.diedNow.has(s.session))));
@@ -774,15 +803,17 @@ export function stRead(text) {
  * conversation it was started for: a background shell's run says it; a heavy lane's agent is placed by its live run, else its last one. Below them,
  * while the summary's state line says Waiting or Blocked, the jobs of what that line names: a conversation (12 hex) or an agent (its code), so a
  * conversation waiting on another one's job sees that job move (the person asked "how's it coming" where the answer was only in the other one).
- * A shell younger than JOB_AFTER seconds is left out: every command an agent runs has a task file while it runs, and a quick one is no job to watch.
+ * A job younger than JOB_AFTER seconds is left out, whatever its kind: every command an agent runs has a task file while it runs, and heavy runs its
+ * screenshot and test jobs in lanes; under a minute it is a step of the run, which the steps already show; past that it is a job to watch.
  * [{agent, kind, cmd, since, line, at, th, there}] newest first; there: true for a job of a conversation this one waits on.
  */
-export const JOB_AFTER = 8;
+export const JOB_AFTER = 60;   // was 8 s: a screenshot run or a test came and went in the head every few seconds, a row that showed and vanished (friction-dash, 11-25)
 export function jobsFor(th) {
   const J = (S.live && S.live.joblines) || []; if (!J.length || !th) return [];
   const t = now() / 1e3, runs = (S.live && S.live.agents) || [];
   const home = j => j.thread || (runs.find(a => a.name === j.agent) || {}).thread || (S.lastSess[j.agent] || {}).thread || null;
-  const shown = J.filter(j => j.kind !== "shell" || !j.since || t - j.since >= JOB_AFTER).map(j => ({ ...j, th: home(j) }));
+  // Every kind waits its minute: heavy's lanes (slot16, quick0) are the usual screenshot and test jobs, and showed at once (a0ad9's re-check)
+  const shown = J.filter(j => !j.since || t - j.since >= JOB_AFTER).map(j => ({ ...j, th: home(j) }));
   const here = shown.filter(j => j.th === th);
   const r = S.threadStatus && S.threadStatus[th], st = r ? stRead(r.text).state : null, refs = new Set(), who = new Set();
   if (st && (st.key === "quiet" || st.key === "stuck")) {
@@ -884,14 +915,19 @@ export function threadStand(th, read, waits) {
   if (RUN_WORD[cur.key]) {
     // A run that began before the summary wrote it on the way and is still going; one that began after it came back to the conversation.
     const run = (runsByThread().get(th) || []).find(a => a.name === cur.who), began = run && run.since ? run.since * 1e3 : 0;
-    const w = RUN_WORD[cur.key], again = cur.key === "queued" ? "about to carry on from the summary" : !began ? "on it now" : began > at ? "on it again since the summary" : "still on it after the summary";
+    // Queued: the run hasn't begun, so there is no "carrying on" to say. When the agent it waits for is at work in another conversation (the box
+    // above the composer says it is working), that is why it waits; else the word stands alone. "Waiting to start · about to carry on from the
+    // summary · Done: …" said three states at once (a0ad9's re-check, friction-dash-review2).
+    const busyElse = cur.key === "queued" && cur.who && (S.live ? S.live.agents : []).some(a => a.name === cur.who && a.thread !== th);
+    const w = RUN_WORD[cur.key], again = cur.key === "queued" ? (busyElse ? `${Name(cur.who)} finishes what it's on first` : "") : !began ? "on it now" : began > at ? "on it again since the summary" : "still on it after the summary";
     // Nothing written yet: when this run began is the one fact there is (the line under it names the agent and its step). One still waiting to
     // start has no fact to add, so its word stands alone.
-    if (!has) return out(cur.key, w, cur.key === "queued" ? "" : began ? `started ${ago(began)}` : "on it now", offAlso);
+    if (!has) return out(cur.key, w, cur.key === "queued" ? again : began ? `started ${ago(began)}` : "on it now", offAlso);
     if (asked) return out(cur.key, w, you ? "carrying on after your reply" : again, offAlso || (b.tail ? `Asked: ${b.tail}` : detail));
     // "Waiting: on my test run" from an agent that is running is its own note of what it is on; Done, Blocked and Told to stop are from before this run
     if (b && b.kind === "waiting") return b.tail ? out(cur.key, w, b.tail, offAlso || detail, b.line) : out(cur.key, w, only, offAlso, only);
-    if (b) return out(cur.key, w, again, offAlso || b.line);
+    // A Done, Blocked or Told to stop line is from before this run: it stays in the open summary, not beside the word that says it runs now
+    if (b) return out(cur.key, w, again, offAlso);
     return out(cur.key, w, first, offAlso || detail, first);
   }
   // 4. the last run ended badly: the list has it, or it happened after the summary was written, so the summary can't know

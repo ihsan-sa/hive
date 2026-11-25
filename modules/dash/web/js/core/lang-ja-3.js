@@ -267,7 +267,7 @@ export default {
   "Tier 2": "ティア2",
   "Held": "保留中",
   "goes first; its jobs use the heavy fast lane": "最優先で、ジョブは heavy の高速レーンを使います",
-  "agents save it and stop; nothing new starts": "エージェントは保存して停止し、新しい作業は始まりません",
+  "the keeper starts no rounds on it; to stop agents now, use Pause": "キーパーはこれのラウンドを始めません。今すぐエージェントを止めるには「一時停止」を使ってください",
   "after tier 2": "ティア2の後",
   "Back to the list": "一覧に戻る",
   "remove your dashboard setting": "ダッシュボードでの設定を削除",

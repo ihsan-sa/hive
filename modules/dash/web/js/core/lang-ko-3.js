@@ -268,7 +268,7 @@ export default {
   "Tier 2": "티어 2",
   "Held": "보류",
   "goes first; its jobs use the heavy fast lane": "가장 먼저 처리되며, 작업은 heavy 고속 레인을 사용합니다",
-  "agents save it and stop; nothing new starts": "에이전트가 저장하고 멈추며, 새로 시작되는 것은 없습니다",
+  "the keeper starts no rounds on it; to stop agents now, use Pause": "키퍼가 이 일에 라운드를 시작하지 않습니다. 에이전트를 지금 멈추려면 일시정지를 쓰세요",
   "after tier 2": "티어 2 이후",
   "Back to the list": "목록으로 돌아가기",
   "remove your dashboard setting": "대시보드에서 설정한 값 제거",

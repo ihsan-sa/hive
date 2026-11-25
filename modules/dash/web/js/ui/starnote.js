@@ -48,9 +48,9 @@ export function starNote(update) {
   if (note("shown", localDay())) { if (s.shown.length > STAR_SHOWN) { s.done = "lapsed"; save(); return null; } save(); }
   const go = button("Star on GitHub", () => finish("starred", update), { size: "s", kind: "primary", href: REPO, cls: "star-go" });
   go.target = "_blank"; go.rel = "noreferrer noopener"; go.title = tr("Opens GitHub in a new tab");
-  const row = banner({ tone: "info", cls: "star-note", key: "star-note",
+  const row = banner({ tone: "info", cls: "star-note", key: "star-note", dismiss: false,
     text: [h("b", null, "Finding Hive useful?"), h("span", { class: "star-more" }, " A star on GitHub helps other people find it.")],
     actions: [go, button("No thanks", () => finish("no", update), { size: "s", kind: "quiet" })] });
-  row.removeAttribute("role");   // an ask, not a status: a live region drawn already filled is read out unevenly, and this needn't interrupt
+  if (row) row.removeAttribute("role");   // an ask, not a status: a live region drawn already filled is read out unevenly, and this needn't interrupt
   return row;
 }

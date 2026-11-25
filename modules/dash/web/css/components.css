@@ -1457,7 +1457,6 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 .cm-hline{max-width:720px;margin:var(--s6) auto 0;text-align:center;font-size:var(--fs-body);color:var(--ink-3)}
 .cm-hline[data-needs]{color:var(--ink)}
 .cm-hline a{color:var(--accent-ink);font-weight:var(--w-med)}
-.cm-hline-why{color:var(--ink-3);font-weight:var(--w-reg,400)}
 /* Needs you on the home (R7b S5): a row per thing that waits, the ask in full, then where, who and when, Answer at the right */
 .cm-needs{max-width:720px;margin:var(--s3) auto 0;padding:0;list-style:none;display:grid;gap:0;border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface)}
 .cm-need{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s3);align-items:center;padding:10px 14px}
@@ -3250,8 +3249,8 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .cm-need-q{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.45}
 .cm-need-q .ref{background:none;padding:0;border:0;height:auto;font-weight:var(--w-bold)}   /* agent code in a sentence: bold mono, not a pill */
 .cm-need-m{display:flex;flex-wrap:nowrap;white-space:nowrap;min-width:0;gap:0 6px;align-items:center;color:var(--ink-3)}
-.cm-need-m>a:first-child{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}   /* one line: the source gives way, the time never lands alone on a second line */
-.cm-need-m>.th{flex:0 0 auto;max-width:60%;overflow:hidden;text-overflow:ellipsis}   /* the project stays whole and the title gives way (punch list 2026-11-10 item 3); the cap only bites on a very long name */
+.cm-need-m>a:first-child{flex:0 1 auto;min-width:min(14ch,40%);overflow:hidden;text-overflow:ellipsis}   /* one line: the source gives way, the time never lands alone on a second line */
+.cm-need-m>.th{flex:0 2 auto;min-width:6ch;max-width:60%;overflow:hidden;text-overflow:ellipsis}   /* the project stays whole and the title gives way (punch list 2026-11-10 item 3); the cap only bites on a very long name. The title could not shrink at all, so at 390 the project went to "T." (friction re-check 2026-11-25): now the title gives way twice as fast and the project keeps 14 characters; a phone shows the title alone (phone.css) */
 .cm-need-m>.ref{flex:0 1 auto;display:inline-block;min-width:6ch;max-width:60%;overflow:clip visible;text-overflow:ellipsis;white-space:nowrap;line-height:20px}   /* a long name gives way with an ellipsis; a pill that shrank without clipping ran over the source and the time at 390 */
 .cm-need-m a{color:var(--ink-2);text-decoration:none}
 .cm-need-m a:hover{text-decoration:underline}
@@ -3527,6 +3526,11 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .tier-chip a{color:inherit;text-decoration:none;display:inline-flex;align-items:center;min-height:24px;margin-block:-4px}   /* a 24 px tap target (WCAG 2.5.8) in the same chip height */
 .tier-chip a:hover{text-decoration:underline}
 .tier-chip-s{font-weight:var(--w-reg,400)}
+/* Pause / Resume (friction-redesign): "Paused until …" and its Resume stay together and wrap as one; the dialog's line says what pausing does */
+.pause-strip{display:inline-flex;align-items:center;gap:6px;flex:none;flex-wrap:nowrap}
+.pause-strip .pause-resume{white-space:nowrap}
+.dlg .pause-says{font-weight:var(--w-med,500)}
+.dlg .pause-until{display:grid;gap:2px;margin:4px 0 8px}
 .tier-intro { margin: 0 0 12px; }
 @media (max-width:640px){.tier-it .lr-in{flex-direction:column;align-items:stretch;gap:var(--s1)}.tier-it .frow-end{width:100%}.tier-it select.input{width:100%}}
 .voice-log{max-height:9rem;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--fs-meta);color:var(--ink-2);background:var(--sunken);border-radius:var(--r-s,6px);padding:var(--s2,8px);margin:var(--s2,8px) 0 0}
@@ -3987,3 +3991,44 @@ a.rc-buy-url{display:inline-block;min-height:24px;line-height:24px}   /* a link 
 button.rc-buy-open{border:0;font:inherit;font-weight:600;cursor:pointer}
 button.rc-buy-open:disabled{opacity:.6;cursor:progress}
 .rc-buy-note{color:var(--ink-3);font-size:var(--fs-meta)}
+
+/* Design 1125 §7, consumer Now: the row that waits on the person is tinted and carries Answer, which stays shown (Stop still shows on hover, above) */
+:root:not([data-dev]) .nowtbl>.tb>.tr[data-state=asks]{background:var(--accent-bg)}
+:root:not([data-dev]) .nowtbl>.tb>.tr[data-state=asks]+.tr[data-state=asks]{box-shadow:inset 0 1px 0 var(--line)}   /* two asks in a row stay two rows */
+:root:not([data-dev]) .nowtbl .tr .nt-x>.now-answer{opacity:1}
+.nowtbl .nt-x{align-items:center}
+.nowtbl .now-stop{display:inline-flex}
+@media (max-width:640px){
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-x>.btn.now-answer:first-child{display:inline-flex;width:auto;min-width:0;height:40px;padding:0 var(--s3)}
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-x>.now-stop>.btn{width:40px;height:40px;min-width:40px;padding:0}
+}
+
+/* Design 1125 §10, Where the work went: one folded line on the home that opens to the bars; open or folded is kept per browser (ui/workbar.js) */
+.wkb[data-folded]>:not(.wkb-sum){display:none}
+.wkb-sum{display:flex;flex-wrap:wrap;gap:2px var(--s2);align-items:baseline;padding-top:var(--s3);border-top:1px solid var(--line);font-size:var(--fs-meta);color:var(--ink-3);cursor:pointer;list-style:none;border-radius:var(--r-s,4px)}
+.wkb-sum::-webkit-details-marker{display:none}
+.wkb-sum>b{font-weight:var(--w-med);color:var(--ink-2)}
+.wkb-sum::after{content:"";align-self:center;width:6px;height:6px;margin-left:auto;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-2px) rotate(45deg);transition:transform .15s}
+.wkb[open]>.wkb-sum::after{transform:translateY(1px) rotate(-135deg)}
+.wkb-sum:hover{color:var(--ink-2)}
+.wkb-sum:hover>b{color:var(--ink)}
+.wkb-sum:focus-visible{outline:none;box-shadow:var(--ring)}
+.wkb[open]>.wkb-sum{margin-bottom:var(--s1)}
+.wkb-held[data-folded]{min-height:33px}
+@media (max-width:640px){.wkb-sum{min-height:40px;align-items:center}.wkb-held[data-folded]{min-height:53px}}
+/* One-tap answer (friction pass, ui/pick.js): a question's numbered choices as small buttons that send at once; while the 10 s to undo run, one line
+   with a shrinking bar and Undo; then "You: Go with 1." Under the ask in the conversation and under a home waiting row. */
+.pk{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:var(--s2)}
+.pk-b{max-width:100%;background:var(--surface);border-color:var(--line-2);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pk-b:hover{border-color:var(--accent);color:var(--accent-ink)}
+.pk-hold,.pk-done{position:relative;gap:var(--s2);min-height:var(--ctl-s,28px);padding:2px 4px 2px 10px;border-radius:var(--r-m,8px);background:var(--accent-bg);color:var(--ink);font-size:var(--fs-small);overflow:hidden;width:max-content;max-width:100%}
+.pk-done{background:none;padding-left:0}
+.pk-done[data-state=failed] .meta{color:var(--bad,#b42318)}
+.pk-t{position:relative;min-width:0;overflow-wrap:anywhere}
+.pk-undo{position:relative;font-weight:var(--w-bold)}
+.pk-bar{position:absolute;left:0;bottom:0;height:2px;width:100%;background:var(--accent);transform-origin:left;animation-name:pk-shrink;animation-timing-function:linear;animation-fill-mode:forwards}
+@keyframes pk-shrink{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+@media (prefers-reduced-motion:reduce){.pk-bar{animation:none;opacity:.5}}
+.cm-need-pk{grid-column:1;margin-top:6px}
+.msg .msg-acts.pk{margin-top:var(--s2)}
+@media (max-width:699px){.pk-b{min-height:40px}.pk-undo{min-height:40px}}

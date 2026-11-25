@@ -566,7 +566,7 @@ def gained_rung(path, since, old=None, now=None):
     if old is None: return path.stat().st_mtime > since and "- [ ]" in now
     had = {RUNG_KEY(l) for l in old.splitlines()}
     opened = [l for l in now.splitlines() if l.lstrip().startswith("- [ ]") and RUNG_KEY(l) not in had]
-    weighed = [l for l in now.splitlines() if re.match(r"\s*Weighed \d{4}-\d{2}-\d{2}", l) and l.strip() not in {x.strip() for x in old.splitlines()}]
+    weighed = [l for l in now.splitlines() if re.match(r"\s*(?:Weighed \d{4}-\d{2}-\d{2}|Finished:)", l) and l.strip() not in {x.strip() for x in old.splitlines()}]   # a `Finished:` line is the no-rung brief's other answer (friction D1)
     return bool(opened or weighed)
 
 def rungs_owed(name, rec):

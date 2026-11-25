@@ -9,6 +9,10 @@
 .banner-t{flex:1;min-width:0;text-wrap:pretty}
 .banner-t b{font-weight:var(--w-bold,600)}
 .banner .btn{flex:none}
+.banner-x{flex:none;margin-left:auto;width:var(--ctl);height:var(--ctl);display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:var(--r-m);background:none;color:inherit;opacity:.65;font-size:18px;line-height:1;cursor:pointer}   /* friction pass §9: every banner can be put away */
+.banner-x:hover{background:var(--tint);opacity:1}
+.banner-x:focus-visible{outline:none;box-shadow:var(--ring);opacity:1}
+.banner .btn+.banner-x{margin-left:0}
 .banner>.st{flex:none}
 .new-ver.banner,.star-note.banner{max-width:none;border:0;border-top:1px solid var(--line);border-radius:0;box-shadow:none;padding:6px var(--s4,16px)}   /* a row of the sticky top bar, like .band */
 @container app (width < 700px){.banner{padding:6px 12px;gap:8px;font-size:var(--fs-meta)}.new-ver-more,.star-more{display:none}}

@@ -29,6 +29,7 @@ export default {
   "Filters": "フィルター",
   "Columns": "列",
   "Total cost": "合計コスト",
+  "At API prices": "API価格換算",
   "Tokens": "トークン",
   "Agent time": "エージェント時間",
   "under a minute": "1分未満",

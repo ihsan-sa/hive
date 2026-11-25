@@ -3,7 +3,7 @@ import { h, tr } from "./core/dom.js";
 import { S, can, built, post, poll, pollUsage } from "./core/store.js";
 import { simpleOn } from "./core/simple.js";
 import { short } from "./core/format.js";
-import { threadTitle, tierOf, agentLabel, capFirst, ownStep } from "./core/model.js";
+import { threadTitle, tierOf, agentLabel, capFirst, ownStep, plainStep } from "./core/model.js";
 import { TIERS, tier } from "./core/status.js";
 import { confirm } from "./ui/dialog.js";
 import { button, input, field, markBad } from "./ui/kit.js";
@@ -24,7 +24,7 @@ export function askKill(n, said) {
   confirm({
     title: said ? said + "?" : `Kill ${n}?`, ok: said || `Kill ${n}`, kind: "danger", typed: S.app.app && said ? null : n, failText: `Nothing was ${done}`,
     body: [
-      L && L.doing ? h("p", { class: "meta" }, "Doing now: ", h("span", { "data-content": "" }, short(L.doing, 160))) : null,
+      L && L.doing ? h("p", { class: "meta" }, "Doing now: ", h("span", { "data-content": "" }, short(S.app && S.app.app ? plainStep(L.doing) : L.doing, 160))) : null,
       "This ends the run and the shells it started, right away, without letting it save its work.",
       "The starter won't resume it, and any wakes queued for it are dropped. A new post that mentions it starts it again. Jobs it detached with nohup keep running, and you'll be told their pids.",
     ],
@@ -55,7 +55,7 @@ export function askStop(n, said = agentLabel(n)) {
   const dlg = confirm({
     title: `Stop ${said}?`, ok: "Stop after this step", failText: "It wasn't stopped",
     body: [
-      L && L.doing && !(S.app && S.app.app && ownStep(L.doing)) ? h("p", { class: "meta" }, "Doing now: ", h("span", { "data-content": "" }, short(L.doing, 160))) : null,
+      L && L.doing && !(S.app && S.app.app && ownStep(L.doing)) ? h("p", { class: "meta" }, "Doing now: ", h("span", { "data-content": "" }, short(S.app && S.app.app ? plainStep(L.doing) : L.doing, 160))) : null,
       `${capFirst(said)} finishes the step it's on, saves what it has, and stops. Nothing is lost, and a message in its conversation wakes it again.`,
       h("p", { class: "meta" }, "Need it to stop this second? ", h("button", { type: "button", class: "linkbtn", onclick: () => { dlg.close(); askKill(n); } }, "Kill it instead"), ", which ends it at once without saving."),
     ],
@@ -123,7 +123,7 @@ export function askProviderLine(name, p) {
 // ---- A thread's tier. Writes kb/priorities.md, the file the keeper follows. ----
 export function askTier(th) {
   const P = (S.live && S.live.priorities) || {}, was = tierOf(th), setNow = (P.set || {})[th]; let pick = was;
-  const desc = { tier1: "goes first; its jobs use the heavy fast lane", tier2: "next", held: "agents save it and stop; nothing new starts", other: "after tier 2" };
+  const desc = { tier1: "goes first; its jobs use the heavy fast lane", tier2: "next", held: "the keeper starts no rounds on it; to stop agents now, use Pause", other: "after tier 2" };
   const warn = h("p", { class: "meta", style: "color:var(--warn-ink)" });
   const opt = (k, l, d, onPick) => h("label", { class: "opt" }, h("input", { type: "radio", name: "tierpick", value: k, checked: k === was || null, onchange: onPick }), h("b", null, l), h("span", { class: "meta" }, d));
   confirm({

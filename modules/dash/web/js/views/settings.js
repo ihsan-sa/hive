@@ -437,7 +437,6 @@ function hiveSection(ctx) {
     } catch (e) { say("starter", e.message, "bad"); }
     ctx.update();
   };
-  const pg = S.app.settings ? pageData(ctx.update) : null;
   // R7: the controls you reach for in a normal week first, Stop the Hive as the last of them; what you set up once lives in its own section.
   const everyday = section({ title: "Everyday", note: "what you change in a normal week; changes save as you make them", level: 1, actions: statusLabel(up ? "working" : "ended", up ? "running" : "not running") },
     blocks(
@@ -459,7 +458,7 @@ function hiveSection(ctx) {
       block({ title: up ? "Stop the Hive" : "Start the Hive", sub: up ? "Stopping lets agents finish their turn." : "The Hive isn't running.", key: "starter", actions: button(up ? "Stop the Hive…" : "Start the Hive", () => up ? confirm({ title: "Stop the Hive?", body: ["Agents finish their turn, and nothing new starts until you start it again here."], ok: "Stop the Hive", kind: "danger", onOk: starter }) : starter(), { size: "s", kind: up ? "danger" : "primary", busy: isBusy("starter"), title: up ? "Stop the Hive" : "Start the Hive" }) })),
     msg("starter"), msg("hive"));
   const setOnce = section({ title: "Set once", note: "the name, the model, updates and spending caps; changes save as you make them", level: 1 },
-    pg ? [h("h3", { class: "set-sub", "data-key": "model-h" }, "Model"), modelPart(ctx.update)] : null,
+    F.cfg.default_model ? [h("h3", { class: "set-sub", "data-key": "model-h" }, "Model"), modelPart(ctx.update, F.cfg.default_model)] : null,
     blocks(brand[0], brand[1],
       versionBlocks(ctx, save),
       block({ title: "Update by itself", sub: F.up && F.up.installed ? "Installs new releases as often as you chose above. Keeps your settings and goes back if it fails. When it's off, this Hive still looks and says so above, and you choose when to update." : "Installs each new release. Keeps your settings and goes back if it fails.",
@@ -698,6 +697,7 @@ function connectorsSection(ctx) {
        C.removable ? h("div", { class: "lr-more" }, button("Remove the connectors", () => confirm({ title: "Remove every connector?", body: ["They all come off this Hive, with any that are on. You can add them back from this page."], ok: "Remove", kind: "danger", onOk: () => bundle("remove") }), { size: "s", kind: "quiet", busy: F.busy.reach })) : null];
   return section({ title: "Connectors", level: 1, note: "other apps that can reach you, or that the agent can read" },
     shopsBlock(),
+    Buy && can("logins") ? Buy.sitesPart(ctx.update) : null,   // any site, signed in for `web` (ui/shop_signin.js sitesBlock)
     msg("conns"),   // above the list: after Add the line shows where the person is looking, not under 24 rows
     C == null ? (F.connsErr ? [empty(`Couldn't read the connectors: ${F.connsErr}`, { kind: "error" }), button("Try again", () => { F.connsErr = null; ctx.update(); return loadConns(ctx, true); }, { size: "s" })] : empty("Reading…", { kind: "loading" })) : body(),
     mcpUrlBlock(ctx));

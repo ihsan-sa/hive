@@ -48,6 +48,14 @@ def post(text, to=(), thread=None, model=None):
         p["text"] = f"[source thread: {thread}] {text}"
     with BOARD.open("a") as f: f.write(json.dumps(p) + "\n")
 
+def thread_note(thread, text, **extra):
+    """A plain line straight into a run's own thread, mentioning nobody (so it starts nothing), as slow_replies does: post() moves
+    notices to the starter thread, where the person reading the run's thread never sees them. Returns the post id, or None for no thread."""
+    if not thread or thread in QUIET_THREADS: return None
+    pid = dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2)
+    with BOARD.open("a") as f: f.write(json.dumps({"id": pid, "at": now(), "from": "starter", "to": [], "thread": thread, "text": text, **extra}) + "\n")
+    return pid
+
 def mentions(p):
     to = p.get("to") or []
     if isinstance(to, str): to = to.replace(",", " ").split()
@@ -83,6 +91,9 @@ def is_warden(name):
     """`@warden` starts w + 4 hex (as `@new` starts a + 4 hex); waking that code again gets the warden prompt too."""
     return name == "warden" or bool(WARDEN.fullmatch(name))
 
+NOT_CALLS = {"import", "media", "keyframes", "font-face", "charset", "supports", "layer", "property", "container", "page"}
+SERVICE_WORDS = {f.stem[3:].lower() for f in CORE.glob("hive-*.*") if f.suffix in (".service", ".timer", ".path")}
+
 def callable_names(p, c):
     """(names this post calls, words in its text that look like a call but name nobody)."""
     to = p.get("to") or []
@@ -94,10 +105,70 @@ def callable_names(p, c):
     # Broadcasts are delivered only by live sessions' inbox hooks, never queued to wake agents.
     # A focus id or a thread name is a name too (hive post resolved it: `foci` and `copies` on the post), not a word naming nobody.
     skip = {"all", "here", *[str(x).lower() for x in (p.get("foci") or [])], *[str(x).lower() for x in (p.get("copies") or [])]}
+    # Words that look like a call and are not one: CSS at-rules, and our own service and timer names (`@remind`, `@memguard`: the unit
+    # an agent means, 20+ unknown_mention events in 14 days) are written about, never called. An explicit `to` still names what it names.
     found = [n for n in mentions(p) if n not in skip]
+    # A passed-on copy (hive relay, or an @thread mention) quotes someone else's post: its quoted @words were for the original's readers.
+    # Only its `to` is called. 7 of the 19 runs ever started by a copy were such strays: 5 on 2026-11-25 from one copied friction brief
+    # (`@new` and four agents named in its list, 1124235875dd), 2 on 11-08.
+    if p.get("relay_of"): found = [n for n in found if n in to]
     if all(n in to or n in c["external"] for n in found): return found, []
     known = known_agents(c)
-    return [n for n in found if n in to or n in c["external"] or n in known], [n for n in found if n not in to and n not in c["external"] and n not in known]
+    return [n for n in found if n in to or n in c["external"] or n in known], [n for n in found if n not in to and n not in c["external"] and n not in known and n not in NOT_CALLS | SERVICE_WORDS]
+
+def unknown_note(unknown, known):
+    """One short line for a post whose @words reached nobody: each name, with the nearest real ones (a name that starts the same way first). Written without an at-sign, so it starts nothing."""
+    import difflib
+    parts = []
+    for n in unknown[:4]:
+        cands = difflib.get_close_matches(n, sorted(known), n=30, cutoff=0.6)
+        cands.sort(key=lambda k: -(difflib.SequenceMatcher(None, n, k).ratio() + (0.3 if k.startswith(n) or n.startswith(k) else 0)))
+        parts.append(f"`{n}`" + (f" (nearest: {', '.join(cands[:3])})" if cands else ""))
+    more = f" and {len(unknown) - 4} more" if len(unknown) > 4 else ""
+    return "Reached nobody, nothing started: " + "; ".join(parts) + more + ". Fix the name, or write it in backticks if it is only a word."
+
+def board_threads():
+    """Every thread name on the board (cached 10 min): a word close to one of them is a typo of it, not a name written on purpose."""
+    if time.time() - board_threads.at > 600:
+        names = set()
+        try:
+            for line in BOARD.open(errors="replace"):
+                if '"thread"' in line:
+                    try: names.add(str(json.loads(line).get("thread", "")).lower())
+                    except ValueError: pass
+        except OSError: pass
+        board_threads.names, board_threads.at = names, time.time()
+    return board_threads.names
+board_threads.at, board_threads.names = 0, set()
+
+SPECIAL_NAMES = {"person", "hives", "rootwarden", "warden", "new", "all", "here"}  # names the person or rootwarden mean to reach: a typo of one is never a habit
+ID_SHAPE = re.compile(r"[a-z][0-9a-f]{4,}|[0-9a-f]{8,}")  # an agent code (a9d22) or a thread id (11241507a6b2)
+
+def notify_unknown(p, fresh, known):
+    """The one note for a post whose @words reached nobody: a plain line in its own thread (the Slack mirror shows every thread, so the person
+    sees it there too). A thread with no room for one (the starter's own, an empty name) gets the person the old way, one post to them, never both."""
+    if not fresh: return
+    person = p.get("from") == "person"
+    text = unknown_note(fresh, known) + (" For a new agent write `@new`." if person else "")
+    if thread_note(p.get("thread"), text) is None and person:
+        post(text, ["person"], p.get("thread"))
+
+def habitual_unknown(n, src, names=(), limit=2, days=14):
+    """True when this same sender has already written this word `limit` times in `days` days and it reached nobody: a name kept on purpose
+    (`library`), not a typo. Never for a word shaped like an agent code or thread id, or close to a known agent, thread or focus name
+    (`names`): that is a typo of it. Rows from passed-on copies (`copy`) and other senders don't count."""
+    if ID_SHAPE.fullmatch(n) or __import__("difflib").get_close_matches(n, list(names), n=1, cutoff=0.75) or __import__("difflib").get_close_matches(n, list(SPECIAL_NAMES), n=1, cutoff=0.7): return False
+    k, floor = 0, time.time() - days * 86400
+    try:
+        for line in LOG.open(errors="replace"):
+            if '"unknown_mention"' in line and f'"name": "{n}"' in line:
+                try: e = json.loads(line)
+                except ValueError: continue
+                if e.get("name") == n and e.get("src") == src and not e.get("copy") and (epoch(e.get("at", "")) or 0) >= floor:
+                    k += 1
+                    if k >= limit: return True
+    except OSError: pass
+    return False
 
 FREE_AGENT = re.compile(r"f[0-9a-f]{4}")  # @free runs (OpenRouter free models): see free_spawns
 CODEX_AGENT = re.compile(r"c[0-9a-f]{4}")
@@ -770,6 +841,7 @@ def carry_on(st, r, why, told):
         tries.pop(key)
         log(event="given_up", name=r["name"], session=r["session"], why=why, tries=n)
         post(gave_up_text(r["name"], why, n, cfg()), ["person"])
+        thread_note(r.get("thread"), gave_up_text(r["name"], why, n, cfg()), stop=[{"name": r["name"], "until": None, "gave_up": True}])
         return
     delays = cfg().get("died_retry_s") or DIED_RETRY_S
     st.setdefault("resume", {})[r["name"]] = {**r, "session": session_in(r.get("out")) or r["session"], "wait": True, "why": why,
@@ -787,10 +859,228 @@ def run_file_bad(f, e):
     log(event="run_file_bad", file=f.name, err=f"{type(e).__name__}: {e}"[:200])
     return False
 
+WHY_WORDS["oom"] = "the machine ran out of memory and killed it"
+# a kill signal the starter didn't send: its own kills are labelled (reaped, moved, woken, stalled), the dashboard's is person_killed and a placed
+# OOM kill is oom. What's left is an agent's own kill or pkill, a test's pkill -f, or an OOM kill oom_picks couldn't place, so the words name no
+# culprit (a0ad9's re-check, 1125021150a6). "unseen": a run that outlived a starter restart (rc None) and ended mid-turn: its exit can't be read.
+WHY_WORDS["killed"] = "killed by a signal the starter didn't send, from another agent, a test or the system"
+WHY_WORDS["unseen"] = "ended mid-turn, most likely killed; it began before the starter's last restart, so the starter couldn't see how it ended"
+OOM_IDLE_PASSES = 3  # passes with an OOM kill counted and no run dead: it hit something else
+OOM_WINDOW_S = 300  # a run killed by signal 9 this soon after an OOM kill was counted is taken as that kill
+oom_seen = {"n": None, "at": 0.0, "left": 0}  # left: OOM kills counted and not yet laid on a run that ended
+run_rss = {}  # name -> resident memory (kB) of the run's own process at its last pass alive: the OOM killer takes the biggest process
+
+def oom_count():
+    """OOM kills so far among the starter's own processes and their children (runs, their tools): oom_kill in the starter's
+    cgroup memory.events, which counts descendants and every kind of OOM killer (the cgroup's limit or the whole machine's).
+    Outside a cgroup (a Mac, a test), /proc/vmstat's machine-wide count. None if neither reads."""
+    try:
+        cg = next(l.split("::", 1)[1].strip() for l in Path("/proc/self/cgroup").read_text().splitlines() if l.startswith("0::"))
+        for line in (Path("/sys/fs/cgroup") / cg.lstrip("/") / "memory.events").read_text().splitlines():
+            if line.startswith("oom_kill "): return int(line.split()[1])
+    except (OSError, StopIteration, ValueError, IndexError): pass
+    try:
+        for line in Path("/proc/vmstat").read_text().splitlines():
+            if line.startswith("oom_kill "): return int(line.split()[1])
+    except (OSError, ValueError, IndexError): pass
+    return None
+
+def note_oom():
+    """Called once a pass: remember when the OOM count last went up."""
+    n = oom_count()
+    if n is not None and oom_seen["n"] is not None and n > oom_seen["n"]:
+        oom_seen["at"], oom_seen["idle"] = time.time(), 0; oom_seen["left"] = oom_seen.get("left", 0) + n - oom_seen["n"]; log(event="oom_seen", kills=n - oom_seen["n"])
+    if n is not None: oom_seen["n"] = n
+
+def rss_kb(pid):
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+            if line.startswith("VmRSS:"): return int(line.split()[1])
+    except (OSError, ValueError, IndexError): pass
+    return None
+
+def oom_picks(dead):
+    """Which of the runs found dead this pass took the OOM kills just counted: no more runs than kills, the biggest first (by memory
+    at their last pass), and only within OOM_WINDOW_S of the count going up. Another run killed beside them keeps its signal_9: the
+    demo's `kill -9` landing in the same second as a real OOM kill read as two OOM kills before this."""
+    if time.time() - oom_seen["at"] >= OOM_WINDOW_S: oom_seen["left"] = 0
+    if not oom_seen.get("left"): return set()
+    if not dead:  # the kill landed on a tool a run started (a compiler, a test), not a run: it isn't laid on whichever run dies next
+        oom_seen["idle"] = oom_seen.get("idle", 0) + 1
+        if oom_seen["idle"] >= OOM_IDLE_PASSES: log(event="oom_unplaced", kills=oom_seen["left"]); oom_seen["left"] = 0
+        return set()
+    oom_seen["idle"] = 0
+    return set(sorted(dead, key=lambda n: -(run_rss.get(n) or 0))[:oom_seen["left"]])
+
+def end_cause(r, rc, by, hit, authed, died, oom=False):
+    """Why a run ended, for the end event's `by`: the starter's own act this pass (woken, reaped, moved, stalled), the person's kill,
+    a usage limit, a rejected login, the machine restarting, an OOM kill (oom: oom_picks chose it), another signal, its own finish or error. rc None: the run
+    was started by an earlier starter (it outlived a restart, KillMode=process), so its exit code can't be read."""
+    if by: return by
+    if rc is not None and 128 < rc < 160 and box(): rc = 128 - rc  # sandbox_inner exits 128+sig for a killed agent: read it as the signal
+    if (STATE / "killed" / f"{r['name']}.json").exists(): return "person_killed"
+    if hit: return "limit"
+    if authed: return "login_rejected"
+    if r.get("boot") and r["boot"] != boot_id(): return "machine_restart"
+    if rc in (None, -9) and died and oom: return "oom"  # the OOM killer sends SIGKILL only: a SIGTERM beside it stays signal_15
+    if rc is not None and rc < 0: return f"signal_{-rc}"
+    if died: return died
+    return "finished" if rc in (0, None) else "error"
+
+# A stop the run didn't choose (a limit, a kill, a reap, a lost connection, an OOM kill) that hasn't carried on within this long gets one
+# plain line in its own thread, with when it carries on (the person, 11242341532d: the threads just went quiet and read as "randomly stopped").
+STOP_NOTE_S = float(os.environ.get("HIVE_STOP_NOTE_S") or 45)
+QUIET_THREADS = {"starter", "keeper", "improve", "kb-dream"}
+
+def _clock(t):
+    d = dt.datetime.fromtimestamp(t).astimezone()
+    return d.strftime("%H:%M %Z" if d.date() == dt.datetime.now().astimezone().date() else "%a %H:%M %Z")
+
+def stop_words(r, held):
+    """(why it stopped, when it carries on) for a parked run's note. held: what keeps a run due now from starting, or None."""
+    reset, why = r.get("reset", 0), r.get("why")
+    if r.get("reaped") and not why:
+        what = "was moved off an account that ran out" if r.get("move") else "was ended after going quiet on a background wait"
+    elif why == "login": what = "hit an account that needs signing in again"
+    elif why in WHY_WORDS: what = f"stopped ({WHY_WORDS[why]})"
+    else: what = "stopped at a usage limit" + (f" on account {account_name(r['login'])}" if r.get("login") and len(cfg().get("logins", [])) > 1 else "")
+    if why == "login": when = "once the account is signed in again, or sooner on another account with room"
+    elif reset > time.time():  # a provider run never moves to a Claude account, so no "sooner" for it
+        when = f"at {_clock(reset)}" + (", sooner if another account has room" if not why and not provider_of(cfg(), r.get("model")) else "")
+    else: when = f"as soon as {held}" if held else "now"
+    return what, when
+
+# The thread's status bar (~/.hive/thread-status.jsonl, what the dashboard shows above the thread) says the stop too, and goes back
+# to what it said before once the run carries on (aadd2's review, 11250030e9f2). st["stop_bars"][thread]: {prev: the bar record
+# before the stop, names: {name: its line}, at: when our bar was written}. A bar someone wrote since is theirs and is left alone.
+BARS = "thread-status.jsonl"
+REASON_LINE = re.compile(r"^(Done|Waiting|Blocked|Needs the person|Told to stop):", re.I)
+
+def last_bar(thread):
+    """The newest bar record for a thread among the lines the dashboard reads, or None."""
+    best, key = None, json.dumps(thread)
+    try: lines = (STATE / BARS).read_text(errors="replace").splitlines()[-3000:]
+    except OSError: return None
+    for ln in lines:
+        if key not in ln: continue
+        try: b = json.loads(ln)
+        except ValueError: continue
+        if isinstance(b, dict) and b.get("thread") == thread and b.get("text"): best = b
+    return best
+
+def set_bar(thread, text, via):
+    t = time.time()
+    with (STATE / BARS).open("a") as f: f.write(json.dumps({"thread": thread, "from": "starter", "text": text, "at": t, "via": via}) + "\n")
+    return t
+
+def stop_bar_text(sb):
+    head = [l for l in str((sb.get("prev") or {}).get("text") or "").splitlines() if l.strip()]
+    if head and REASON_LINE.match(head[-1]): head = head[:-1]
+    return "\n".join((head or ["Work by " + ", ".join(f"@{n}" for n in sb["names"])]) + ["Waiting: " + "; ".join(sb["names"].values())])
+
+def bar_stop(st, th, add):
+    """Say the stops in add ({name: line}) in thread th's status bar."""
+    bars = st.setdefault("stop_bars", {})
+    cur, sb = last_bar(th), bars.get(th)
+    if not sb: sb = bars[th] = {"prev": cur, "names": {}}
+    elif not (cur and cur.get("from") == "starter" and cur.get("at") == sb.get("at")): sb["prev"] = cur  # written over since: that's the bar to go back to
+    sb["names"].update(add)
+    try: sb["at"] = set_bar(th, stop_bar_text(sb), "stop")
+    except OSError: pass
+
+def bar_clear(st, n, th, gone):
+    """n's stop is over (gone: the words for the bar when nothing came before it). The bar goes back once no stop is left in it."""
+    sb = (st.get("stop_bars") or {}).get(th)
+    if not sb or n not in sb["names"]: return
+    sb["names"].pop(n)
+    cur = last_bar(th)
+    ours = bool(cur and cur.get("from") == "starter" and cur.get("at") == sb.get("at"))
+    if not sb["names"]: st["stop_bars"].pop(th, None)
+    if not ours: return
+    try:
+        if sb["names"]: sb["at"] = set_bar(th, stop_bar_text(sb), "stop")
+        else: set_bar(th, str(sb["prev"]["text"]) if sb.get("prev") else f"Work by @{n}\n{gone}", "stop-cleared")
+    except OSError: pass
+
+NOTE_AGAIN_S = 3600  # a run stopped again within this long of its last note gets the bar, not another post (an outage stops it every few minutes)
+
+def stop_notes(st, held_for):
+    """One line in the thread of each run parked longer than STOP_NOTE_S, once per stop, and the same in the thread's status bar.
+    held_for(name, r): why a run that is due still can't start, or None. The run's resume clears it (stop_cleared, below); the
+    dashboard reads the same stop from the log."""
+    now_ = time.time()
+    for th, sb in list((st.get("stop_bars") or {}).items()):  # a stop that ended by a path that didn't say so
+        for n in [n for n in sb["names"] if n not in st.get("resume", {})]: bar_clear(st, n, th, f"@{n}'s stop is over ({_clock(now_)})")
+    seen = st.setdefault("noted_at", {})
+    for n in [n for n, v in seen.items() if now_ - v[0] > NOTE_AGAIN_S]: seen.pop(n)
+    by_thread = {}
+    for n, r in st.get("resume", {}).items():
+        if "shells" in r: continue  # woken for a post: the run was asked to stop, and carries on straight away
+        r.setdefault("stopped_at", now_)
+        th = r.get("thread")
+        if r.get("noted") or not th or th in QUIET_THREADS or now_ - r["stopped_at"] < STOP_NOTE_S: continue
+        by_thread.setdefault(th, []).append((n, r))
+    for th, rs in by_thread.items():
+        lines, bar, new = [], {}, []
+        for n, r in rs:
+            what, when = stop_words(r, held_for(n, r))
+            bar[n] = f"@{n} {what}, carries on by itself {when}"
+            if n in seen: continue
+            lines.append(f"`{n}` {what}. It carries on by itself in the same session {when}; nothing is lost, and messages to it wait for it.")
+            new.append((n, r))
+        pid = thread_note(th, " ".join(lines), stop=[{"name": n, "until": r.get("reset") or None} for n, r in new]) if lines else None
+        bar_stop(st, th, bar)
+        for n, r in rs:
+            again = n in seen
+            if not again: seen[n] = [now_, pid]
+            r["noted"] = seen[n][1] or "bar"
+            log(event="stop_noted", name=n, thread=th, post=None if again else pid, again=again, why=r.get("why") or ("reaped" if r.get("reaped") else "limit"))
+
+def held_words(c, st, n, r, hold, login, alive, room=None):
+    """Why a parked run that is due now still waits, as the end of "carries on as soon as ...", or None. Reads what the resume loop
+    decided from, in its order; it calls nothing that acts or logs."""
+    if hold:
+        if box_state.get("ok") is False: return "the sandbox works again"
+        if launch_held(st): return "Claude Code starts agents again (tried every few minutes)"
+        return "tomorrow's spend allowance starts (the daily cap is reached)"
+    pv = provider_of(c, r.get("model"))
+    if not login and not pv: return "an account has room again"
+    if n in alive: return "its earlier run ends"
+    if len(alive) >= (c.get("max_sessions") or float("inf")): return "one of the running agents finishes (the session limit is reached)"
+    if (why := st.get("paced", {}).get(n)): return f"the machine has memory to spare ({why} now)"
+    if r.get("from") != "person" and tier_held(c, r.get("thread")): return "its kind of work is unpaused"
+    if pv:
+        if (w := st.get("provider_held", {}).get(n)): return f"provider {pv[0]} has room ({w})"
+        return None
+    if room is not None:
+        own, limits, model = r.get("login"), st.get("limits"), r.get("model")
+        if not (own in room and pick_login(c, {own: room[own]}, limits, model=model)):
+            dst = login if not (scope_held(limits, login, model) or share_full(login, model)) else pick_login(c, room, limits, model=model)
+            if not dst or dst == own: return "an account it can move to has room"
+    return None
+
+def stop_cleared(n, r, st=None, gone=None):
+    """A noted stop is over: logged, so the note's lifetime can be measured, and the thread's bar goes back. gone: the bar's
+    words when it had none before, for a stop that ended without the run carrying on."""
+    if r.get("noted"):
+        log(event="stop_cleared", name=n, thread=r.get("thread"), post=r["noted"], after_s=round(time.time() - r.get("stopped_at", time.time())))
+    if st is not None and r.get("thread"): bar_clear(st, n, r["thread"], gone or f"@{n} is back at work since {_clock(time.time())}")
+
 def running(st=None, by_hand=False):
     """by_hand: the first pass after a deliberate stop in this boot (see stop_stamp): a run that's gone was stopped, not lost."""
     alive, told, stopped = {}, {}, []
-    note_sleep()
+    cause = {}  # name -> what the starter did to it this pass, for its end event
+    note_sleep(); note_oom()
+    dead = []  # runs already gone as this pass starts, for oom_picks (a run the starter kills below isn't one)
+    if oom_seen.get("left"):
+        for f in RUN.glob("*.json"):
+            if (c := children.get(f.stem)):
+                if c.poll() is not None and c.returncode == -9: dead.append(f.stem)
+                continue
+            try: gone_pid = not Path(f"/proc/{int(json.loads(f.read_text())['pid'])}").exists()
+            except (OSError, ValueError, KeyError, TypeError): continue
+            if gone_pid: dead.append(f.stem)
+    picks = oom_picks(dead)
     grace, quiet = cfg().get("done_grace_s", 900), cfg().get("stall_s", 1800)
     for f in RUN.glob("*.json"):
         try:
@@ -806,12 +1096,14 @@ def running(st=None, by_hand=False):
         c = children.get(r["name"])
         g = grace_for(r["name"], grace)
         gone = not c and run_gone(r)  # checked first: nothing below may signal a pid that isn't this run's
+        if not gone and (kb := rss_kb(r["pid"])): run_rss[r["name"]] = kb
         # parked on a waiter on a login that has run out: it would only find out when the waiter ends, up to hours later
         move = not gone and st is not None and out_of_room(cfg(), r.get("login"), st.get("limits")) and finished_but_alive(r, min(60, grace)) and only_waiters(r["pid"])
         if gone: pass
         elif move or (finished_but_alive(r, g) and not working(r, g)):
             bg = bg_tasks(r.get("out", ""))
             log(event="reaped", name=r["name"], session=r["session"], pid=r["pid"], bg=bg, move=move)
+            cause[r["name"]] = "moved" if move else "reaped"
             kill_tree(r["pid"])
             if c: c.wait(timeout=10)
             if not move: reap_hist[r["name"]] = ((reap_hist.get(r["name"], (0, 0))[0] + 1) if g > grace or time.time() - reap_hist.get(r["name"], (0, 0))[1] < 10800 else 1, time.time())
@@ -822,25 +1114,32 @@ def running(st=None, by_hand=False):
             step = open_command(r) if any(p.get("supersede") for p in ps) else None   # stopped mid-command: the command runs on, and the resumed run is told
             shells = release_shells(r["pid"])
             log(event="woken", name=r["name"], session=r["session"], pid=r["pid"], posts=[p["id"] for p in ps], shells=shells)
+            cause[r["name"]] = "woken"
             if c: c.wait(timeout=10)
             st.setdefault("resume", {})[r["name"]] = {**r, "session": session_in(r.get("out")) or r["session"], "reset": 0, "reaped": ["(none: shells left running)"],
                 "shells": shells, "step": step, "from": "person" if any(p.get("from") == "person" for p in ps) else ps[0].get("from")}  # the person's post isn't paced
             work.pop(r["name"], None)
         elif st is not None and quiet and carries_on(r) and stalled(r, quiet):
             log(event="stalled", name=r["name"], session=r["session"], pid=r["pid"], quiet=quiet)
-            went_silent.add(r["name"])
+            went_silent.add(r["name"]); cause[r["name"]] = "stalled"
             kill_tree(r["pid"])
             if c: c.wait(timeout=10)
             work.pop(r["name"], None)
         done = c.poll() is not None if c else gone or not Path(f"/proc/{r['pid']}").exists()
         if done:
             f.unlink(); children.pop(r["name"], None)
-            log(event="end", name=r["name"], session=r["session"], pid=r["pid"], exit=c.returncode if c else None, **({"cost": cost} if (cost := run_cost(r.get("out"))) is not None else {}))
+            rc = c.returncode if c else None
             hit = limit_hit(r.get("out"))
             authed = auth_hit(r.get("out")) is not None
             died = None if hit or authed else died_unfinished(r.get("out"))
-            if r["name"] in went_silent: died = "stalled"; went_silent.discard(r["name"])
+            if r["name"] in went_silent: died = "stalled"; went_silent.discard(r["name"]); cause.setdefault(r["name"], "stalled")
             elif died and r.get("boot") and r["boot"] != boot_id(): died = "restart"
+            by = end_cause(r, rc, cause.get(r["name"]), hit, authed, died, r["name"] in picks)
+            run_rss.pop(r["name"], None)
+            if by.startswith("signal_") and died == "other": died = "killed"
+            elif by == "other" and rc is None: died = "unseen"
+            if by == "oom": died = "oom"; oom_seen["left"] -= 1  # said as such in its thread, and it carries on like any other death
+            log(event="end", name=r["name"], session=r["session"], pid=r["pid"], exit=rc, by=by, **({"cost": cost} if (cost := run_cost(r.get("out"))) is not None else {}))
             if st is not None and not hit and not authed and not died:
                 st.get("died_tries", {}).pop(f"{r['name']}:{r.get('post')}", None)
                 if (epoch(r.get("at", "")) or 0) >= st.get("auth_told", {}).get(r.get("login"), {}).get("since", float("inf")):
@@ -856,13 +1155,15 @@ def running(st=None, by_hand=False):
                 login, limits = r.get("login", ""), st.setdefault("limits", {})
                 scope = limit_scope(r.get("out"))  # a model's own bar (Fable's share) holds that model, not the login
                 key = f"{login}#{scope}" if scope else login
-                fresh = not any(time.time() < t for k, t in limits.items() if str(k).partition("#")[2] == (scope or ""))  # first stop of this limit episode
+                fresh = not any(time.time() < t for k, t in limits.items() if str(k).partition("#")[2] == (scope or "")) \
+                    and time.time() - st.get("limit_said", {}).get(scope or "", 0) > 60  # first stop of this limit episode (a reset already past still counts as one)
                 limits[key] = max(limits.get(key, 0), hit[0])
                 st.setdefault("resume", {})[r["name"]] = {**r, "session": hit[1] or r["session"], "reset": hit[0]}
                 log(event="limited", name=r["name"], session=hit[1] or r["session"],
                     resets=dt.datetime.fromtimestamp(hit[0], dt.timezone.utc).isoformat(timespec="seconds"),
                     **({"scope": scope} if scope else {}))  # a model's own limit: the chat names its reset and says another model carries on now (HA-15)
                 if fresh:  # one post per episode, not one per stopped agent
+                    st.setdefault("limit_said", {})[scope or ""] = time.time()
                     more = len(cfg().get("logins", [])) > 1
                     post(f"Usage limit reached (`{r['name']}` first{f', the {scope.title()} limit' if scope else ''}). {f'{scope.title()} agents' if scope else 'Agents'}{f' on account {account_name(login)}' if more else ''} wait and carry on by themselves at "
                          f"{dt.datetime.fromtimestamp(limits[key]).astimezone():%H:%M %Z}.{' Other models on it keep working.' if scope else ''}{' Other accounts with room keep working.' if more else ''}", [])  # the person doesn't want these in the inbox (2026-11-08)
@@ -906,7 +1207,7 @@ def running(st=None, by_hand=False):
                 ended_clean.append(r)
         else: alive[r["name"]] = r
     for why, names in told.items():  # one post per stop, not one per agent
-        post(f"{', '.join(f'`{n}`' for n in names)} stopped ({WHY_WORDS[why]}) and will carry on by themselves.", [])
+        post(f"{', '.join(f'`{n}`' for n in names)} stopped ({WHY_WORDS[why]}) and will carry on by {'themselves' if len(names) > 1 else 'itself'}.", [])
     if stopped:
         post(f"{', '.join(f'`{n}`' for n in stopped)} ended when the Hive was stopped by hand, so they stay stopped. A message to one starts it again.", [])
     return alive
@@ -982,6 +1283,7 @@ def drop_killed(st):
         posts = [p.get("id") for p in st["pending"].pop(n, []) + st.get("held", {}).pop(n, [])]
         resume = st.get("resume", {}).pop(n, None)
         log(event="kill_dropped", name=n, posts=posts, resume=bool(resume))
+        if resume: stop_cleared(n, resume, st, f"@{n} was stopped by the person")
         mark_done(n, "the person killed its last run")
         f.unlink(missing_ok=True)
 
@@ -1124,6 +1426,7 @@ def newest_seen(login):
     return None
 
 SLOW_S, SLOW_MAX_S = 240, 900   # a person's mention with no reply after 4 min gets one line saying who is on it; nothing after 15 min (the watchdog's)
+QUEUED_S = 45   # ...but a start already known to be queued says so at 45 s: "Hello?" came 2 min into a queued wait, the notice at 4 min (111622544a72, friction-chase)
 NOT_REPLY = {"person", "hives", "box", "starter", "watchdog"}
 ACK = re.compile(r"(?:@\S+\s+)*((?:perf|perfect|excellent|great|nice|cool|good|awesome|amazing|thanks|thank you|thx|ty|ok|okay|got it|sounds good)[\s.!,]*)+", re.I)
 
@@ -1136,19 +1439,21 @@ def slow_replies(posts, st, alive, t=None):
         if str(p.get("from", "")).lower() != "person" or p.get("id") in noted: continue
         try: age = t - dt.datetime.fromisoformat(p["at"]).timestamp()
         except (KeyError, ValueError): continue
-        if not SLOW_S <= age <= SLOW_MAX_S: continue
+        if not QUEUED_S <= age <= SLOW_MAX_S: continue
         names = [n for n in mentions(p) if n not in ("all", "here", "person", "hives")]
         if not names or ACK.fullmatch(str(p.get("text", "")).strip()): continue
         th = p.get("thread") or p.get("id")
-        noted.add(p["id"])
-        if any((q.get("thread") or q.get("id")) == th and q.get("at", "") > p["at"] and str(q.get("from", "")).lower() not in NOT_REPLY for q in posts): continue
         run = next((r for r in alive.values() if r.get("post") == p["id"]), None) \
             or next((r for r in alive.values() if str(r.get("name", "")).lower() in names), None)
+        queued = not run and any(any(q.get("id") == p["id"] for q in ps) or n in names for n, ps in st.get("pending", {}).items())
+        if age < (QUEUED_S if queued else SLOW_S): continue
+        noted.add(p["id"])
+        if any((q.get("thread") or q.get("id")) == th and q.get("at", "") > p["at"] and str(q.get("from", "")).lower() not in NOT_REPLY for q in posts): continue
         if run:
             try: since = (t - dt.datetime.fromisoformat(run["at"]).timestamp()) / 60
             except (KeyError, ValueError): since = age / 60
             out.append((th, f"`{run['name']}` is on this ({run.get('model') or 'claude'}, running {since:.0f} min, no reply yet); a first reply usually follows within a few minutes."))
-        elif any(any(q.get("id") == p["id"] for q in ps) or n in names for n, ps in st.get("pending", {}).items()):
+        elif queued:
             out.append((th, "This is queued: no agent has started on it yet (every login is paused or at its stop line, or the start is waiting its turn). It starts as soon as there is room."))
         else:
             out.append((th, "No agent is running on this post yet; the watchdog looks again at 10 min."))
@@ -1465,6 +1770,8 @@ RESUME_WHY = {"login": "Your run stopped because its Claude login had expired or
               "restart": "Your run stopped because the machine restarted. Jobs you had running may have stopped too.",
               "connection": "Your run stopped because the connection to Claude was lost. It may be back now.",
               "stalled": "Your run went silent mid-turn with nothing running, so the starter ended it and resumed it.",
+              "killed": "Your run was killed by a signal the starter didn't send (another agent, a test, or the system), and the starter resumed it. A job you had running may have been killed too.",
+              "unseen": "Your run ended mid-turn, most likely killed by a signal. It began before the starter's last restart, so the starter couldn't see how it ended. The starter resumed it. A job you had running may have been killed too.",
               "other": "Your run ended before it finished, and the starter resumed it."}
 
 HARD = re.compile(r"\*\*Hard limits\.\*\*.*?\n\nRoot on the [a-z]+ is held only by[^\n]*\n", re.S)
@@ -2114,7 +2421,7 @@ IMPROVE = """@new Figure out how to improve everything in the hive, across all o
 def drop_stale_resumes(st):
     """A status-bar brief is worthless once the next 20-min pass has run: about 75 of 162 status-timer starts on 2026-11-09 were held runs bounced back on a limit."""
     for n, r in list(st.get("resume", {}).items()):
-        if r.get("from") == "status-timer": st["resume"].pop(n); log(event="resume_dropped_stale", name=n)
+        if r.get("from") == "status-timer": st["resume"].pop(n); log(event="resume_dropped_stale", name=n); stop_cleared(n, r, st, f"@{n}'s stop is over")
 
 def floor_gap(c, st, r):
     """How long a first-tier thread rests between floor starts: floor_focus_gap_s, doubling up to floor_gap_s each start that left its ladder unmoved (the fizzle brake)."""
@@ -2373,6 +2680,8 @@ LOOSE, SHA = re.compile(r"[0-9a-f]{38}|[0-9a-f]{62}"), re.compile(r"[0-9a-f]{40}
 BROKEN = re.compile(r"object file \S+ is empty|could not parse HEAD|bad (tree )?object HEAD|index file (smaller than expected|corrupt)"
                     r"|bad signature 0x|unexpected diff status|loose object \S+ \(stored in .+\) is corrupt|unable to unpack \S+ header"
                     r"|unable to read tree|reference broken")
+UNREADABLE = re.compile(r"unable to index file '(.+?)'")
+RACY = re.compile(r"File exists|unable to stat|unstable object source data|Changes not staged|no changes added|unable to index file|failed to insert into database|error: open\(")
 git_fsync, backup_seen = [], []
 
 def home_git(*args, input=None):
@@ -2391,8 +2700,15 @@ def home_git(*args, input=None):
     except OSError as e: return subprocess.CompletedProcess(cmd, 127, "", str(e))
 
 def commit_home():
-    r = home_git("add", "-A")
-    return r if r.returncode else home_git("commit", "-qm", "auto backup")
+    r = home_git("add", "-A", "--ignore-errors")  # a file git can't read is left out of the backup, not the whole backup with it
+    if r.returncode and ("File exists" in r.stderr or BROKEN.search(r.stderr + r.stdout)): return r  # the index itself is the trouble
+    c = home_git("commit", "-qm", "auto backup")
+    c.skipped = sorted(set(UNREADABLE.findall(r.stderr)))
+    return c
+
+def only_skipped(r):
+    """The commit failed only because nothing but files git couldn't read had changed: nothing to back up, not a failure."""
+    return bool(getattr(r, "skipped", None)) and bool(re.search(r"nothing added to commit|no changes added to commit", r.stdout + r.stderr))
 
 def backup(c, st):
     if time.time() - st.get("committed", 0) < c["commit_s"]: return
@@ -2402,11 +2718,17 @@ def backup(c, st):
             backup_seen.append(1)
             if (gd := git_dir()) and bad_objects(gd): heal_backup(st, "empty object files")
         r = commit_home()
-        if r.returncode and "File exists" in r.stderr and stale_locks(): r = commit_home()
+        for _ in range(2):  # git's own busy or racy failures (a lock, a file that changed or went between add and commit) pass in seconds
+            if not (r.returncode and RACY.search(r.stderr + r.stdout)) or only_skipped(r): break
+            if "File exists" in r.stderr: stale_locks()
+            time.sleep(3); r = commit_home()
         if r.returncode and BROKEN.search(r.stderr + r.stdout) and heal_backup(st, r.stderr + r.stdout): r = commit_home()
     except Exception as e:  # mending must never stop the starter
         return log(event="backup-failed", rc=-1, err=f"{type(e).__name__}: {e}"[:300])
-    if r.returncode and "nothing to commit" not in r.stdout + r.stderr:  # nothing-to-commit exits 1 too; anything else is a real failure
+    if (sk := getattr(r, "skipped", [])) != st.get("backup_skipped", []):  # said once when the set changes, not every 5 min
+        st["backup_skipped"] = sk
+        if sk: log(event="backup-skipped", files=sk[:20], n=len(sk))
+    if r.returncode and "nothing to commit" not in r.stdout + r.stderr and not only_skipped(r):  # nothing-to-commit exits 1 too
         log(event="backup-failed", rc=r.returncode, err=(r.stderr or r.stdout)[-300:])
 
 def git_dir():
@@ -2427,13 +2749,27 @@ def bad_objects(gd, deep=False):
         except OSError: pass
     return out
 
+def git_running():
+    """A git process of ours working in ~'s repo (or one we can't list): it may hold a lock."""
+    try: pids = subprocess.run(["pgrep", "-x", "git"], capture_output=True, text=True, timeout=10).stdout.split()
+    except (OSError, subprocess.TimeoutExpired): return True
+    for pid in pids:
+        try: cwd = os.readlink(f"/proc/{pid}/cwd")
+        except OSError: continue  # gone, or another user's: not ours
+        d = Path(cwd)
+        while d != d.parent and not (d / ".git").exists(): d = d.parent  # the repo it works in: ~/core has its own
+        if d == HOME: return True
+    return False
+
 def stale_locks():
-    """Locks git left when it was killed mid-backup or the machine went down: older than the boot or than an hour, so nothing holds
-    them, and every backup after would fail on them. True when one went."""
+    """Locks git left when it was killed mid-backup or the machine went down: older than 5 min with no git process running in ~
+    (or older than the boot, or than an hour whatever runs), so nothing holds them and every backup after would fail on them.
+    True when one went."""
     if not (gd := git_dir()): return False
     since = time.time() - 3600
     try: since = max(since, time.time() - time.clock_gettime(time.CLOCK_BOOTTIME) - 60)
     except (AttributeError, OSError): pass
+    if not git_running(): since = max(since, time.time() - 300)
     gone = []
     for p in [*gd.glob("*.lock"), *(gd / "refs").rglob("*.lock")]:
         try:
@@ -2600,7 +2936,7 @@ def tier_of(model):
     return "codex (no extra cost)" if m[1] == "codex" else "kimi (subscription, no extra cost)" if m[1] == "kimi" else "free" if m[2].endswith(":free") else "paid, real money"
 
 PAUSE_TELL = float(os.environ.get("HIVE_PAUSE_TELL") or 300)  # a pause is announced once it has lasted this long
-def pause_notice(c, signed_in):
+def pause_notice(c, signed_in, st=None):
     """What the person is told when no login can take work: true for this install's fallback (config.json fallback and providers), not always Codex."""
     if not signed_in:
         return "No Claude account is signed in yet, so only your own asks start, on another provider if one is set up. Sign in under Settings > Accounts."
@@ -2608,10 +2944,34 @@ def pause_notice(c, signed_in):
     fb = c.get("fallback") or {}
     own = names(agents_chain(c))
     person = names(fb.get("chain", [])) if "person" in fb.get("for", ["person"]) or "*" in fb.get("for", []) else []
-    head = "Every login is paused or past its stop line; "
-    if own: return head + f"work carries on on the fallback ({', '.join(own)}), and your own asks also on a login that isn't paused."
-    if person: return head + f"the hive's own work waits for a login, and your own asks run on {', '.join(person)}."
-    return head + "no fallback provider is set up on this install, so nothing starts until a login has room again."
+    head = "Every login is paused, past its stop line or at a usage limit, so new work and stopped agents wait. "
+    at = back_at(c, st) if st is not None else None
+    when = f"The first account has room again at {at:%a %H:%M %Z}; everything waiting carries on by itself then. " if at else \
+        "" if st is None else "No account gives a time it has room again yet; everything waiting carries on by itself once one does. "
+    def held(names):  # the fallback is set up, but is it taking work now? (Codex at its own limit, 2026-11-21 08:00-14:00, while this said it carried on)
+        return {n: why for n in names if (pc := (c.get("providers") or {}).get(n)) and (why := provider_room(c, n, pc, {}))}
+    if own:
+        h = held(own)
+        fb = f"The fallback ({', '.join(own)}) is on and carrying the work now. " if len(h) < len(own) else \
+            f"The fallback ({', '.join(own)}) is on but held too ({'; '.join(f'{n}: {w}' for n, w in h.items())[:200]}), so nothing runs. "
+    elif person: fb = f"The hive's own work waits for a login; your own asks run on {', '.join(person)}. "
+    else: fb = "There is no fallback provider set up on this install, so nothing starts until a login has room. "
+    return head + when + fb + "You can unpause an account or raise its stop line under Settings > Accounts, or add an account."
+
+def back_at(c, st):
+    """When the first login the person hasn't paused has room again: the later of its limit hold and the reset of each of its
+    reads past its stop line. A datetime, or None if none names a time. Reads only; picks nothing."""
+    u, five, rs, now_ = unpaused(load("usage.json", {})), load("usage_5h.json", {}), load("usage_resets.json", {}), time.time()
+    best = None
+    for k in [str(Path(l).expanduser()) for l in c.get("logins", [])]:
+        if k not in u: continue
+        t, w, f = max(now_, (st.get("limits") or {}).get(k, 0)), u.get(k), (five or {}).get(k)
+        wl, hl = stop_lines(c, k)
+        r = (rs or {}).get(k) or {}
+        if isinstance(w, (int, float)) and w >= wl: t = max(t, r.get("weekly") or float("inf"))
+        if hl is not None and isinstance(f, (int, float)) and f >= hl: t = max(t, r.get("five_hour") or float("inf"))
+        if now_ < t != float("inf") and (best is None or t < best): best = t  # a login with no time named (t == now) doesn't hide one that names one
+    return dt.datetime.fromtimestamp(best).astimezone() if best else None
 
 def fallback_model(c, st, chain, cache):
     """The first model in chain (provider:model strings, config.json fallback) whose provider has room now, else None.
@@ -2748,6 +3108,13 @@ def crash_mended():
         if c.get("told"): post("The starter runs again, so agents start as before.", ["person"])
     except OSError: pass
 
+def read_before_move(st, u):
+    """A run just stopped on a limit is about to move to another login: force one fresh usage read first (30 s floor), once per stop."""
+    if (fresh := [r for r in st.get("resume", {}).values() if not r.get("wait") and not r.get("read_for_move") and time.time() < r.get("reset", 0)]):
+        if time.time() - u.get("_checked", 0) > 30: u["_checked"] = 0
+        for r in fresh: r["read_for_move"] = True
+
+
 def main():
     for d in (RUN, STATE, HOME / "sessions"): d.mkdir(exist_ok=True)
     # One starter per home: two would both read the board and start every agent twice. A second one waits here and takes over
@@ -2802,10 +3169,14 @@ def main():
                     _, skip = free_spawns(p, called)
                     if skip: log(event="free_spawn_ignored", names=skip, post=p.get("id"), src=p.get("from"))
                     called = [n for n in called if n not in skip]
+                copy = bool(p.get("relay_of"))  # a passed-on copy: the original already got its note, and the copy does not count toward a habit
+                if unknown and not copy and p.get("from") in ("person", "rootwarden"):  # neither sees hive post's receipt: one plain line in the thread, mentioning nobody
+                    try:
+                        names = known_agents(c) | board_threads() | {str(f.get("id", "")).lower() for f in st.get("foci", [])}
+                        notify_unknown(p, [n for n in unknown if not habitual_unknown(n, p.get("from"), names)], known_agents(c))
+                    except Exception as e: log(event="unknown_note_error", post=p.get("id"), err=f"{type(e).__name__}: {e}"[:200])
                 for n in unknown:
-                    log(event="unknown_mention", name=n, post=p.get("id"), src=p.get("from"))
-                    if p.get("from") == "person":  # he can't see hive post's warning, and asked for something
-                        post(f"Nobody here is called `{n}`, so nothing started. For a new agent use the word new; for one with that name, `hive post --to {n}`.", ["person"], p.get("thread"))
+                    log(event="unknown_mention", name=n, post=p.get("id"), src=p.get("from"), **({"copy": True} if copy else {}))
                 for n in called:
                     if n in c["external"]: continue
                     # a self-mention wakes its author only when the author isn't running: a waiter's
@@ -2866,22 +3237,25 @@ def main():
         if pick_login(c, unpaused(u), st.get("limits")) is None and time.time() - u.get("_checked", 0) > 30 \
                 and any(p.get("from") == "person" for ps in st["pending"].values() for p in ps):
             u["_checked"] = 0
+        # runs just stopped on a limit are about to move to another login: read first, once per stop. Moved on a read up to
+        # usage_check_s old, five runs went to cc3 at 03:57Z on 2026-11-25 and all stopped again on its 5-hour limit at 04:00 (11242341532d)
+        read_before_move(st, u)
         u = usage(c, u); room = unpaused(u); limits_reset(st)
         if (off := sorted(set(u) - set(room))) != st.get("paused_logins", []):
             st["paused_logins"] = off; log(event="logins_paused", logins=off)
-        if (pick_login(c, room) is None) != paused:
+        if (pick_login(c, room, st.get("limits")) is None) != paused:  # held on limits counts too: every login at its limit while the reads lag said nothing
             paused = not paused; st["all_paused"] = paused
             if paused: st["pause_at"], st["pause_told"] = time.time(), False  # told below once it has lasted PAUSE_TELL s, so a flaky pause that flips on and off says nothing
             elif st.pop("pause_told", False): post("Usage has room again; starting sessions.", ["person"])  # "room again" only for a pause that was told
             log(event="paused" if paused else "resumed", usage=u)
         if paused and not st.get("pause_told") and time.time() - st.get("pause_at", 0) >= PAUSE_TELL:
             st["pause_told"] = True
-            post(pause_notice(c, any((Path(l).expanduser() / ".credentials.json").exists() for l in c["logins"])), ["person"])
+            post(pause_notice(c, any((Path(l).expanduser() / ".credentials.json").exists() for l in c["logins"]), st), ["person"])
         login = pick_login(c, room, st.get("limits"))  # None: every login is paused, past the stop line or held on a limit
         hold = box_holds() or launch_held(st) or daily_cap_holds(c, st)
         for n, r in ([] if hold else list(st.get("resume", {}).items())):  # a provider run held on its limit, asked since for a Claude model: its session can't move, so the post wakes it as a new run
             if login and provider_of(c, r.get("model")) and any(p.get("model") in MODELS for p in st["pending"].get(n, [])) and provider_room(c, *provider_of(c, r.get("model"))[:2], pcache):
-                st["resume"].pop(n); log(event="resume_dropped_for_claude", name=n)
+                st["resume"].pop(n); log(event="resume_dropped_for_claude", name=n); stop_cleared(n, r, st, f"@{n} starts again as a new run on Claude")
         drop_stale_resumes(st)
         for n, r in ([] if hold else list(st.get("resume", {}).items())):  # resume limit-stopped sessions first, same name and session
             if (not login and not provider_of(c, r.get("model"))) or n in alive or len(alive) >= (c.get("max_sessions") or float("inf")): continue
@@ -2903,7 +3277,7 @@ def main():
                     and own != dst and move_session(r["session"], own, dst):  # or it moves to one that does (and has its model)
                 to = dst; log(event="moved", name=n, session=r["session"], src=own, dst=to)
             else: continue
-            st["resume"].pop(n)
+            st["resume"].pop(n); stop_cleared(n, r, st)
             waiting = st["pending"].pop(n, []) if r.get("reaped") else []  # hand queued posts to the resumed run
             if not r.get("reaped") and "shells" not in r and st["pending"].get(n):
                 # A limit resume: posts queued while it waited predate the resumed run, so the inbox hook (posts newer than the run's
@@ -2929,6 +3303,7 @@ def main():
                   resume=r["session"], reaped=r.get("reaped"), extra=[p["id"] for p in waiting], moved=r.get("move", False), lost=r.get("lost", False), quiet=r.get("quiet"),
                   woken={"shells": r["shells"], "posts": waiting, "step": r.get("step")} if "shells" in r else None, all_since=r.get("all_since") or r.get("at"), why=r.get("why"))
             alive[n] = {"name": n, "thread": r.get("thread")}  # a dict, so keeper() sees a resumed keeper (two rounds at once, 2026-11-02)
+        stop_notes(st, lambda n, r: held_words(c, st, n, r, hold, login, alive, room))
         release_held(c, st)
         for n in ([] if hold else list(st["pending"])):
             if n in alive or n in st.get("resume", {}): continue

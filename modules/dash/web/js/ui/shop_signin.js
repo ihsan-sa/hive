@@ -1,13 +1,15 @@
-// Settings › Buying › JLCPCB: the person signs the machine's JLC browser in from here (GET/POST /api/shop-signin, class ShopSignin in dash.py).
+// Settings › Buying › JLCPCB, and Settings › Connectors › Sign in to a site (any address, in the profile `web` reads with; warden
+// 112500380c83): the person signs the machine's browser in from here (GET/POST /api/shop-signin, class ShopSignin in dash.py).
 // Thread 11241110ade5, warden 11241330fa1c: only the person's own signed-in app sees or drives it (the server checks, as for Link); the person
 // types the password and solves the captcha in the live view; it shows only while a sign-in is open and closes itself once signed in.
 // Nothing here keeps, logs or shows back what is typed: each key goes to the server and is dropped.
 import { h, tr } from "../core/dom.js";
 import { jget, post } from "../core/store.js";
-import { block, button, statusLabel } from "./kit.js";
+import { block, button, statusLabel, field, input } from "./kit.js";
+import { confirm } from "./dialog.js";
 import { ago } from "../core/format.js";
 
-const J = { v: null, err: "", loading: false, gen: 0, dlg: null };
+const J = { v: null, err: "", loading: false, gen: 0, dlg: null, url: "", say: null, busy: "" };
 const SPECIAL = new Set(["Enter", "Backspace", "Tab", "Delete", "ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Home", "End"]);
 const OPEN = new Set(["starting", "open", "checking", "signed"]);
 
@@ -19,7 +21,7 @@ export async function loadShops(update) {
   J.loading = false; update();
 }
 /** Leaving Settings closes the live view and the browser with it. */
-export function forgetShops() { J.gen++; if (J.dlg) { const d = J.dlg; J.dlg = null; send({ do: "close" }); try { d.close(); } catch (e) {} d.remove(); } J.v = null; J.err = ""; }
+export function forgetShops() { J.url = ""; J.said = null; J.gen++; if (J.dlg) { const d = J.dlg; J.dlg = null; send({ do: "close" }); try { d.close(); } catch (e) {} d.remove(); } J.v = null; J.err = ""; }
 
 // One request at a time, in order: keys sent side by side could arrive out of order and scramble a password (review a31c707b29fe918db).
 let chain = Promise.resolve();
@@ -28,7 +30,8 @@ const send = body => (chain = chain.then(() => post("/api/shop-signin", body)).c
 const closeOnLeave = () => { if (J.dlg) fetch("/api/shop-signin", { method: "POST", keepalive: true, headers: { "Content-Type": "application/json", "X-Hive-Dash": "1" }, body: JSON.stringify({ do: "close" }) }).catch(() => {}); };
 addEventListener("pagehide", closeOnLeave);
 
-function openView(site, name, update) {
+function openView(site, name, update, url) {
+  const web = site === "web";
   if (J.dlg) return;
   const gen = ++J.gen;
   const img = h("img", { class: "shop-screen", alt: `The ${name} page on the Hive's browser`, draggable: "false", tabindex: "0" });
@@ -44,12 +47,15 @@ function openView(site, name, update) {
   const sendTyped = () => { const s = typed.value; typed.value = ""; if (s) send({ do: "input", t: "text", s: s.slice(0, 500) }); };
   const dlg = h("dialog", { class: "dlg dlg-wide shop-dlg", "aria-label": `Sign in to ${name}` },
     h("h2", null, `Sign in to ${name}`),
-    h("p", { class: "field-h" }, "This is the Hive's own browser. Click the page and type your password and any captcha here; agents never see or keep what you type. Drag works for slider captchas. Esc leaves; it closes by itself once you're signed in."),
+    h("p", { class: "field-h" }, web
+      ? "This is the Hive's own browser, and it doesn't save passwords. Click the page and type your password and any captcha here; agents never see or keep what you type. Drag works for slider captchas. Press Done once you're signed in."
+      : "This is the Hive's own browser. Click the page and type your password and any captcha here; agents never see or keep what you type. Drag works for slider captchas. Esc leaves; it closes by itself once you're signed in."),
     line, img,
     h("form", { class: "frow", onsubmit: e => { e.preventDefault(); sendTyped(); } }, typed, show, button("Send", null, { size: "s", type: "submit" }),
       button("Enter", () => send({ do: "input", t: "key", key: "Enter" }), { size: "s", kind: "quiet" }),
       button("Back", () => send({ do: "input", t: "back" }), { size: "s", kind: "quiet" })),
-    h("div", { class: "dlg-a" }, button("Close", finish, {})));
+    h("div", { class: "dlg-a" }, web ? button("Done, I'm signed in", () => { line.textContent = tr("Saving the sign-in…"); send({ do: "done" }); }, { kind: "primary" }) : null,
+      button(web ? "Cancel" : "Close", finish, web ? { kind: "quiet" } : {})));
   J.dlg = dlg; J.say = t => { line.textContent = t; line.dataset.tone = "bad"; };
   dlg.addEventListener("cancel", e => { e.preventDefault(); finish(); });
   const at = e => { const r = img.getBoundingClientRect(); return { fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height }; };
@@ -96,13 +102,13 @@ function openView(site, name, update) {
       if (gen !== J.gen) return;
       if (r.img) { img.src = "data:image/jpeg;base64," + r.img; seq = r.seq; }
       const left = r.left ? ` · closes in ${Math.ceil(r.left / 60)} min` : "";
-      if (r.state === "signed") { line.textContent = tr(`Signed in to ${name}. Closing…`); line.dataset.tone = "good"; setTimeout(finish, 2500); return; }
+      if (r.state === "signed") { line.textContent = tr(`Signed in to ${name}. Closing…`); line.dataset.tone = "good"; if (web) { J.said = { text: `Signed in to ${name}. Agents can read its pages now.`, tone: "good" }; J.url = ""; } setTimeout(finish, 2500); return; }
       if (r.state === "open") { line.textContent = tr("Click the page to start" + left); delete line.dataset.tone; }
-      else if (r.state === "checking") { line.textContent = tr("That looks signed in. Checking it holds, then this closes by itself…"); line.dataset.tone = "good"; }
+      else if (r.state === "checking") { line.textContent = tr(web ? "That looks signed in. Press Done if it is." : "That looks signed in. Checking it holds, then this closes by itself…"); line.dataset.tone = "good"; }
       else if (!OPEN.has(r.state)) { line.textContent = tr(r.state === "failed" ? "It didn't start: " + (r.why || "unknown") : "Closed" + (r.why ? ": " + r.why : "") + "."); line.dataset.tone = "bad"; return; }
     }
   };
-  send({ do: "start", site }).then(v => { if (v) loop(); else line.textContent = tr("It didn't start."); });
+  send(web ? { do: "start", site, url } : { do: "start", site }).then(v => { if (v) loop(); else if (line.dataset.tone !== "bad") line.textContent = tr("It didn't start."); });
 }
 
 /** One row per shop under Buying. Only on the person's own app (v.here from /api/buy); elsewhere the server would refuse anyway. */
@@ -116,4 +122,46 @@ export function shopsBlock(here, update) {
       state: statusLabel(s.signed_at ? "working" : "off", s.signed_at ? "signed in" : "not signed in"),
       actions: button(s.signed_at ? "Sign in again" : `Sign in to ${s.name}`, () => openView(s.site, s.name, update), { size: "s", kind: s.signed_at ? "quiet" : "primary", busy: !!J.dlg && busy }) });
   });
+}
+
+/** Settings › Connectors: sign the Hive's browser in to any site the person names, so `web` reads it signed in (thread 11241110ade5).
+ *  here: the server says this app is the person's own (v.here from /api/buy); null while that is still being read. */
+export function sitesBlock(here, update) {
+  if (here == null) return null;
+  if (here && !J.v && !J.loading && !J.err) loadShops(update);
+  const sites = (J.v && J.v.web) || [];
+  const say = (text, tone) => { J.said = text ? { text, tone } : null; update(); };
+  const go = (u, label) => {
+    if (J.dlg) return;
+    const t = String(u || "").trim();
+    if (!t) return say("Type the site's address first, like etsy.com.", "bad");
+    J.said = null; J.busy = "start"; update();
+    // Started here first, so a refusal (a bank, a number address, another sign-in open) shows under the box, not in an empty window;
+    // the window's own start then finds it running and just shows it
+    post("/api/shop-signin", { do: "start", site: "web", url: t }).then(v => { J.busy = ""; openView("web", label || v.name || t, update, t); },
+      e => { J.busy = ""; say(e.message, "bad"); });
+  };
+  const forget = x => confirm({ title: `Forget ${x.base}?`, body: [`The Hive's browser signs out of ${x.base} and clears what the site kept there. Agents then read it as a visitor.`], ok: "Forget", kind: "danger",
+    onOk: async () => {
+      J.busy = x.base; update();
+      try { const r = await post("/api/shop-signin", { do: "forget", base: x.base }); J.v = r; say(r.cleared ? `Forgot ${x.base}: the browser is signed out of it.` : `Took ${x.base} off the list, but its cookies weren't cleared: ${r.why || "try again"}.`, r.cleared ? "good" : "bad"); }
+      catch (e) { say(e.message, "bad"); }
+      J.busy = ""; update();
+    } });
+  const row = x => h("li", { class: "lr conn-row", "data-key": "web-" + x.base },
+    h("div", { class: "lr-in conn-in" },
+      h("div", { class: "conn-head" }, h("b", { class: "conn-name" }, x.base), statusLabel("working", "signed in")),
+      h("p", { class: "conn-line muted" }, x.signed_at ? `Signed in here ${ago(x.signed_at * 1000)}` : "Signed in here"),
+      here ? h("div", { class: "conn-acts" },
+        button("Sign in again", () => go(x.base, x.base), { size: "s", kind: "quiet" }),
+        button("Forget", () => forget(x), { size: "s", kind: "quiet", busy: J.busy === x.base })) : null));
+  return block({ title: "Sign in to a site", key: "web-signin",
+      sub: "For a site that turns agents away, like Etsy, eBay, Best Buy or Mouser. You sign the Hive's browser in once; agents then read its pages signed in. They never buy, post, message or change anything there. Banks and payment sites stay out." },
+    here ? h("form", { class: "frow", "data-key": "web-signin-form", onsubmit: e => { e.preventDefault(); go(J.url); } },
+      h("div", { class: "frow-grow" }, field("Site address", input({ type: "text", inputmode: "url", enterkeyhint: "go", autocomplete: "off", autocapitalize: "off", spellcheck: "false", placeholder: "etsy.com", value: J.url, oninput: (e, n) => { J.url = n.value; } }))),
+      button("Sign in", null, { type: "submit", size: "s", kind: "primary", busy: !!J.dlg || J.busy === "start" }))
+      : h("p", { class: "field-h", "data-key": "web-signin-where" }, "Signing in to a site works only from your own app opened through Cloudflare or Tailscale, not from this connection."),
+    J.err && here ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, J.err) : null,
+    J.said ? h("p", { class: "fmsg", "data-tone": J.said.tone || null, role: "status", "data-key": "web-signin-say" }, J.said.text) : null,
+    sites.length ? h("ul", { class: "list conn-list" }, sites.map(row)) : null);
 }

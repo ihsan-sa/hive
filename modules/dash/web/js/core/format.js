@@ -57,7 +57,12 @@ export function firstSentence(s) {
 /** What an agent asks, as one line: its question when the message has one ("Both exports pass. Which one goes to print?" is "Which one goes to print?"),
  *  else its first sentence. The Needs you lines said the lead-in and left the question out (HA-13). */
 export function askSentence(s) {
-  const t = mdPlain(s).replace(/^(@\S+\s+)+/, "").replace(/\s+/g, " ").trim(), m = t.match(/(?:^|[.!?:]\s)([^.!?]{3,240}\?)(?=\s|$)/);
+  // A line break ends a sentence too: "3. Drop it" then "Which way?" asks "Which way?", not "Drop it Which way?" (friction-redesign)
+  // (a blank line or a list item's end; a line wrapped mid-sentence still reads on)
+  const l = mdPlain(s).replace(/^(@\S+\s+)+/, "").replace(/[ \t]+/g, " ").replace(/^ +| +$/gm, "")
+    .replace(/\n(?!\n)/g, (x, i, all) => (/(^|\n)(?:[-*•]|\(?\d+[.):])[^\n]*$/.test(all.slice(0, i)) || /^\s*(?:[-*•]|\(?\d+[.):])\s/.test(all.slice(i + 1)) ? "\n" : " "))
+    .replace(/\n\s*\n+/g, "\n").trim(), t = l.replace(/\n/g, " ");
+  const m = l.match(/(?:^|[.!?:]\s|\n)([^.!?\n]{3,240}\?)(?=\s|$)/);
   return m ? m[1].trim() : firstSentence(t);
 }
 

@@ -30,6 +30,7 @@ export default {
   "Filters": "Filtros",
   "Columns": "Columnas",
   "Total cost": "Coste total",
+  "At API prices": "A precios de la API",
   "Tokens": "Tokens",
   "Agent time": "Tiempo de agente",
   "under a minute": "menos de un minuto",
@@ -254,6 +255,11 @@ export default {
     [/^(\d+) agents?$/, (_, n) => `${n} ${pl(n, "agente", "agentes")}`],
     [/^(\d+) running$/, "$1 corriendo"],
     [/^(\S+) per agent$/, "$1 por agente"],
+    [/^not billed · (\S+) per agent$/, "no se cobra · $1 por agente"],
+    [/^Also show (\S+) housekeeping runs?$/, "Mostrar también $1 tareas de mantenimiento"],
+    [/^(\S+) housekeeping runs?$/, "$1 tareas de mantenimiento"],   // the phone's shorter button, beside "411 helpers"
+    [/^Totals: (\d+) running · (\S+) at API prices, not billed$/, "Totales: $1 corriendo · $2 a precios de la API, no se cobra"],
+    [/^Totals: (\d+) running$/, "Totales: $1 corriendo"],
     [/^added up over (\d+) runs?, in (.+)$/, (_, n, t) => `sumado en ${n} ${pl(n, "ejecución", "ejecuciones")}, en ${t}`],
     [/^(\d+)% re-read from cache; (\S+) written$/, "$1% releído de la caché; $2 escritos"],
     // Timeline

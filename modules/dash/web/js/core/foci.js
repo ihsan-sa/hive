@@ -273,8 +273,13 @@ export function railSay(text, max = 70) {
 export const plainPills = text => scrub(text).replace(WORD, (m, a, at, w1, w2, w3) => (at === "#" ? m : at === "@" || w2 || isCode(w3) ? a + plainName(w1 || w2 || w3) : m));
 /** A thread's one-line description: its status bar's first line, else nothing (the title says what it is). */
 export function threadLine(th) { const r = S.threadStatus && S.threadStatus[th]; const l = r && scrub(r.text.split("\n")[0].replace(/\s*\(a[0-9a-f]{4,5}\)/g, "")); return l && l !== threadTitle(th) ? l : ""; }
-/** Where a needs row comes from, said for the person: its focus's name, else the thread's status line 1, else its title. */
-export function needSource(w) { const f = w.focus ? focusById(w.focus) : focusById(focusOf(w.th)); return f ? focusName(f) : (w.th && (threadLine(w.th) || threadTitle(w.th))) || ""; }
+/** Where a needs row comes from, said for the person: the conversation it is in (friction pass: the focus's name made the Amazon cart ask
+ *  read "The web app beats the chat apps"); a focus summary's line names its focus, which is where it comes from. */
+export function needSource(w) {
+  const f = w.focus ? focusById(w.focus) : focusById(focusOf(w.th));
+  if (w.src === "summary") return f ? focusName(f) : (w.th && railTitle(w.th)) || "";
+  return (w.th && railTitle(w.th)) || (f ? focusName(f) : "");
+}
 /** A focus's name, said short where the long name explains more than it names. */
 /** The focus's name from its record or its id (the thread header's crumb and the focus page's links pass ids; handed an id this said Misc for every filed thread, the person, 11081224cf6a); "Misc" for none. */
 export const focusName = f => { if (typeof f === "string") f = focusById(f); return (f && f.name) || "Other"; };

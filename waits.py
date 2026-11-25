@@ -2,8 +2,8 @@
 """What still waits on the person, put to an agent at the moment it can answer: at Stop in a thread it touched (inbox.owns_open), on writing a second wait in a thread (`hive post`, `hive asks person`), and on closing a thread's last one under a bar that still says it waits.
 Warns and shows, never refuses; each reminder at most once per run, one line per item. The causes and counts are in projects/rsi-lab/simuse/foryou-pass.md.
 
-`waits.py answered | threads-pct | decidable` prints the numbers `hive improve log --check` reads."""
-import json, os, sys, time
+`waits.py answered | threads-pct | decidable | repeats` prints the numbers `hive improve log --check` reads."""
+import json, os, re, sys, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # asks.py runs with -I, which leaves this folder off the path
 import away, asks, foryou
@@ -134,7 +134,75 @@ def decidable():
     """Asks waiting on the person whose reason names none of the six."""
     return sum(foryou.decidable(e.get("why")) for e in asks.ledger().values() if e.get("status") == "person" and e.get("kind") != "direction")
 
+
+STOP = set("a an and are as at be but by can do for from has have i if in is it its it's me my no not of on or our so than that the their them then there this to up us was we what when which will with would you your yours yes say said just one".split())
+ROUTE = set("warden slack sudo word send sent line box post thread reply type paste message board".split())  # how to send, not what: 3 of 11 replay hits matched only on these (aa008, 2026-11-25)
+WINDOW = 14 * 86400
+
+def words(line):
+    """The content words of a For you line: lower case, 3 letters or more, common words and route words left out, code spans removed."""
+    line = foryou.SPAN.sub(" ", str(line))   # a command or a quoted word is the route, not the thing asked
+    return {w for w in (x.strip(".,;:!?()[]{}'\"`*_") for x in line.lower().split()) if len(w) >= 3 and w not in STOP and w not in ROUTE}
+
+def answers(p, post_id, author):
+    """The person's post p answers For you post_id from author: it replies to that post, or names the author (@author in the text, or in to)."""
+    to = p.get("to") if isinstance(p.get("to"), list) else [p.get("to") or ""]
+    return str(p.get("reply_to") or "") == post_id or bool(re.search(rf"@{re.escape(author)}\b", str(p.get("text") or "").lower())) or author in {str(x).lower().lstrip("@") for x in to}
+
+def alike(a, b):
+    """Two For you lines ask the same thing: at least 4 content words shared, and 60% of the shorter line's. Replaying 14 days of the board, this caught the sign-in and H4-yes repeats."""
+    common = a & b
+    return len(common) >= 4 and len(common) >= 0.6 * min(len(a), len(b))
+
+def repeats(text, thread, pid, posts, open_ids, now=None):
+    """For you lines in a new post that restate one from the last 14 days which is still open in another thread, or which the person has answered since (as away.for_yous: a reply to it, or a post in its thread naming its author; another person post there isn't an answer). [(kind, earlier post, its thread, the person's post or None)], one per earlier post. The same thread's open line is same_wait's."""
+    now = now or time.time()
+    new = [words(l) for l in foryou.lines(text) if not foryou.NOTHING.match(l)]
+    new = [w for w in new if w]
+    if not new: return []
+    posts = list(posts)
+    out, said = [], {}
+    for p in posts:
+        if str(p.get("from", "")).lower() in away.PERSON and (t := away.stamp(p.get("at"))): said.setdefault(p.get("thread"), []).append((t, p.get("id"), p))
+    for p in posts:
+        if str(p.get("id")) == str(pid) or str(p.get("from", "")).lower() in away.PERSON: continue
+        at = away.stamp(p.get("at"))
+        if not at or at < now - WINDOW or not foryou.FOR_YOU.search(str(p.get("text") or "")): continue
+        if not any(alike(n, words(l)) for l in foryou.lines(p.get("text")) for n in new): continue
+        t, i = p.get("thread"), str(p.get("id"))
+        if i in open_ids:
+            if t != thread: out.append(("open", i, t, None))
+        elif after := [x for x in said.get(t, []) if x[0] > at and answers(x[2], i, str(p.get("from", "")).lower())]:
+            out.append(("answered", i, t, after[0][1]))
+    return out
+
+def on_repeat(text, thread, pid):
+    """After `hive post` with a For you line: a line asked before and still open elsewhere, or already answered."""
+    if not foryou.FOR_YOU.search(str(text or "")): return None
+    posts = list(away.lines(away.HOME / "board.jsonl"))
+    open_ids = {str(r["post"]) for r in away.open_on_person(posts=posts)["for_yous"]}
+    found = repeats(text, thread, pid, posts, open_ids)
+    if not found or not once("repeat"): return None
+    said = []
+    for kind, i, t, heard in found[:MAX_ROWS]:
+        if kind == "open": said.append(f"For you {i} in thread {t} already asks this and is still open.")
+        else: said.append(f"For you {i} in thread {t} asked this before, and the person wrote there after it ({heard}).")
+    return ("Your For you line repeats an earlier one:\n" + "\n".join(said) +
+            f"\nIf it is the same wait, close yours (`hive foryou close {pid} --why \"same wait as POST\"`) or point to the open one. If they answered, act on their answer; ask again only if something changed, and say what.")
+
+def repeat_count(days=7, posts=None, now=None):
+    """Agent posts in the last `days` days whose For you line restated an earlier one (open now in another thread, or answered by then): the week check for on_repeat. 14 days before it landed (2026-11-25): 11 of 121."""
+    now = now or time.time()
+    posts = list(away.lines(away.HOME / "board.jsonl")) if posts is None else posts
+    open_ids = {str(r["post"]) for r in away.open_on_person(posts=posts)["for_yous"]}
+    n = 0
+    for k, p in enumerate(posts):
+        at = away.stamp(p.get("at"))
+        if not at or at < now - days * 86400 or not away.AGENT.match(str(p.get("from", ""))): continue
+        n += bool(repeats(p.get("text"), p.get("thread"), p.get("id"), posts[:k], open_ids, now=at))
+    return n
+
 if __name__ == "__main__":
-    do = {"answered": answered, "threads-pct": threads_pct, "decidable": decidable}.get((sys.argv[1:] or [""])[0])
-    if not do: sys.exit("usage: waits.py answered | threads-pct | decidable")
+    do = {"answered": answered, "threads-pct": threads_pct, "decidable": decidable, "repeats": repeat_count}.get((sys.argv[1:] or [""])[0])
+    if not do: sys.exit("usage: waits.py answered | threads-pct | decidable | repeats")
     print(do())

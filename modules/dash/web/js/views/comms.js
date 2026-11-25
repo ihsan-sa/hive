@@ -13,8 +13,8 @@ import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitO
 import { workBar, workBarHeld } from "../ui/workbar.js";
 import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, yoursN, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci, workingIn, leadOf, cardSince, newSince, hiddenAsks, markSeen as lookAt, seenLeave } from "../core/foci.js";
 import { newIn } from "./focus.js";
-import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadStand, jobsFor, heldForYou, carryOn, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, retryWords, fresh7, asksQuestion, fileInfo } from "../core/model.js";
-import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
+import { SIDE_THREAD, agentLabel, capFirst, ownStep, plainStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadStand, jobsFor, heldForYou, carryOn, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, retryWords, fresh7, asksQuestion, fileInfo } from "../core/model.js";
+import { ago, dayName, stamp, clock, dur, short, mdPlain, bareLinks, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
 import { href, threadHref, go, parse } from "../core/router.js";
 import { yoursSearch, yoursText } from "../core/yours.js";
 import { tier, status } from "../core/status.js";
@@ -28,8 +28,9 @@ import { message, messageHead, messageReceipt, localMessage, draftMessage, markW
 import { chatView } from "../rich/artifact.js";
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
 import { openQuick, quickOpen, closeQuick, quickPanel, laterButtons, setLater } from "../ui/quick.js";
+import { pickBar, onPick } from "../ui/pick.js";
 import { when } from "../ui/when.js";
-import { loadTiers, focusTierChip, threadTierChip } from "../ui/worktiers.js";
+import { loadTiers, focusTierChip, threadTierChip, pauseOf, askPause, pausedStrip } from "../ui/worktiers.js";
 import { downloadMarkdown, printScript } from "../ui/export.js";
 import { shareDialog } from "../ui/share.js";
 import { pinned, important, faded, meta as tmeta, archived, setMeta, renameDialog, openCard, openFor, doneFor, markSeen, threadCrumb, titleExtras } from "../ui/threadmeta.js";
@@ -197,6 +198,10 @@ function cardSeen(box) {
   if (on.length && markSeen(on)) L.ctx && L.ctx.update();
 }
 const atEnd = b => b.scrollTop + b.clientHeight > b.scrollHeight - NEAR;
+// The message the reader is on (the first one in view) and where it sits, so a list drawn again puts that one back in the same place:
+// keeping the distance from the end moved it by whatever changed below it (a new question, a Retry going away when a run starts).
+const readAt = b => { const top = b.getBoundingClientRect().top; for (const c of b.children) { if (!c.dataset || !c.dataset.key) continue; const r = c.getBoundingClientRect(); if (r.bottom > top + 1) return [c.dataset.key, r.top]; } return null; };
+const putBack = (b, at) => { const el = at && b.querySelector(`:scope > [data-key="${CSS.escape(at[0])}"]`); if (!el) return false; b.scrollTop += el.getBoundingClientRect().top - at[1]; return true; };
 const sameTo = (a, b) => a.men.join() === b.men.join();
 const sameSource = (a, b) => { const x = postSource(a), y = postSource(b); return (x && x.name + x.how) === (y && y.name + y.how); };
 
@@ -262,11 +267,11 @@ function versioned(items) {
   for (const p of items) { const r = !p.ev && p.from === "person" && (p.edit_of || p.retry_of); if (r) (starts.get(r) || starts.set(r, []).get(r)).push(p); }
   const out = starts.size ? walk(items, starts) : items;
   if (!V.old) {   // Edit on your last message (its files go with the edit); Retry on the last reply once nothing of yours follows it.
-    // Either works while the reply is still being written: the starter stops that run and hands the agent the new ask (E12d).
+    // Edit works while the reply is still being written: the starter stops that run and hands the agent the new ask (E12d). Retry waits until the run ends: under a "Taking this:" line it read as if that post had failed (friction-dash 3); Interrupt is there meanwhile.
     const posts = out.filter(p => !p.ev && !p.retry_of), li = posts.findLastIndex(p => p.from === "person" && !docNotes(p)), lastMe = posts[li];   // notes from a document aren't a message to edit
     V.edit = lastMe && !pageEdit(lastMe) ? lastMe.id : null;   // a page edited by hand is changed with the page's own Edit (E43)
     const after = posts.slice(li + 1).filter(p => isAgent(p.from)), lastAg = after.at(-1);
-    if (lastAg && !V.wait) { V.retry = lastAg.id; V.retryRoot = (V.info.get(after[0].id) || {}).root || after[0].id; }
+    if (lastAg && !V.wait && !workingIn(L.th)) { V.retry = lastAg.id; V.retryRoot = (V.info.get(after[0].id) || {}).root || after[0].id; }
   }
   return out;
 }
@@ -284,6 +289,7 @@ function walk(seg, starts) {
   return [...seg.slice(0, i).filter(p => !p.retry_of), ...walk(pt, starts)];
 }
 const verRedraw = () => { L.rebuild = true; L.keep = true; L.ctx && L.ctx.update(); };
+onPick(() => { L.rebuild = true; L.keep = true; });   // a one-tap choice held, undone or sent: the conversation's cached messages redraw
 const verPick = (root, i, n) => { if (i >= n - 1) VSEL.delete(root); else VSEL.set(root, i); verRedraw(); };
 const verOpts = p => ({ ver: V.info.get(p.id) || null, canEdit: V.edit === p.id, canRetry: V.retry === p.id, retryRoot: V.retry === p.id ? V.retryRoot : null, pick: verPick, redraw: verRedraw });
 // E13: in one conversation, in the app's look, with no search, a page posted again shows as the newest version of the earlier one.
@@ -373,7 +379,7 @@ function syncDrafts(c, box) {
   const sig = ds.map(a => a.name + ":" + (a.draft ? a.draft.text.length : "-") + ":" + (a.steps || []).map(s => (s.running ? "r" : "d") + (s.out || "").length).join("/")).join();
   if (sig === L.draftSig) return;
   const stick = atEnd(box) || L.stuck; L.draftSig = sig;
-  L.drafts.replaceChildren(...ds.map(draftMessage));
+  L.drafts.replaceChildren(...ds.map(a => inConversation(th, () => draftMessage(a))));   // the same scope as message(): a run still writing is named as its posts are
   if (stick) { box.scrollTop = box.scrollHeight; L.stuck = true; }
 }
 
@@ -439,14 +445,16 @@ function sync(c, ctx) {
     }
     const fsig = S.foci ? (S.foci.foci || []).map(f => f.id + ":" + f.name).join() : "";   // a focus chip names its focus: redraw once the foci arrive
     if (fsig !== L.fociSig) { if (L.fociSig !== undefined && L.all && L.all.some(p => p.tags && p.tags.length)) { L.rebuild = true; L.keep = true; } L.fociSig = fsig; }
+    const wsig = L.th + ":" + workingIn(L.th);   // Retry shows once the run here ends, which brings no post of its own
+    if (wsig !== L.workSig) { if (L.workSig && L.workSig.startsWith(L.th + ":") && (V.retry || V.edit)) { L.rebuild = true; L.keep = !L.stuck && !atEnd(box); } L.workSig = wsig; }
     // E12: a new post can move the Edit and Retry buttons or add a version: draw the list again, where the reader is (at the end if there)
     if (!L.rebuild && L.pend.length && (V.info.size || V.wait || V.edit || V.retry || L.pend.some(p => p.edit_of || p.retry_of))) { L.rebuild = true; L.keep = !L.stuck && !atEnd(box); }
     if (L.rebuild) {
-      const fromEnd = L.keep ? box.scrollHeight - box.scrollTop : isNew && L.saved && L.saved.key === L.key ? L.saved.fromEnd : null;
+      const fromEnd = L.keep ? box.scrollHeight - box.scrollTop : isNew && L.saved && L.saved.key === L.key ? L.saved.fromEnd : null, at = L.keep ? readAt(box) : null;
       paint(box, ctx);
       L.rebuild = false; L.keep = false;
       syncOut(c, box);
-      if (fromEnd != null) { box.scrollTop = box.scrollHeight - fromEnd; L.stuck = atEnd(box); }
+      if (fromEnd != null) { if (!putBack(box, at)) box.scrollTop = box.scrollHeight - fromEnd; L.stuck = atEnd(box); }
       else { box.scrollTop = box.scrollHeight; L.stuck = true; }
       if (L.jumpTo) {
         const id = L.jumpTo, sel = `[data-key="${CSS.escape(id)}"]`, p = S.byId[id]; let el = box.querySelector(sel);
@@ -862,7 +870,8 @@ function statusBar(th) {
   // drops, or a long line): a bare "Working · started 5m ago" is all there, so it is not a button that does nothing.
   const opens = !s.bare || !!s.also || s.text.length > 60, open = opens && stOpen.has(th), r = (S.threadStatus || {})[th];
   if (can("tier") && !simpleOn()) loadTiers(L.ctx && L.ctx.update);
-  const tierChip = can("tier") && !simpleOn() ? threadTierChip(th, focusOf(th)) : null;
+  // Paused (ad748, friction-redesign): a "Paused" chip and Resume in place of the tier chip, so stopping it again is one press.
+  const tierChip = can("tier") && !simpleOn() ? pausedStrip("thread", th, focusOf(th), L.ctx && L.ctx.update) || threadTierChip(th, focusOf(th)) : null;
   return h("div", { class: "cm-status cm-strip", "data-key": "status", "data-open": open ? "" : null, "data-state": s.key, "data-tone": status(s.key).tone, role: "note", "aria-label": "Where it stands" },
     h("b", opens ? { class: "cm-strip-a", role: "button", tabindex: "0", "aria-expanded": String(open), title: s.bare ? (open ? "Show less" : "Show all of it") : open ? "Hide the summary" : "Show the whole summary",
       onclick: e => { e.stopPropagation(); open ? stOpen.delete(th) : stOpen.add(th); L.ctx && L.ctx.update(); },
@@ -897,10 +906,12 @@ function jobRows(th) {
   return h("div", { class: "cm-jobs", "data-key": "jobs", role: "status", "aria-label": "Jobs running" },
     js.slice(0, 4).map(j => {
       const age = j.line && j.at ? ago(j.at * 1e3) : j.since ? `started ${ago(j.since * 1e3)}` : "";
-      const lead = j.there ? h("a", { class: "cm-job-w", href: threadHref(j.th), title: `A job in ${threadTitle(j.th)}` }, short(threadTitle(j.th), 40)) : h("span", { class: "cm-job-w" }, "Job");
+      // The app look shows no shell command: "mkdir -p $TMPDIR/… && cd …" told the person nothing (friction-dash, 11-25). It is on hover; the job's own line says how it goes.
+      const lead = j.there ? h("a", { class: "cm-job-w", href: threadHref(j.th), title: `A job in ${threadTitle(j.th)}` }, short(threadTitle(j.th), 40)) : h("span", { class: "cm-job-w", title: app() && j.cmd ? plainStep("Running: " + j.cmd) : null }, "Job");
+      const what = app() ? (j.line ? null : "no output yet") : j.cmd ? short(say(j.cmd), 60) : inConversation(th, () => `${capFirst(agentLabel(j.agent))}'s job`);
       return h("div", { class: "cm-job", "data-key": `job:${j.agent}:${j.kind}:${Math.round(j.since || 0)}`, "data-there": j.there ? "" : null },
         statusDot("working", { live: true }), lead,
-        h("span", { class: "cm-job-c", title: j.cmd || null }, j.cmd ? short(say(j.cmd), 60) : inConversation(th, () => `${capFirst(agentLabel(j.agent))}'s job`)),
+        what ? h("span", { class: "cm-job-c" + (app() ? " cm-job-who" : ""), title: app() ? null : j.cmd || null }, what) : null,
         j.line ? h("span", { class: "cm-job-l", title: j.line }, say(j.line)) : null,
         age ? h("span", { class: "meta cm-job-age" }, age) : null);
     }),
@@ -932,7 +943,8 @@ function stripLines(th) {
     const s = agentState(a);
     if (simpleOn()) { if (!out.some(x => x.dataset.key === "run")) out.push(line("working", "Your Hive is working on it.", can("stop") ? stopButton("Stop this work", () => askStop(a.name)) : null, { key: "run", live: true })); continue; }
     // Closed it reads "a7c31 Editing fetch.py"; how long ago it was active shows only when open.
-    const doing = a.doing && !(app() && ownStep(a.doing)) ? a.doing.charAt(0).toUpperCase() + a.doing.slice(1) : AGENT_WORDS[s.key] || s.text;   // E10: its own board commands are not a step to read
+    const step = a.doing && app() ? plainStep(a.doing) : a.doing;   // a bare command reads as plain words in the app look (a0ad9's re-check)
+    const doing = step && !(app() && ownStep(a.doing)) ? step.charAt(0).toUpperCase() + step.slice(1) : AGENT_WORDS[s.key] || s.text;   // E10: its own board commands are not a step to read
     out.push(line(s.key, [who(a.name), " ", doing, h("span", { class: "meta cm-line-m" }, " · " + (s.key === "working" ? ago(a.last * 1e3) : s.text))],
       [post && th ? interruptButton(th, a.name) : null, can("stop") ? stopButton(`Stop ${agentLabel(a.name)}`, () => askStop(a.name, agentLabel(a.name))) : null], { key: "run:" + a.name, live: true }));
   }
@@ -1043,7 +1055,11 @@ function titleMenu(c, n, d, off, ctx) {
   const lead = part(...own,
     focusRow,
     full ? titleExtras(th, { files: () => import("../ui/preview.js").then(m => m.openFiles()), close: () => { C.menu = null; ctx.update(); } }) : null);
+  // Pause / Resume (ad748): through the work tiers, which the starter obeys; the dialog says what it does.
+  const pz = full && can("tier") ? pauseOf("thread", th, focusOf(th)) : null;
+  const pause = pz ? act(pz.held ? "Resume" : "Pause…", pz.held ? "play" : "pause", () => askPause("thread", th, focusOf(th), ctx.update), pz.held ? "Let agents start on it again" : "Agents save and stop; nothing new starts until you resume it") : null;
   const where = part(...more,
+    pause,
     prio,
     off > 0 && !simpleOn() ? act(`Show ${off} hidden`, "filter", () => setShow(SHOW.ALL, ctx), "Turn on For you, Updates and Agent comms") : null,
     link("All messages", "chat", href("comms", "~all")),
@@ -1234,14 +1250,37 @@ const startedByPerson = th => { const d = S.threads.get(th); return !!(d && d.po
 /** Finished since the last visit (SU-3): asks of the person's that closed first (the ask register, /api/progress), then conversations they started that went Done. Ten shown, the rest behind one click. */
 const FIN = { asks: null, at: 0, open: true };   // open: shut, the reader saw "11 conversations" and no titles (reading 1812)
 function loadFinished(ctx) { if (now() - FIN.at < 5 * MIN) return; FIN.at = now(); jget("/api/progress").then(v => { FIN.asks = (v && v.asks) || []; ctx.update(); }).catch(() => { FIN.at = 0; }); }
-/** What came of a closed ask: the first line of its evidence post, one line; the ask's own words read as an order under a "Finished" heading (reading 20261110-2009). No post found: no words. */
-function outcome(ev) { const id = (String(ev || "").match(/\b\d{12}\b/) || [])[0], p = id && S.posts.find(q => q.id === id); return p ? firstLine(displayText(p)) : ""; }
+/** What came of a closed ask: the first line of its evidence post, one line; the ask's own words read as an order under a "Finished" heading (reading 20261110-2009). No post found: no words.
+ *  Post ids are hex: "\d{12}" missed "112415478b8d", and that row said nothing (friction-dash, 2026-11-25). */
+function outcome(ev) { const ids = String(ev || "").match(/\b[0-9a-f]{12}\b/g) || [], p = ids.map(id => S.byId[id]).find(Boolean); return p ? finishWords(displayText(p)) : ""; }
+/**
+ * What a finished conversation came to, in one line a person reads (a0ad9's re-check, friction-dash-review2): the closing post's opening words without
+ * footnote marks ("[^1]"), list dashes, commit hashes or file paths (a path reads as its file's name). A post that opens on housekeeping ("False start:
+ * the first launch ran without my H2_NAME …") says nothing of what was done, so the row shows no line for it rather than that one.
+ */
+const HOUSE = /^(?:false start|restart(?:ed|ing)?|relaunch(?:ed)?|retry(?:ing)?|re-?ran|note to self|heartbeat|ignore (?:this|that))\b/i;
+export function finishWords(t) {
+  const ls = bareLinks(mdPlain(String(t || ""))).split("\n").filter(l => !/^\s*\[\^[^\]]+\]:/.test(l)).map(l => l
+    .replace(/\[\^[^\]]+\]/g, "").replace(/^\s*(?:[-*+\u2022]|\d+[.)])\s+/, "").replace(/^(?:@\S+\s+)+/, "")
+    .replace(/(?:\s+(?:in|at|as|to))?\s*\b(?:commit\s+)?(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/g, "")
+    .replace(/(?:~\/|\.{1,2}\/|\/)?(?:[\w.@-]+\/)+([\w@-]+(?:\.\w+)*)(?::\d+(?:-\d+)?)?(?=[\s,.;:)]|$)/g, "$1")
+    .replace(/\(\s*[,;]?\s*\)/g, "").replace(/\s+([,.;:])/g, "$1").replace(/\s+/g, " ").trim()).filter(l => l && !/^[\s\W]*$/.test(l));
+  if (!ls.length || HOUSE.test(ls[0])) return "";
+  const x = ls.join(" "), m = x.match(/^.{20,200}?[.!?](\s|$)/), one = (m ? m[0] : x).trim();
+  return one.length > 140 ? one.slice(0, 139) + "\u2026" : one;
+}
+/** The ask whose closing post a finished conversation's row shows: its own ask (the one its first post made) when it was done since the last visit, else
+ *  the newest done one. A later side ask's answer ("the answer to your warden question", a quiz workbook) read as what the conversation finished (ad748,
+ *  2026-11-25); an own ask done days before would put an old answer under a new date (a54ea's review). A slug-named thread's first post is its own ask. */
+const ownAsk = b => { const d = S.threads.get(b.thread); return b.post === b.thread || !!(d && d.posts.length && b.post === d.posts[0].id); };
+const closer = (a, done) => done.find(b => b.thread === a.thread && ownAsk(b) && b.done_at && Date.parse(b.done_at) > SEEN_BEFORE) || a;
 /** Another ask still open in a finished thread: say whose move it is. "Still open" alone read as a wait on the person (reading 20261113-1736: three of four readers of an all-answered copy listed two such threads as waiting). */
 const moreAsk = a => { const o = (FIN.asks || []).filter(b => b.thread === a.thread && b.id !== a.id); return o.some(b => b.status === "person") ? "person" : o.some(b => b.status === "open" || b.status === "owned") ? "hive" : null; };
 function finishedItems() {
   const out = [], seenTh = new Set(), waits = new Set(waitingOn().map(w => w.th)), live = th => !waits.has(th) && S.threads.has(th) && !isSystemThread(S.threads.get(th)) && !btwParent(th);
-  for (const a of (FIN.asks || []).filter(a => a.status === "done" && a.done_at && Date.parse(a.done_at) > SEEN_BEFORE && live(a.thread)).sort((a, b) => (a.done_at < b.done_at ? 1 : -1))) {
-    if (seenTh.has(a.thread)) continue; seenTh.add(a.thread); out.push({ th: a.thread, t: Date.parse(a.done_at), what: outcome(a.evidence), more: moreAsk(a) });
+  const done = (FIN.asks || []).filter(a => a.status === "done");
+  for (const a of done.filter(a => a.done_at && Date.parse(a.done_at) > SEEN_BEFORE && live(a.thread)).sort((a, b) => (a.done_at < b.done_at ? 1 : -1))) {
+    if (seenTh.has(a.thread)) continue; seenTh.add(a.thread); out.push({ th: a.thread, t: Date.parse(a.done_at), what: outcome(closer(a, done).evidence) || outcome(a.evidence), more: moreAsk(a) });
   }
   const rest = [...S.threads.values()].filter(d => !seenTh.has(d.name) && live(d.name) && d.last > SEEN_BEFORE && startedByPerson(d.name) && /(^|\n)Done:/.test(String((S.threadStatus && S.threadStatus[d.name] || {}).text || "").trim().split("\n").pop() || "") && !waitingOn().some(w => w.th === d.name))
     .sort((a, b) => b.last - a.last);
@@ -1315,6 +1354,7 @@ const cardRows = (rows, n) => rows.length ? h("div", { class: "fc-cv" }, h("ul",
 function cardMenu(f, id, ctx) {
   const all = foci().map(x => x.id), at = all.indexOf(id), mv = all.length > 1, open = C.menu === "fc:" + id, name = focusName(f);
   const close = () => { C.menu = null; ctx.update(); };
+  const pz = !simpleOn() && can("tier") ? pauseOf("focus", id) : null;
   const item = (label, fn, off) => h("button", { type: "button", class: "menu-i", role: "menuitem", disabled: off ? "" : null, onclick: () => { C.menu = null; fn(); ctx.update(); } }, label);
   return h("span", { class: "fc-more pop" },
     h("button", { type: "button", class: "btn fc-moreb", "data-kind": "icon", "data-size": "s", "aria-haspopup": "menu", "aria-expanded": String(open), "aria-label": `More for ${name}: ${mv ? "move earlier or later, " : ""}new conversation`, title: "More",
@@ -1322,7 +1362,8 @@ function cardMenu(f, id, ctx) {
     open ? [scrim(close), h("div", { class: "cm-menu menu fc-menu", role: "menu", "data-side": "bottom-end", "data-key": "fcm" },
       mv ? item("Move earlier", () => moveFocus(id, { step: -1 }).then(err => moved(err, ctx)), at <= 0) : null,
       mv ? item("Move later", () => moveFocus(id, { step: 1 }).then(err => moved(err, ctx)), at >= all.length - 1) : null,
-      item("New conversation", () => newIn(id)))] : null);
+      item("New conversation", () => newIn(id)),
+      pz ? item(pz.held ? "Resume" : "Pause…", () => askPause("focus", id, null, ctx.update)) : null)] : null);
 }
 function focusCard(f, ctx, onlyNew) {
   const id = f.id || null, page = href("focus", id || "misc"), rows = activeThreads(id).filter(r => !archived(r.th)), up = updatedAt(f, rows);
@@ -1347,7 +1388,7 @@ function focusCard(f, ctx, onlyNew) {
       // + and … sit where the time was and show on hover or focus (the Nov 8 handoff §1.4); the time ends the lead line.
       h("span", { class: "fc-tools" }, can("post") ? button("New conversation in " + focusName(f), () => newIn(id), { kind: "icon", size: "s", icon: "plus", cls: "fc-new" }) : null,
         can("post") ? cardMenu(f, id, ctx) : null),
-      h("div", { class: "fc-lead" }, word, simpleOn() || !can("tier") ? null : focusTierChip(id),
+      h("div", { class: "fc-lead" }, word, simpleOn() || !can("tier") ? null : pausedStrip("focus", id, null, ctx.update) || focusTierChip(id),
         pillsOf.length ? h("span", { class: "fc-ag" }, pillsOf.slice(0, HOME_AGENTS).map(a => simpleOn() ? null : agentRef(a, { pill: true })),
           !simpleOn() && pillsOf.length > HOME_AGENTS ? h("span", { class: "pill pill-more", title: pillsOf.slice(HOME_AGENTS).join(", ") }, "+" + (pillsOf.length - HOME_AGENTS)) : null) : null,
         when(up, "t", "updated"))),
@@ -1399,13 +1440,15 @@ function homeNeeds(ws) {
   if (!ws.length) return null;
   const row = w => {
     const d = S.threads.get(w.th), p = w.post && d ? d.posts.find(x => x.id === w.post) : null, who = (w.st && w.st.who) || (p && p.from) || null;
+    const p0 = p || (w.post && S.byId[w.post]) || null;   // the question itself, for its one-tap choices (ui/pick.js)
     const to = w.src === "summary" && w.focus ? href("focus", w.focus) : threadHref(w.th), open = answerer(w), lf = liftIn(w.text);
     // The whole row opens the panel (the question holds agent and thread links, so it can't be a button itself); Answer is the keyboard's way.
     return h("li", { class: "cm-need", "data-hover-acts": open ? "" : null, "data-key": w.key || w.th + ":" + (w.post || w.src), "data-open": open ? "" : null, onclick: open ? (e, n) => { if (!e.target.closest("a,button")) open(e, n); } : null },
       // A trailing ", in #thread" goes to the meta line, as on the card (V3 handoff point 9), so no pill sits mid-sentence.
       h("p", { class: "cm-need-q" }, lineText(lf.text, { pill: false })),
-      h("p", { class: "cm-need-m meta" }, h("a", { href: to }, needSource(w)), lf.th && lf.th !== w.th ? [" \u00b7 in ", h("a", { class: "th", href: threadHref(lf.th) }, threadTitle(lf.th))] : null,
+      h("p", { class: "cm-need-m meta" }, h("a", { href: to }, needSource(w)), lf.th && lf.th !== w.th ? [h("span", { class: "cm-need-in" }, " \u00b7 in "), h("a", { class: "th", href: threadHref(lf.th) }, threadTitle(lf.th))] : null,
         who ? [h("span", { class: "cm-need-wsep" }, " \u00b7 "), simpleOn() || !isCode(who) ? h("span", { class: "cm-need-who" }, plainName(who)) : agentRef(who, { dot: false, pill: true })] : null, w.t ? [" \u00b7 ", when(w.t)] : null),
+      open && w.src === "live" && p0 ? pickBar({ ...p0, disp: displayText(p0) }, { cls: "cm-need-pk" }) : null,
       // Its time rests at the right; on hover or focus the actions take its place (data-hover-acts, css §0). On a phone one … holds Later and Not needed and the row tap is Answer.
       open ? h("div", { class: "cm-need-b" }, w.t ? h("span", { class: "row-t meta" }, when(w.t, "t")) : null,
         h("span", { class: "row-acts" }, laterButtons(w), h("button", { type: "button", class: "btn cm-need-a", "data-size": "s", onclick: open }, "Answer")), needMore(w))
@@ -1618,9 +1661,9 @@ function homePane(ctx) {
   // The waits head (the Nov 8 handoff §1.2): the count as plain words, and All to the full list on the right when there is more than the rows show.
   const waits = n ? `${n} ${n === 1 ? "waits" : "wait"} on you` : "Nothing new waits on you";
   const all = (n > HOME_WAITS || sp.older) && needsHref() ? h("a", { class: "cm-hline-all", href: needsHref(), title: sp.older ? `${plural(sp.older, "older one")} in Stuff to address` : "What waits on you, newest first, each in its conversation" }, "All") : null;
-  // Why the other counts differ, said beside this one rather than in a hover title, so it reads at 390 too (IM-3): older ones fold below, and the Inbox counts unread messages, not things waiting on you.
-  const why = [sp.older ? `${plural(sp.older, "older one")} below` : null, IB.unread && IB.unread !== n ? `Inbox: ${plural(IB.unread, "unread message")}` : null].filter(Boolean).join(" · ");
-  const line = n || sp.older ? [h("span", null, waits), why ? h("span", { class: "cm-hline-why", "data-key": "why" }, why) : null, all] : simpleOn() || S.live.signin?.length ? null : IB.unread ? "No agent is waiting on you" : "Nothing needs you";
+  // One count on the line (friction-dash 5): "19 wait on you · 42 older ones below · Inbox: 29 unread" put three numbers where the person wanted one.
+  // The older ones have their own count on Stuff to address just below, and the Inbox count is unread messages, said where it shows (the rail's "N unread").
+  const line = n || sp.older ? [h("span", null, waits), all] : simpleOn() || S.live.signin?.length ? null : IB.unread ? "No agent is waiting on you" : "Nothing needs you";
   return h("div", { class: "cm-home", "data-key": "home" },
     w ? h("div", { class: "cm-new", "data-key": "new" },
       h("h1", { class: "cm-home-t" }, "What do you want done?"),
@@ -1761,7 +1804,7 @@ function frame(ctx, c, pane) {
 function readOnly(th) {
   const run = app() ? [] : (S.live ? S.live.agents : []).filter(a => a.thread === th && a.alive);
   return h("div", { class: "cm-ro", "data-key": "ro" }, icon("lock"), h("span", null, "Read-only here. This address can't post."),
-    run.length ? h("span", { class: "cm-ro-a" }, run.map(a => h("span", { class: "cm-ro-l", "data-key": a.name, title: a.doing || null }, statusDot(agentState(a).key), agentRef(a.name), a.doing ? h("span", { class: "meta" }, short(a.doing, 48)) : null))) : null);
+    run.length ? h("span", { class: "cm-ro-a" }, run.map(a => { const d = a.doing && app() ? (ownStep(a.doing) ? "" : plainStep(a.doing)) : a.doing; return h("span", { class: "cm-ro-l", "data-key": a.name, title: d || null }, statusDot(agentState(a).key), agentRef(a.name), d ? h("span", { class: "meta" }, short(d, 48)) : null); })) : null);
 }
 
 // A header menu (title, More) closes on a press anywhere outside it and its button (the person, 2026-11-04, post 11040100216b).

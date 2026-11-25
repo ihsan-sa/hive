@@ -130,6 +130,7 @@ def _claude_models():
 CLAUDE_MODELS = _claude_models()
 FRESH = ("new", "claude", "codex", "free", *CLAUDE_MODELS, "astra")  # words that start a fresh agent (SPAWN in starter.py)
 QUOTED_FRESH = re.compile(r"[\"“‘']@([a-z0-9][a-z0-9_-]*)", re.I)  # a mention right after an opening quotation mark
+QUOTE_SPAN = re.compile(r"[\"“]([^\"”\n]{0,300})[\"”]")  # one quotation on one line: "…" or “…”
 ADDRESS_FRESH = re.compile(r"\A\s*@([a-z0-9][a-z0-9_-]*)\s*[:,]", re.I)  # a post that opens by addressing a word ("@haiku: checked ...")
 HASH_NAME = re.compile(r"[a-z][0-9a-f]{4,}")  # what new/claude/codex/free/warden hand out (a9aba, c12cd, f12cd, w0e1f)
 sys.path.insert(0, str(CORE))
@@ -164,7 +165,7 @@ def receipt(to, ignored, ext, me):
         elif (RUN / f"{n}.json").exists(): reach.append(n)
         else: start.append(n)
     bits = [f"starts {', '.join(start)}"] * bool(start) + [f"reaches {', '.join(reach)}"] * bool(reach)
-    if ignored: bits.append(f"ignored {', '.join(ignored)}: no such agent (--to starts one under a code like a1b2c)")
+    if ignored: bits.append(f"{', '.join('@' + n for n in ignored)} REACHED NOBODY: no agent, focus or thread has that name, so nobody was woken. If you meant someone, fix the name and post again (--to starts one under a code like a1b2c); if it was only a word, put it in backticks")
     if bits: print("hive post: " + "; ".join(bits), file=sys.stderr)
 
 def held_tier_note(to, ext, me, thread):
@@ -207,6 +208,40 @@ def paused_untiered_note(text, thread):
             f"`hive tier pause N --post {pid} --why ...`): `hive tier set {thread} N --post {pid}` for this thread alone{whole}. "
             f"Note the tier on the pause's line in kb/priorities.md.")
 
+ASK_WORDS = re.compile(r"\b(please|can you|could you|would you|next step for you|over to you)\b", re.I)
+ASKED_NAME = r"`@?([a-z][0-9a-f]{4}|rootwarden|warden)`"   # an agent code, or a named agent people ask for rulings and root work
+DO_VERBS = ("fix|add|check|build|make|take|run|send|restart|look|review|update|write|post|merge|remove|drop|test|measure|tell|cover|close|"
+            "try|do|find|keep|move|answer|reply|confirm|rebuild|redo|finish|start|own|handle|rule|install|give|use|set|put|read|rerun|retest")
+ASK_LINE = re.compile(r"(?m)^[ \t]*(?:[-*][ \t]+|\d+[.)][ \t]+)?(?:\*\*)?" + ASKED_NAME + r"(?:\*\*)?[ \t]*[:,][ \t]*(?:\*\*)?[ \t]*"
+                      r"(?:please[ \t]+|can you[ \t]+|could you[ \t]+)?(?:" + DO_VERBS + r")\b", re.I)   # "`a9d22`: fix X", "- `warden`, please rule on Y"
+
+def unwoken_ask_note(text, to, me, thread, board=None, running=None):
+    """A warning when an agent's post asks someone to act but names the agent it means only in backticks, so it wakes nobody.
+    Builders end their run after their result post, and a reply like "Checked, `a042e`. Please also ..." left two hand-offs
+    unread on 2026-11-25 (1125021746b0, 1125022053f9), as on 11-06 and 11-24 (memory mention-assignee-by-name). Two shapes:
+    a line that opens with a backticked agent and a verb ("`a9d22`: fix X"), whoever else the post wakes, for any agent that
+    has posted on the board; and a post that asks something ("please", "can you"...) outside code and quotes, wakes nobody
+    but its author, and backticks an agent that has posted in this thread. Never for an agent that is running or that the
+    post wakes. `board` and `running` are for replays. None on any error."""
+    try:
+        to = {str(n).lower() for n in to}
+        plain = "\n".join(l for l in (text or "").splitlines() if not l.lstrip().startswith(">"))   # a quoted older ask asks nothing now
+        board = list(posts()) if board is None else board
+        live = (lambda n: (RUN / f"{n}.json").exists()) if running is None else (lambda n: n in running)
+        seen = {str(q.get("from", "")).lower() for q in board}
+        here = {str(q.get("from", "")).lower() for q in board if q.get("thread") == thread}
+        lined = {m.group(1).lower() for m in ASK_LINE.finditer(plain)} & seen
+        asked = set()
+        if not (to - {me}) and ASK_WORDS.search(CODE.sub(" ", plain)):
+            asked = {m.group(1).lower() for c in CODE.findall(plain) if (m := re.fullmatch(ASKED_NAME, c.strip()))} & here
+        idle = sorted(n for n in (lined | asked) - to - {me} if not live(n))
+    except Exception: return None
+    if not idle: return None
+    names_ = ", ".join(idle)
+    return (f"hive post: this post asks for something, but it names {names_} only in backticks, so "
+            f"{'it is' if len(idle) == 1 else 'they are'} not woken or told. If you are asking {names_} to act, post again with "
+            f"{' '.join('@' + n for n in idle)} written bare (a short pointer to this post is enough).")
+
 def effort_hint(to, a):
     """The line an agent sees when it starts a fresh Claude agent with no --effort, or None. The rule is in `hive help agents`, which few
     runs open, so it is said at the step it applies to (7 days to 2026-11-15: 4 of 187 such starts chose an effort,
@@ -244,6 +279,24 @@ def waits_say(fn, *args):
     try:
         import waits
         return getattr(waits, fn)(*args)
+    except Exception: return None
+
+def served_say(p):
+    """For a running agent: a post that says a file is live, deployed or fixed while its service still runs the old copy gets a warning
+    (served.on_post; friction-chase A13). Only a warning: the post is on the board already."""
+    if not HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")): return None
+    try:
+        import served
+        return served.on_post(p)
+    except Exception: return None
+
+def first_reply_say(p):
+    """For a running agent: its first reply to the person's ask that says work is ahead but not when gets a warning (promises.on_post;
+    friction-chase, ad748 1125022053f9: the person chased after replies with no time). Only a warning: the post is on the board already."""
+    if not HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")): return None
+    try:
+        import promises
+        return promises.on_post(p)
     except Exception: return None
 
 def remind_asks(pid, thread):
@@ -509,6 +562,14 @@ def cmd_post(a):
     if HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_ and (q := sorted({m.group(1).lower() for m in QUOTED_FRESH.finditer(CODE.sub(" ", text)) if m.group(1).lower() in FRESH and m.group(1).lower() not in asked})):
         sys.exit(f"hive post: nothing posted. {', '.join('@' + n for n in q)} sits in quotation marks, so you are quoting it, but it would start a new agent. "
                  "Put it in backticks to write about it; to start one, write it unquoted (or pass --to).")
+    # A thread or focus @word inside a quotation ("talk to @11241507a6b2") is a quote, yet it copies the whole post into that thread and wakes
+    # its agent: ad549 quoted the person's line in an improve result and woke ad5b1 for nothing (2026-11-25), the same slip that copied a
+    # friction brief there an hour before. Refused for agents' own posts; --to still sends on purpose.
+    if HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_:
+        quoted = {m.lower() for span in QUOTE_SPAN.findall(CODE.sub(" ", text)) for m in MENTION.findall(span)}
+        if (q := sorted(n for n in quoted if n in where and n not in asked)):
+            sys.exit(f"hive post: nothing posted. {', '.join('@' + n for n in q)} sits inside a quotation, so you are quoting it, but it names a "
+                     f"{where[q[0]]['kind']} and would copy this post there. Put it in backticks to write about it; to send it there, write it unquoted (or pass --to).")
     # A post opening "@haiku: ..." answers the word its own brief started with, as if it were a name, and starts another agent: on both
     # watchdog trips that started Haiku (11-22, 11-25) the Haiku agent replied that way, and 3 agents rechecked a finished fix (improve, af1eb).
     if HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_ and (m := ADDRESS_FRESH.match(CODE.sub(" ", text))) and m.group(1).lower() in FRESH and m.group(1).lower() not in asked:
@@ -590,6 +651,9 @@ def cmd_post(a):
     # Agents only, and only a warning: the post is on the board already (hive-meta P3).
     if HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_ and foryou and (w := foryou.warning(text)): print(w, file=sys.stderr, flush=True)
     if not a.as_ and (w := waits_say("on_for_you", text, p["thread"], pid)): print(w, file=sys.stderr, flush=True)
+    if not a.as_ and (w := waits_say("on_repeat", text, p["thread"], pid)): print(w, file=sys.stderr, flush=True)
+    if not a.as_ and (w := served_say(p)): print(w, file=sys.stderr, flush=True)
+    if not a.as_ and (w := first_reply_say(p)): print(w, file=sys.stderr, flush=True)
     if HASH_NAME.fullmatch(me or "") and not a.as_ and (w := order_hint(p)): print(w, file=sys.stderr, flush=True)
     for k in getattr(a, "done", None) or []:  # the result post closes the ask it delivers: no separate `hive asks done` turn
         subprocess.run([sys.executable, "-I", str(CORE / "asks.py"), "done", k, "--evidence", pid])
@@ -600,6 +664,7 @@ def cmd_post(a):
     receipt(list(dict.fromkeys(to)), ignored, ext, me)
     if not a.as_ and (w := held_tier_note(to, ext, me, p["thread"])): print(w, file=sys.stderr, flush=True)
     if not a.as_ and HASH_NAME.fullmatch(me or "") and (w := paused_untiered_note(text, p["thread"])): print(w, file=sys.stderr, flush=True)
+    if not a.as_ and HASH_NAME.fullmatch(me or "") and (w := unwoken_ask_note(text, list(dict.fromkeys(to)), me, p["thread"])): print(w, file=sys.stderr, flush=True)
     if (w := effort_hint(to, a)): print(w, file=sys.stderr)
 
 def cmd_model(a):

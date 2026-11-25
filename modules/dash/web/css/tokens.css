@@ -137,3 +137,11 @@
 [data-tone=tier2]{--c:var(--tier2);--ci:var(--ink)}
 [data-tone=held]{--c:var(--held);--ci:var(--ink)}
 [data-tone=other]{--c:var(--other);--ci:var(--ink-2)}
+
+/* Friction pass, 2026-11-25 (ui-regen-1125-0545). Added; no existing value changes. */
+:root{
+  --cp-status-h:32px;   /* the composer card's status slot: fixed, so the box never moves while the owner types (HANDOFF §3) */
+  --ask-pick-h:36px;    /* one-tap answer buttons; 44px hit area on a phone (phone.css) */
+  --undo-ms:10000;      /* how long a one-tap answer can be undone before it is final (read by JS, HANDOFF §1) */
+  --banner-age:6h;      /* a dismissable banner leaves on its own after this (read by JS, HANDOFF §9) */
+}

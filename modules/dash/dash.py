@@ -15,7 +15,7 @@ The web page is web/ next to this file (ui.html, the previous page, is at /old);
   hive-dash serve [--port P] web UI on http://127.0.0.1:P/ (loopback only; default 8077)
   hive-dash --json          the snapshot as JSON
 """
-import base64, math, ipaddress, socket, urllib.parse, email.utils, shlex, errno, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time, zlib
+import base64, bisect, math, ipaddress, socket, urllib.parse, email.utils, shlex, errno, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time, zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -1548,8 +1548,8 @@ def drafts_in(thread, steps=False):
         if not alive(r.get("pid")): continue
         d = activity(r.get("out"))["draft"]
         d = {**d, "thread": thread} if d and d["thread"] == thread else None   # a post with no --thread opens a new conversation: it is not a reply in the one the agent runs in (person 111311262b35)
-        ran = ran_live(r.get("out")) if steps and r.get("thread") == thread else {"steps": []}
-        if d or ran["steps"]: got.append({"name": r.get("name", f.stem), "draft": d, **({"steps": ran["steps"], "more": ran["more"]} if steps else {})})
+        ran = ran_live(r.get("out")) if steps and r.get("thread") == thread else {"steps": [], "more": 0}   # an agent running elsewhere that drafts a reply here has no steps here: the shape stays whole (KeyError 'more', 379 times in 14 days)
+        if d or ran["steps"]: got.append({"name": r.get("name", f.stem), "draft": d, **({"steps": ran["steps"], "more": ran.get("more", 0)} if steps else {})})
     return [g for g in got if g["draft"] or g.get("steps")] if steps else [g for g in got if g["draft"]]
 
 def live():
@@ -1881,6 +1881,9 @@ class Usage:
                     elif ln.startswith(b'{"type":"rate_limit_event"'):
                         try: self.limit(f, json.loads(ln), p)
                         except (ValueError, AttributeError, TypeError): continue
+                if self.scanning:   # the first pass reads every log (17 GB on 2026-11-25), and its page cache was charged to the dash: it sat at its 2G cap
+                    try: os.posix_fadvise(fh.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)   # for minutes after each start, reclaiming on every request (a54ea's review)
+                    except (OSError, AttributeError): pass
         except OSError:
             return
         if f["off"] != was: self.ver += 1; f["v"] = self.ver
@@ -1983,12 +1986,20 @@ class AgentCosts:
     never waits for it, and gets the last result with "refreshing" set. No hive-cost: "by" stays empty and the page uses Usage's figures."""
     TOOL = Path(__file__).resolve().parent.parent / "cost" / "cost.py"
 
-    def __init__(self, every=300):
+    def __init__(self, every=1800):   # half-hourly: a running agent's newest spend comes from its session log meanwhile (model.js agentUsd)
         self.every, self.at, self.by, self.busy, self.lock = every, None, {}, False, threading.Lock()
+        # The last read survives a restart: hive-cost takes about 4 min, and until it answered the Agents page showed grey cost tiles (a0ad9's
+        # re-check, 2026-11-25). The kept read goes out with its own time, so the page says how old it is, and a fresh one starts as usual.
+        self.save = HOME / ".cache" / "hive-dash" / "agent-costs.json"
+        try:
+            v = json.loads(self.save.read_text())
+            if isinstance(v.get("by"), dict) and v.get("at"): self.at, self.by = float(v["at"]), v["by"]
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
 
     def refresh(self):
         try:
-            r = subprocess.run(["nice", sys.executable, "-I", str(self.TOOL), "--by", "agent", "--json"], capture_output=True, text=True, timeout=180)
+            r = subprocess.run(self.scope() + ["nice", sys.executable, "-I", str(self.TOOL), "--by", "agent", "--json"], capture_output=True, text=True, timeout=900)   # 4 min over 17 GB of logs on 2026-11-25: the old 180 s cut it off every time, so it never answered and ran again every 5 min
             rows = json.loads(r.stdout)["rows"] if r.returncode == 0 else None
         except (OSError, ValueError, KeyError, subprocess.SubprocessError):
             rows = None
@@ -1998,6 +2009,25 @@ class AgentCosts:
                 self.at = time.time()
                 self.by = {x["key"][0]: {"usd": x["usd"], "calls": x["calls"], "t": x["tokens"], "sub": x["sub_usd"],
                                          "m": {k: v for k, v in x["models"].items() if k != "<synthetic>"}} for x in rows}
+                try:
+                    self.save.parent.mkdir(parents=True, exist_ok=True); tmp = self.save.with_suffix(".tmp")
+                    tmp.write_text(json.dumps({"at": self.at, "by": self.by})); tmp.replace(self.save)
+                except OSError:
+                    pass
+
+    SCOPE = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "-p", "MemoryMax=1G"]
+    _scoped = None
+
+    def scope(self):
+        """Run hive-cost in a cgroup of its own (a54ea's review, 2026-11-25): reading 17 GB of logs filled the dash's own 2 GB cgroup with
+        page cache and hive-cost's heap, so the dash ran pinned at its ceiling (memory.events max 14777 in a few hours) and every request paid for
+        reclaim. In its own scope the cache is charged there, and its 1G cap reclaims from hive-cost, not the dash. No user systemd: run as before."""
+        if AgentCosts._scoped is None:
+            try:
+                AgentCosts._scoped = subprocess.run(self.SCOPE + ["true"], capture_output=True, timeout=20).returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                AgentCosts._scoped = False
+        return list(self.SCOPE) if AgentCosts._scoped else []
 
     def view(self):
         with self.lock:
@@ -2205,11 +2235,11 @@ def ran_live(out, limit=30):
     The same calls, cut the same way, as the fold ran_for() gives the post it writes next, so what showed live is what stays."""
     p = Path(out or "")
     try: st = p.stat(); key = (st.st_mtime, st.st_size)
-    except OSError: return {"steps": []}
+    except OSError: return {"steps": [], "more": 0}
     hit = _ran_live.get(str(p))
     if hit and hit[0] == key: return hit[1]
     v = _ran_parse(p)
-    if not v: return {"steps": []}
+    if not v: return {"steps": [], "more": 0}
     start = max(v["posts"].values(), default=-1) + 1
     steps = [s for s in (_ran_step(c) for c in v["calls"][start:]) if s]
     r = {"steps": steps[-limit:], "more": max(0, len(steps) - limit)}
@@ -2386,16 +2416,32 @@ def agent_diff(name, path, full=True):
     return {"p": path, "what": what, "diff": d[:60000], "cut": len(d) > 60000}
 
 
+_libc = None
+
+
+def trim_heap():
+    """Hand freed heap back to the system (glibc malloc_trim). A parse that peaked at hundreds of MB otherwise stays charged to the
+    service's 2 GB cap as free-but-held pages, across one arena per request thread (24 of them on 2026-11-25, friction-dash)."""
+    global _libc
+    try:
+        if _libc is None:
+            import ctypes, ctypes.util
+            _libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6")
+        _libc.malloc_trim(0)
+    except (OSError, AttributeError): _libc = False
+
+
 class Steps:
     """Every agent's tool calls and words, from all the session logs, for the Ledger page (/api/ledger). Each log is read on
     from where the last look stopped, so after the first pass a look costs only what was written since. Kept in memory as short
     rows (a few tens of MB for tens of thousands of steps); filtered and paged here, so the page only ever gets one page.
     Codex logs carry no times, so they're left out. Each log's agent and thread come from its start event in ~/log.jsonl."""
     EVERY, STALE = 5, 60
+    DAYS = 7   # steps older than this are dropped and older logs not read: all 13,700 logs held 596k rows, 415 MB of a 2 GB service (OOM-killed 28 times in 14 days, friction-dash)
 
     def __init__(self):
         self.rows, self.off, self.owner, self.log_off, self.at, self.sorted = [], {}, {}, 0, 0, True
-        self.lock, self.busy, self.ready = threading.Lock(), False, False
+        self.lock, self.busy, self.ready, self.trimmed = threading.Lock(), False, False, 0.0
 
     def scan(self):
         try:
@@ -2412,11 +2458,13 @@ class Steps:
         new = []
         try: files = list((HOME / "sessions").glob("*.jsonl"))
         except OSError: files = []
+        cut = time.time() - self.DAYS * 86400
         for q in files:
             k = q.name
-            try: size = q.stat().st_size
+            try: st = q.stat(); size = st.st_size
             except OSError: continue
             if size <= self.off.get(k, 0): continue
+            if st.st_mtime < cut: self.off[k] = size; continue   # nothing in it is inside the window
             name, thread = self.owner.get(k) or (k.split("-")[0], "")
             name, thread = sys.intern(name), sys.intern(thread)   # tens of thousands of rows share a few hundred names
             off = self.off.get(k, 0)
@@ -2441,7 +2489,7 @@ class Steps:
                         try: e = json.loads(ln)
                         except ValueError: continue
                         t = ts(e.get("timestamp"))
-                        if not t: continue
+                        if not t or t < cut: continue
                         for c in (e.get("message") or {}).get("content") or []:
                             if c.get("type") == "tool_use":
                                 inp = c.get("input") or {}
@@ -2452,6 +2500,9 @@ class Steps:
                             elif c.get("type") == "text" and str(c.get("text") or "").strip():
                                 x = redact(short(c["text"], 400))
                                 new.append((t, name, thread, "said", "", x, ""))
+                    if not self.ready:   # the first pass reads a week of sessions (GBs); drop their page cache so it isn't charged to the dash (same as Usage)
+                        try: os.posix_fadvise(fh.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+                        except (OSError, AttributeError): pass
             except OSError: pass
             self.off[k] = off
         return new
@@ -2461,7 +2512,13 @@ class Steps:
             new = self.scan()
             with self.lock:
                 if new: self.rows.extend(new); self.sorted = False
+                cut = time.time() - self.DAYS * 86400
+                if time.time() - self.trimmed > 3600:   # hourly, sorted first so the old rows are one slice
+                    self.trimmed = time.time()
+                    if not self.sorted: self.rows.sort(key=lambda r: r[0]); self.sorted = True
+                    self.rows = self.rows[bisect.bisect_left(self.rows, cut, key=lambda r: r[0]):]
                 self.at, self.ready = time.time(), True
+            if new: trim_heap()
         finally: self.busy = False
 
     def query(self, agent="", thread="", kind="", q="", before=None, since=None, limit=300, full=True):
@@ -2965,7 +3022,7 @@ GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/buy": "logins", "/api/orders": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/shop-signin": "logins", "/api/shop-signin/frame": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/kb/wipe": "files", "/api/kb/copies": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files", "/api/docs": "files", "/api/docs/doc": "files", "/api/docs/page": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/kb/wipe": "files", "/api/kb/putback": "files", "/api/docs/notes": "files", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/side-ask": "post", "/api/door": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
+            "/api/post": "post", "/api/side-ask": "post", "/api/door": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/default-model": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/mcp-url": "modules", "/api/voice": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/kb/save": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/buy": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/shop-signin": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/mcp-url", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
@@ -2979,10 +3036,12 @@ def docs_mod():
     return _DOCS[0]
 
 
-def word_shell():
+def word_shell(key="word_shell"):
     """The root-run word shell's origins (projects/word-shell/DESIGN.md): config.json word_shell, one origin or a list (its own name
-    and its tailnet port). Unset = off. Any malformed entry turns it all off. The dash only tells the shell which thread is open."""
-    v = (jload(HOME / "core" / "config.json", {}) or {}).get("word_shell")
+    and its tailnet port). Unset = off. Any malformed entry turns it all off. The dash only tells the shell which thread is open.
+    word_card (same shape): the origins of root's approval card (projects/word-shell/ONE-APP.md). Set it only once root serves /confirm there:
+    while it is set, a yes: line's Send opens that card."""
+    v = (jload(HOME / "core" / "config.json", {}) or {}).get(key)
     v = [v] if isinstance(v, str) else v
     if not isinstance(v, list) or not v or len(v) > 4: return None
     ok = all(isinstance(o, str) and re.fullmatch(r"https://[a-z0-9-]+(\.[a-z0-9-]+)*(:[0-9]{1,5})?", o) for o in v)
@@ -4732,7 +4791,7 @@ def config_view():
     try: style = ANSWER_STYLE.read_text(errors="replace")
     except OSError: style = ""
     return {**{k: c.get(k) for k in ("max_sessions", "keeper_every_s", "keeper_idle_s", "usage_stop_pct", "auto_update", "update_every_s", "update_pace", "max_budget_usd", "max_daily_usd")}, "spend_today": spend_today(),
-            "answer_style": style.strip(), "memory": memory_view(c)}
+            "answer_style": style.strip(), "memory": memory_view(c), "default_model": default_model_view()}
 
 
 # E39b (projects/everyday MEMORY.md): Settings › Everyday › Memory. core/memory.py is the only writer of ~/memory.md; the dash reads it with
@@ -5757,6 +5816,15 @@ class ShopSignin:
     seconds after the shop shows signed in, after IDLE_S with no input, or after LIFE_S, so it is never a standing window onto the browser.
     Only the person's own app may use it (buy_person, like Buying): agents on this machine can reach the local route."""
     SITES = {"jlc": "JLCPCB"}
+    # site "web": any address the person names (thread 11241110ade5, warden 112500380c83), in the profile `web` uses, so agents can then read
+    # that site's pages signed in. Read-only for agents (web navigates and reads, never clicks); no saved passwords (the helper sets that).
+    WEB_LOG = HOME / ".hive" / "web-signins.json"   # {base: {"signed_at": epoch}}: hosts only, read by modules/web/web.mjs
+    # Banks and payments, email and identity, government: nobody signs in to these here, and `web` never reads them signed in (warden's advice;
+    # the list is tools/web_refuse.json, which tools/web_sites.mjs refused() reads too)
+    # A copy without tools/ (the release export ships none, and so no sign-in helper either) refuses every site rather than failing to start.
+    try: REFUSE = json.loads((Path(__file__).resolve().parent / "tools" / "web_refuse.json").read_text())
+    except (OSError, ValueError): REFUSE = None
+    SIGNED_DIR = HOME / ".cache" / "web-signed"   # one kept profile per signed-in site (tools/web_sites.mjs signedProfile)
     INPUTS = {"click", "wheel", "drag", "text", "key", "back"}
     LIFE_S, IDLE_S, SIGNED_CLOSE_S = 900, 300, 4
     POLL_S = 90   # no screen asked for this long: the page that showed it is gone (closed tab, lost phone), so the browser goes too
@@ -5766,7 +5834,64 @@ class ShopSignin:
         self.lock, self.cond, self.wlock = threading.Lock(), threading.Condition(), threading.Lock()
         self.proc = self.site = self.unit = self.closing = None
         self.n = 0
+        self.web_base = self.web_href = None
         self.state, self.why, self.frame, self.seq, self.size, self.started, self.touched, self.polled = "idle", "", b"", 0, (0, 0), 0.0, 0.0, 0.0
+
+    @staticmethod
+    def base(host):
+        """The site a host belongs to, as tools/web_sites.mjs baseOf says it: www.etsy.com -> etsy.com, www.amazon.co.uk -> amazon.co.uk."""
+        l = [x for x in str(host or "").lower().rstrip(".").split(".") if x]
+        if len(l) >= 3 and len(l[-1]) == 2 and l[-2] in ("co", "com", "org", "net", "ac", "gov", "edu", "ne", "or", "gc", "qc", "on"): return ".".join(l[-3:])
+        return ".".join(l[-2:])
+
+    @classmethod
+    def refused(cls, base):
+        """Why this site is refused, as tools/web_sites.mjs refused() says it, or ""."""
+        b = str(base or "").lower(); name = b.split(".")[0]; R = cls.REFUSE
+        if not R: return "can't be checked here: this copy has no tools/web_refuse.json"
+        for k, l in R["names"].items():
+            if name in l: return R["why"][k]
+        for k, l in R["bases"].items():
+            if b in l: return R["why"][k]
+        for k, l in R["ends"].items():
+            if any(b.endswith(e) for e in l): return R["why"][k]
+        return R["why"]["money"] if "bank" in name else ""
+
+    def web_url(self, url):
+        """A public web address the person may sign in to: (href, base). The helper opens it; only its host is ever kept or shown."""
+        if not isinstance(url, str) or not url.strip() or len(url) > 2000: raise ValueError("type the site's address, like etsy.com")
+        url = url.strip()
+        if "://" not in url: url = "https://" + url
+        try: u = urlsplit(url); host = (u.hostname or "").lower(); u.port
+        except ValueError: raise ValueError("that isn't a web address")
+        if u.scheme not in ("http", "https"): raise ValueError("only http and https addresses")
+        if u.username is not None or u.password is not None or "@" in u.netloc: raise ValueError("leave the name and password out of the address: type them on the site")
+        try: ip = ipaddress.ip_address(host.strip("[]"))
+        except ValueError: ip = None
+        # a name with a real top-level label: no number address in any spelling Chrome accepts (127.1, 0x7f.1, 2130706433)
+        if ip or "." not in host or not re.fullmatch(r"[a-z0-9.-]+", host) or not re.fullmatch(r"[a-z][a-z0-9-]{1,62}", host.rsplit(".", 1)[-1]) or host.endswith((".local", ".internal", ".lan", ".home", ".localhost", ".arpa", ".test", ".invalid")) or host in ("localhost",):
+            raise ValueError("a public site's address, like etsy.com")
+        b = self.base(host)
+        why = self.refused(b)
+        if why: raise ValueError(f"{b} {why}")
+        return urlunsplit((u.scheme, u.netloc.lower(), u.path or "/", u.query, "")), b
+
+    def name(self, site):
+        return self.web_base if site == "web" else self.SITES.get(site, site)
+
+    def web_log(self):
+        try: v = json.loads(self.WEB_LOG.read_text()); return v if isinstance(v, dict) else {}
+        except Exception: return {}
+
+    def web_mark(self, base, signed=True):
+        log = self.web_log()
+        if signed: log[base] = {"signed_at": int(time.time())}
+        else: log.pop(base, None)
+        self.WEB_LOG.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.WEB_LOG.with_suffix(f".tmp{os.getpid()}")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # private from the first byte
+        with os.fdopen(fd, "w") as f: f.write(json.dumps(log))
+        os.replace(tmp, self.WEB_LOG)
 
     def cmd(self, site):
         env = os.environ.get("HIVE_SHOP_SIGNIN_CMD")   # tests: the helper on a fake page, no unit
@@ -5774,7 +5899,7 @@ class ShopSignin:
         node, tool = shutil.which("node") or "/usr/bin/node", str(Path(__file__).resolve().parent / "tools" / "shop_signin.mjs")
         self.n += 1; self.unit = f"hive-shop-signin-{int(time.time())}-{self.n}-{secrets.token_hex(3)}"
         return ["systemd-run", "--user", "--quiet", "--collect", "--pipe", f"--unit={self.unit}", "-p", "MemoryMax=1500M",
-                "-p", f"RuntimeMaxSec={self.LIFE_S + 120}", f"--setenv=HOME={HOME}", f"--setenv=PATH={os.environ.get('PATH', '/usr/bin:/bin')}", node, tool, site]
+                "-p", f"RuntimeMaxSec={self.LIFE_S + 120}", f"--setenv=HOME={HOME}", f"--setenv=PATH={os.environ.get('PATH', '/usr/bin:/bin')}", node, tool, site]   # the web address goes on stdin (start), not here where the process list shows it
 
     def signed_log(self):
         try: return json.loads(self.LOG.read_text())
@@ -5784,10 +5909,13 @@ class ShopSignin:
         log = self.signed_log()
         return {"site": self.site, "state": self.state, "why": self.why, "seq": self.seq, "w": self.size[0], "h": self.size[1],
                 "left": max(0, int(self.started + self.LIFE_S - time.time())) if self.proc else 0,
-                "sites": [{"site": k, "name": v, "signed_at": (log.get(k) or {}).get("signed_at")} for k, v in self.SITES.items()]}
+                "sites": [{"site": k, "name": v, "signed_at": (log.get(k) or {}).get("signed_at")} for k, v in self.SITES.items()],
+                "name": self.name(self.site) if self.site else None,
+                "web": sorted(({"base": k, "signed_at": (v or {}).get("signed_at")} for k, v in self.web_log().items() if isinstance(k, str)), key=lambda x: x["base"])}
 
-    def start(self, site):
-        if not isinstance(site, str) or site not in self.SITES: raise ValueError("no such shop")
+    def start(self, site, url=None):
+        if site == "web": href, base = self.web_url(url)
+        elif not isinstance(site, str) or site not in self.SITES: raise ValueError("no such shop")
         old = self.closing
         if old and old.poll() is None:   # the last one is still shutting down (it saves its cookies first): wait for it rather than hand it back
             try: old.wait(timeout=20)
@@ -5796,19 +5924,22 @@ class ShopSignin:
             c = self.closing   # a close that began after the wait above (the watchdog): its helper may still hold the profile
             if c and c.poll() is None and c is not old: raise ValueError("the last sign-in is still closing: try again in a moment")
             if self.proc and self.proc.poll() is None and self.proc is not self.closing:
-                if self.site == site: return self.view()
-                raise ValueError(f"a sign-in to {self.SITES[self.site]} is open: close it first")
-            try: proc = subprocess.Popen(self.cmd(site), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
-            except OSError as e: raise ValueError(f"can't start the browser: {e.strerror or e}")
+                if self.site == site and (site != "web" or self.web_base == base): return self.view()
+                raise ValueError(f"a sign-in to {self.name(self.site)} is open: close it first")
+            if site == "web": self.web_href, self.web_base = href, base
+            try:
+                proc = subprocess.Popen(self.cmd(site), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+                if site == "web": proc.stdin.write((json.dumps({"t": "url", "url": href}) + "\n").encode()); proc.stdin.flush()
+            except (OSError, ValueError) as e: raise ValueError(f"can't start the browser: {getattr(e, 'strerror', None) or e}")
             with self.cond:
                 self.proc, self.closing = proc, None
                 self.site, self.state, self.why, self.frame, self.size = site, "starting", "", b"", (0, 0)
                 self.started = self.touched = self.polled = time.time()
-            threading.Thread(target=self.read, args=(self.proc,), daemon=True).start()
+            threading.Thread(target=self.read, args=(self.proc, base if site == "web" else None), daemon=True).start()
             threading.Thread(target=self.watch, args=(self.proc,), daemon=True).start()
         return self.view()
 
-    def read(self, proc):
+    def read(self, proc, base=None):
         for line in proc.stdout:
             try: m = json.loads(line)
             except Exception: continue
@@ -5837,6 +5968,10 @@ class ShopSignin:
                 elif m.get("t") == "error": self.state, self.why = "failed", str(m.get("why") or "")[:200]
                 self.cond.notify_all()
         proc.wait()
+        # a site sign-in closed without Done, for a site not already on the list: its profile goes, so nothing half signed in is kept
+        if base and base not in self.web_log():
+            try: shutil.rmtree(self.SIGNED_DIR / base)
+            except OSError: pass
         with self.cond:
             if proc is self.proc:
                 if self.state in ("starting", "open", "checking"): self.state, self.why = "closed", self.why or "the browser closed"
@@ -5864,10 +5999,14 @@ class ShopSignin:
     def close_if_signed(self, proc):
         if self.state == "signed": self.close(proc)   # still signed in a few seconds on: the shop didn't send it back to its sign-in page
 
-    def close(self, proc=None):
+    def close(self, proc=None, done=False):
         with self.wlock:
             p = proc or self.proc
             if not p or p.poll() is not None or p is not self.proc or p is self.closing: return {"ok": True}
+            # any site: only the person's Done marks it signed in; Cancel or Close never does (review 2026-11-25), even if it looked signed in
+            if self.site == "web" and self.web_base and done:
+                try: self.web_mark(self.web_base); self.state = "signed"
+                except OSError: pass
             self.closing, unit = p, self.unit
             try: p.stdin.write(b'{"t":"close"}\n'); p.stdin.flush(); p.stdin.close()
             except (BrokenPipeError, OSError, ValueError): pass
@@ -5884,8 +6023,12 @@ class ShopSignin:
 
     def act(self, d):
         what = d.get("do")
-        if what == "start": return self.start(d.get("site"))
+        if what == "start": return self.start(d.get("site"), d.get("url"))
         if what == "close": return self.close()
+        if what == "done":   # any site: the person says it is signed in now
+            if self.site != "web" or not self.proc or self.proc.poll() is not None: raise ValueError("no site sign-in is open")
+            self.close(done=True); return self.view()
+        if what == "forget": return self.forget(d.get("base"))
         if what == "input":
             t = d.get("t")
             if t not in self.INPUTS: raise ValueError("click, wheel, drag, text, key or back")
@@ -5906,7 +6049,25 @@ class ShopSignin:
                 msg["key"] = d["key"]
             self.touched = time.time(); self.tell(msg)
             return {"ok": True}
-        raise ValueError("start, input or close")
+        raise ValueError("start, input, done, forget or close")
+
+    def forget(self, base):
+        """Sign out of a site here: take it off the list, then delete its own profile, cookies and all (tools/web_forget.mjs)."""
+        log = self.web_log()
+        if not isinstance(base, str) or base not in log: raise ValueError("that site isn't on the list")
+        if self.site == "web" and self.proc and self.proc.poll() is None: raise ValueError("close the open sign-in first")
+        self.web_mark(base, signed=False)   # first: `web` stops treating it as signed in even if the clearing below has to wait
+        env = os.environ.get("HIVE_WEB_FORGET_CMD")
+        node, tool = shutil.which("node") or "/usr/bin/node", str(Path(__file__).resolve().parent / "tools" / "web_forget.mjs")
+        cmd = json.loads(env) + [base] if env else ["systemd-run", "--user", "--quiet", "--collect", "--pipe", "--wait", f"--unit=hive-web-forget-{int(time.time())}-{secrets.token_hex(3)}",
+               "-p", "MemoryMax=1500M", "-p", "RuntimeMaxSec=150", f"--setenv=HOME={HOME}", f"--setenv=PATH={os.environ.get('PATH', '/usr/bin:/bin')}", node, tool, base]
+        try: r = subprocess.run(cmd, capture_output=True, text=True, timeout=180, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError) as e: return {**self.view(), "forgot": base, "cleared": False, "why": f"can't clear its cookies now: {e}"[:200]}
+        last = (r.stdout.strip().splitlines() or [""])[-1]
+        try: res = json.loads(last)
+        except ValueError: res = {}
+        if r.returncode == 0 and res.get("ok"): return {**self.view(), "forgot": base, "cleared": True, "removed": res.get("removed", 0)}
+        return {**self.view(), "forgot": base, "cleared": False, "why": str(res.get("why") or "the clearing didn't finish")[:200]}
 
     def next_frame(self, after, wait=2.0):
         """The newest screen once it is newer than `after` (or after `wait` s, whatever there is): (seq, jpeg bytes)."""
@@ -6022,6 +6183,42 @@ def set_settings(d):
     if d.get("setup_done") is True and settings_norm(cur)["share"].get("failures"): report_now()  # the first check-in: nothing goes before setup is passed
     if "setup_done" in d: sync_accounts()  # a Codex login made in a terminal counts too: nothing else would tell the starter
     return settings_page()
+
+
+# B32 (projects/friction/REGISTER.md): Settings › Model from the owner's own outside sign-in too. /api/settings stays LOCAL_ONLY (power, sandbox,
+# share); this route changes only the model a new agent starts on, by the warden's ruling (post 11250015705e, thread b32-default-model).
+SETTINGS_LOG = STATE / "settings-log.jsonl"   # one line per change made here: {at, by, key, was, now}
+
+
+def default_model_view():
+    """What Settings › Model shows: the model, the choices, and where the choice is kept (settings.json where there is one, else config.json)."""
+    return {"model": default_model(), "models": list(AGENT_MODELS), "saved_in": "settings.json" if SETTINGS.is_file() else "core/config.json"}
+
+
+def set_default_model(model, by):
+    """The model a new agent nobody asked a model for starts on: settings.json "model" on a Hive with that file (the starter's
+    default_model), else core/config.json "spawn_model" (its spawn_model). Only a name from config.json "models": it ends up on a command line."""
+    if not isinstance(model, str) or model not in AGENT_MODELS: raise ValueError("the model is " + ", ".join(AGENT_MODELS))
+    if SETTINGS.is_file():
+        with _settings_lock:
+            cur = settings_raw()
+            if cur is None: raise ValueError("settings.json can't be read")
+            was = cur.get("model"); cur["model"] = model
+            write_text_private(SETTINGS, json.dumps(cur, indent=1) + "\n")
+        key = "settings.json model"
+    else:
+        with _cfg_lock:
+            c = jload(HOME / "core" / "config.json")
+            if not isinstance(c, dict): raise ValueError("core/config.json can't be read")
+            was = c.get("spawn_model"); c["spawn_model"] = model
+            t = HOME / "core" / f".config.json.{os.getpid()}.{threading.get_ident()}"
+            t.write_text(json.dumps(c, indent=2) + "\n"); t.replace(HOME / "core" / "config.json")
+        key = "config.json spawn_model"
+    try:
+        SETTINGS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(SETTINGS_LOG, "a") as f: f.write(json.dumps({"at": now_iso(), "by": by or "local", "key": key, "was": was, "now": model}) + "\n")
+    except OSError: pass
+    return default_model_view()
 
 
 # ---------- the person's own CLAUDE.md and MCP servers: shown at setup, copied only on a tick ----------
@@ -6984,7 +7181,7 @@ LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta
 const go=async k=>{const r=await fetch("/login",{method:"POST",headers:{"Content-Type":"application/json","X-Hive-Dash":"1"},body:JSON.stringify({secret:k})});
  if(r.ok)location.replace("/");else document.getElementById("e").textContent="That isn't this Hive's secret. Run hive web again for the current address.";};
 document.getElementById("f").addEventListener("submit",e=>{e.preventDefault();go(document.getElementById("s").value.trim());});
-(async()=>{const k=location.hash.slice(1);if(k){history.replaceState(null,"","/login");return go(k);}
+(async()=>{const k=location.hash.slice(1);if(/^[A-Za-z0-9_-]{32,}$/.test(k)){history.replaceState(null,"","/login");return go(k);}
  // the session cookie is SameSite=Strict, so a link from elsewhere arrives without it: this request has it, if there is one
  // Link's approval pop-up comes back here that way (/?linkback=1, modules/buy): close it, else carry the linkback on to the app
  const lb=new URLSearchParams(location.search).get("linkback")==="1";if(lb)try{window.close()}catch(e){}
@@ -7328,6 +7525,7 @@ def serve(port):
             if self.route != "open" and install_id(): info["install"] = install_id()   # the report module's install code, shown at the foot of Settings so the owner can match this Hive to its reports
             if self.route != "open": info["default_model"] = default_model(); info["voice"] = voice_ready(); info["phone"] = phone_ready() and "post" in self.can
             if self.route != "open" and "post" in self.can and word_shell(): info["word_shell"] = word_shell()
+            if self.route != "open" and "post" in self.can and word_shell("word_card"): info["word_card"] = word_shell("word_card")   # root's approval card (k2992)
             if self.route != "open" and "post" in self.can and "files" in self.can and (self.route != "outside" or self.mode == "full"):
                 ds = {x["page"]: n for n, x in doors().items() if door_for(n, self.route, self.email)}
                 if ds: info["doors"] = ds   # project page -> door name: the preview relays that page's calls (preview/render.js)
@@ -7659,7 +7857,7 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/starter", "/api/module", "/api/voice", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/mcp-url", "/api/signin-codex", "/api/account-key", "/api/design", "/api/shop-signin", "/api/brand", "/api/slack-door"):
+            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/default-model", "/api/starter", "/api/module", "/api/voice", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/mcp-url", "/api/signin-codex", "/api/account-key", "/api/design", "/api/shop-signin", "/api/brand", "/api/slack-door"):
                 try:
                     if u.path == "/api/post" and isinstance(d.get("page"), dict): res = page_edit_post(d.get("page"), d.get("thread"), limited="config" not in self.can)
                     elif u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True, edit_of=d.get("edit_of"), retry_of=d.get("retry_of"), files_from=d.get("files_from"), focus=d.get("focus"))
@@ -7684,6 +7882,7 @@ def serve(port):
                         if self.route == "outside" and self.mode != "full": return self.deny(403, "push is for a full sign-in")
                         res = webpush_do(d, self.headers)
                     elif u.path == "/api/config": res = set_config(d)
+                    elif u.path == "/api/default-model": res = set_default_model(d.get("model"), self.signer)
                     elif u.path == "/api/brand": res = set_brand(d)
                     elif u.path == "/api/starter": starter_do(d.get("do")); SETUP.t = 0; res = {"ok": True}
                     elif u.path == "/api/module": res = {"said": module_do(d.get("do"), d.get("name"))}

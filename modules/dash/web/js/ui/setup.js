@@ -288,15 +288,33 @@ export function sharePart(update, inSettings = false) {
 }
 
 // ---- the model ----
-export function modelPart(update) {
-  const cur = shown().settings.model;
+// B32: its own route (/api/default-model), which a full sign-in from outside may use too: the warden's ruling, thread b32-default-model.
+// view: /api/config's default_model, {model, models, saved_in}. Works on a Hive with or without settings.json.
+const WHERE = { "settings.json": "this Hive's settings file (settings.json)", "core/config.json": "this Hive's core/config.json, as spawn_model" };
+// When it takes effect follows the starter: with config.json spawn_model a new agent records the model it started on; with settings.json it
+// records none, so every agent nobody chose a model for takes the current choice on its next wake (reviewer, b32-default-model).
+const WHEN = { "core/config.json": "It applies to agents started after you change it: an agent that has already run keeps its own model, which you can change in its panel.",
+  "settings.json": "It applies to new agents, and to agents nobody chose a model for the next time they wake. An agent given a model of its own, in a message or its panel, keeps it." };
+export function modelPart(update, view) {
+  const cur = P.wantModel || view.model, choices = MODELS.filter(([m]) => !view.models || view.models.includes(m));
   return [
-    h("p", null, "The Claude model an agent runs on, unless you ask for another in a message by writing --model and its name, like --model sonnet."),
-    h("div", { class: "checks cards", role: "radiogroup", "aria-label": "Which model agents use" }, MODELS.map(([m, label, hint]) => h("label", { class: "check", "data-key": "model-" + m },
-      h("input", { type: "radio", name: "model", checked: cur === m, disabled: !local(), onchange: () => saveSettings({ model: m }, update) }),
+    h("p", null, "The Claude model a new agent starts on, unless you ask for another in a message by writing --model and its name, like --model sonnet."),
+    h("div", { class: "checks cards", role: "radiogroup", "aria-label": "Which model new agents use" }, choices.map(([m, label, hint]) => h("label", { class: "check", "data-key": "model-" + m },
+      h("input", { type: "radio", name: "model", checked: cur === m, disabled: !can("config"), onchange: () => saveModel(m, view, update) }),
       h("span", null, label, h("span", { class: "field-h" }, hint))))),
-    h("p", { class: "field-h" }, "An agent changes the next time it starts or wakes. One already working finishes on the model it has. If agents fail to start after a change, your plan may not include that model, so choose another."),
-    saveLine("model"), localOnly(), saveErr()];
+    h("p", { class: "field-h", "data-key": "model-where" }, `Saved in ${WHERE[view.saved_in] || view.saved_in}. ${WHEN[view.saved_in] || WHEN["core/config.json"]} If agents fail to start after a change, your plan may not include that model, so choose another.`),
+    saveLine("model"), saveErr()];
+}
+async function saveModel(m, view, update) {
+  const n = (MODELS.find(x => x[0] === m) || [0, m])[1];
+  P.saved = null; P.saving.model = (P.saving.model || 0) + 1; P.wantModel = m;
+  try {
+    if (await act("save" + ++P.seq, `Setting the model to ${n}`, async () => { Object.assign(view, await post("/api/default-model", { model: m })); P.err = ""; }, update, `Model: ${n}`) === false) return;
+    P.saved = "model";
+    const k = P.seq; setTimeout(() => { if (P.saved === "model" && P.seq === k) { P.saved = null; update(); } }, 4000);
+  }
+  catch (e) { P.err = e.message; }
+  finally { if (P.wantModel === m) P.wantModel = null; P.saving.model--; update(); }
 }
 
 // ---- power and the sandbox ----

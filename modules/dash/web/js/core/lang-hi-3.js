@@ -266,7 +266,7 @@ export default {
   "Tier 2": "स्तर 2",
   "Held": "रोका हुआ",
   "goes first; its jobs use the heavy fast lane": "पहले चलता है; इसके जॉब heavy तेज़ लेन का उपयोग करते हैं",
-  "agents save it and stop; nothing new starts": "एजेंट इसे सहेजकर रुक जाते हैं; कुछ नया शुरू नहीं होता",
+  "the keeper starts no rounds on it; to stop agents now, use Pause": "कीपर इस पर कोई राउंड शुरू नहीं करता; एजेंटों को अभी रोकने के लिए Pause इस्तेमाल करें",
   "after tier 2": "स्तर 2 के बाद",
   "Back to the list": "सूची पर वापस",
   "remove your dashboard setting": "डैशबोर्ड में आपकी सेटिंग हटाएँ",

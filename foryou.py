@@ -3,11 +3,31 @@
 import re
 
 FOR_YOU = re.compile(r"^[\s>*_#-]*for you[\s*_]*:", re.I | re.M)  # the line that puts a post on the person's card
-NOTHING = re.compile(r"^\W*(nothing (is )?needed\b|no action\b|nothing to do\b|nothing\s*(?:[;:,.]|$))", re.I)  # away.py uses this one; needs_you.py copies it
+NOTHING = re.compile(r"^\W*(nothing (is )?needed\b|no action\b|nothing to do\b|nothing\s*(?:[;:,.]|$))", re.I)
+STOOD_DOWN = re.compile(r"(?:\bnothing (?:now )?(?:(?:still |now )?waits|is (?:still )?waiting|is pending|is (?:still )?needed|is required|is wanted|needed|required|left) (?:on|from|for) you\b"
+                        r"|\bnothing for you to do\b|\byou (?:don't|do not|no longer) need to (?:do anything|reply|answer|act|type|say|send|approve)\b"
+                        r"|\b(?:the|your|that|this|my) (?:pending |waiting |earlier |last )?(?:yes:?(?: line)?|go|ok|approval|answer|reply|step|ask|for you(?: line)?)\b[^.\n]{0,40}?\b(?:can wait|is no longer needed|isn't needed any ?more|is not needed any ?more|is moot)\b)"
+                        r"(?![^.\n]{0,40}\b(?:except|but|other than|besides|apart from|until you)\b)", re.I)
+"""An agent saying the person needn't act now: "Nothing waits on you meanwhile", "the pending yes can wait" (ad5b1, 2026-11-25, while the headline still asked for that yes).
+Read on the post's prose only: not inside code, quotes or a For you line of its own (see stood_down).
+Not "nothing else/more waits on you": that assumes an earlier step still stands (aa008's review, 2026-11-25: af98e's 112116130ae0 gave a new task, then "Nothing else is waiting on you for this"). The except/apart-from guard covers all three forms."""
 OFFER = re.compile(r"^\W*(?:if you\b|only if\b|optional(?:ly)?\b|(?:say|tell me|let me know) if you\b)", re.I)  # an offer, not a wait: nothing stops until they answer
 AGENT = re.compile(r"^[a-z][0-9a-f]{4,}$")  # as away.py
+AGENT_IN_PROSE = re.compile(r"(?<![\w-])@?a[0-9a-f]{4}(?![\w-])")  # an agent named in prose
 SELF_THREADS = {"starter", "keeper", "improve", "watchdog", "progress"}  # as away.py
 LONG_WORDS = 30
+# Codes the person can't open (friction-asks A10, 2026-11-25: "what is gf26e i dont see it", "remote card (3076f52d743c)"): an agent's name (a letter and four hex, at least one a digit),
+# an ask id (k1161) or a 12-hex post id. A link or a path holding one isn't flagged here (a link opens; a path is "command").
+IDS = re.compile(r"(?<![\w/.-])@?(?:[a-z](?=[0-9a-f]{0,3}\d)[0-9a-f]{4}|k\d{4,}|(?=[0-9a-f]{0,11}\d)(?=[0-9a-f]{0,11}[a-f])[0-9a-f]{12})(?![\w/-])(?:'s)?")
+# A concrete step: the line asks them to do, say or choose something. With none of these, they read it and ask "what do I do now?" (11161514308e, 111620214631, 111611412e74).
+STEP = re.compile(r"\b(?:say|reply|answer|tell|pick|choose|decide|approve|confirm|send|sign|log|click|tap|open|go|plug|unplug|press|hold|push|pull|turn|switch|flash|put|take|clear|paste|attach|"
+                  r"upload|export|download|copy|give|add|save|enter|type|order|buy|pay|check out|book|install|run|accept|merge|post|write|read|look|print|keep|share|forward|"
+                  r"email|call|text|vote|rate|rank|list|fill|submit|pin|dictate|record|review|set|connect|pair|restart|reboot|charge|move|remove|delete|drop|stop|start|ask|let|try|use|visit|make|"
+                  r"reload|refresh|close|dm|tag|finish|rename|pause|unpause|enable|disable|renew|update|sign in|log in|scan|test|find|join|wear|mount|plug in)\b|\?(?:\s|$)|\byes or no\b|\bor no\b", re.I)
+# A machine-level word has to name its post: the root word command reads the post by id, so the id is the step, not a code to explain (ad748, friction-asks 11250213f5ed).
+WORD_STEP = re.compile(r"\bh2ward" r"en-word\b|\b(?:tow" r"er|standing) word\b", re.I)
+# "Nothing for you today", "nothing new on you": no step is missing, there is none (ad748, 11250213f5ed). NOTHING itself stays narrow: other code reads it as "the line is empty".
+NOTHING_FOR_YOU = re.compile(r"^\W*nothing\b|\bnothing (?:\w+ ){0,2}(?:for|on|from) you\b", re.I)
 FENCE, SPAN = re.compile(r"```.*?```", re.S), re.compile(r"`[^`\n]*`")
 URL = re.compile(r"^(?:https?://|www\.|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:ca|com|org|net|io|dev|ai|app|cc|co|uk|de)/)", re.I)
 PATH = re.compile(r"(?<!\S)[\w.~-]*/[\w.~/-]*(?=[\s,;:!?)]|$)")
@@ -22,15 +42,19 @@ WHY = {"long": "It is over 30 words.",
        "command": "It holds a command, flag or path: say what you need in plain words, or run it yourself.",
        "chain": "It chains steps: ask for the one step only they can do, and do the rest.",
        "ours": "It asks them to check our work: test it yourself, and ask only for a device or account check you can't do.",
-       "offer": "It is an offer, and nothing stops until they answer, so it won't count as waiting on them: say it in the post, and write `Decided:` for the default you took."}
+       "offer": "It is an offer, and nothing stops until they answer, so it won't count as waiting on them: say it in the post, and write `Decided:` for the default you took.",
+       "ids": "It leans on a code they can't open (an agent's name, an ask or post id): say the thing itself, or what the page or button is called where they'll see it.",
+       "vague": "It names no step they can take: say what to do, where, and what to reply."}
 
 EXAMPLE = {"command": "Instead of `For you: run `hive go` then reload`, write `For you: say yes and I'll switch it on.`",
            "many": "Instead of two asks in one line, keep the one only they can answer: `For you: pick red or blue for the header.`",
            "long": "Cut to one plain sentence: `For you: OK to buy the $12 domain?`",
            "chain": "Ask for the single step and do the rest yourself: `For you: send me the account code.`",
            "ours": "Test it yourself; ask only what needs their device: `For you: tell me if the phone login works.`",
-           "offer": "Take the default and say so: `Decided: blue header; one post from you changes it.`"}
-ORDER = ["command", "many", "long", "chain", "ours", "offer"]  # commonest first in the last day's board
+           "offer": "Take the default and say so: `Decided: blue header; one post from you changes it.`",
+           "ids": "Instead of `For you: approve post 11060033b3ed`, write `For you: reply yes here to switch the attachments on.`",
+           "vague": "Instead of `For you: the Lite 1 firmware question`, write `For you: reply 1 or 2 for which Lite firmware to keep.`"}
+ORDER = ["command", "ids", "many", "long", "chain", "vague", "ours", "offer"]  # commonest first in the last day's board
 # The test before a For you line: only these six are the person's; anything else an agent decides and writes up as Decided. A word list, so it warns and never refuses.
 THEIRS = re.compile(r"\$|\b(?:pay|buy|purchase|order|checkout|check out|invoice|budget|price|cost|bill|subscription|funds?|spend|quote"  # money
                     r"|account|github|waterlooworks|sign(?:ing)?[ -]?(?:in|up)|log[ -]?in|token|password|credentials?|api key|keys?|cookies?|secret|permission|invite|2fa"  # an account
@@ -71,8 +95,23 @@ def is_path(tok):
     parts = tok.strip("/").split("/")
     return tok.startswith(("/", "~", ".")) or not (all(len(p) <= 3 for p in parts) or all(p[:1].isupper() and p.isalpha() for p in parts))
 
+def stood_down(text, to=()):
+    """The post tells the person nothing waits on them now (STOOD_DOWN in its prose, or a `For you: nothing` line) and puts no new step to them: an earlier wait in its thread is overtaken.
+    A post addressed to agents and not the person, or a sentence that names an agent ("Thanks, af9de, nothing more is needed from you"), is talking to an agent: 5 of 25 matches on the board, 11-18 to 11-25."""
+    to = [str(x).lower().lstrip("@") for x in (to if isinstance(to, (list, tuple)) else [to] if to else [])]
+    if any(AGENT.match(x) for x in to) and "person" not in to: return False
+    found = lines(text)
+    if any(not NOTHING.match(l) for l in found): return False
+    if found: return True
+    # a one-word span keeps its word (`ae976`, `yes:`): names are backticked by convention, and the phrase can't hide in one word
+    prose = "\n".join(l for l in SPAN.sub(lambda m: m[0].strip("`") if len(m[0].split()) == 1 else " ", FENCE.sub(" ", str(text or ""))).splitlines() if not l.lstrip().startswith(">"))
+    for m in STOOD_DOWN.finditer(prose):
+        start = max(prose.rfind(c, 0, m.start()) for c in ".!?\n") + 1
+        if not AGENT_IN_PROSE.search(prose[start:m.end()]): return True
+    return False
+
 def flags(line):
-    """Which of long, many, command, chain, ours, offer a For you line reads as. A line saying nothing is needed has none."""
+    """Which of long, many, command, chain, ours, offer, ids, vague a For you line reads as. A line saying nothing is needed has none."""
     line = str(line or "")
     if NOTHING.match(line): return []
     bare = SPAN.sub(" ", line)
@@ -83,6 +122,8 @@ def flags(line):
     if CHAIN.search(REPORT_BACK.sub(" ", bare)): out.append("chain")
     if OURS.search(bare.lower()) and not DEVICE.search(bare): out.append("ours")
     if OFFER.match(bare): out.append("offer")
+    if not WORD_STEP.search(line) and IDS.search(" ".join(t for t in re.sub(r"`([^`\s]+)`", r"\1", line).split() if not URL.match(t))): out.append("ids")
+    if not STEP.search(bare) and not NOTHING_FOR_YOU.search(line) and not STOOD_DOWN.search(line): out.append("vague")
     return out
 
 def decidable(line):
