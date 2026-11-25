@@ -77,6 +77,10 @@ class Case:
         if d.get("date_from") == "text" and d.get("date") and (rd := extract.local_day(d.get("fetched_at"))) and len(rd) == 10 and str(d["date"])[:10] > rd:
             try: d["date"] = extract.body_date(d.get("text") or "", d.get("title") or "", dt.date.fromisoformat(rd))   # a page stored before body_date dropped a date after its reading (GTCC's closure notice, fnwords134)
             except ValueError: pass
+        if d.get("status") == "ok" and d.get("date_from") != "event" and extract.EVENT_PATH.search(d.get("url") or "") and (rd := extract.local_day(d.get("fetched_at"))) and len(rd) == 10:
+            try: ev = extract.event_date(d.get("url"), [], d.get("text") or "", d.get("title") or "", dt.date.fromisoformat(rd))
+            except ValueError: ev = ""
+            if ev: d["date"], d["date_from"], d["published"] = ev, "event", ev   # a page stored before event_date: dated by its posting, not its event (Mitchell's Forsyth Works page, fnwords135 review)
         return d
 
     def page(self, url):

@@ -228,6 +228,29 @@ def text_date(text, title="", today=None):
     return ""
 
 
+EVENT_PATH = re.compile(r"/(?:events?|calendar)/[^/?#]+", re.I)
+
+
+def event_date(url, ld_items, text, title="", today=None):
+    """The day an event page's event is on, if it has passed: a JSON-LD Event's startDate, or on an /event/ address the date on a short line of its own just under the headline ("AI in the Job Search\n\nSeptember 25, 2024\n\n@\n\n1:00 pm"). An event page's words are about the event, so they are as old as it, not as old as the day it was posted: Beth Mitchell's Forsyth Works page was dated by its datePublished 2024-07-30 for her talk of 2024-09-25 (fnwords135 review). A coming event says nothing yet about when it was held, so the posting date stays. '' if none."""
+    today = (today or dt.date.today()).isoformat()
+    for it in ld_items or []:
+        if re.search(r"Event\b", str(it.get("@type", ""))) and (d := parse_date(str(it.get("startDate", "")))):
+            return d if d <= today else ""
+    if not EVENT_PATH.search(urllib.parse.urlsplit(url or "").path) or not text: return ""
+    heads = _heads(title) + [h for part in re.split(r"\s+[|\u2013\u2014-]\s+", title or "") if len(h := part.strip()) >= 8 for _ in [0]]
+    for head in heads:
+        i = text.find(head)
+        if i < 0: continue
+        for line in [x.strip() for x in text[i + len(head): i + len(head) + 200].split("\n") if x.strip()][:3]:
+            m = _TEXT_DATE.search(line)
+            if m and len((line[:m.start()] + line[m.end():]).split()) <= 4:
+                d = _past(m, dt.date.fromisoformat(today))
+                return d
+        break
+    return ""
+
+
 def parse_html(html, url=""):
     """{title, text, links, date, date_from, published, people_ld}."""
     p = _Page(url)
@@ -252,6 +275,7 @@ def parse_html(html, url=""):
     date, how = page_date(url, p.meta, items, text, title)
     wp = re.search(r"""<link[^>]+rel=["']alternate["'][^>]+type=["']application/json["'][^>]+href=["'](https?://[^"']+/wp-json/wp/v2/[^"']+)|<link[^>]+href=["'](https?://[^"']+/wp-json/wp/v2/[^"']+)["'][^>]+type=["']application/json["']""", html[:300000], re.I) if how == "modified" else None
     published = "" if "wikipedia.org" in url else published_date(p.meta, items)
+    if (ev := event_date(url, items, text, title)): date, how, published = ev, "event", ev
     return {"title": title, "text": text, "links": list(dict(p.links).items()), "date": date, "date_from": how, "published": published, "people_ld": people, "cut": cut, "wp_json": htmllib.unescape(wp.group(1) or wp.group(2)) if wp else ""}
 
 

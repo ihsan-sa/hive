@@ -2255,7 +2255,12 @@ def floor(c, st, alive, login):
     if not rows:
         if below: floor_idle(st, running, why)
         return
-    held = cont.waits({r["thread"] for r in rows}, set(alive) | {n for n, ps in st["pending"].items() if ps}, t, c.get("floor_wait_max_s", 7200))
+    waiters = set(alive) | {n for n, ps in st["pending"].items() if ps}
+    held = cont.waits({r["thread"] for r in rows}, waiters, t, c.get("floor_wait_max_s", 7200))
+    # a ladder owed its ask (ask_more: every rung dated) is held by a `Waiting:` only floor_ask_wait_max_s after the last agent post, not floor_wait_max_s (72 h):
+    # that line names the same date as the gate the ask exists to look past (ab324 11-25, rsi-lab: 8 of 9 ladders due an ask were held 19 to 71 h by it, 8 ask_away starts in 2 days)
+    asked = {r["thread"] for r in rows if r.get("ask_more")}
+    if asked: held.update(cont.waits(asked, waiters, t, c.get("floor_ask_wait_max_s", 7200)))
     try: paused = cont.G.person_held_of({r["thread"] for r in rows})   # the person's worded pause ("ok pause the FW dev"): is_stop takes only a bare stop, so the floor briefed fw-bench 40 min after it (11151647ee34, 2026-11-20 23:20)
     except Exception: paused = {}
     for r in sorted(rows, key=lambda r: (not first(r), -(r["quiet_s"] if r["quiet_s"] is not None else float("inf")))):

@@ -65,8 +65,6 @@ export default {
   // Now
   "Nothing is running.": "No hay nada en marcha.",
   "of your weekly use, helpers included": "de tu uso semanal, ayudantes incluidos",
-  "agents running now, and the helpers they started inside their runs": "agentes en marcha ahora, y los ayudantes que iniciaron dentro de sus ejecuciones",
-  "open Agents": "abrir Agentes",
   "agents running now, and the helpers they started inside their runs: open Agents": "agentes en marcha ahora, y los ayudantes que iniciaron dentro de sus ejecuciones: abrir Agentes",
   // the Map
   "What an agent starts inside its own run; filled while running": "Lo que un agente inicia dentro de su propia ejecución; relleno mientras está en marcha",

@@ -2,7 +2,7 @@
 // Thread 11241110ade5, warden 11241330fa1c: only the person's own signed-in app sees or drives it (the server checks, as for Link); the person
 // types the password and solves the captcha in the live view; it shows only while a sign-in is open and closes itself once signed in.
 // Nothing here keeps, logs or shows back what is typed: each key goes to the server and is dropped.
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { jget, post } from "../core/store.js";
 import { block, button, statusLabel } from "./kit.js";
 import { ago } from "../core/format.js";
@@ -34,7 +34,7 @@ function openView(site, name, update) {
   const img = h("img", { class: "shop-screen", alt: `The ${name} page on the Hive's browser`, draggable: "false", tabindex: "0" });
   const line = h("p", { class: "fmsg", role: "status" }, "Starting the browser…");
   const typed = h("input", { class: "input", type: "password", autocomplete: "off", autocapitalize: "off", spellcheck: "false", "aria-label": "Type into the page", placeholder: "Type here, then Send (phones)" });
-  const show = button("Show", () => { const hid = typed.type === "password"; typed.type = hid ? "text" : "password"; show.textContent = hid ? "Hide" : "Show"; show.setAttribute("aria-pressed", String(hid)); }, { size: "s", kind: "quiet" });
+  const show = button("Show", () => { const hid = typed.type === "password"; typed.type = hid ? "text" : "password"; show.textContent = tr(hid ? "Hide" : "Show"); show.setAttribute("aria-pressed", String(hid)); }, { size: "s", kind: "quiet" });
   show.setAttribute("aria-pressed", "false");
   const finish = () => {
     if (J.dlg !== dlg) return;
@@ -92,17 +92,17 @@ function openView(site, name, update) {
     while (gen === J.gen && J.dlg === dlg) {
       let r;
       try { r = await jget("/api/shop-signin/frame?after=" + seq); }
-      catch (e) { line.textContent = "Lost the Hive: " + e.message; line.dataset.tone = "bad"; await new Promise(ok => setTimeout(ok, 2000)); continue; }
+      catch (e) { line.textContent = tr("Lost the Hive: " + e.message); line.dataset.tone = "bad"; await new Promise(ok => setTimeout(ok, 2000)); continue; }
       if (gen !== J.gen) return;
       if (r.img) { img.src = "data:image/jpeg;base64," + r.img; seq = r.seq; }
       const left = r.left ? ` · closes in ${Math.ceil(r.left / 60)} min` : "";
-      if (r.state === "signed") { line.textContent = `Signed in to ${name}. Closing…`; line.dataset.tone = "good"; setTimeout(finish, 2500); return; }
-      if (r.state === "open") { line.textContent = "Click the page to start" + left; delete line.dataset.tone; }
-      else if (r.state === "checking") { line.textContent = `That looks signed in. Checking it holds, then this closes by itself…`; line.dataset.tone = "good"; }
-      else if (!OPEN.has(r.state)) { line.textContent = r.state === "failed" ? "It didn't start: " + (r.why || "unknown") : "Closed" + (r.why ? ": " + r.why : "") + "."; line.dataset.tone = "bad"; return; }
+      if (r.state === "signed") { line.textContent = tr(`Signed in to ${name}. Closing…`); line.dataset.tone = "good"; setTimeout(finish, 2500); return; }
+      if (r.state === "open") { line.textContent = tr("Click the page to start" + left); delete line.dataset.tone; }
+      else if (r.state === "checking") { line.textContent = tr("That looks signed in. Checking it holds, then this closes by itself…"); line.dataset.tone = "good"; }
+      else if (!OPEN.has(r.state)) { line.textContent = tr(r.state === "failed" ? "It didn't start: " + (r.why || "unknown") : "Closed" + (r.why ? ": " + r.why : "") + "."); line.dataset.tone = "bad"; return; }
     }
   };
-  send({ do: "start", site }).then(v => { if (v) loop(); else line.textContent = "It didn't start."; });
+  send({ do: "start", site }).then(v => { if (v) loop(); else line.textContent = tr("It didn't start."); });
 }
 
 /** One row per shop under Buying. Only on the person's own app (v.here from /api/buy); elsewhere the server would refuse anyway. */

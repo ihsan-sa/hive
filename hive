@@ -130,6 +130,7 @@ def _claude_models():
 CLAUDE_MODELS = _claude_models()
 FRESH = ("new", "claude", "codex", "free", *CLAUDE_MODELS, "astra")  # words that start a fresh agent (SPAWN in starter.py)
 QUOTED_FRESH = re.compile(r"[\"“‘']@([a-z0-9][a-z0-9_-]*)", re.I)  # a mention right after an opening quotation mark
+ADDRESS_FRESH = re.compile(r"\A\s*@([a-z0-9][a-z0-9_-]*)\s*[:,]", re.I)  # a post that opens by addressing a word ("@haiku: checked ...")
 HASH_NAME = re.compile(r"[a-z][0-9a-f]{4,}")  # what new/claude/codex/free/warden hand out (a9aba, c12cd, f12cd, w0e1f)
 sys.path.insert(0, str(CORE))
 try: import foryou; FOR_YOU = foryou.FOR_YOU  # the line that puts a post on the person's card
@@ -443,6 +444,17 @@ def reason_bar(p):
             fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps({"thread": p["thread"], "from": p["from"], "text": f"{line1}\n{p['reason']}"[:400], "at": time.time(), "via": "post-reason " + p["id"]}) + "\n")
     except OSError: pass
 
+def order_hint(p):
+    """An agent's post that hands the person an order in prose, in a thread with no order card: point at `hive order new`.
+    The rule lives in modules/buy/drafts.py (shared with the integrations census); a hint only, the post is on the board."""
+    f = MODULES / "buy" / "drafts.py"
+    if not f.exists(): return None
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("h2_buy_drafts", f); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+        return m.hint(p, BOARD)
+    except Exception: return None
+
 def cmd_post(a):
     text = " ".join(a.text) if a.text and a.text != ["-"] else sys.stdin.read()   # a lone - means stdin; agents write it, and it once went out as the whole message
     if SHELL_BODY.fullmatch(text.strip()):
@@ -497,6 +509,12 @@ def cmd_post(a):
     if HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_ and (q := sorted({m.group(1).lower() for m in QUOTED_FRESH.finditer(CODE.sub(" ", text)) if m.group(1).lower() in FRESH and m.group(1).lower() not in asked})):
         sys.exit(f"hive post: nothing posted. {', '.join('@' + n for n in q)} sits in quotation marks, so you are quoting it, but it would start a new agent. "
                  "Put it in backticks to write about it; to start one, write it unquoted (or pass --to).")
+    # A post opening "@haiku: ..." answers the word its own brief started with, as if it were a name, and starts another agent: on both
+    # watchdog trips that started Haiku (11-22, 11-25) the Haiku agent replied that way, and 3 agents rechecked a finished fix (improve, af1eb).
+    if HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_ and (m := ADDRESS_FRESH.match(CODE.sub(" ", text))) and m.group(1).lower() in FRESH and m.group(1).lower() not in asked:
+        sys.exit(f"hive post: nothing posted. The post opens by addressing @{m.group(1).lower()}, but that word is not anyone's name: it starts a new agent. "
+                 "To answer the post that woke you, drop the mention (whoever posted reads this thread; an agent is a letter and hex digits). "
+                 "To start a helper on purpose, write the brief without the colon or pass --to.")
     # A post naming the person pings their phone: orientation asks for it short, plain, with one `For you:` line. Checked before
     # anything is written, so a slip costs a re-post, not a second ping. Agents' own names only, like the model check above.
     # (A chat answer has no need of the mention: refused here, agents added "For you: nothing needed" to get it through, projects/everyday E9.)
@@ -572,6 +590,7 @@ def cmd_post(a):
     # Agents only, and only a warning: the post is on the board already (hive-meta P3).
     if HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_ and foryou and (w := foryou.warning(text)): print(w, file=sys.stderr, flush=True)
     if not a.as_ and (w := waits_say("on_for_you", text, p["thread"], pid)): print(w, file=sys.stderr, flush=True)
+    if HASH_NAME.fullmatch(me or "") and not a.as_ and (w := order_hint(p)): print(w, file=sys.stderr, flush=True)
     for k in getattr(a, "done", None) or []:  # the result post closes the ask it delivers: no separate `hive asks done` turn
         subprocess.run([sys.executable, "-I", str(CORE / "asks.py"), "done", k, "--evidence", pid])
     if getattr(a, "done", None):  # a closed ask's durable part goes in the kb, linked back to this post, so the focus page can list it

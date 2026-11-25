@@ -2,7 +2,7 @@
 // installer's last line or open Settings. So, once this browser has used the Hive on three different days (its own local days), and only on
 // a Hive installed from a release (not a dev tree), a row under the bar asks. Either button ends it for good in this browser; left unanswered,
 // it stops by itself after showing on STAR_SHOWN days. Reviewed by an independent Opus pass (projects/hive-stars/research.md).
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { button } from "./kit.js";
 import { banner } from "./banner.js";
 
@@ -47,7 +47,7 @@ export function starNote(update) {
   if (!installed) return null;
   if (note("shown", localDay())) { if (s.shown.length > STAR_SHOWN) { s.done = "lapsed"; save(); return null; } save(); }
   const go = button("Star on GitHub", () => finish("starred", update), { size: "s", kind: "primary", href: REPO, cls: "star-go" });
-  go.target = "_blank"; go.rel = "noreferrer noopener"; go.title = "Opens GitHub in a new tab";
+  go.target = "_blank"; go.rel = "noreferrer noopener"; go.title = tr("Opens GitHub in a new tab");
   const row = banner({ tone: "info", cls: "star-note", key: "star-note",
     text: [h("b", null, "Finding Hive useful?"), h("span", { class: "star-more" }, " A star on GitHub helps other people find it.")],
     actions: [go, button("No thanks", () => finish("no", update), { size: "s", kind: "quiet" })] });
