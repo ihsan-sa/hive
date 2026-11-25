@@ -31,8 +31,8 @@ function card(o) {
     h("p", { class: "muted order-meta" }, meta, o.thread ? [meta ? " · " : "", h("a", { href: "#comms/t:" + encodeURIComponent(o.thread) }, "conversation")] : null));
 }
 
+// Its name, label and tab rule are in views/index.js, which loads this file when the page opens.
 export default {
-  id: "orders", label: "Orders", about: "what the Hive has drafted or ordered: shop, items, total, where it stands, and a button to the shop's page", tab: () => !!S.app.orders && can("logins"),
   enter(ctx) { load(ctx); },
   render(ctx) {
     if (!can("logins")) return h("div", { class: "page", "data-width": "narrow" }, empty("Orders need full mode. Sign in again if your hour is up.", { kind: "page", title: "Orders" }));

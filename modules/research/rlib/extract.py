@@ -90,10 +90,28 @@ MONTHS = "jan feb mar apr may jun jul aug sep oct nov dec".split()
 _TEXT_DATE = re.compile(r"\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(\d{1,2}),?\s+(20\d\d)\b")
 
 
+_UTC_STAMP = re.compile(r"\b((?:20|19)\d\d-\d\d-\d\d)[T ](\d\d):(\d\d)(?::(\d\d)(?:\.\d+)?)?\s*(?:Z|[+-]00:?00)(?![\d:])")
+
+
+def local_day(stamp):
+    """The run's own calendar day for a UTC timestamp ("2026-11-25T00:45:34+00:00" is the 24th in New York), else the date the stamp starts with. A page modified or read in the evening in America is stamped the next day in UTC: fnwords134's reload read Garib's page_date and Roark's read_on as 2026-11-25 on a run of the 24th."""
+    s = str(stamp or "")
+    m = _UTC_STAMP.match(s.strip())
+    if m:
+        try: return dt.datetime.fromisoformat(f"{m.group(1)}T{m.group(2)}:{m.group(3)}:{m.group(4) or '00'}+00:00").astimezone().date().isoformat()
+        except ValueError: pass
+    return s[:10]
+
+
 def parse_date(s):
-    """YYYY-MM-DD from an ISO-ish or written date, else ''."""
+    """YYYY-MM-DD from an ISO-ish or written date, else ''. A UTC timestamp is the run's local day (local_day); one with its own offset keeps its own date."""
     if not s: return ""
+    if (u := _UTC_STAMP.search(s)) and (d := local_day(u.group(0))) and len(d) == 10: return d
     m = re.search(r"\b(20\d\d|19\d\d)-(\d\d)-(\d\d)", s)
+    if m:
+        try: return dt.date(*map(int, m.groups())).isoformat()
+        except ValueError: pass
+    m = re.search(r"\b(20\d\d|19\d\d)(\d\d)(\d\d)T\d", s)   # ISO 8601 basic form, <time datetime="20260928T090000Z"> under Cedarville's bylines (Arminio, fnwords127-128 reviews); eight digits alone are no date
     if m:
         try: return dt.date(*map(int, m.groups())).isoformat()
         except ValueError: pass
@@ -121,6 +139,10 @@ def url_date(url):
 PEOPLE_PAGE = re.compile(r"/(?:profiles?|directory|staff(?:-directory)?|people|our-team|meet-the-team|meet-our-staff|leadership)(?:/|\.html?|$|[?#])", re.I)  # a page that lists people by name
 
 
+META_DATES_SINCE = "2026-11-25T01:05:00Z"   # pages saved before this read their metadata dates under older rules (a template's node first, ISO basic form unread, a last edit before the first publication): Hunt.stored_dates reads a stored row's page again once. Move it forward when page_date's metadata rules change.
+ARTICLE_LD = re.compile(r"Article|BlogPosting|Posting|PressRelease|Report\b|NewsItem")
+
+
 def page_date(url, meta, ld_items, text, title=""):
     """When the page says it was published, and how it knows. A copyright line is not a date."""
     if "wikipedia.org" in url: return "", ""  # the first date there is from the article's subject (an infobox's founding year)
@@ -135,16 +157,25 @@ def page_date(url, meta, ld_items, text, title=""):
         if k == "time" and meta.get("time_many"): continue   # the first of several <time> tags is the first item of a list: uConnect's episode page took 2026-11-03 from its "Latest episodes" sidebar for an episode of 2026-02-03 (fnwords119 review)
         d = parse_date(meta.get(k, ""))
         if d: return d, "meta"
-    for it in ld_items:
+    for it in sorted(ld_items, key=lambda it: not ARTICLE_LD.search(str(it.get("@type", "")))):   # the story's own node before the page's or site's: Cedarville's template WebPage (dateModified 2026-02-05) came before Arminio's NewsArticle of 2026-09-28 (fnwords127-128 reviews)
         for k in ("datePublished", "dateModified"):
             d = parse_date(str(it.get(k, "")))
             if d: return d, "meta"
     d = url_date(url)
     if d: return d, "url"
-    d = parse_date(text[:1500]) or text_date(text, title)
+    d = body_date(text, title)
     if d: return d, "text"
     d = parse_date(meta.get("og:updated_time", ""))   # the last edit, when nothing says when it was written: later than the truth, never a sidebar's date
     return (d, "modified") if d else ("", "")   # "modified": the fetcher asks the site's WordPress record for the published date
+
+
+def published_date(meta, ld_items):
+    """When the page says it was first put up, apart from when it was last edited: article:published_time or a datePublished, the story's own JSON-LD node first. '' if it doesn't say. A signal taken from a page is as old as its words, and an edit doesn't make them new: UF's AI in Careers page (Glover's unit signal) gives article:modified_time 2026-01-28 in its meta tags and datePublished 2022-11-17 only in its JSON-LD, and page_date took the edit (fnwords133-134 reviews). page_date keeps the edit, because a staff or contact page is current by it."""
+    for k in ("article:published_time", "datepublished"):
+        if (d := parse_date(meta.get(k, ""))): return d
+    for it in sorted(ld_items, key=lambda it: not ARTICLE_LD.search(str(it.get("@type", "")))):
+        if (d := parse_date(str(it.get("datePublished", "")))): return d
+    return ""
 
 
 _DATELINE = re.compile(r"(?m)^[ \t]*" + _TEXT_DATE.pattern + r"\s*[,\u2013\u2014-]\s*[A-Z][A-Z.'\-]+(?:\s+[A-Z][A-Z.'\-]+)*\b(?![a-z])")
@@ -169,6 +200,13 @@ def _heads(title):
     return sorted(out, key=len, reverse=True)   # a site name is shorter than a story's headline
 
 
+def body_date(text, title="", today=None):
+    """The date a page's text gives: the first date in its opening, else text_date. Never one after the day it was read: GTCC's pages opened with a closure notice ("campuses will close at noon on Wednesday, November 25, 2026") and were dated by it on 2026-11-24 (fnwords134 reload)."""
+    today = today or dt.date.today()
+    d = parse_date((text or "")[:1500])
+    return d if d and d <= today.isoformat() else text_date(text, title, today)
+
+
 def text_date(text, title="", today=None):
     """A date the body gives as the story's own, past the first 1500 characters a menu can fill: a press dateline ("Jan. 10, 2022, GRAND RAPIDS, Mich. –", a line opening with a date then a place in capitals), or a date on a short line of its own in the 300 characters after the headline (the title before its " | Site" tail). Not any date in the text: an event, a deadline or a © year is not when the page was written, and a future date never is (Parks' GRCC news page, fnwords74, read as undated)."""
     if not text: return ""
@@ -191,7 +229,7 @@ def text_date(text, title="", today=None):
 
 
 def parse_html(html, url=""):
-    """{title, text, links, date, date_from, people_ld}."""
+    """{title, text, links, date, date_from, published, people_ld}."""
     p = _Page(url)
     deadline = time.monotonic() + PARSE_SECONDS
     cut = False
@@ -213,7 +251,8 @@ def parse_html(html, url=""):
     if len(p.times) > 1: p.meta["time_many"] = "1"
     date, how = page_date(url, p.meta, items, text, title)
     wp = re.search(r"""<link[^>]+rel=["']alternate["'][^>]+type=["']application/json["'][^>]+href=["'](https?://[^"']+/wp-json/wp/v2/[^"']+)|<link[^>]+href=["'](https?://[^"']+/wp-json/wp/v2/[^"']+)["'][^>]+type=["']application/json["']""", html[:300000], re.I) if how == "modified" else None
-    return {"title": title, "text": text, "links": list(dict(p.links).items()), "date": date, "date_from": how, "people_ld": people, "cut": cut, "wp_json": htmllib.unescape(wp.group(1) or wp.group(2)) if wp else ""}
+    published = "" if "wikipedia.org" in url else published_date(p.meta, items)
+    return {"title": title, "text": text, "links": list(dict(p.links).items()), "date": date, "date_from": how, "published": published, "people_ld": people, "cut": cut, "wp_json": htmllib.unescape(wp.group(1) or wp.group(2)) if wp else ""}
 
 
 def fold(s):

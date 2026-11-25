@@ -939,6 +939,28 @@ function effortPick(d, r, th) {
       h("p", { class: "cp-menu-n", "data-key": "foot" }, live ? `${Said(th, who)} can't change effort mid-run. It holds from its next run. Claude runs only.` : "It holds on that agent from this run on. Claude runs only.")) : null);
 }
 
+/** The word shell's box draws its own To, Model and Effort (rootword.js tells it these): the same names, defaults and notes this box would show.
+ *  Labels only: the shell signs what the person picks there, and the text is never sent from here. */
+export function shellHints(th) {
+  if (simpleOn()) return null;
+  const r = recipient(th), n = r.who, cut = (s, k) => String(s || "").slice(0, k);
+  const nm = n === "new" ? "a new agent" : !agentish(n) || !(S.app && S.app.app) ? n : inConversation(th, () => agentLabel(n));
+  const opt = w => { const a = agentRow(w), where = a.th && a.th !== th ? (a.title && a.title !== a.th ? a.title : a.th) : "";
+    return [w, cut(Said(th, w), 40), cut([a.model, where, w === partner(th) ? "you've been talking to it" : ""].filter(Boolean).join(" · "), 90), cut(inConversation(th, () => mono(w)), 2)]; };
+  const known = n && n !== "new" && !MODEL_WORDS.includes(n), live = known && isRunning(n), row = known && agentCard(n).find(x => x.k === "Model");
+  const def = (S.app && S.app.default_model) || "", mv = row && (row.v === "login default" ? "Default model" : row.v);
+  const ml = live ? mv || "Its model" : row ? mv : def ? MODEL_LABELS[def] || def : "Default";
+  const mn = live ? `${Said(th, n)} is on ${row ? row.v : "its model"} for this run` : row ? `${Said(th, n)} wakes on ${row.v}` : def ? `New agents start on ${MODEL_LABELS[def] || def}` : "The model a new agent starts on";
+  const erow = known && agentCard(n).find(x => x.k === "Effort"), held = (known && S.live && S.live.efforts && S.live.efforts[n]) || "";
+  const el = held ? (EFFORTS.find(([v]) => v === held) || [, held])[1] : "Default";
+  const now = erow && erow.v !== "not seen yet" && erow.v !== "not recorded" ? erow.v : "";
+  const en = live ? (now ? `${Said(th, n)} is at ${now} effort for this run` : `${Said(th, n)} keeps its effort for this run`) : known ? (held ? `${Said(th, n)} wakes at ${held} effort` : `${Said(th, n)} wakes at Claude's default effort`) : "How hard a new agent thinks";
+  // at: the name wire() would put in front of the text (the agent you've been talking to, when the server would wake another), so the shell's send goes where its To says
+  const at = th && (r.why === "partner" || r.why === "last") && n && n !== "new" && n !== r.server && agentish(n) ? n : "";
+  return { to: [n === "new" || agentish(n) ? n : "", cut(nm || "…", 40), n && n !== "new" && agentish(n) ? cut(inConversation(th, () => mono(n)), 2) : "+", at], opts: th ? threadPeople(th).filter(isAgent).slice(0, 12).map(opt) : [],
+           model: [cut(ml, 30), cut(mn, 120)], effort: [cut(el, 20), cut(en, 120)] };
+}
+
 /** The lock's click: open the secret box, or say why it can't open in limited mode. */
 function secretClick(th) {
   if (SB.open && SB.lost) { dropSecrets(); return; }

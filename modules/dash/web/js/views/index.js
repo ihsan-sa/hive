@@ -20,7 +20,7 @@ import timeline from "./timeline.js";
 import start from "./start.js";
 import settings from "./settings.js";
 import secrets from "./secrets.js";
-import orders from "./orders.js";
+import { lazyView } from "./lazy.js";
 import deck from "./deck.js";
 import knowledge from "./knowledge.js";
 import kbtime from "./kbtime.js";
@@ -29,6 +29,10 @@ import made from "./made.js";
 import docs from "./docs.js";
 import progress from "./progress.js";
 import page from "./page.js";   // an html file full screen (the file panel's Open on a phone)
+
+// A page only its own route uses loads when it opens (views/lazy.js): its name and tab rule live here, so the bar draws without it.
+const orders = lazyView({ id: "orders", label: "Orders", about: "what the Hive has drafted or ordered: shop, items, total, where it stands, and a button to the shop's page", tab: () => !!S.app.orders && can("logins") },
+  () => import("./orders.js"));
 
 // Registry order is the developer look's tab order (and the Deck's left pads): keep the groups together.
 export default [

@@ -22,7 +22,6 @@ import { copyButton } from "../ui/refs.js";
 import { MODELS, POWER, accountsData, codexPart, forget, keysPart, loadPage, modelPart, pageData, powerPart, reading, rootNote, sandboxPart, sharePart } from "../ui/setup.js";
 import { forgetSecrets, secretParts, secretsLost } from "./secrets.js";
 import { kbWipeSection } from "../ui/kbwipe.js";
-import { buyingSection, loadBuying, forgetBuying } from "../ui/buying.js";
 
 // Everything the person is typing lives here, so a poll never loses it.
 // T: words typed here and not saved yet (the style, the Hive name). enter() clears F; T lasts the session, so coming back to Settings shows them
@@ -538,6 +537,37 @@ function setupSections(ctx) {
 }
 const secretsSection = ctx => can("secrets") || secretsLost() ? section({ title: "Secrets", level: 1, note: "send a token to the Hive; it's never shown back" }, h("div", { class: "stack secrets" }, secretParts(ctx))) : null;
 
+// Shops and suppliers (shops.py, GET /api/shops): a signed-in state that was checked in the last 10 minutes, else "Checking…". Read-only.
+const SHOP_STATE = { in: ["working", "Signed in"], out: ["failed", "Signed out"], down: ["failed", "Not running"], unknown: ["stuck", "Couldn't check"],
+  checking: ["queued", "Checking…"], absent: ["off", "Not set up"] };
+let shopTimer = null;
+async function loadShops(ctx) {
+  clearTimeout(shopTimer); shopTimer = null;
+  if (!can("logins")) return;
+  const turn = F.shopTurn = (F.shopTurn || 0) + 1;
+  let got = null, err = null;
+  try { got = await jget("/api/shops"); } catch (e) { err = e.message; }
+  if (turn !== F.shopTurn) return;   // left the screen, or a newer read is under way
+  F.shopsErr = err; F.shops = got;   // a failed read drops the old rows: nothing stays green on old news
+  ctx.update();
+  shopTimer = setTimeout(() => loadShops(ctx), got && got.rows.some(r => r.state === "checking") ? 10000 : 60000);
+}
+function shopsBlock() {
+  if (!can("logins")) return null;
+  const R = F.shops, here = ["127.0.0.1", "localhost"].includes(location.hostname);
+  const row = x => {
+    const [key, word] = SHOP_STATE[x.state] || SHOP_STATE.unknown;
+    return h("li", { class: "lr conn-row", "data-key": x.id, "data-state": x.state },
+      h("div", { class: "lr-in conn-in" },
+        h("div", { class: "conn-head" }, h("b", { class: "conn-name" }, x.label), statusLabel(key, word)),
+        h("p", { class: "conn-line" }, x.model),
+        h("p", { class: "conn-needs muted" }, h("span", { class: "conn-step" }, "The Hive may:"), " ", x.may),
+        h("div", { class: "conn-acts" }, x.local && !here ? h("span", { class: "muted" }, "Opens only on the Hive's own computer for now.")
+          : h("a", { class: "conn-readme", href: x.url, target: "_blank", rel: "noreferrer noopener" }, "Open the app"))));
+  };
+  return block({ title: "Shops and suppliers", sub: "Checked while this page is open." },
+    R ? h("ul", { class: "list conn-list" }, R.rows.map(row)) : F.shopsErr ? empty(`Couldn't read the shops: ${F.shopsErr}`, { kind: "error" }) : empty("Reading…", { kind: "loading" }));
+}
 // ---- Connectors (projects/everyday/CONNECTORS.md, E55): the reach bundle's connectors, one row each, read from GET /api/connectors. ----
 // Nothing here turns a connector on: no route runs `conn`, and a two-way one (it talks back into the Hive) has no On at all until it runs
 // under a separate account (warden ruling). The only writes are Add/Remove of `reach` (/api/module) and a pasted token (/api/secret).
@@ -666,6 +696,7 @@ function connectorsSection(ctx) {
     : [h("ul", { class: "list conn-list" }, C.rows.map(row)),
        C.removable ? h("div", { class: "lr-more" }, button("Remove the connectors", () => confirm({ title: "Remove every connector?", body: ["They all come off this Hive, with any that are on. You can add them back from this page."], ok: "Remove", kind: "danger", onOk: () => bundle("remove") }), { size: "s", kind: "quiet", busy: F.busy.reach })) : null];
   return section({ title: "Connectors", level: 1, note: "other apps that can reach you, or that the agent can read" },
+    shopsBlock(),
     msg("conns"),   // above the list: after Add the line shows where the person is looking, not under 24 rows
     C == null ? (F.connsErr ? [empty(`Couldn't read the connectors: ${F.connsErr}`, { kind: "error" }), button("Try again", () => { F.connsErr = null; ctx.update(); return loadConns(ctx, true); }, { size: "s" })] : empty("Reading…", { kind: "loading" })) : body(),
     mcpUrlBlock(ctx));
@@ -871,19 +902,33 @@ function navDots(ctx) {
   return d;
 }
 
+// Buying (ui/buying.js, which brings ui/shop_signin.js) loads when Settings first asks for it, with the logins right: no other page needs it.
+let Buy = null, buyLoad = null, buyTurn = 0;
+const importBuying = () => buyLoad ||= import("../ui/buying.js").then(m => { Buy = m; }, e => { buyLoad = null; console.error("Buying didn't load:", e); });
+function readBuying(ctx) {
+  if (!can("logins")) return;
+  const turn = buyTurn;
+  importBuying().then(() => { if (Buy && turn === buyTurn) Buy.loadBuying(ctx.update); });   // turn: left Settings while the file was on its way
+}
+function buyingPart(ctx) {
+  if (Buy) return Buy.buyingSection(ctx);
+  if (can("logins") && !buyLoad) readBuying(ctx);   // the right arrived while Settings was open, or an earlier load failed
+  return null;
+}
+
 export default {
   id: "settings", label: "Settings", about: "accounts, modules, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.navShown = null; F.keysOpen = null; F.flash = {}; F.ed = null; F.lost = false; F.name = null; F.saved = null; if (!F.accessTyped) F.access = null;   /* unsaved access edits stay for the session (3.3.7) */ F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); loadConns(ctx); loadBuying(ctx.update); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
+  enter(ctx) { F.navShown = null; F.keysOpen = null; F.flash = {}; F.ed = null; F.lost = false; F.name = null; F.saved = null; if (!F.accessTyped) F.access = null;   /* unsaved access edits stay for the session (3.3.7) */ F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); loadConns(ctx); loadShops(ctx); readBuying(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
   },
-  back(ctx) { loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); loadConns(ctx); loadBuying(ctx.update); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update); },   // what enter reads, without enter's clearing: what the person is typing stays
-  leave() { F.goTo = null; clearInterval(upTimer); upTimer = null; clearTimeout(voiceTimer); voiceTimer = null; forget(); forgetSecrets(); forgetBuying(); F.connIn = {}; },   // tokens typed in Connectors but not saved don't outlive the screen
+  back(ctx) { loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); loadConns(ctx); loadShops(ctx); readBuying(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update); },   // what enter reads, without enter's clearing: what the person is typing stays
+  leave() { F.goTo = null; clearTimeout(shopTimer); shopTimer = null; F.shopTurn = (F.shopTurn || 0) + 1; F.shops = null; clearInterval(upTimer); upTimer = null; clearTimeout(voiceTimer); voiceTimer = null; forget(); forgetSecrets(); buyTurn++; if (Buy) Buy.forgetBuying(); F.connIn = {}; },   // tokens typed in Connectors but not saved don't outlive the screen
   render(ctx) {
     if (S.app.can == null) return h("div", { class: "page", "data-width": "narrow" }, waiting(S.failed));   // /api/app hasn't answered: don't say "only in the app" yet
     if (!S.app.app) return h("div", { class: "page", "data-width": "narrow" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));
     const [slug, row] = (ctx.arg || "").split("/");   // #settings/modules/slack-door: the section, then a row to open on (modulesSection's F.goRow)
     if (row && slug === "modules" && F.goTo !== ctx.arg) { F.goTo = ctx.arg; F.goRow = row; }   // once per link, so "Hide the full list" stays hidden
     const hive = hiveSection(ctx), [everyday, setOnce] = Array.isArray(hive) ? hive : [hive, null];
-    const secs = [everyday, loginsSection(ctx), buyingSection(ctx), useSection(), tiersSection(ctx), ...setupSections(ctx), secretsSection(ctx), viewSection(ctx), setOnce, connectorsSection(ctx), modulesSection(ctx), accessSection(ctx), kbWipeSection(ctx)].filter(Boolean);
+    const secs = [everyday, loginsSection(ctx), buyingPart(ctx), useSection(), tiersSection(ctx), ...setupSections(ctx), secretsSection(ctx), viewSection(ctx), setOnce, connectorsSection(ctx), modulesSection(ctx), accessSection(ctx), kbWipeSection(ctx)].filter(Boolean);
     const header = pageHeader({ title: "Settings" });
     if (!secs.length) return form({ header, sections: [empty("This connection can't change any settings.")] });
     const nav = secs.map(n => n.dataset.name || n.getAttribute("aria-label")),   // data-name: the English title, which the interface language (core/lang.js) leaves alone, so #settings/this-device works in any language

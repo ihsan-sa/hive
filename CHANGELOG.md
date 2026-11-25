@@ -6,6 +6,7 @@ A release can ship several times a day. A Hive installs each one as soon as it's
 
 ## Smaller fixes, 2026-11-24
 
+- `kb find` now names a document by its live copy, not an old copy kept in a project's archive folder.
 - Settings › Connectors now has rows for Link, JLCPCB, InvenTree and LCSC, where installed: how each signs in, what the Hive may do there, a link to the service, and whether it is signed in, checked while the page is open.
 - One damaged line in the activity log (for example from a write cut off when the disk was full) no longer makes the whole app say "Can't reach your Hive": the dashboard skips that line and shows the rest.
 - When the app can't reach your Hive, the note now says which read got no answer or why it failed. If your sign-in from outside has run out, it says so and offers a button to sign in again.

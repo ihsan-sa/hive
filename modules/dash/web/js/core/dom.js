@@ -2,6 +2,8 @@
 // h() builds elements; morph() applies a freshly built tree onto the live one, so a poll
 // changes only what changed and scroll, focus, hover and selection survive.
 
+import "./langtables.js";   // everything that can call h() or tr() imports this file, so it waits for the chosen language's words
+
 const SVGNS = "http://www.w3.org/2000/svg";
 
 function set(e, props) {

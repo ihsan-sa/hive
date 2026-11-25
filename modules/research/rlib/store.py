@@ -4,7 +4,7 @@ from pathlib import Path
 from . import extract
 
 SCHEMA = """
-create table if not exists pages(url text primary key, final_url text, via text, status text, http int, title text, text text, sha text, fetched_at text, date text, date_from text, snapshot text, links text, people_ld text, note text);
+create table if not exists pages(url text primary key, final_url text, via text, status text, http int, title text, text text, sha text, fetched_at text, date text, date_from text, snapshot text, links text, people_ld text, note text, published text);
 create table if not exists searches(q text, source text, at text, hits text, error text, primary key(q, source));
 create table if not exists meta(k text primary key, v text);
 """
@@ -36,6 +36,7 @@ class Case:
         self.lock = threading.Lock()
         with self.lock:
             self.db.executescript(SCHEMA)
+            if "published" not in {r[1] for r in self.db.execute("pragma table_info(pages)")}: self.db.execute("alter table pages add column published text")   # a case made before pages kept their first publication date apart from their last edit
             self.db.commit()
 
     def close(self):
@@ -59,8 +60,8 @@ class Case:
     def save_page(self, p):
         p = dict(p, sha=hashlib.sha256((p.get("text") or "").encode()).hexdigest()[:16], fetched_at=p.get("fetched_at") or now())
         with self.lock:
-            self.db.execute("insert or replace into pages(url,final_url,via,status,http,title,text,sha,fetched_at,date,date_from,snapshot,links,people_ld,note) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (p["url"], p.get("final_url"), p.get("via"), p.get("status"), p.get("http"), p.get("title"), p.get("text"), p["sha"], p["fetched_at"], p.get("date"), p.get("date_from"), p.get("snapshot"), json.dumps(p.get("links") or []), json.dumps(p.get("people_ld") or []), p.get("note")))
+            self.db.execute("insert or replace into pages(url,final_url,via,status,http,title,text,sha,fetched_at,date,date_from,snapshot,links,people_ld,note,published) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (p["url"], p.get("final_url"), p.get("via"), p.get("status"), p.get("http"), p.get("title"), p.get("text"), p["sha"], p["fetched_at"], p.get("date"), p.get("date_from"), p.get("snapshot"), json.dumps(p.get("links") or []), json.dumps(p.get("people_ld") or []), p.get("note"), p.get("published") or ""))
             self.db.commit()
         return p
 
@@ -69,6 +70,13 @@ class Case:
         d = dict(r)
         d["links"], d["people_ld"] = json.loads(d["links"] or "[]"), json.loads(d["people_ld"] or "[]")
         if not d.get("date") and d.get("status") == "ok" and (td := extract.text_date(d.get("text") or "", d.get("title") or "")): d["date"], d["date_from"] = td, "text"  # a page stored before text_date read its dateline (Parks' GRCC story, fnwords74)
+        if d.get("date_from") in ("meta", "modified") and d.get("date") and (rd := extract.local_day(d.get("fetched_at"))) and len(rd) == 10:
+            try:
+                if (dt.date.fromisoformat(d["date"][:10]) - dt.date.fromisoformat(rd)).days == 1: d["date"] = rd   # a page stored before parse_date read a UTC stamp as the local day: its metadata date is the day after it was read (Garib's, fnwords134)
+            except ValueError: pass
+        if d.get("date_from") == "text" and d.get("date") and (rd := extract.local_day(d.get("fetched_at"))) and len(rd) == 10 and str(d["date"])[:10] > rd:
+            try: d["date"] = extract.body_date(d.get("text") or "", d.get("title") or "", dt.date.fromisoformat(rd))   # a page stored before body_date dropped a date after its reading (GTCC's closure notice, fnwords134)
+            except ValueError: pass
         return d
 
     def page(self, url):
