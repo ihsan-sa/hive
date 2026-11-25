@@ -20,7 +20,7 @@ import { textOf, selected, askQuote } from "../rich/ask.js";
 const app = () => !!(S.app && S.app.app);
 const hashThread = () => { const m = /^#comms\/([^/?]+)/.exec(location.hash); return m ? decodeURIComponent(m[1]) : null; };
 /** The main conversation on screen, if side chats can be opened from it here. */
-const here = () => { const th = hashThread(); return th && app() && can("post") && !btwParent(th) ? th : null; };
+export const here = () => { const th = hashThread(); return th && app() && can("post") && !btwParent(th) ? th : null; };
 
 // ---- the side chats of a conversation, and what each is about ----
 const firstT = th => { const d = S.threads.get(th); return (d && (d.first || (d.posts[0] && d.posts[0].t))) || 0; };
@@ -66,7 +66,7 @@ const said = (who) => (who === "your" ? "your message" : who.replace(/'s$/, "") 
 
 // ---- the text of a message, as offsets: what a mark holds on to ----
 const SKIP = "button,input,textarea,.rc-bar,.rc-tools,.rc-fig-note,svg,.katex-mathml,annotation,style,script,.sc-layer";
-const bodyOf = art => art && (art.querySelector(".msg-b .md") || art.querySelector(".msg-b") || art.querySelector(".md"));
+export const bodyOf = art => art && (art.querySelector(".msg-b .md") || art.querySelector(".msg-b") || art.querySelector(".md"));
 function texts(root) {
   const out = [], w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: n => (n.parentElement && n.parentElement.closest(SKIP) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
   let n, at = 0;
@@ -566,18 +566,26 @@ const boxCancel = () => stopBox();
 function boxUp(e) {
   if (!boxing) return;
   e.preventDefault(); e.stopPropagation();
-  const R = rectOf(e), main = boxing.main, small = R.right - R.left < 10 && R.bottom - R.top < 10;
+  const R = rectOf(e), main = boxing.main;
   stopBox();
-  const box = document.querySelector("#main .cm-msgs");
-  if (!box) return;
-  // the message the box covers most of
+  boxSideChat(main, R);
+}
+/** The message a screen rectangle covers most of (a point: the one under it). */
+export function msgUnder(R) {
+  const box = document.querySelector("#main .cm-msgs"), small = R.right - R.left < 10 && R.bottom - R.top < 10;
+  if (!box) return null;
   let art = null, best = 0;
   for (const m of box.querySelectorAll("article.msg")) {
     const r = m.getBoundingClientRect();
     const ov = small ? (R.left >= r.left && R.left <= r.right && R.top >= r.top && R.top <= r.bottom ? 1 : 0) : Math.max(0, Math.min(r.right, R.right) - Math.max(r.left, R.left)) * Math.max(0, Math.min(r.bottom, R.bottom) - Math.max(r.top, R.top));
     if (ov > best) { best = ov; art = m; }
   }
-  if (!art || !S.byId[art.dataset.key]) return;
+  return art && S.byId[art.dataset.key] ? art : null;
+}
+/** A side chat about what a screen rectangle covers (a drawn box, or a loop drawn with the pen: ink/overlay.js). */
+export function boxSideChat(main, R) {
+  const art = msgUnder(R), small = R.right - R.left < 10 && R.bottom - R.top < 10;
+  if (!art) return;
   if (small) { newSideChat(main, anchorOfMsg(art)); return; }
   const got = wordsIn(art, R), ar = art.getBoundingClientRect();
   const cl = { left: Math.max(R.left, ar.left), top: Math.max(R.top, ar.top), right: Math.min(R.right, ar.right), bottom: Math.min(R.bottom, ar.bottom) };
@@ -585,7 +593,7 @@ function boxUp(e) {
   if (a) newSideChat(main, a);
 }
 // The words whose middle is inside the box (a formula counts whole, as its LaTeX), in reading order, and the range from the first to the last.
-function wordsIn(art, R) {
+export function wordsIn(art, R) {
   const root = bodyOf(art), out = [];
   if (!root) return { r: null, text: "" };
   const inside = r => { const x = (r.left + r.right) / 2, y = (r.top + r.bottom) / 2; return r.width > 0 && x >= R.left && x <= R.right && y >= R.top && y <= R.bottom; };
