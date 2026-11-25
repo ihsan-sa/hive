@@ -1944,7 +1944,8 @@ def claude_launch(c, name, sid, model, prov, login, kind, posts, prompt, system,
 def reaped_text(c, name, reaped, thread, extra=(), moved=False, quiet=None):
     """What a run ended by the reaper is told when it resumes. It names the quiet time actually used (doubled on a repeat, grace_for)
     and the tool for an idle wait: one agent re-parked on a GitHub CI poll was reaped 3 times in 10 h (11-19..20, 3 of the day's 4 reaps),
-    told only that an idle wait "is ended again"."""
+    told only that an idle wait "is ended again". 11-24: 5 of 12 reaps were waits on a file or result line (a frame-test log, results.jsonl),
+    re-parked after each resume; `hive remind --if` waits on the condition itself, so the message names it."""
     mins = int((quiet or c.get('done_grace_s', 900)) // 60)
     return (("The starter moved you to another login, because yours ran out while you were waiting. "
              if moved else f"The starter ended your run: it had printed its result, then nothing for {mins} min, "
@@ -1953,6 +1954,7 @@ def reaped_text(c, name, reaped, thread, extra=(), moved=False, quiet=None):
             "If you were waiting on something, check it now and carry on. A background wait on a job that uses CPU is fine; "
             "an idle wait (CI checks, a poll loop, another agent, a time) is ended again, each time later. For one, end your turn with "
             f"`hive remind at +30m \"check WHAT\" --to {name}` instead: the reminder wakes you with your memory. "
+            f"If you wait for a file or a result line, add `--if \"CMD\"` (e.g. `--if \"grep -q PASS ~/x.log\"`): it wakes you only once CMD passes, not to say \"not yet\". "
             f"Check `hive read --thread {thread}` for anything new first. If you were done, just stop."
             + (f" Posts for you that came in meanwhile: {', '.join(extra)} (`hive read` them)." if extra else ""))
 
@@ -2901,10 +2903,13 @@ def main():
             if not r.get("reaped") and "shells" not in r and st["pending"].get(n):
                 # A limit resume: posts queued while it waited predate the resumed run, so the inbox hook (posts newer than the run's
                 # start) never hands them over, and they woke it again after it had answered them (a7d1b 2026-11-17, a4b0e 2026-11-18:
-                # 2 of 63 limit resumes in a week). Hand plain ones over now; a continuation, a fallback or a provider ask keeps its own start.
+                # 2 of 63 limit resumes in a week). Hand plain ones over now; a continuation, or a post for another provider or a
+                # fallback the run isn't on, keeps its own start. A fallback for the provider the run already resumes on is plain: kept
+                # back, it woke ad1e9 (on Codex) for a keeper brief it had just answered (2026-11-21, improve i0374).
                 try: got = set((STATE / "delivered" / n).read_text().split())
                 except OSError: got = set()
-                plain = lambda p: not (p.get("continue") or p.get("free") or p.get("fallback") or provider_of(c, p.get("model")))
+                same = lambda p: (provider_of(c, p.get("model")) or (None,))[0] == (pv or (None,))[0]
+                plain = lambda p: not (p.get("continue") or p.get("free")) and same(p) and (pv or not p.get("fallback"))
                 waiting = [p for p in st["pending"][n] if plain(p) and p["id"] not in got]
                 keep = [p for p in st["pending"][n] if not plain(p)]
                 if keep: st["pending"][n] = keep

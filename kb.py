@@ -488,7 +488,8 @@ def copies(a, b, editions=True):
 
 def fold_copies(top, pool, c=None):
     """One name per document. Files that `copies` matches (a sheet quoting a note is not its copy) are one document: it is
-    named by its best-ranked live copy (kb/, projects/, ...) over an archive or H4 one, says `(also in PATH)`, and a
+    named by its canonical copy (K84: kb/ or modules/, then projects/, then a project's archive/ folder, then an archive or
+    H4 one; best-ranked within a tier), says `(also in PATH)`, and a
     passage found on another copy is shown at its line in the named file, unless a passage near it is already shown
     there. Places freed go to the next hits of the pool."""
     cache, rep, group, keep = {}, {}, {}, []
@@ -507,7 +508,11 @@ def fold_copies(top, pool, c=None):
         r = root(h["path"]); rep[h["path"]] = r; group.setdefault(r, [])
         if h["path"] not in group[r]: group[r].append(h["path"])
     if all(len(m) == 1 for m in group.values()): return top
-    name = {r: next((p for p in m if live(p)), m[0]) for r, m in group.items()}
+    def tier(p):   # K84: the canonical copy names the group: kb/ and modules/, then projects/, then a project's own archive/
+        if not live(p): return 3
+        if "/archive/" in p or "/attic/" in p: return 2
+        return 0 if p.startswith(("kb/", "modules/")) else 1
+    name = {r: min(m, key=lambda p: (tier(p), m.index(p))) for r, m in group.items()}
     lines = {}
     def moved(h, to):
         """h's passage at its line in file `to`, or None when its text isn't there."""
@@ -527,8 +532,10 @@ def fold_copies(top, pool, c=None):
     def add(h):
         r = rep[h["path"]]; to = name[r]
         if h["path"] != to:
-            h = moved(h, to)
-            if h is None: return
+            g = moved(h, to)
+            if g is None and live(h["path"]) and to not in shown and tier(h["path"]) < 3: g = h   # K84: an edition whose text drifted keeps its own path rather than lose the doc
+            if g is None: return
+            h = g
         s = shown.setdefault(to, [])
         if len(s) >= (2 * PERDOC if "moved" in h else PERDOC) or any(abs(h["line"] - x) <= 12 for x in s): return
         s.append(h["line"]); keep.append(h); ids.add(h["id"])
