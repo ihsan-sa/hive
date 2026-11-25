@@ -9,7 +9,7 @@ import { ago } from "../core/format.js";
 
 const J = { v: null, err: "", loading: false, gen: 0, dlg: null };
 const SPECIAL = new Set(["Enter", "Backspace", "Tab", "Delete", "ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Home", "End"]);
-const OPEN = new Set(["starting", "open", "signed"]);
+const OPEN = new Set(["starting", "open", "checking", "signed"]);
 
 /** Reads /api/shop-signin once (Buying's load calls it when the server says this app is the person's own). */
 export async function loadShops(update) {
@@ -98,6 +98,7 @@ function openView(site, name, update) {
       const left = r.left ? ` · closes in ${Math.ceil(r.left / 60)} min` : "";
       if (r.state === "signed") { line.textContent = `Signed in to ${name}. Closing…`; line.dataset.tone = "good"; setTimeout(finish, 2500); return; }
       if (r.state === "open") { line.textContent = "Click the page to start" + left; delete line.dataset.tone; }
+      else if (r.state === "checking") { line.textContent = `That looks signed in. Checking it holds, then this closes by itself…`; line.dataset.tone = "good"; }
       else if (!OPEN.has(r.state)) { line.textContent = r.state === "failed" ? "It didn't start: " + (r.why || "unknown") : "Closed" + (r.why ? ": " + r.why : "") + "."; line.dataset.tone = "bad"; return; }
     }
   };

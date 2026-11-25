@@ -5831,14 +5831,15 @@ class ShopSignin:
                         try: self.LOG.parent.mkdir(parents=True, exist_ok=True); self.LOG.write_text(json.dumps(log))
                         except OSError: pass
                         threading.Timer(self.SIGNED_CLOSE_S, self.close_if_signed, args=(proc,)).start()
-                    elif st == "open" and self.state == "signed": self.state = "open"
+                    elif st == "checking" and self.state == "open": self.state = "checking"   # signed in on the page; waiting to see it hold
+                    elif st == "open" and self.state in ("signed", "checking"): self.state = "open"
                     elif st in ("gone", "timeout", "closed") and self.state != "signed": self.state, self.why = "closed", {"timeout": "it was open too long", "gone": "the browser closed"}.get(st, self.why)
                 elif m.get("t") == "error": self.state, self.why = "failed", str(m.get("why") or "")[:200]
                 self.cond.notify_all()
         proc.wait()
         with self.cond:
             if proc is self.proc:
-                if self.state in ("starting", "open"): self.state, self.why = "closed", self.why or "the browser closed"
+                if self.state in ("starting", "open", "checking"): self.state, self.why = "closed", self.why or "the browser closed"
                 self.proc, self.frame = None, b""
             if proc is self.closing: self.closing = None
             self.cond.notify_all()
@@ -7007,6 +7008,33 @@ def serve_socket(path, handler):
     finally: os.umask(old)
 
 
+TUNNEL_SOCK_DIR = Path("/run/h2cf-sockets")  # root makes it (tmpfiles): this user, group h2cf-tunnel, 2770; the broker routes only to sockets here
+
+
+def serve_tunnel_socket(path, handler):
+    """web.json outside.tunnel_socket: the same way in as outside.socket, in the root-made directory the Cloudflare broker may
+    route to (word-shell broker/README-install.md step 5), so its ledger can name the dash's socket. The directory is root's to
+    make and shape: this never creates or chmods it, and refuses one that isn't this user's 2770 directory, a link, or a path
+    outside it. The socket is 0660 and takes the directory's group (setgid), so the tunnel's group can connect and nobody else."""
+    path = Path(path)
+    if path.parent != TUNNEL_SOCK_DIR or not re.fullmatch(r"[a-z0-9-]{1,40}\.sock", path.name):
+        raise ValueError(f"outside.tunnel_socket must be {TUNNEL_SOCK_DIR}/NAME.sock")
+    st = os.lstat(TUNNEL_SOCK_DIR)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o2770:
+        raise ValueError(f"{TUNNEL_SOCK_DIR} isn't this user's 2770 directory")
+    import socketserver
+    class Srv(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+        daemon_threads = True
+        request_queue_size = 256
+        def get_request(self):
+            conn, _ = self.socket.accept()
+            return conn, ("unix", 0)  # outside, as on outside.socket: route_of reads this
+    path.unlink(missing_ok=True)
+    old = os.umask(0o117)
+    try: return Srv(str(path), handler)
+    finally: os.umask(old)
+
+
 def local_get(path, port=None, timeout=10):
     """GET from this user's own dash, for tools on this machine: sends the session cookie when web.json has a secret, and only after
     checking this user holds the port, since another account can bind it while the dash restarts. Returns the response body."""
@@ -7741,6 +7769,10 @@ def serve(port):
     cfg = web_cfg() or {}; sock = (cfg.get("outside") or {}).get("socket")
     # Only on this install's own port. A test copy on another port shares the home and so the config: it would take the tunnel's socket and leave it dead when it stopped (2026-11-03).
     if sock and port == int(cfg.get("port") or 8077): threading.Thread(target=serve_socket(Path(sock).expanduser(), H).serve_forever, daemon=True).start()
+    tsock = (cfg.get("outside") or {}).get("tunnel_socket")
+    if sock and tsock and port == int(cfg.get("port") or 8077):  # only beside outside.socket, so TCP stays refused to outside names
+        try: threading.Thread(target=serve_tunnel_socket(tsock, H).serve_forever, daemon=True).start()
+        except (OSError, ValueError) as e: print(f"hive-dash: outside.tunnel_socket not served: {e}", flush=True)
     print(f"hive-dash on http://127.0.0.1:{port}/  (from elsewhere: ssh -L {port}:localhost:{port} <this-machine>)", flush=True)
     srv.serve_forever()
 

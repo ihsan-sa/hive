@@ -2244,7 +2244,7 @@ def floor(c, st, alive, login):
     only = set(c.get("floor_only") or [])  # config floor_only: when set, the floor starts only these threads (the person's "pause all but career", 2026-11-11, post 11111341a979); unset or [] is every ladder
     why = {}   # floor_idle: the first reason each ladder was passed over
     rows_all = [r for r in cont.G.goals()["rows"] if r["kind"] == "focus" or r.get("ladder")]
-    asked_away = ask_away(c, st, rows_all, t) if below else set()
+    asked_away, ask_tag = ask_away(c, st, rows_all, t) if below else (set(), "ask_away")
     def keep(r, k, ok):
         if not ok: why[k] = why.get(k, 0) + 1
         return ok
@@ -2271,7 +2271,7 @@ def floor(c, st, alive, login):
         except Exception: pass
         with BOARD.open("a") as f:
             f.write(json.dumps({"id": dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now(), "from": "starter", "to": [text.split()[0]], "thread": r["thread"], **({"model": model} if text.startswith("@new ") else {}), "text": text}) + "\n")
-        log(event="floor", thread=r["thread"], running=len(alive), tier=1 if first(r) else 2, **({"ask_away": True} if r["thread"] in asked_away else {})); return
+        log(event="floor", thread=r["thread"], running=len(alive), tier=1 if first(r) else 2, **({ask_tag: True} if r["thread"] in asked_away else {})); return
     if below: floor_idle(st, running, why)
 
 AWAY_S = 3 * 3600   # the person is away 3 h+ after their last post (rsi-lab roots.py, the away_ratio measure)
@@ -2280,19 +2280,23 @@ def ask_away(c, st, rows, t):
     """config floor_ask_away_h (0 or unset: off): while the person is away and the floor runs under agents_floor, a ladder whose open rungs
     all wait on a date is asked what else would move it every floor_ask_away_h hours, not once a day (goals.ASK_EVERY_H). a266c 11-23, rsi-lab
     rung 5: floor_idle showed 15 of 36 ladders passed over as gated with 3 to 5 runs going; the 49 ask rounds graded since 11-16 were 82%
-    delivered against 77% for rung rounds. Sets row["ask_more"] so gated_now lets the row through and goals.brief writes the ask; returns the threads."""
-    h = c.get("floor_ask_away_h") or 0
-    if h and "person_at" not in st:   # first pass after this landed: the board reader only sees posts after its offset
+    delivered against 77% for rung rounds. Sets row["ask_more"] so gated_now lets the row through and goals.brief writes the ask; returns (threads, log tag).
+    config floor_ask_present_h (0 or unset: off): the same while the person is here, logged `ask_present` so the two are graded apart (afe57 11-24,
+    post 11241843934a: on 11-24 the floor passed 18-19 of 42 ladders over as gated in 84 floor_idle lines with 5 runs going, most of them in present hours)."""
+    h, hp = c.get("floor_ask_away_h") or 0, c.get("floor_ask_present_h") or 0
+    if (h or hp) and "person_at" not in st:   # first pass after this landed: the board reader only sees posts after its offset
         try: st["person_at"] = max((epoch(p.get("at", "")) or 0 for p in map(json.loads, BOARD.read_text(errors="replace").splitlines()[-20000:]) if p.get("from") == "person"), default=0)
         except ValueError: st["person_at"] = 0
-    if not h or not st.get("person_at") or t - st["person_at"] < AWAY_S: return set()
+    away = t - (st.get("person_at") or 0) >= AWAY_S
+    h, tag = (h, "ask_away") if away else (hp, "ask_present")
+    if not h or not st.get("person_at"): return set(), tag
     out, when = set(), dt.datetime.fromtimestamp(t, dt.timezone.utc)
     for r in rows:
         if r.get("gated_until") and not r.get("ask_more") and not r.get("parked") and not r.get("rung"):
             try: due = cont.G.ask_due(r, when, every_h=h)
             except Exception: due = False
             if due: r["ask_more"] = True; out.add(r["thread"])
-    return out
+    return out, tag
 
 def floor_idle(st, running, why):
     """Under agents_floor and nothing started: log why, at most every 10 min (a266c 11-22, rsi-lab ladder: the floor ran under 6 in
