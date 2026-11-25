@@ -73,6 +73,13 @@ jobs:
       - if: runner.os == 'Windows'
         timeout-minutes: 20
         run: node test/setupexe.js dist/Hive-Setup.exe
+      # The zip a Mac person downloads: unpacked with the download mark, moved into /Applications, the README's Open
+      # Anyway (its command-line form), then opened from there: it must go straight to the Hive from the step above.
+      # Read, not a red build, like the real install it stands on.
+      - if: matrix.os == 'macos-15-intel'
+        continue-on-error: true
+        timeout-minutes: 10
+        run: node test/macdl.js dist/Hive-mac-x64.zip
       # The README's "Remove it" steps, run after the real install: nothing of the Hive may be left.
       - if: runner.os == 'Linux'
         run: HIVE_APP_REAL=1 node test/remove.js
