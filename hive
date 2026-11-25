@@ -1020,6 +1020,8 @@ def module_links(d):
     try: logins = json.loads((CORE / "config.json").read_text())["logins"]
     except (OSError, ValueError, KeyError): logins = ["~/.claude"]
     for s in m.get("provides", {}).get("skills", []):
+        if not Path(s).parent.name or ".." in Path(s).parts:  # a bare name ("money") would make the link the skills folder itself; give skills/NAME/SKILL.md
+            print(f"note: {d.name}'s provides.skills entry {s!r} isn't a path like skills/NAME/SKILL.md, so it wasn't linked", file=sys.stderr); continue
         out += [(Path(l).expanduser() / "skills" / Path(s).parent.name, (d / s).parent) for l in logins]
     return out
 

@@ -11,6 +11,7 @@ The agent that edits the document uses the command line (projects/doc-review-vie
     docs.py pending 006-0002 path/to/new.pdf   the page shows this PDF as the next revision until the library files it
     docs.py addressed 006-0002 1 3 [--rev CM] [--pdf new.pdf]  these notes are done in the new revision; the rest stay open
                                                (--pdf also does `pending` with that PDF, in the same call)
+    docs.py check                              open every document as the page would (words, page 1); names any that fail
 """
 import fcntl, hashlib, json, os, re, subprocess, sys, threading, time
 from pathlib import Path
@@ -425,6 +426,24 @@ def cli_addressed(base, nums, rev, sha=None):
           + (f"; not sent to you yet, left alone {unsent}" if unsent else "") + f"; still open {left or 'none'}")
 
 
+def cli_check():
+    """Every library document as the page opens it: the file is there, pdftotext gives pages, page 1 renders. Prints one line per
+    problem and a total; exits 1 if any document fails. A document with no selectable text is named but passes (boxes still work)."""
+    rows, bad, flat = documents()["docs"], [], []
+    for r in rows:
+        try:
+            d = doc(r["id"])
+            if not d["pages"]: bad.append(f"{r['id']} rev {d['rev']}: no pages from pdftotext ({d['path']})"); continue
+            if not any(p["words"] for p in d["pages"]): flat.append(r["id"])
+            if page_png(r["id"], d["rev"], 1)[:8] != b"\x89PNG\r\n\x1a\n": bad.append(f"{r['id']} rev {d['rev']}: page 1 is not a PNG")
+        except Exception as e:
+            bad.append(f"{r['id']}: {type(e).__name__}: {str(e)[:160]}")
+    for b in bad: print("FAIL", b)
+    if flat: print("no selectable text (boxes only):", " ".join(flat))
+    print(f"{len(rows) - len(bad)} of {len(rows)} documents open")
+    if bad: sys.exit(1)
+
+
 def main(a):
     if len(a) >= 2 and a[0] == "show": return cli_show(a[1])
     if len(a) == 3 and a[0] == "pending": return cli_pending(a[1], a[2])
@@ -444,6 +463,7 @@ def main(a):
         if pdf and not BASE.match(a[1] or ""): sys.exit("bad document id: " + str(a[1]))
         if pdf: cli_pending(a[1], pdf)
         return cli_addressed(a[1], nums, rev, _sha(_safe_pdf(pdf)) if pdf else None)
+    if a == ["check"]: return cli_check()
     if a and a[0] == "list":
         for r in documents()["docs"]: print(r["id"], r["rev"], r["title"], f"drafts={r['drafts']} open={r['open']}")
         return

@@ -3325,7 +3325,7 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .yr-wait-r{display:grid;gap:8px;min-height:84px;padding:10px 0;align-content:center}
 @media (prefers-reduced-motion:reduce){.yr-wait{animation:none}}
 .ag-cnt{display:contents}
-@container (max-width:640px){.ag-cnt{display:flex;flex:1 1 100%;align-items:center;gap:var(--s2) var(--s3)}.toolbar>.ag-sum{flex-basis:100%}}
+@container (max-width:640px){.ag-cnt{display:flex;flex:1 1 100%;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s3)}.toolbar>.ag-sum{flex-basis:100%}}
 .ph:has(.ag-sum){margin-bottom:0}   /* a phone: the Totals fold is a 44 px target with its own air, so the first agent stays in the top half of the screen */
 .yr-day{color:var(--ink);font-weight:var(--w-bold)}
 .yr-day::after{display:none}
