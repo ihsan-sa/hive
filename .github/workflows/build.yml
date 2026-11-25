@@ -68,6 +68,11 @@ jobs:
         timeout-minutes: 75
         env: { HIVE_APP_REAL: "1" }
         run: node test/real.js "${{ matrix.app }}"
+      # The file a Windows person downloads: Hive-Setup.exe with the browser's download mark, installed, opened from its
+      # Start menu shortcut (the Hive from the step above, or the setup screen where there is none), then uninstalled.
+      - if: runner.os == 'Windows'
+        timeout-minutes: 20
+        run: node test/setupexe.js dist/Hive-Setup.exe
       # The README's "Remove it" steps, run after the real install: nothing of the Hive may be left.
       - if: runner.os == 'Linux'
         run: HIVE_APP_REAL=1 node test/remove.js
