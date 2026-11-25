@@ -155,7 +155,31 @@ subscribe(w => {
   else if (w?.live && hiveAway) { hiveAway = false; if (S.foci !== undefined) loadFoci(true); if (S.needsYou !== undefined) loadNeedsYou(true); if (cur.poll) cur.poll.run(ctx); if (cur.back) cur.back(ctx); }   // the Hive came back: the shared reads and the open page read now, or Needs you would say "couldn't refresh" for up to five more minutes; a page with no poll that reads on enter names its read as back
 });
 import { reportLoad } from "./core/loadtime.js";
+// One address (k2966, thread 11241507a6b2): opened on its own at its public name, the dashboard moves into the word shell, which frames it
+// with the box that signs, on the same page. The shell is the word_shell entry from config on this page's own site (same last two name
+// labels, another host, no port); none, no move. ?stay keeps it here for this tab: the way back when the shell is down. The shell opens the
+// page after its own # in the frame, so the hash goes along as is.
+const FORWARD = false;   // off again 11-25 04:40 UTC: the person found the shell broken (1124233388ed); the dashboard stays the page
+function shellHome() {
+  const site = h => h.split(".").slice(-2).join(".");
+  for (const o of [].concat(S.app.word_shell || [])) {   // sent only to a page that can post as the person: the shell frames no other
+    try { const u = new URL(o); if (u.protocol === "https:" && !u.port && u.hostname !== location.hostname && site(u.hostname) === site(location.hostname)) return u.origin; } catch (e) {}
+  }
+  return "";
+}
+function toShell() {
+  if (!FORWARD || window.top !== window || location.protocol !== "https:" || location.port) return false;
+  try {
+    if (new URLSearchParams(location.search).has("stay")) sessionStorage.setItem("stayHere", "1");
+    if (sessionStorage.getItem("stayHere")) return false;
+  } catch (e) { return false; }
+  const home = shellHome();
+  if (!home) return false;
+  location.replace(home + "/" + location.hash);
+  return true;
+}
 start().then(() => {
+  if (toShell()) return;
   booted = true; reportLoad();
   markRoute();
   offerTour();

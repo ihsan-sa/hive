@@ -613,6 +613,21 @@ def org_page_type(url, page, src_url=""):
     return ""
 
 
+SYNDICATED = re.compile(r"\b(?:was |is )?(?:originally|first) (?:published|appeared|posted|ran) (?:on|in|at|by) ([^.\n]{2,60})|\breprinted (?:with|by) permission of ([^.\n]{2,60})|\brepublished (?:with permission )?from ([^.\n]{2,60})", re.I)
+
+
+def syndicated_from(page, org):
+    """The outlet an organisation's page says it is reprinted from, or '': CCP's career blog post "How AI Is Already Changing the Way We Work" "was originally published on The Muse" and lent Cobas its words (fnwords135 review, WRONG). Not when the outlet is the organisation's own ("the university News Hub", "The AI Journey at ASU") or the headline names the organisation (GTCC's and Germanna's news pages reprint local press about the college)."""
+    m = SYNDICATED.search((page or {}).get("text", ""))
+    if not m: return ""
+    src = next(g for g in m.groups() if g).strip()
+    src = re.split(r",| - | \u2013 ", src)[0].strip()
+    init = "".join(w[0] for w in re.findall(r"[A-Za-z]+", org or "") if w[0].isupper())
+    own = lambda t: people.org_words_in(t, org) or (len(init) >= 2 and re.search(rf"\b{init}\b", t)) or re.search(r"(?i)\b(?:the|our) (?:university|college|school|campus)\b|\bnews ?hub\b|\bnewsroom\b", t)
+    head = re.split(r" [|\u2013\u2014] | - ", (page or {}).get("title", ""))[0]
+    if own(src) or own(head): return ""
+    return src
+
 ROSTER_PATH = re.compile(r"(?i)\b(?:advisory|board|committee|council)[\s_-]*(?:members?|roster|list)\b|\broster\b|\bmember[\s_-]*(?:list|directory)\b")  # DMACC's "CTE Advisory Board Members.pdf": its AI word was a Pella employee's "Head of AI" title, and it stood as the organisation's signal for Webb twice (fnwords108, fnwords111; the hop-55 review called it WRONG)
 
 
@@ -754,6 +769,35 @@ def with_signal_url(r):
     """A copy of the row for the CSV with the page its signal is from: source_url is the page that confirms the title, and on 7 of 11 verified rows in fnwords134 the signal was on another page named only in the note (review)."""
     return dict(r, signal_url=stored_signal_url(r) or r.get("source_url", ""))
 
+def title_without_org(title, org):
+    """The row's title without the organisation it already names in its own column: "Chief Learning Officer and Vice President of ..., Cuyahoga Community College" ends at "Pathways", and "executive director of SDSU Career Services" is "executive director of Career Services" (fnwords135 review). Only a trailing ", Org" or " at Org" that is the whole name (or its core), and an all-capitals acronym of three letters or more that is the name's initials."""
+    t, o = str(title or ""), str(org or "")
+    if not t or not o: return t
+    names = {fold(o), fold(people.org_core(o))} - {""}
+    m = re.search(r"(?:,\s*|\s+at\s+)(?:the\s+)?([^,]+)$", t, re.I)
+    if m and fold(m.group(1)).strip(" .") in names and m.start() > 0: t = t[:m.start()].rstrip(" ,")
+    init = "".join(w[0] for w in re.findall(r"[A-Za-z]+", o) if w[0].isupper())
+    if len(init) >= 3: t = re.sub(rf"\b(?:the\s+)?{init}(?:'s|’s)?\s+(?=[A-Za-z])", "", t, count=1)
+    return t.strip() or str(title)
+
+
+TEASER_OWN = "the signal is the headline of their own article at "
+TEASER_STORY = "the signal is the headline of a story at "
+def teaser_link(page, sig):
+    """The page a signal leads to when the signal is a link's text on its page: a listing's teaser headline is the article's, and so is its date. Springfield's Career Advice listing (its own datePublished 2018-05-19) gave Dranka the headline "Career Center Prepares Students for the Job Search in Age of AI" as his signal, dated 2018 and flagged 8.5 years old, though the article it links to is dated 2026-05-19 (fnwords135 review). Only a link of four words or more to another page on the same site; '' if none."""
+    norm = lambda x: fold(re.sub(r"\s+", " ", str(x or ""))).strip(" .:;,!?\"'“”‘’")
+    s = norm(sig)
+    if len(s.split()) < 4 or not page: return ""
+    here = page.get("final_url") or page.get("url") or ""
+    for link in page.get("links") or []:
+        if not isinstance(link, (list, tuple)) or len(link) < 2: continue
+        u, t = link[0], norm(link[1])
+        if len(t.split()) < 4 or not (s == t or s.startswith(t + " ")): continue
+        if canonical(u) == canonical(here) or registrable(domain_of(u)) != registrable(domain_of(here)): continue
+        return u
+    return ""
+
+
 def search_results_url(url):
     """A site's own search page prints back what was searched for ('Results for "... NAWAL BENMOUNA INTERIM VICE PRESIDENT WORKFORCE AI"', fnwords51): its words are ours, not the organisation's."""
     u = urllib.parse.urlsplit(url)
@@ -806,6 +850,7 @@ def listed_kind(r):
     sig = str(r.get("signal") or "")
     if k != "statement" or sig.startswith("(") or r.get("signal_near_person") != "yes": return k
     if UNIT_LINE in str(r.get("note") or ""): return "unit"
+    if TEASER_OWN in str(r.get("note") or ""): return "publication"   # a teaser headline of the article they wrote (Dranka, fnwords135 review)
     toks = [t for t in re.findall(r"[^\W\d_][\w'’-]*", people.clean_name(r.get("name") or "")) if len(t) >= 2]
     if not toks: return k
     full = r"\b" + r"\W+(?:\w+\.?\W+){0,2}".join(re.escape(t) for t in (toks[:1] + toks[-1:] if len(toks) > 1 else toks)) + r"\b"
@@ -818,8 +863,10 @@ def paraphrased(sig, name):
     """A reporter's words for what the person said, with no quotation marks: their name with "said", "explained" and the like after it ("Anahid Petrosian, Ph.D., said for the last two years, STC has invested ..."), or "said"/"according to" before it."""
     sig = str(sig or "")
     toks = [t for t in re.findall(r"[^\W\d_][\w'’-]*", people.clean_name(name or "")) if len(t) >= 2]
-    if not toks or re.search(r"[\"“”„«»]", sig): return False
+    if not toks: return False
     nm = r"(?:" + "|".join(re.escape(t) for t in dict.fromkeys(toks[:1] + toks[-1:])) + r")"
+    if re.search(r"\b(?:sat down|spoke|speaks|talked|talks|chatted|chats|caught up|sits down|interviewed?)\s+(?:with\s+)?(?:\w+\.?\s+){0,3}?" + nm + r"\b", sig, re.I): return True  # an interview's introduction: "We sat down with Sandra Bachert, ... to discuss how OCC is adapting to AI-driven change" is the channel's words about her, not hers (fnwords135 review)
+    if not toks or re.search(r"[\"“”„«»]", sig): return False
     return bool(re.search(r"\b" + nm + r"\b(?:[^.;:!?]|\.(?=[\w,])){0,60}?\b" + SAID + r"\b", sig) or re.search(r"\b(?:" + SAID + r"|according to)\s+(?:\w+\s+){0,6}?" + nm + r"\b", sig, re.I))
 
 
@@ -836,9 +883,20 @@ def local_read_day(r, case):
 
 
 OLD_SIGNAL = "an old signal: "
+def note_items(note):
+    """A row's note split at its "; " separators, but not inside brackets: ORG_ONLY's "(set allow_org_signal ...; its page is a staff or bio page)" is one item, and splitting it left Castonguay a stray "its page is a staff or bio page)" after the org note was dropped (fnwords135 review)."""
+    out, depth, cur = [], 0, ""
+    for part in str(note or "").split("; "):
+        cur = f"{cur}; {part}" if depth else part
+        depth += part.count("(") - part.count(")")
+        if depth <= 0: out.append(cur); cur, depth = "", 0
+    if cur: out.append(cur)
+    return out
+
+
 def with_age_note(r):
     """A verified row whose signal is more than a year older than the day its page was read says so in its note, and by how much: fnwords134's Glover rests on a 2022-11-17 signal read in 2026 with nothing on the row to say it. Idempotent: an earlier run's flag is replaced, and dropped when the signal is now newer. Returns the age in days, or None."""
-    keep = [x for x in str(r.get("note") or "").split("; ") if x and not x.startswith(OLD_SIGNAL)]
+    keep = [x for x in note_items(r.get("note")) if x and not x.startswith(OLD_SIGNAL)]
     days = None
     if r.get("check_status") == "verified" and r.get("signal"):   # the organisation's signal too, "(the organisation's, from URL) ...": Glover's is one
         try: days = (dt.date.fromisoformat(str(r.get("read_on") or "")[:10]) - dt.date.fromisoformat(str(r.get("signal_date") or "")[:10])).days
@@ -1209,6 +1267,7 @@ class Hunt:
         if not sp or sp.get("status", "ok") != "ok": return "", ""
         src_url = row.get("source_url", "")
         if (k := org_page_type(url, sp, src_url)): return "", f"its page is {k}"
+        if (k := syndicated_from(sp, row.get("organisation", ""))): return "", f"its page is an article reprinted from {k}"
         title, e = fold(row.get("title", "")), fold(excerpt)
         ai = [people.term_regex(w) for w in (self.must or ["artificial intelligence", "AI"])]
         def beside(text, near, width):
@@ -1342,7 +1401,7 @@ class Hunt:
             res = undated_down(res, page.get("final_url") or r["source_url"])
             if res["status"] not in ("verified", "secondary") and not res.get("left") and not res.get("other_employer") and not res.get("stale"): continue
             row = dict(r, check_status=res["status"], check_quote=res["quote"], page_date=res["page_date"], read_on=res["as_of"], official_site="yes" if res["official"] else "no",
-                       note="; ".join(x for x in [n for n in str(r.get("note", "")).split("; ") if n.startswith(("the signal is the organisation's", "the person's own signal is from"))] + [res["note"]] if x))
+                       note="; ".join(x for x in [n for n in note_items(r.get("note")) if n.startswith(("the signal is the organisation's", "the person's own signal is from"))] + [res["note"]] if x))
             why = self.held_back(res, row, org, False, page.get("text", ""), page.get("links")) or self.stored_why(row)
             if not why and row.get("signal_near_person") != "yes" and str(row.get("signal", "")).startswith("(the organisation's") and not self.s.get("allow_org_signal"): why = self.org_signal_only(row) or self.shape_noted(row) and ""
             if not why and no_room:
@@ -1693,7 +1752,7 @@ class Hunt:
         ex = self.own_sentence((self.case.page(url) or {}).get("text", ""), row["name"], row["organisation"], self.must)
         if not ex: return False
         row.update(signal=ex, signal_near_person="yes", signal_date=signal_page_date(self.case.page(url), url))
-        keep = [n for n in str(row.get("note") or "").split("; ") if n and not n.startswith("the signal is the organisation's")]
+        keep = [n for n in note_items(row.get("note")) if n and not n.startswith("the signal is the organisation's")]
         held = [n for n in keep[:1] if n.startswith("not listed: ")]   # a near miss's reason stays first, so stored_readmits still finds it
         row["note"] = "; ".join(held + [f"the person's own signal is from {url} {self.OWN_ON_ORG}"] + keep[len(held):])
         with_event_note(row, self.case.page(url), url)
@@ -1774,7 +1833,7 @@ class Hunt:
             own = OWN_SIGNAL_NOTE.search(str(r.get("note") or "")) if r.get("signal_near_person") == "yes" and not ex else None   # any page that lent them their own signal, a search's too: Burroughs kept a roster's "Ka'ai'ai" as her AI after term_regex learnt better (fnwords115)
             if own and (op := self.case.page(own.group(1))) and not self.own_sentence(op.get("text", ""), r["name"], r["organisation"], self.must):  # an older reading took the page as theirs, and today's does not (Wells's contact cell on Howard's AI page, fnwords111 review): the organisation's signal again, judged as one
                 r.update(signal=f"(the organisation's, from {own.group(1)}) {r.get('signal') or ''}"[:400], signal_near_person="no")
-                r["note"] = "; ".join([x for x in str(r.get("note") or "").split("; ") if x and not x.startswith("the person's own signal is from")] + ["the signal is the organisation's, from another of its pages, not this person's"])
+                r["note"] = "; ".join([x for x in note_items(r.get("note")) if x and not x.startswith("the person's own signal is from")] + ["the signal is the organisation's, from another of its pages, not this person's"])
                 self.mark_roster(r, own.group(1)); n += 1
                 continue
             if r.get("signal_near_person") == "yes":
@@ -1782,7 +1841,7 @@ class Hunt:
                 continue
             if ex:
                 r.update(signal=ex, signal_near_person="yes")
-                r["note"] = "; ".join(x for x in str(r.get("note") or "").split("; ") if x and not x.startswith("the signal is the organisation's"))
+                r["note"] = "; ".join(x for x in note_items(r.get("note")) if x and not x.startswith("the signal is the organisation's"))
                 n += 1
                 continue
             if m and self.own_on_org_page(r, m.group(1)): n += 1
@@ -1795,6 +1854,58 @@ class Hunt:
         return n
 
     FRESH_SINCE = "2023-01-01"
+    def teaser_signal(self, row, url, page=None, listing=None):
+        """Point a row whose signal is a teaser headline (teaser_link) at the article it leads to: signal_url, its date (signal_page_date) and a note saying whose article it is; a byline naming them makes it their own (listed_kind: publication). Returns True when the article could be read."""
+        pg = page or fetcher.fetch(url, self.case)
+        if not pg or pg.get("status") != "ok": return False
+        url = pg.get("final_url") or url
+        near = people.name_regex(row["name"])
+        lt = str((listing or {}).get("text") or "")
+        i = fold(lt).find(fold(str(row.get("signal") or "")[:60]))
+        own = people.byline(pg.get("text", ""), near) or (i >= 0 and people.byline(lt[i:i + len(str(row.get("signal") or "")) + 200], near))   # the listing's "by Scott Dranka '01 and Laurie Wrona" under the headline; the article's own byline came through without its "by"
+        row["signal_url"], row["signal_date"] = url, signal_page_date(pg, url)
+        keep = [n for n in note_items(row.get("note")) if n and not n.startswith((TEASER_OWN, TEASER_STORY))]
+        row["note"] = "; ".join(keep + [(TEASER_OWN if own else TEASER_STORY) + url])
+        with_event_note(row, pg, url)
+        return True
+
+    def stored_teasers(self):
+        """A stored row whose signal is a teaser headline on its signal page takes the article's address and date (teaser_signal); the notes that dated the signal by the listing go. Returns how many rows changed."""
+        n = 0
+        for r in [*self.leads.values(), *self.near.values()]:
+            sig = str(r.get("signal") or "")
+            if not sig or sig.startswith("(") or r.get("signal_near_person") != "yes" or not self.case: continue
+            was_url = stored_signal_url(r) or r.get("source_url") or ""
+            pg = self.case.page_at(was_url)
+            tu = teaser_link(pg, sig)
+            if not tu: continue
+            art = self.case.page_at(tu)
+            old = r.get("signal_date") or ""
+            if not self.teaser_signal(r, tu, art if art and art.get("status") == "ok" else None, pg): continue
+            if old and r.get("signal_date") != old:
+                gone = lambda x: x == f"their signal is from {old}" or (x == f"the page is dated {old}: may be out of date" and r.get("source_url") != was_url) or (x.startswith("a search of ") and "found no newer page" in x)   # fresher_signal's and check's words about the listing's date
+                notes = [x for x in note_items(r.get("note")) if not x.startswith(f"the quote is from {was_url}")]   # the teaser note says where it is from now
+                r["note"] = "; ".join(x for x in notes if x and not gone(x))
+                r.pop("fresher_signal_tried", None)
+            n += 1
+        if n: self.log(f"stored rows: {n} had a listing's teaser headline as their signal; it now names the article it leads to, and its date")
+        return n
+
+    def stored_event_dates(self):
+        """A stored row read from an event page takes the event's day (extract.event_date) as its page_date, and as its signal_date when the signal is from that page; a note that gave the posting date names the event's. Beth Mitchell's row was dated 2024-07-30, the day her talk of 2024-09-25 was posted (fnwords135 review). Returns how many rows changed."""
+        n = 0
+        for r in [*self.leads.values(), *self.near.values()] if self.case else []:
+            was = (r.get("page_date"), r.get("signal_date"))
+            src, sig = r.get("source_url") or "", stored_signal_url(r) or r.get("source_url") or ""
+            for u, k in ((src, "page_date"), (sig, "signal_date")):
+                pg = self.case.page_at(u) if u else None
+                if pg and pg.get("date_from") == "event" and pg.get("date") and r.get(k) and r[k] != pg["date"]:
+                    old, r[k] = r[k], pg["date"]
+                    r["note"] = "; ".join(x.replace(f"dated {old}", f"dated {pg['date']}").replace(f"from {old}", f"from {pg['date']}") for x in note_items(r.get("note")))
+            n += was != (r.get("page_date"), r.get("signal_date"))
+        if n: self.log(f"stored rows: {n} read from an event page now carry the event's day, not the day it was posted")
+        return n
+
     def fresher_due(self, r):
         """A verified row whose signal is the person's own and older than FRESH_SINCE, not searched for a newer one before."""
         d = str(r.get("signal_date") or "")
@@ -1861,11 +1972,11 @@ class Hunt:
         if own:
             url, ex, d = own
             r.update(signal=ex, signal_near_person="yes", signal_url=url, signal_date=d)
-            keep = [n for n in str(r.get("note") or "").split("; ") if n and not n.startswith(("the person's own signal is from", "their unit's newer page"))]
+            keep = [n for n in note_items(r.get("note")) if n and not n.startswith(("the person's own signal is from", "their unit's newer page"))]
             r["note"] = "; ".join(keep + [f"the person's own signal is from {url}, newer than the one from {old} at {was} (a search of {host} with '{self.must[0]}')"])
         elif unit:
             url, ex, d = unit
-            r["note"] = "; ".join(x for x in [n for n in str(r.get("note") or "").split("; ") if n and not n.startswith("their unit's newer page")] + [f"their unit's newer page {url} ({d}) says: {ex}"] if x)
+            r["note"] = "; ".join(x for x in [n for n in note_items(r.get("note")) if n and not n.startswith("their unit's newer page")] + [f"their unit's newer page {url} ({d}) says: {ex}"] if x)
         else:
             r["note"] = "; ".join(x for x in (r.get("note"), f"their signal is from {old}; a search of {host} with '{self.must[0]}' found no newer page with their own sentence or their unit's") if x)
             return False
@@ -1908,7 +2019,7 @@ class Hunt:
             ex = self.own_sentence(pg["text"], name, org, self.must)
             if ex and not self.searched_signal_why(pg, url, ex, row):
                 row.update(signal=ex, signal_near_person="yes", signal_url=url, signal_date=self.signal_when(pg, url, name))
-                row["note"] = "; ".join(x for x in (f"the person's own signal is from {url} (a search for them with '{self.must[0]}')", *[n for n in (row.get("note") or "").split("; ") if n and not n.startswith("the signal is the organisation's")]) if x)
+                row["note"] = "; ".join(x for x in (f"the person's own signal is from {url} (a search for them with '{self.must[0]}')", *[n for n in note_items(row.get("note")) if n and not n.startswith("the signal is the organisation's")]) if x)
                 with_event_note(row, pg, url)
                 with self.save_lock: self.person_signal_found += 1
                 return True
@@ -2007,7 +2118,7 @@ class Hunt:
             if not url: continue
             with self.save_lock: self.held_signal_found += 1
             org = r["organisation"]
-            keep = [n for n in str(r.get("note", "")).split("; ") if n and not n.startswith(("not listed: ", "the signal is the organisation's", "the organisation's signal"))]
+            keep = [n for n in note_items(r.get("note")) if n and not n.startswith(("not listed: ", "the signal is the organisation's", "the organisation's signal"))]
             row = dict(r, signal=sig, signal_near_person="yes", signal_url=url, signal_date=when, note="; ".join([f"the person's own signal is from {url} (a search for them with '{min(self.must, key=len)}')"] + keep))
             with_event_note(row, self.case.page(url), url)
             page = self.case.page(r["source_url"]) or {}
@@ -2038,7 +2149,7 @@ class Hunt:
         back = 0
         for (k, r), good in zip(near, ok[len(lead):]):
             if not good or self.org_count(r["organisation"]) >= self.per_org: continue
-            r["note"] = "; ".join(x for x in str(r.get("note", "")).split("; ") if not x.startswith("not listed: "))
+            r["note"] = "; ".join(x for x in note_items(r.get("note")) if not x.startswith("not listed: "))
             self.leads[k] = self.near.pop(k)
             if r["name"] in self.moved: self.moved.remove(r["name"])
             back += 1
@@ -2159,7 +2270,7 @@ class Hunt:
         for r in self.near.values():
             if r.get("organisation") != org or not str(r.get("note", "")).startswith("not listed: " + self.NO_SIGNAL): continue
             r.update(signal=f"(the organisation's, from {url}) {excerpt}", signal_near_person="no")
-            r["note"] = "; ".join(x for x in ["not listed: the signal is the organisation's, not this person's", "the signal is the organisation's, from another of its pages, not this person's"] + str(r["note"]).split("; ")[1:] if x)
+            r["note"] = "; ".join(x for x in ["not listed: the signal is the organisation's, not this person's", "the signal is the organisation's, from another of its pages, not this person's"] + note_items(r["note"])[1:] if x)
             n += 1
         self.unsignalled_refreshed += n
         return n
@@ -2241,7 +2352,7 @@ class Hunt:
             if r.get("organisation") != org or not self.unit_held(r) or not unit_named(r["title"], page.get("text", ""), url): continue
             r.update(signal=f"(the organisation's, from {url}) {excerpt}", signal_near_person="no")
             if "signal_kind" in r: r["signal_kind"] = signal_kind(r["signal"], r.get("source_url"))
-            r["note"] = "; ".join(x for x in ["not listed: the signal is the organisation's, not this person's", "the signal is their unit's page, found by a search of the organisation's site for the unit"] + str(r["note"]).split("; ")[1:] if x)
+            r["note"] = "; ".join(x for x in ["not listed: the signal is the organisation's, not this person's", "the signal is their unit's page, found by a search of the organisation's site for the unit"] + note_items(r["note"])[1:] if x)
             n += 1
         return n
 
@@ -2332,6 +2443,7 @@ class Hunt:
             if close and sig and not res["official"] and re.search(r"[.!?\"\u201d\u2019')]$", sig.strip()) and not near.search(fold(sig)) and not people.names_unit(sig, per["title"], org) and not people.byline(text, near): close = False   # on another site's story, a sentence that names neither them nor their unit is the writer's own (Kostenbauder's "While AI can help read X-rays ...", after a quote of hers without the word; fnwords122 review); one about the whole college is the college's, not theirs ("The community college has used that money ... to build out an AI lab" for Griffith, a VP of workforce development; fnwords123 review); an article they wrote is theirs throughout (Roark)
             if hit_terms and not sig and not res["official"]: close = False  # only a menu says it, as on a namesake's site
             row = dict(name=per["name"], title=people.drop_code(per["title"]), organisation=org, official_site="yes" if res["official"] else "no", signal=sig, signal_near_person="yes" if close else "no", source_url=page.get("final_url") or page["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status=res["status"], check_quote=res["quote"], angle=angle, note=res["note"])
+            if close and sig and (tu := teaser_link(page, sig)): self.teaser_signal(row, tu, listing=page)   # a listing's headline is the article's: its address and date, not the listing's (Dranka, fnwords135 review)
             if close and sig and not mine and not near.search(fold(sig)) and self.quoted_here(text, per["name"]): row["note"] = "; ".join(x for x in (row.get("note"), UNIT_LINE) if x)   # kept: the rubric takes an organisation's signal, but the reader is told the words are the story's, not theirs (Newell, whose quote on SDSU's story had no "AI", fnwords126 review)
             if close and hit_terms and roster_only(text, per["name"], hit_terms) and self.seat_page(page) and not self.own_sentence(text, per["name"], org, hit_terms):
                 self.seat(row, page, row["source_url"])  # the signal page itself lists them in a member table: a seat, not their words (a council roster, Margolin)
@@ -2822,6 +2934,8 @@ class Hunt:
         workers = self.workers
         if self.stored_redirects(): self._save()
         if self.stored_dates(): self._save()
+        if self.stored_teasers(): self._save()
+        if self.stored_event_dates(): self._save()
         self.stored_official_rechecks()
         self.stored_menu_statements()
         self.stored_unit_signals()
@@ -2867,6 +2981,8 @@ class Hunt:
             local_read_day(r, self.case)
             if r.get("signal") and not str(r["signal"]).startswith("("): r["signal"] = strip_speaker(r["signal"], r.get("name"))   # stored before the strip (fnwords125)
             r["signal_kind"] = listed_kind(r)
+            r["title"] = title_without_org(r.get("title"), r.get("organisation"))
+            if r.get("note"): r["note"] = "; ".join(x for x in note_items(r["note"]) if x.count(")") <= x.count("("))   # a tail a split note left behind ("its page is a staff or bio page)", Castonguay, fnwords135)
             if r["signal_kind"] == "statement" and r.get("signal_near_person") != "yes" and (om := re.match(r"\(the organisation's, from (\S+)\)", str(r.get("signal") or ""))):
                 r["signal_kind"] = "organisation"   # a page of the organisation's that says it, not the person: fnwords132's five such rows were all labelled statement (review)
                 if not r.get("signal_date") and self.case and (op := self.case.page_at(om.group(1))):

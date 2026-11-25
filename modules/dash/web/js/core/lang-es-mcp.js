@@ -28,7 +28,6 @@ const SELF = {
   "its sign-in gave an address that isn't https": "su inicio de sesión dio una dirección que no es https",
   "its sign-in server doesn't describe itself, so this app can't sign in; paste a token instead": "su servidor de inicio de sesión no se describe, así que esta app no puede iniciar sesión; pegue un token",
   "sign in from this computer's own address": "inicie sesión desde la dirección propia de este ordenador",
-  "the server needs an app registered by hand, which this app can't do; paste a token instead": "el servidor necesita una app registrada a mano, cosa que esta app no puede hacer; pegue un token",
   "the server's answer had no token": "la respuesta del servidor no traía token",
   "this server doesn't ask for a sign-in: agents can use it as it is": "este servidor no pide iniciar sesión: los agentes pueden usarlo tal cual",
   // E132: the Known servers list (views/settings.js mcpUrlBlock, mcp-known.json lines) and its two refusals

@@ -4,7 +4,7 @@
 // Ask Link again (the person's ask, 24 h): on a request whose 30 min prompt lapsed it sends Link a fresh prompt for the same cart and
 // total (POST /api/buy do=renew, the person's signed-in app only); that approves nothing, the Link app is still the only go.
 // Open in Link opens Link's own page in a pop-up over the dashboard (openInLink below); Link's page can't be framed.
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { can, post } from "../core/store.js";
 import { codeBlock } from "./code.js";
 import { parseBuy, money as fmt } from "./buy_parse.js";
@@ -35,9 +35,9 @@ function renewButton(d) {
   const note = h("span", { class: "rc-buy-note", role: "status" });
   const b = h("button", { type: "button", class: "rc-buy-open" }, "Ask Link again");
   b.addEventListener("click", async () => {
-    b.disabled = true; note.textContent = "Asking Link…";
-    try { await post("/api/buy", { do: "renew", id: d.id }); b.remove(); note.textContent = "Sent: approve or decline the new prompt in your Link app."; }
-    catch (e) { b.disabled = false; note.textContent = e.message || "Couldn't ask Link again."; }
+    b.disabled = true; note.textContent = tr("Asking Link…");
+    try { await post("/api/buy", { do: "renew", id: d.id }); b.remove(); note.textContent = tr("Sent: approve or decline the new prompt in your Link app."); }
+    catch (e) { b.disabled = false; note.textContent = e.message || tr("Couldn't ask Link again."); }
   });
   return h("div", { class: "rc-buy-act" }, b, note);
 }

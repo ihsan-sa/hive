@@ -547,6 +547,7 @@ async function loadShops(ctx) {
   const turn = F.shopTurn = (F.shopTurn || 0) + 1;
   let got = null, err = null;
   try { got = await jget("/api/shops"); } catch (e) { err = e.message; }
+  if (got && !Array.isArray(got.rows)) { err = got.error || "the answer had no list"; got = null; }
   if (turn !== F.shopTurn) return;   // left the screen, or a newer read is under way
   F.shopsErr = err; F.shops = got;   // a failed read drops the old rows: nothing stays green on old news
   ctx.update();
