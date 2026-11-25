@@ -43,6 +43,12 @@
           ]
         },
         {
+          "target": "rpm",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
           "target": "AppImage",
           "arch": [
             "x64"
@@ -94,10 +100,34 @@
         "xdg-utils",
         "libatspi2.0-0",
         "libuuid1",
-        "libsecret-1-0", "libasound2t64 | libasound2", "libgbm1",
+        "libsecret-1-0",
+        "libasound2t64 | libasound2",
+        "libgbm1",
         "curl",
         "git",
         "python3"
+      ]
+    },
+    "rpm": {
+      "depends": [
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libXScrnSaver",
+        "libXtst",
+        "xdg-utils",
+        "at-spi2-core",
+        "libuuid",
+        "libsecret",
+        "alsa-lib",
+        "mesa-libgbm",
+        "curl",
+        "git",
+        "python3"
+      ],
+      "fpm": [
+        "--directories",
+        "/opt/Hive"
       ]
     }
   },

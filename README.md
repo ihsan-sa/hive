@@ -14,7 +14,7 @@ download, and the terminal install and the browser keep working beside it.
 |---|---|---|
 | Windows 10/11 | `Hive-Setup.exe` | WSL 2 system called Hive (may need one restart) |
 | macOS 13+ | `Hive-mac-arm64` / `Hive-mac-x64` (.dmg from the workflow, .zip from here) | a Linux VM (test build) |
-| Linux | `Hive-linux-amd64.deb`, or the `.AppImage` | `~/hive`, in your own account, sandboxed |
+| Linux | `Hive-linux-amd64.deb` (Ubuntu, Debian, Mint), `Hive-linux-x86_64.rpm` (Fedora), or the `.AppImage` | `~/hive`, in your own account, sandboxed |
 
 ## Opening the Mac download the first time (wording for the download page)
 Seen on macOS 15.8 on Apple silicon, runner run 44390913418 (`test/downloaded.sh`; screenshots in `shots/mac-download-*.png`).
@@ -29,7 +29,7 @@ The older shortcut (right-click, Open) no longer works on macOS 15. For someone 
 
 ## Remove it
 Run the site's remover first, then delete the app (the usual way for the system). Each remover asks before deleting, and keeps your projects, notes and board (copied to a folder of their own) unless you say to delete them.
-- **Linux** (the app installs the Hive inside your own account): the folder `~/hive`, its background services and the `hive` command. Run `curl -fsSL https://hivelab.ca/uninstall.sh | sh -s -- --this-account`; it never deletes your account. Then `sudo apt remove hive-app` for the .deb (or delete the AppImage). The app's own settings are in `~/.config/Hive` (window size, and the sign-in cookie the Hive's page keeps, as good as the key: delete the folder to sign out fully; on Windows it is `%APPDATA%\Hive`, on a Mac `~/Library/Application Support/Hive`).
+- **Linux** (the app installs the Hive inside your own account): the folder `~/hive`, its background services and the `hive` command. Run `curl -fsSL https://hivelab.ca/uninstall.sh | sh -s -- --this-account`; it never deletes your account. Then `sudo apt remove hive-app` for the .deb, `sudo dnf remove hive-app` for the .rpm (or delete the AppImage). The app's own settings are in `~/.config/Hive` (window size, and the sign-in cookie the Hive's page keeps, as good as the key: delete the folder to sign out fully; on Windows it is `%APPDATA%\Hive`, on a Mac `~/Library/Application Support/Hive`).
 - **Windows**: the Hive is a WSL system called `Hive` (WSL itself and your other Linux systems stay), a `Hive` entry in the Start menu, on the Desktop and in Startup (it keeps WSL awake), and `%LOCALAPPDATA%\Hive`. Run `irm https://hivelab.ca/uninstall.ps1 | iex` in PowerShell, then uninstall "Hive" in Settings, Apps (the app and the Hive share the name Hive.lnk, so removing either may take the other's icon). Your kept files go to `Hive-kept-DATE` in your home folder.
 - **Mac**: the Hive's own small Linux machine (a Lima VM named `hive.vm`) and `~/.hive`, plus `~/Applications/Hive.app` (the launcher icon). A Lima of your own in `~/.lima` is not touched. Run `curl -fsSL https://hivelab.ca/uninstall-mac.sh | sh`, (it also takes out the background launch agent `~/Library/LaunchAgents/hive.vm.plist`), then drag `/Applications/Hive.app` to the Bin. Your kept files go to `~/hive-kept-DATE`.
 

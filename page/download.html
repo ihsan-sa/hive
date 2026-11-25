@@ -7,13 +7,15 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding
 .btn.pick{background:#1a56db;color:#fff;border-color:#1a56db}
 details{margin:1rem 0}
 </style>
+<p><a href="/">← Hive home</a></p>
 <h1>Download Hive</h1>
 <p>One file, double-click, and you are in the Hive. The terminal install line still works too: <code>curl -fsSL https://hivelab.ca/install.sh | sh</code> on Linux, <code>irm https://hivelab.ca/install.ps1 | iex</code> in Windows PowerShell, <code>curl -fsSL https://hivelab.ca/install-mac.sh | sh</code> on a Mac.</p>
 <div id="buttons">
-  <a class="btn" id="btn-win" data-os="win" href="downloads/Hive-Setup.exe">Windows 10/11 — Hive-Setup.exe</a>
-  <a class="btn" id="btn-mac" data-os="mac" data-chip="arm64" href="downloads/Hive-mac-arm64.zip">Mac with Apple chip (M1 or later) — Hive-mac-arm64.zip</a>
-  <a class="btn" id="btn-mac-intel" data-os="mac" data-chip="x64" href="downloads/Hive-mac-x64.zip">Mac with Intel chip — Hive-mac-x64.zip</a>
-  <a class="btn" id="btn-linux" data-os="linux" href="downloads/Hive-linux-amd64.deb">Linux — Hive.deb</a>
+  <a class="btn" id="btn-win" data-os="win" href="/downloads/Hive-Setup.exe">Windows 10/11 — Hive-Setup.exe</a>
+  <a class="btn" id="btn-mac" data-os="mac" data-chip="arm64" href="/downloads/Hive-mac-arm64.zip">Mac with Apple chip (M1 or later) — Hive-mac-arm64.zip</a>
+  <a class="btn" id="btn-mac-intel" data-os="mac" data-chip="x64" href="/downloads/Hive-mac-x64.zip">Mac with Intel chip — Hive-mac-x64.zip</a>
+  <a class="btn" id="btn-linux" data-os="linux" data-kind="deb" href="/downloads/Hive-linux-amd64.deb">Linux: Ubuntu, Debian, Mint — Hive.deb</a>
+  <a class="btn" id="btn-linux-rpm" data-os="linux" data-kind="rpm" href="/downloads/Hive-linux-x86_64.rpm">Linux: Fedora — Hive.rpm</a>
 </div>
 <p id="note"></p>
 <details id="help-win"><summary>Windows says "Windows protected your PC"</summary>
@@ -25,13 +27,14 @@ details{margin:1rem 0}
 <li>Hive opens. The Mac asks this once only.</li></ol></details>
 <details id="help-linux"><summary>Linux</summary>
 <p>The .deb is for Ubuntu, Debian, Mint and other systems that install with apt, on an Intel or AMD PC. Double-click it, then open Hive from your applications. If it says there is no app installed for "Debian package" files (some Ubuntu versions), or it opens an archive instead, open a Terminal in your Downloads folder and run <code>sudo apt install ./Hive-linux-amd64.deb</code>.</p>
-<p>On Fedora, Arch, an ARM board or another Linux, use the install line instead: <code>curl -fsSL https://hivelab.ca/install.sh | sh</code></p></details>
+<p>The .rpm is for Fedora on an Intel or AMD PC. Double-click it and press <b>Install</b> in Software, or open a Terminal in your Downloads folder and run <code>sudo dnf install ./Hive-linux-x86_64.rpm</code>.</p>
+<p>On Arch, an ARM board or another Linux, use the install line instead: <code>curl -fsSL https://hivelab.ca/install.sh | sh</code></p></details>
 <h2 id="update">Already have Hive? Update it</h2>
 <p>Download the new file from the button above, then:</p>
 <ul>
 <li id="update-win"><b>Windows:</b> run the new Hive-Setup.exe. Hive can stay open: the installer closes it, puts the new one in its place and keeps your window and sign-in. If Hive does not come back by itself, open it from the Start menu.</li>
 <li id="update-mac"><b>Mac:</b> quit Hive first (Hive menu, <b>Quit</b>). Open the new zip, drag Hive into Applications and choose <b>Replace</b>, then open Hive. Your window and sign-in stay.</li>
-<li id="update-linux"><b>Linux:</b> double-click the new .deb, or run <code>sudo apt install ./Hive-linux-amd64.deb</code>, over the old one. An open Hive keeps working; the next time you open it, it is the new one.</li>
+<li id="update-linux"><b>Linux:</b> double-click the new .deb, or run <code>sudo apt install ./Hive-linux-amd64.deb</code>, over the old one (on Fedora the new .rpm, or <code>sudo dnf install ./Hive-linux-x86_64.rpm</code>). An open Hive keeps working; the next time you open it, it is the new one.</li>
 </ul>
 <p>Nothing is lost either way: your Hive and its chats live on your machine, not in the app.</p>
 <script>
@@ -46,14 +49,18 @@ function detectOS(ua, platform) {
 // A Mac's browser says "Intel Mac OS X" whatever the chip. Its graphics name can tell: an Intel or AMD one means an Intel
 // Mac. Anything else (Safari says only "Apple GPU") gets the Apple chip file, as most Macs sold since 2021 have; both stay shown.
 function macChip(gpu) { gpu = String(gpu || ''); return /Intel|AMD|Radeon/i.test(gpu) && !/Apple/i.test(gpu) ? 'x64' : 'arm64'; }
+// A Linux browser sometimes names its system (Firefox on Fedora and Ubuntu does): then only that system's file is picked,
+// otherwise both Linux buttons are.
+function linuxKind(ua) { ua = String(ua || ''); return /Fedora|Red Hat/i.test(ua) ? 'rpm' : /Ubuntu|Debian|Mint/i.test(ua) ? 'deb' : null; }
 function gpuName(doc) {
   try { const gl = doc.createElement('canvas').getContext('webgl'); const x = gl.getExtension('WEBGL_debug_renderer_info'); return gl.getParameter(x ? x.UNMASKED_RENDERER_WEBGL : gl.RENDERER); } catch (e) { return ''; }
 }
 function pick(doc, nav) {
   const os = detectOS(nav.userAgent, nav.platform);
   const chip = os === 'mac' ? macChip(nav.gpu !== undefined ? nav.gpu : gpuName(doc)) : null;
+  const kind = os === 'linux' ? linuxKind(nav.userAgent) : null;
   const els = doc.querySelectorAll('.btn');
-  for (const b of els) if (b.dataset.os === os && (!chip || b.dataset.chip === chip)) { b.className = 'btn pick'; }
+  for (const b of els) if (b.dataset.os === os && (!chip || b.dataset.chip === chip) && (!kind || b.dataset.kind === kind)) { b.className = 'btn pick'; }
   const n = doc.getElementById('note');
   if (n) n.textContent = os ? '' : 'Pick your system below.';
   return os;

@@ -25,6 +25,9 @@ jobs:
         with: { node-version: 22 }
       - run: npm ci --no-audit --no-fund
       - run: npm test
+      # The .rpm for Fedora needs rpmbuild, which the Ubuntu runner doesn't have.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get install -y -qq rpm
       - run: npx electron-builder ${{ matrix.flags }} --publish never
       - run: node test/size.js dist
       # On the ARM runner: the chip Windows reports to this (x64, translated) job and the one it keeps in the registry, which the app hands the installer.
@@ -69,6 +72,10 @@ jobs:
       - if: runner.os == 'Linux'
         timeout-minutes: 30
         run: sh test/cleandeb.sh dist/Hive-linux-amd64.deb ubuntu:22.04 ubuntu:24.04 ubuntu:26.04 debian:12 debian:13 docker.io/linuxmintd/mint22-amd64@gdebi debian:13@pkcon ubuntu:24.04@pkcon ubuntu:26.04@pkcon
+      # The .rpm the same way on Fedora 44 and 45: dnf, then PackageKit as GNOME Software installs a double-clicked file.
+      - if: runner.os == 'Linux'
+        timeout-minutes: 20
+        run: sh test/cleandeb.sh dist/Hive-linux-x86_64.rpm fedora:44 fedora:45
       # The same on Windows (its WSL 2) and on the Intel Mac (its VM; Apple silicon runners can't start one). These machines
       # differ from a person's computer, so a stop here is read, not a red build.
       # Which Linux systems the Windows runner already has before the install (the installer makes its own, "Hive").
@@ -138,6 +145,7 @@ jobs:
             dist/*.dmg
             dist/*.zip
             dist/*.deb
+            dist/*.rpm
             dist/*.AppImage
             test/shots/*.png
           if-no-files-found: warn
