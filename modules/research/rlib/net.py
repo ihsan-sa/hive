@@ -392,12 +392,18 @@ def _throwaway_profile():
             time.sleep(0.5)
 
 
+def _die_with_us():
+    """A prefix that makes the kernel kill Chrome when this process dies. Without it, a hunt stopped by SIGTERM or SIGKILL (a timeout, the machine's OOM guard) left its Chrome running for hours, one at full CPU, its page proxy gone."""
+    tool = shutil.which("setpriv")
+    return [tool, "--pdeathsig", "KILL", "--"] if tool else []
+
+
 def _run_chrome(cmd, timeout):
     """(html, error). A hostile page can reach a browser, so it keeps its sandbox unless the owner of this machine said otherwise."""
     extras = [[], ["--no-sandbox"]] if os.environ.get("RESEARCH_CHROME_NO_SANDBOX") else [[]]
     for extra in extras:
         try:
-            p = subprocess.run(cmd[:1] + extra + cmd[1:], capture_output=True, timeout=timeout)
+            p = subprocess.run(_die_with_us() + cmd[:1] + extra + cmd[1:], capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             return "", "Chrome timed out"
         except OSError as e:

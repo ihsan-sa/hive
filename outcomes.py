@@ -62,6 +62,9 @@ DRAFT_LINES = (3, 10)      # a draft's body, in lines
 DAY_BOUND = re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b|\b20\d\d-\d\d-\d\d\b|\b(?:today|tonight|yesterday|this morning)\b|\b(?:fixed|landed|merged|committed) (?:in|as|at)\b", re.I)   # a commit id, a date, a day word, "fixed in"
 OWN_WORDS = 0.7            # share of a draft's words that must be in its source post: it quotes, it doesn't summarise
 GRADE_RE = re.compile(r'"run"\s*:\s*"([^"]+)"\s*,\s*"grade"\s*:\s*"(\w+)"\s*,\s*"why"\s*:\s*"((?:[^"\\]|\\.)*)"')
+DRAWS = 2                  # model calls per batch, each with the runs in a fresh order; runs the draws split on get one more call together and take the majority. One draw changed 9 of 29 nothing grades and 6 of 40 delivered on a regrade (ae657, 2026-11-25): one call decided the worst grade a third of the time
+EXTRA = 2                  # more calls at most, each on the runs still without a majority: a three-way split gets a fourth vote (a462d's review 11-25: 4 of the 6 rows two passes still split on were three-way partials)
+MODEL_GRADES = ("delivered", "partial", "nothing", "not_asked")
 POST_CLIP, RESULT_CLIP = 900, 2500   # chars of a post shown to the model; the last one is usually the result and holds the fact
 
 def now(): return dt.datetime.now(dt.timezone.utc)
@@ -476,7 +479,7 @@ Grades:
   nothing    it posted, but no delivery and no handover: status only, questions back, or the wrong thing
   not_asked  the post asked this agent nothing concrete (a thread update, an acknowledgement, a hand-off to someone else)
 
-Judge only against what the post asked, not whether the work was good. A waking post with attached files and few or no words asks the agent to act on those files (a screenshot to look at, a document to review or answer) in the light of the thread: the agent reading them right and doing the evident thing is the ask, not not_asked. A post that says "stop" or "thanks" and a short reply is not_asked; so is a chase ("???", "hello?", "status?", "done yet?", "did you do it", a note that a wait is due) answered with where things stand, and a post asking for work the person had put on hold, answered by pointing to that hold. A run the starter carried on from the agent's own Next: line is graded against that line: the step done and checked is delivered; finding it can't run yet (not due, waiting) and doing nothing else is nothing, since the run was spent for no step. A memguard post that killed the agent's job asks it to rerun the job or say why it needs no rerun: a reply with a concrete reason none is needed (the result is already in hand, the job was superseded or finished its purpose, a smaller check replaces it, done) is delivered; "it retries by itself" is delivered only if the run shows the retry is set up. Reply with JSON only:
+Judge only against what the post asked, not whether the work was good. A waking post with attached files and few or no words asks the agent to act on those files (a screenshot to look at, a document to review or answer) in the light of the thread: the agent reading them right and doing the evident thing is the ask, not not_asked. A post that says "stop" or "thanks" and a short reply is not_asked; so is a chase ("???", "hello?", "status?", "done yet?", "did you do it", a note that a wait is due) answered with where things stand, and a post asking for work the person had put on hold, answered by pointing to that hold. A reminder whose only ask is a check, answered by running that check now and saying what it showed, is not_asked when the next step still waits on the person or another agent; if the check could not be run (the tool or machine unreachable) and nothing else was done, it is nothing. Neither applies to a keeper rung or a Next: line, which are graded below. A post asking for work already done in full (by this agent earlier or by anyone), answered by checking it now and naming the post or file where it was done, is delivered. A question asking for information, answered directly and specifically, is delivered; a question that is really a request ("can you...", "why is X broken") is graded as that request. A run the starter carried on from the agent's own Next: line is graded against that line: the step done and checked is delivered; finding it can't run yet (not due, waiting) and doing nothing else is nothing, since the run was spent for no step. The same holds for a keeper round's rung. A run that finds its line or rung can't run yet and instead lands another due rung or step of the same project (a fix with a test, a defect corrected and verified; not a rung merely moved to a later date) is delivered if that step was checked, else partial. Work quoted under "its post:" was done by the earlier run and does not count for this one. A memguard post that killed the agent's job asks it to rerun the job or say why it needs no rerun: a reply with a concrete reason none is needed (the result is already in hand, the job was superseded or finished its purpose, a smaller check replaces it, done) is delivered; "it retries by itself" is delivered only if the run shows the retry is set up. Reply with JSON only:
 {"grades":[{"run":"<RUN key>","grade":"delivered|partial|nothing|not_asked","why":"<at most 20 words>"}]}
 
 One more job, on delivered and partial runs only. If a post by the agent holds a fact another agent could use months from now in other work, add to that run's grade:
@@ -601,19 +604,20 @@ def cmd_grade(a):
         nonlocal cost, graded, drafts, limited
         for i in range(0, len(chosen), 8):
             batch = chosen[i:i + 8]
-            prompt = PROMPT.replace("{blocks}", "\n\n".join(block(*b) for b in batch))
-            if a.dry: print(prompt[:3000] + ("\n..." if len(prompt) > 3000 else "")); print(f"... {len(batch)} runs, {len(prompt)} chars"); continue
-            try: out, c = asks.ask_model(prompt, a.model)
-            except Exception as e:
+            if a.dry:
+                prompt = PROMPT.replace("{blocks}", "\n\n".join(block(*b) for b in batch))
+                print(prompt[:3000] + ("\n..." if len(prompt) > 3000 else "")); print(f"... {len(batch)} runs, {len(prompt)} chars, {DRAWS} draws"); continue
+            draws, c, e = draw_all(batch, a.model, asks)
+            cost += c
+            if e:
                 limited = isinstance(e, getattr(asks, "Limited", ()))
                 print(f"outcomes: model call failed: {e}", file=sys.stderr); return False
-            cost += c or 0.0
-            byk = {r["key"]: (r, post, mine) for r, post, mine, _ in batch}
-            for g in parse_grades(out):
-                r, post, mine = byk.get(g.get("run"), (None, None, None))
-                if not r or g.get("grade") not in ("delivered", "partial", "nothing", "not_asked"): continue
-                del byk[r["key"]]   # a reply that grades a run twice (seen 2026-11-11..19, 12 rows) writes it once: the first grade stands
-                append(LEDGER, {**r, **tag, "at": iso(), "grade": g["grade"], "why": clip(g.get("why"), 200), "posts": len(mine), "by": a.model, "cost": round(cost / len(batch), 4)}); graded += 1
+            for r, post, mine, _ in batch:
+                got = [d[r["key"]] for d in draws if r["key"] in d]
+                if not got: continue
+                g = settled(got)
+                append(LEDGER, {**r, **tag, "at": iso(), "grade": g["grade"], "why": clip(g.get("why"), 200), "posts": len(mine), "by": a.model, "cost": round(c / len(batch), 4),
+                                "draws": [x["grade"] for x in got]}); graded += 1
                 try: drafts += bool(write_draft(g, r, mine))
                 except OSError as e: print(f"outcomes: draft not written: {e}", file=sys.stderr)
         return True
@@ -627,6 +631,49 @@ def cmd_grade(a):
     if not a.dry and todo and not limited and not other and not back: CURSOR.write_text(json.dumps({"at": min([max(r["ended"] for r in todo)] + [iso(dt.datetime.fromisoformat(h) - dt.timedelta(seconds=1)) for h in held]), "run": iso()}))
     if not a.dry and graded and not other and not back: step_up(graded)
     print(f"{graded} runs graded ({len(chosen) + len(closers)} by the model, {len(chosen) if back else len(closers)} of them closers, {len(model_runs) - len(chosen) - len(closers)} left ungraded: chain not chosen or past ROOT_MAX), {drafts} drafts, ${cost:.2f}")
+
+def draw(batch, model, asks, rng=random):
+    """One model call grading `batch` with its runs in a fresh order (a run's place in the batch is one more thing a single call
+    leans on). Returns ({run key: grade dict}, cost); a reply that grades a run twice keeps the first (seen 2026-11-11..19, 12 rows)."""
+    order = rng.sample(batch, len(batch))
+    out, c = asks.ask_model(PROMPT.replace("{blocks}", "\n\n".join(block(*b) for b in order)), model)
+    keys, got = {b[0]["key"] for b in batch}, {}
+    for g in parse_grades(out):
+        if g.get("run") in keys and g.get("grade") in MODEL_GRADES: got.setdefault(g["run"], g)
+    return got, c or 0.0
+
+def draw_all(batch, model, asks, draws=None):
+    """DRAWS calls on the batch, then up to EXTRA more, each on the runs that still lack a clear majority (split, three ways, or left
+    out of a reply), together. The same for every grade, so it can move a delivered down as readily as a nothing up. Returns
+    (list of {key: grade dict}, cost, error): on a failed call it stops and hands back what it has, with the cost of the calls that ran."""
+    out, cost = [], 0.0
+    try:
+        for _ in range(DRAWS if draws is None else draws):
+            got, c = draw(batch, model, asks); out.append(got); cost += c
+        for _ in range(EXTRA if len(out) > 1 else 0):
+            open_ = [b for b in batch if not majority([d[b[0]["key"]] for d in out if b[0]["key"] in d])]
+            if not open_: break
+            got, c = draw(open_, model, asks); out.append(got); cost += c
+    except Exception as e:
+        return out, cost, e
+    return out, cost, None
+
+def majority(got):
+    """The grade dict more than half of `got` gave (the first draw that gave it, for its why and note), or None; one draw is no majority."""
+    gs = [g["grade"] for g in got]
+    top = max(gs, key=gs.count) if len(gs) > 1 else None
+    return next(g for g in got if g["grade"] == top) if top and gs.count(top) * 2 > len(gs) else None
+
+def settled(got):
+    """A run's grade from its draws (grade dicts, in draw order): the majority; else the one grade given most; on a tie not_asked if it
+    is one of the tied (out of the denominator, rather than a counted partial: a462d's review 11-25), else partial, the middle."""
+    if len(got) == 1: return got[0]
+    m = majority(got)
+    if m: return m
+    gs = [g["grade"] for g in got]
+    n = max(map(gs.count, gs)); tied = [x for x in MODEL_GRADES if gs.count(x) == n]
+    pick = tied[0] if len(tied) == 1 else "not_asked" if "not_asked" in tied else "partial"
+    return next((g for g in got if g["grade"] == pick), {"grade": pick, "why": "draws split: " + ", ".join(gs)})
 
 def step_up(new, post=None):
     """An agent graded short STEP_UP_AFTER times in a row in one thread while on a cheap model gets its next wake on STEP_UP_TO:

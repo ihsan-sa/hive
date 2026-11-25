@@ -632,6 +632,14 @@ Rules. done only when an agent post reports the thing itself finished and checke
 {body}
 """
 
+def post_view(p, n=900):
+    """A post as reconcile reads it: its start and its end, and the agent's own last line (Done:, Waiting:...), which hive post moves out
+    of the text into reason. Cut at the first 700 characters, the read missed a delivery at a long post's end with its Done: line: k2867
+    (2026-11-24, "the shop search tool is built") was filed owned, its owner slept, and the watchdog called it orphaned 3 h later."""
+    t = str(p.get("text", "")); r = str(p.get("reason") or "").strip()
+    if len(t) > n: t = t[:n * 2 // 3] + " [...] " + t[-(n // 3):]
+    return t + (f" [last line: {r[:200]}]" if r else "")
+
 def thread_posts(posts):
     by = {}
     for p in posts: by.setdefault(p.get("thread") or p.get("id"), []).append(p)
@@ -684,7 +692,7 @@ def cmd_reconcile(a):
         if not after: continue
         # Both ends of the thread: the answer to an old ask sits right after it, and a busy thread (keeper, hive) has hundreds of posts since.
         if len(after) > 40: after = after[:20] + after[-20:]
-        lines = [f"  {p['id']} {p['at'][:16]} {p.get('from')}{' (person)' if str(p.get('from','')).lower()=='person' else ''}: {str(p.get('text',''))[:700]}" for p in after]
+        lines = [f"  {p['id']} {p['at'][:16]} {p.get('from')}{' (person)' if str(p.get('from','')).lower()=='person' else ''}: {post_view(p)}" for p in after]
         txt = "\n".join(lines)
         if len(txt) > a.chars: txt = txt[:a.chars // 2] + "\n  [...]\n" + txt[-a.chars // 2:]
         head = "\n".join(f"- {e['id']} ({e.get('when','')[:16]}){' [put to the person ' + (e.get('status_at') or '')[:16] + ': ' + str(e.get('why') or '')[:200] + ']' if e.get('status') == 'person' else ''}: {e['ask']}" for e in es)
