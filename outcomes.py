@@ -16,6 +16,7 @@ A run the starter stopped because the person edited the message it was answering
 more work (marked `person_pause`; person_paused has the conditions, rsi-lab 11212112c6ed).
 A model or effort switch (`hive model X`) splits one piece of work over two runs: the run that only switched is not_asked by rule (marked `switch`), and the
 run that resumed on the switch post is graded against the post that woke the first one (`origin`), so the work is counted once, against what was asked.
+So is a run that worked, then ended on its switch post and was resumed on it (`switch_carried`): the resumed run is graded with its posts too (R77).
 Every run woken by the person is graded; of the rest, whole chains: a fixed share of roots (ROOT_PCT) has every run handed on from it graded, so a chain's rate means a chain.
 A completion wake (an agent's result post named this agent, asked it nothing, and it ticked no rung) and a self-wake (the agent's own post named it) are
 only counted, every one of them, and marked on a ledger row that gets graded anyway: hive-meta moving.md P4, measuring before anyone suppresses them. The
@@ -155,6 +156,27 @@ def switch_only(run, mine, log):
     if not mine or not all(switch_post(p, run["name"]) for p in mine): return False
     ids = {p.get("id") for p in mine}
     return any(r.get("event") == "start" and r.get("name") == run["name"] and ids & set(r.get("woke") or [r.get("post")]) for r in log)
+
+def switch_carried(run, mine, log):
+    """The run ended on its own switch post (`hive model X`, then stop as told) and a later run of the same agent started on that post: the ask goes on
+    in that run, which is graded with this run's posts too (`switch_origin`), so this one is outside the score like `switch_only`. Graded alone, a run
+    that posted an intent line and then switched read as plan-only: a56bb nothing (11-19), a7e3c partial (11-20), a8df6 partial (11-25), each
+    finished by the next run on the same post (R77, hive-meta)."""
+    if not mine or not switch_post(mine[-1], run["name"]): return False
+    pid = mine[-1].get("id")
+    return any(r.get("event") == "start" and r.get("name") == run["name"] and r.get("at", "") >= run["ended"][:19] and pid in (r.get("woke") or [r.get("post")])
+               for r in log)
+
+def switch_origin(run, post, log):
+    """For a run woken by its own switch post: the start of the run that posted it, so this run is graded with both runs' posts (the work done
+    before the switch is this ask's too), or None."""
+    if not switch_post(post, run["name"]): return None
+    at, best = post.get("at", ""), None
+    for e in log:
+        if e.get("event") == "end" and e.get("name") == run["name"] and at <= e.get("at", "") <= run["started"]:
+            s = _starts(log).get((e.get("session"), e.get("pid")))
+            if s and s.get("at", "") <= at and (best is None or s["at"] > best): best = s["at"]
+    return best
 
 def parked(run, log):
     """The run ended because the starter stopped it while it sat on a background shell, to resume it with new posts (a `woken` event for it at its end).
@@ -556,7 +578,9 @@ def cmd_grade(a):
         r = {**r, **({"root": root[r["key"]]} if root.get(r["key"], r["key"]) != r["key"] else {}), **({"completion_wake": True} if completion_wake(r, by_id, mine, ticks) else {}), **({"self_wake": True} if post and self_wake(r, post) else {}), **({"round": True} if ask and ROUND.search(str((post if ask is not post and job_notice(post, r["name"]) else ask).get("text", ""))[:80]) else {})}   # marks for the spot-check and the step-up; the grade doesn't look at them
         if (ro := reap_origin(r, log)):   # resumed after a reap: the reaped run's posts are this run's too, the ask counted once
             r = {**r, "reap_of": ro}; post, mine, after = posts_of({**r, "started": ro}, posts, by_id)
-        sw = switch_only(r, mine, log); sup = not sw and superseded(r, log, by_id); pz = not (sw or sup) and person_paused(r, mine, pauses)
+        elif post and (so := switch_origin(r, post, log)):   # resumed on its own switch post: the switching run's posts are this run's too
+            r = {**r, "switch_of": so}; post, mine, after = posts_of({**r, "started": so}, posts, by_id)
+        sw = switch_only(r, mine, log) or switch_carried(r, mine, log); sup = not sw and superseded(r, log, by_id); pz = not (sw or sup) and person_paused(r, mine, pauses)
         rp = not (sw or sup or pz) and bool(reap_resumed(r, log)); lc = None if sw or sup or pz or rp or not mine else limit_cut(r, log, until)
         if lc == "": held.append(r["ended"]); continue   # cut by a limit, nothing resumed yet: graded on a later hour, once the reset brings it back or doesn't
         if parked(r, log):
@@ -567,7 +591,7 @@ def cmd_grade(a):
         post = ask
         g = "not_asked" if sw or sup or pz or rp or lc else "not_run" if not_run(r, mine, lims, log) else mechanical(r, post, mine)
         if g:
-            why = "only switched model or effort; the run it resumed as carries the ask" if sw else "reaped on a background wait and resumed on the same post; that run carries the ask" if rp else "cut by a usage limit after posting and resumed on the same post; that run carries the ask" if lc else "stopped for the person's edit or retry; the run it resumed as carries the ask" if sup else "the person paused it mid-run and it stopped; the run that resumes carries the ask" if pz else "hit a usage limit before posting; the same session resumes on the same post and carries the ask" if g == "not_run" \
+            why = "switched model or effort and stopped; the run it resumed as carries the ask, with this run's posts" if sw else "reaped on a background wait and resumed on the same post; that run carries the ask" if rp else "cut by a usage limit after posting and resumed on the same post; that run carries the ask" if lc else "stopped for the person's edit or retry; the run it resumed as carries the ask" if sup else "the person paused it mid-run and it stopped; the run that resumes carries the ask" if pz else "hit a usage limit before posting; the same session resumes on the same post and carries the ask" if g == "not_run" \
                 else "the post asked nothing" if g == "not_asked" else "posted nothing" + (" though named" if g == "silent" else "")
             if not a.dry: append(LEDGER, {**r, **({"switch": True} if sw else {}), **({"superseded": True} if sup else {}), **({"person_pause": True} if pz else {}), **({"reap_resumed": True} if rp else {}), **({"limit_resumed": True} if lc else {}), **tag, "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
             graded += 1

@@ -123,7 +123,7 @@ export function askProviderLine(name, p) {
 // ---- A thread's tier. Writes kb/priorities.md, the file the keeper follows. ----
 export function askTier(th) {
   const P = (S.live && S.live.priorities) || {}, was = tierOf(th), setNow = (P.set || {})[th]; let pick = was;
-  const desc = { tier1: "goes first; its jobs use the heavy fast lane", tier2: "next", held: "the keeper starts no rounds on it; to stop agents now, use Pause", other: "after tier 2" };
+  const desc = { tier1: "goes first; its jobs use the heavy fast lane", tier2: "next", held: "the keeper starts no rounds on it; Pause stops new starts at once", other: "after tier 2" };
   const warn = h("p", { class: "meta", style: "color:var(--warn-ink)" });
   const opt = (k, l, d, onPick) => h("label", { class: "opt" }, h("input", { type: "radio", name: "tierpick", value: k, checked: k === was || null, onchange: onPick }), h("b", null, l), h("span", { class: "meta" }, d));
   confirm({

@@ -6,7 +6,8 @@ service does nothing until that service restarts. A dash web file is served from
 and the tunnel lets a browser reuse css and js for 60 s. Until now the only check was livecheck.py, which tests that an edited file
 still parses. It doesn't test whether the edit is the code that runs.
 
-  served.py check PATH...         for each file: live, fresh (runs anew each call), restart needed, differs or unserved (exit 1 if any)
+  served.py check PATH...         for each file: live, fresh (runs anew each call), restart needed, differs, unserved or unknown
+                                  (exit 1 if any is restart, differs, unserved or missing; 2 if the worst is unknown)
   served.py claims [--since 6h]   posts that say a change is live: check the files they name
   (hive post runs on_post on every agent post that names a file and says live, deployed or fixed, and warns the writer)
 
@@ -16,7 +17,11 @@ How a file is checked:
     status is checked.
   - a .py file that a long-running user service runs or imports from its own folder (found by following its imports): live only if
     the service started after the file last changed, otherwise "restart needed".
-  - the script of a timer or one-shot unit: it runs fresh each time, so the next run uses it.
+  - the script of a timer or one-shot unit: it runs fresh each time, so the next run uses it; but a one-shot still on a run that started
+    before the change (the release train runs for hours) holds the old copy: "restart".
+  - a process of this user, found in /proc, that runs a .py/.sh by path or `-m` (under heavy's run-*.scope, in tmux, behind a wrapper)
+    and imports the file: "live" if it started after the change, "restart" if it started before and has run over 10 minutes.
+  - nothing holds it, but a Dockerfile or compose file sits above it (below home): "unknown", since a container's processes aren't ours.
   - anything else (a CLI, a test): no running service holds it, so the next call runs the new copy.
 """
 import argparse, ast, datetime as dt, hashlib, hmac, json, os, re, subprocess, sys, time, urllib.error, urllib.request
@@ -35,11 +40,11 @@ def run(cmd, timeout=10):
 
 
 def units():
-    """User services: [{id, type, active, started (unix or 0), argv: [...], timer: bool}]."""
+    """User services: [{id, type, active, started (unix or 0), argv: [...], timer: bool, cwd, main: MainPID or 0}]."""
     names = [l.split()[0] for l in run(["systemctl", "--user", "list-units", "--type=service", "--all", "--no-legend", "--plain"]).splitlines() if l.split()]
     if not names: return []
     out, cur = [], {}
-    raw = run(["systemctl", "--user", "show", "--timestamp=unix", "-p", "Id,Type,ActiveState,ExecMainStartTimestamp,ExecStart,TriggeredBy", *names], 20)
+    raw = run(["systemctl", "--user", "show", "--timestamp=unix", "-p", "Id,Type,ActiveState,ExecMainStartTimestamp,ExecStart,TriggeredBy,WorkingDirectory,MainPID", *names], 20)
     for line in raw.splitlines() + [""]:
         if not line.strip():
             if cur.get("Id"): out.append(cur)
@@ -50,7 +55,8 @@ def units():
         m = re.search(r"argv\[\]=([^;]*)", u.get("ExecStart", ""))
         st = re.match(r"@(\d+)", u.get("ExecMainStartTimestamp", ""))
         res.append({"id": u["Id"], "type": u.get("Type", ""), "active": u.get("ActiveState", ""), "started": int(st[1]) if st else 0,
-                    "argv": (m[1].split() if m else []), "timer": is_timer(u.get("TriggeredBy", ""))})
+                    "argv": (m[1].split() if m else []), "timer": is_timer(u.get("TriggeredBy", "")), "cwd": u.get("WorkingDirectory", "").lstrip("!-") or str(HOME),
+                    "main": int(u.get("MainPID") or 0) if str(u.get("MainPID", "")).isdigit() else 0})
     return res
 
 
@@ -65,18 +71,32 @@ def local_imports(script, seen=None):
     script = Path(script).resolve(); seen = set() if seen is None else seen
     if script in seen or not script.is_file(): return seen
     seen.add(script)
-    try: tree = ast.parse(script.read_text(errors="replace"))
-    except (SyntaxError, ValueError, OSError): return seen
-    for n in ast.walk(tree):
-        names = [a.name for a in n.names] if isinstance(n, ast.Import) else [n.module] if isinstance(n, ast.ImportFrom) and n.module and not n.level else []
-        for name in names:
-            f = script.parent / (name.split(".")[0] + ".py")
-            if f.is_file(): local_imports(f, seen)
-        if isinstance(n, ast.Call) and (getattr(n.func, "attr", None) or getattr(n.func, "id", None)) in LOADERS:
-            for f in loaded_paths(n, script): local_imports(f, seen)
-    if script.name == "starter.py":
-        for f in config_impls(script.parent / "config.json"): local_imports(f, seen)
+    for f in _deps(script): local_imports(f, seen)
     return seen
+
+
+IMPORT = re.compile(r"(?:^|[;:])[ \t]*(?:import[ \t]+([\w., \t]+)|from[ \t]+(\w+)[\w.]*[ \t]+import\b)", re.M)
+_DEPS = {}
+
+def _deps(script):
+    """The files one script loads directly (see local_imports), cached by mtime. Imports are read by a line regex; only a file that names a
+    path loader is parsed: walking the tree of every script a process runs took 17 s a check."""
+    try: key = (script, script.stat().st_mtime_ns); text = script.read_text(errors="replace")
+    except OSError: return []
+    if key in _DEPS: return _DEPS[key]
+    out = []
+    for m in IMPORT.finditer(text):
+        for name in ([x.split()[0] for x in m[1].split(",") if x.split()] if m[1] else [m[2]]):
+            f = script.parent / (name.split(".")[0] + ".py")
+            if f.is_file(): out.append(f)
+    if any(l in text for l in LOADERS):
+        try: tree = ast.parse(text)
+        except (SyntaxError, ValueError): tree = None
+        for n in ast.walk(tree) if tree else ():
+            if isinstance(n, ast.Call) and (getattr(n.func, "attr", None) or getattr(n.func, "id", None)) in LOADERS: out += loaded_paths(n, script)
+    if script.name == "starter.py": out += config_impls(script.parent / "config.json")
+    _DEPS[key] = out
+    return out
 
 
 def config_impls(cfg):
@@ -108,8 +128,63 @@ def loaded_paths(call, script):
 
 
 def script_of(u):
-    """The .py or .sh a unit runs, if any."""
-    return next((Path(a) for a in u["argv"] if a.endswith((".py", ".sh")) and Path(a).is_absolute()), None)
+    """The .py or .sh a unit runs, if any: an absolute path, or one relative to its WorkingDirectory."""
+    return script_in(u["argv"][1:] if u["argv"] else [], u.get("cwd") or HOME)
+
+
+def script_in(argv, cwd):
+    """The .py/.sh an argv runs (`python3 -I x.py`, `bash run.sh`, `python3 -m pkg`), resolved against cwd, or None."""
+    for i, a in enumerate(argv):
+        if a == "-m" and i + 1 < len(argv):
+            mod = Path(cwd, *argv[i + 1].split("."))
+            return next((f for f in (mod.with_suffix(".py"), mod / "__main__.py") if f.is_file()), None)
+        if a.endswith((".py", ".sh")) and not a.startswith("-"):
+            f = Path(cwd) / a
+            return f if f.is_file() else None
+    return None
+
+
+OLD_RUN_S = 600   # a process that started before the edit this long ago is a run that holds the old copy, not a CLI about to exit
+CLI_S = 60        # a process younger than this is a CLI (served.py check itself, a hook): it says nothing live; one still up this long
+                  # after the edit holds the old copy, however soon before the edit it started (a0ad9 fourth pass, 112503263733)
+TEST = re.compile(r"(?:^|/)(?:tests?/|test_[^/]*$|[^/]*_test\.py$)")   # a test server left running (serve_csp.py since 11-06) is no service
+
+def procs():
+    """This user's running processes that run a .py/.sh: [{pid, script, started (unix), unit}]. It finds what systemd's units don't name:
+    a script under `heavy` (a run-*.scope), in tmux, behind a wrapper or `python3 -m`, or the one-shot still running (review a0ad9, 112502385891)."""
+    try:
+        btime = next(int(l.split()[1]) for l in Path("/proc/stat").read_text().splitlines() if l.startswith("btime "))
+        hz, uid = os.sysconf("SC_CLK_TCK"), os.getuid()
+    except (OSError, StopIteration, ValueError): return []
+    out, me = [], set()
+    pid = os.getpid()
+    while pid > 1 and pid not in me:   # this check and what ran it
+        me.add(pid)
+        try: pid = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError): break
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit() or int(d.name) in me: continue
+        try:
+            if d.stat().st_uid != uid: continue
+            argv = [a.decode(errors="replace") for a in (d / "cmdline").read_bytes().split(b"\0") if a]
+            if not any(a.endswith((".py", ".sh")) or a == "-m" for a in argv): continue
+            script = script_in(argv[1:], os.readlink(d / "cwd"))
+            if not script or TEST.search(str(script)): continue
+            start = int((d / "stat").read_text().rsplit(")", 1)[1].split()[19])   # field 22, starttime in ticks since boot
+            cg = (d / "cgroup").read_text().strip().rsplit("/", 1)[-1]
+        except (OSError, ValueError, IndexError): continue
+        out.append({"pid": int(d.name), "script": script.resolve(), "started": btime + start / hz, "unit": cg})
+    return out
+
+
+DOCKER = ("Dockerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml")
+
+def in_docker(p):
+    """A Dockerfile or compose file beside p or above it (below home): a container may run it, and a container's processes are not ours to see."""
+    for d in p.parents:
+        if d == HOME or not d.is_relative_to(HOME): break
+        if any((d / n).is_file() for n in DOCKER): return d
+    return None
 
 
 def dash_port(us=None):
@@ -145,8 +220,8 @@ def fetch_served(rel, port=None, opener=None, holds=None):
     except (OSError, ValueError): return 0, b""
 
 
-def check(path, us=None, fetch=fetch_served, now=None):
-    """{path, state: live|restart|fresh|differs|unserved|missing, why} for one file."""
+def check(path, us=None, fetch=fetch_served, now=None, ps=None):
+    """{path, state: live|restart|fresh|unknown|differs|unserved|missing, why} for one file. ps: procs(), read here if None."""
     now = now or time.time()
     p = Path(str(path).replace("~/", str(HOME) + "/", 1) if str(path).startswith("~/") else str(path)).expanduser()
     if not p.is_absolute():   # `served.py check starter.py` from ~/core; a deleted cwd falls back to home
@@ -166,18 +241,36 @@ def check(path, us=None, fetch=fetch_served, now=None):
         late = f"; through the tunnel a browser may keep the old copy until {time.strftime('%H:%M:%SZ', time.gmtime(mtime + TUNNEL_S))}" if now - mtime < TUNNEL_S else ""
         return {"path": str(p), "state": "live", "why": f"the dash serves /{rel} the same as on disk (a tab open before the edit shows it after a reload){late}"}
     us = units() if us is None else us
-    hits = []
+    hits, held, seen = [], set(), {}
+    imports = lambda s: seen.setdefault(s, local_imports(s))
+    hm = lambda t: time.strftime('%m-%d %H:%MZ', time.gmtime(t))
     for u in us:
         s = script_of(u)
         if not s: continue
-        if u["timer"] or u["type"] == "oneshot":
-            if s.resolve() == p: hits.append(("fresh", f"{u['id']} runs it fresh each time"))
+        if u["timer"] or u["type"] == "oneshot":   # runs anew, the same as no hit, unless a run is in progress: only then follow its imports
+            if s.resolve() != p and not (u["active"] == "activating" and p in imports(s)): continue
+            held.add(u.get("main"))
+            if u["active"] == "activating" and u["started"] and u["started"] < mtime and now - u["started"] > OLD_RUN_S:   # release-train: hours in one run
+                hits.append(("restart", f"{u['id']} is a one-shot still on a run that started {hm(u['started'])}, before the change at {hm(mtime)}: "
+                                        "that run holds the old copy (the next run takes this one)", u["started"]))
+            else: hits.append(("fresh", f"{u['id']} runs it fresh each time"))
             continue
         if u["active"] not in ("active", "activating", "reloading"): continue
-        if p in local_imports(s):
-            if u["started"] and u["started"] >= mtime: hits.append(("live", f"{u['id']} started {time.strftime('%m-%d %H:%MZ', time.gmtime(u['started']))}, after the last change"))
-            else: hits.append(("restart", f"{u['id']} started {time.strftime('%m-%d %H:%MZ', time.gmtime(u['started']))}, before the change at {time.strftime('%m-%d %H:%MZ', time.gmtime(mtime))}: restart needed", u["started"]))
-    if not hits: return {"path": str(p), "state": "fresh", "mtime": mtime, "why": "no running service holds it, so whatever calls it next runs this copy"}
+        if p in imports(s):
+            held.add(u.get("main"))
+            if u["started"] and u["started"] >= mtime: hits.append(("live", f"{u['id']} started {hm(u['started'])}, after the last change"))
+            else: hits.append(("restart", f"{u['id']} started {hm(u['started'])}, before the change at {hm(mtime)}: restart needed", u["started"]))
+    for x in (procs() if ps is None else ps):   # what no unit names: heavy's run-*.scope, tmux, a wrapper, `python3 -m`
+        if x["pid"] in held or p not in imports(x["script"]): continue   # a unit's main process is told above; an agent's script in the starter's cgroup is not
+        where = f"pid {x['pid']} ({x['script'].name}{', ' + x['unit'] if x['unit'] else ''})"
+        if now - x["started"] < CLI_S: continue
+        if x["started"] >= mtime:
+            if not hits: hits.append(("live", f"{where} started {hm(x['started'])}, after the last change"))   # one is enough to say so
+        elif now - x["started"] > OLD_RUN_S or now - mtime >= CLI_S: hits.append(("restart", f"{where} started {hm(x['started'])}, before the change at {hm(mtime)}: it runs the old copy", x["started"]))
+    if not hits:
+        if (d := in_docker(p)): return {"path": str(p), "state": "unknown", "mtime": mtime,
+                                        "why": f"no process of ours holds it, but {d.relative_to(HOME)} has a Dockerfile or compose file: a container may run an old copy"}
+        return {"path": str(p), "state": "fresh", "mtime": mtime, "why": "no running service or process holds it, so whatever calls it next runs this copy"}
     worst = next((h for h in hits if h[0] == "restart"), hits[0])
     return {"path": str(p), "state": worst[0], "mtime": mtime, "started": min((h[2] for h in hits if h[0] == "restart"), default=0), "why": "; ".join(h[1] for h in hits)}
 
@@ -192,7 +285,11 @@ NOT_YET = re.compile(r"\b(once|when|whenever|until|till|unless|if|not|isn't|aren
 PENDING = re.compile(r"\b(not (yet )?live|isn'?t (yet )?live|aren'?t (yet )?live|not live yet|live (once|when|after|from|until)\b|will (be|go) live|goes live|"
                      r"loads? (when|once|after|at|on)\b|picks? (it|this|them|that) up|restart (needed|pending)|needs? an? (\w+ )?restart|"
                      r"(when|once|after|until|till) (the|it|its|a|an|that|this) [\w-]+( [\w-]+)? (re)?starts?|after (the|a|its) restart|"
-                     r"(un)?till? the restart|not (yet )?(running|loaded|deployed|restarted))", re.I)
+                     r"(un)?till? the restart|not (yet )?(running|loaded|deployed|restarted)|stays? (\w+ )?old|(?:stays?|staying|left|leave|leaving|keep|keeping|kept|remains?|holds?|wait(?:s|ing)?|parked|on hold)\b[^.;:]{0,30}\bfor now)", re.I)
+# "the restart is the person's call, so it stays old for now" (review a0ad9, 112502385891); "for now" only beside a word that
+# leaves it as it is: "core/promises.py is fixed and live now; that's all for now" is a claim (a0ad9 fourth pass)
+PAST_FIX = re.compile(r"\b(that|which|who)\W+(?:[\w./~-]+\W+){0,3}$", re.I)   # "the bug that core/promises.py fixed yesterday is back": a mention
+PAST_AFTER = re.compile(r"\W+(yesterday|earlier|(\w+ ){0,2}ago\b|last (night|week|time)\b)", re.I)
 SENT = re.compile(r"(?<=[.!?;])\s+")
 
 def is_result(p):
@@ -220,6 +317,7 @@ def claims(posts, since, us=None, fetch=fetch_served, now=None, results_only=Tru
                 for m in LIVE_CLAIM.finditer(sent):
                     before = sent[:m.start()]
                     if NOT_YET.search(before[-40:]) or (before.count('"') + before.count("\u201c") - before.count("\u201d")) % 2: continue
+                    if m[0].lower() == "fixed" and (PAST_FIX.search(before[-60:]) or PAST_AFTER.match(sent[m.end():])): continue
                     files.update(dict.fromkeys(named or (i and [f[1] for f in PATH.finditer(sents[i - 1])] or [])))
         files = {f: 1 for f in files if f not in pending}
         if not files: continue
@@ -265,7 +363,7 @@ def main(argv=None):
         if a.json: print(json.dumps(res, indent=1))
         else:
             for r in res: print(f"{r['state']:9} {r['path'].replace(str(HOME) + '/', '')}: {r['why']}")
-        return 0 if all(r["state"] in LIVE_OK for r in res) else 1
+        return 0 if all(r["state"] in LIVE_OK for r in res) else 2 if all(r["state"] in LIVE_OK + ("unknown",) for r in res) else 1
     posts = []
     try:
         with open(HOME / "board.jsonl", errors="replace") as f:

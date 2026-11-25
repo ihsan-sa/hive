@@ -141,7 +141,18 @@ const SELF = {
   "Still needed:": "Aún faltan:",
   "The buy module didn't answer:": "El módulo buy no respondió:",
   "Your sign-in has run out.": "Se ha agotado tu sesión.",
+  // Settings › sign in to any site (ui/shop_signin.js, the web sign-in)
+  "Sign in to a site": "Iniciar sesión en un sitio",
+  "Site address": "Dirección del sitio",
+  "Type the site's address first, like etsy.com.": "Escribe primero la dirección del sitio, como etsy.com.",
+  "Signing in to a site works only from your own app opened through Cloudflare or Tailscale, not from this connection.": "Iniciar sesión en un sitio solo funciona desde tu propia app abierta por Cloudflare o Tailscale, no desde esta conexión.",
+  "Done, I'm signed in": "Listo, he iniciado sesión",
+  "Saving the sign-in…": "Guardando la sesión…",
+  "That looks signed in. Press Done if it is.": "Parece que la sesión está iniciada. Pulsa Listo si es así.",
+  "Signed in here": "Sesión iniciada aquí",
+  "try again": "inténtalo de nuevo",
   __patterns: [
+    [/^Signed in here (.+ ago|just now)$/, (_, w) => `Sesión iniciada aquí ${w === "just now" ? "ahora mismo" : "hace " + w.replace(/ ago$/, "")}`],
     [/^Agents may ask for up to (.+) a buy\. Each waits for you in the Link app; nothing here approves one\.$/, (_, c) => `Los agentes pueden pedir hasta ${c === "the cap" ? "el tope" : c} por compra. Cada una te espera en la app Link; nada aquí aprueba ninguna.`],
     [/^Still needed: (.+)$/, (_, l) => `Aún faltan: ${l.split(", ").map(w => ({ "Full name": "Nombre completo", Email: "Correo", Phone: "Teléfono", Address: "Dirección", "Apartment, suite": "Piso o puerta", City: "Ciudad", country: "país", "State or province": "Estado o provincia", "ZIP or postal code": "Código postal" })[w] || w).join(", ")}`],
     [/^The buy module didn't answer: (.*)$/, "El módulo buy no respondió: $1"],

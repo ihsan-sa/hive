@@ -29,7 +29,6 @@ export default {
   "Failed": "Fallido",
   "Filters": "Filtros",
   "Columns": "Columnas",
-  "Total cost": "Coste total",
   "At API prices": "A precios de la API",
   "Tokens": "Tokens",
   "Agent time": "Tiempo de agente",

@@ -14,7 +14,7 @@ import { href } from "../core/router.js";
 import { layout, moreGroups, rowItems } from "../core/nav.js";
 import { getTheme, cycleTheme, setTheme, THEMES } from "../core/theme.js";
 import { statusDot, button, icon, scrim, setPageRow, signInAgain } from "./kit.js";
-import { banner } from "./banner.js";
+import { banner, forget } from "./banner.js";
 import { newVersionNote } from "./newversion.js";
 import { starNote } from "./starnote.js";
 import { startCall, phoneReady, inCall } from "./phone.js";
@@ -115,26 +115,36 @@ function loginMarks() {
     `${full} of ${all.length} full`);
 }
 /** A state band: what is true right now, with a × that puts it away until its words change (banner.js). */
-const stateBand = (tone, dot, text, action) => banner({ tone, cls: "band", lead: dot, text, actions: action, age: false });
+const BANDS = ["band.signin", "band.account", "band.stopped"];
+let bandOn = null;   // the state band's key drawn last time
+const stateBand = (key, tone, dot, text, action) => { bandOn = key; return banner({ tone, cls: "band", key, lead: dot, text, actions: action, age: false }); };
+/** band() but with the record of a state that is over forgotten, so a × only puts away this time that state is true. */
+function bandNow(current) {
+  bandOn = null;
+  const row = band(current);
+  // only on a fresh, whole answer: lost contact, or a first draw before the data is in, says nothing about the states
+  if (!S.failed && S.fresh && S.live && (S.usage || S.usageFailed)) for (const k of BANDS) if (k !== bandOn) forget(k);
+  return row;
+}
 /** The band under the bar when the hive has stopped: says why in words, and where to look. */
 function band(current) {
   if (S.failed && S.signedOut) return banner({ tone: "bad", cls: "lost", dismiss: false, text: [h("b", null, "Your sign-in has run out."), " Sign in again to see your Hive; your typing is kept."],
     actions: button("Sign in again", () => location.reload(), { size: "s", kind: "quiet" }) });
   if (S.failed) return banner({ tone: "bad", cls: "lost", dismiss: false, text: [h("b", null, "Can't reach your Hive."), S.fresh ? ` What you see is from ${clock(S.fresh)}.` : "", S.failWhy ? " " + S.failWhy : "", " Trying again every few seconds; your typing is kept."],
     actions: button("Try now", () => poll(), { size: "s", kind: "quiet" }) });
-  const sign = signInWords(); if (sign) return stateBand("bad", statusDot("limited"), sign,
+  const sign = signInWords(); if (sign) return stateBand("band.signin", "bad", statusDot("limited"), sign,
     can("logins") ? button("Sign in", null, { href: href("settings"), size: "s", kind: "quiet" }) : null);
-  if (simpleOn() && needsAccount() && current !== "start" && current !== "settings") return stateBand("warn", statusDot("limited"),
+  if (simpleOn() && needsAccount() && current !== "start" && current !== "settings") return stateBand("band.account", "warn", statusDot("limited"),
     can("logins") ? "Your Hive can't start until you add your Claude account." : "Your Hive isn't ready yet. The person setting it up still has a step to finish.",
     can("logins") ? button("Add it", null, { href: href("settings"), size: "s", kind: "quiet" }) : null);
   const st = hiveStopped(); if (!st) return null;
-  if (st.why === "off" && current === "start" && S.app.setup && S.app.setup.starter === false) return null;   // Start says this itself, with the button that fixes it
-  if (simpleOn()) return stateBand("bad", statusDot(st.why === "off" ? "failed" : "limited"),
+  if (st.why === "off" && current === "start" && S.app.setup && S.app.setup.starter === false) { bandOn = "band.stopped"; return null; }   // Start says this itself, with the button that fixes it
+  if (simpleOn()) return stateBand("band.stopped", "bad", statusDot(st.why === "off" ? "failed" : "limited"),
     (st.why === "off" ? "Your Hive isn't running right now, so it won't answer yet." : "Your Hive has used up its allowance for now and is taking a break." + (st.own ? " What you send still gets an answer." : "") + (st.until ? ` It comes back ${stamp(st.until)}. Nothing is lost.` : " Nothing is lost.")));
   const text = st.why === "off" ? "The Hive isn't running, so nothing you send starts an agent."
     : st.why === "paused" ? "Every Claude account is paused, so no new agents start. Running ones finish their turn."
     : (st.own ? "Agents have stopped starting on their own: every Claude account is past its usage line. Your own messages still start one, and running ones finish their turn." : "The Hive has stopped starting agents: every Claude account is past its usage line. Running ones finish their turn.") + (st.until ? ` Agents start again ${stamp(st.until)}.` : "");
-  return stateBand("bad", statusDot(st.why === "off" ? "failed" : "limited"), text,
+  return stateBand("band.stopped", "bad", statusDot(st.why === "off" ? "failed" : "limited"), text,
     (to => current === to ? null : button(to === "settings" ? "Settings" : "Usage", null, { href: href(to), size: "s", kind: "quiet" }))(st.why === "off" ? "settings" : "usage"));   // no link to the page you're on
 }
 
@@ -238,6 +248,6 @@ export function topBar({ views, current, update, nav }) {
         app ? null : fullscreenButton())),   // in the app both live in the "…" menu under Look
     h("div", { class: "top-sub", "aria-hidden": "true" }, bits()),
     extra,
-    app ? band(current) : null,
+    app ? bandNow(current) : null,
     newVersionNote(update) || starNote(update));   // its own row under the bar, so nothing on the page is covered; one row at a time
 }

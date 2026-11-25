@@ -267,7 +267,20 @@ export default {
   "Tier 2": "ティア2",
   "Held": "保留中",
   "goes first; its jobs use the heavy fast lane": "最優先で、ジョブは heavy の高速レーンを使います",
-  "the keeper starts no rounds on it; to stop agents now, use Pause": "キーパーはこれのラウンドを始めません。今すぐエージェントを止めるには「一時停止」を使ってください",
+  // friction pass 11-25 (thread friction-redesign): one-tap answer, Pause words
+  "10 seconds to undo.": "10秒以内なら取り消せます。",
+  "Answer with one tap": "ワンタップで答える",
+  "How long": "期間",
+  "It stays paused until you press Resume here.": "ここで「再開」を押すまで一時停止のままです。",
+  "Last 24 hours: nothing yet": "過去24時間：まだなし",
+  "Let agents start on it again": "エージェントの開始を再び許可する",
+  "Nothing new starts. An agent already at work carries on until it stops. A message you write still starts one.": "新しい作業は始まりません。すでに作業中のエージェントは止まるまで続けます。あなたが書いたメッセージは引き続きエージェントを開始します。",
+  "Sending": "送信中",
+  "Sends": "送信します",
+  "To see or change every pause, open Settings, Work tiers.": "すべての一時停止の確認・変更は、設定の作業ティアで行えます。",
+  "Undo": "取り消す",
+  "every conversation and focus with no work tier of its own": "独自の作業ティアを持たないすべての会話とフォーカス",
+  "the keeper starts no rounds on it; Pause stops new starts at once": "キーパーはこれのラウンドを始めません。「一時停止」で新しい開始をすぐに止めます",
   "after tier 2": "ティア2の後",
   "Back to the list": "一覧に戻る",
   "remove your dashboard setting": "ダッシュボードでの設定を削除",
@@ -564,7 +577,12 @@ export default {
   "Got it": "了解",
   "Hide this line": "この行を非表示",
   "One row per focus, a piece of your work with a goal, under where it stands: the ones that wait on you come first. Each row is the focus in a sentence or two. Click a focus name for the whole picture; Cards, beside the heading, shows every focus with its lines.": "フォーカス(目標を持つ作業のひとまとまり)ごとに1行を、状況別にまとめて表示します。対応待ちのものが先頭です。各行は、そのフォーカスを1〜2文で説明しています。フォーカス名をクリックすると全体像を見られます。見出しの横の「カード」では、各フォーカスを行付きで表示します。",
+  // a timer job named in a pause line (ui/worktiers.js keyName: "the timer improve")
+  "the timer": "タイマー",
   __patterns: [
+    [/^You asked: (.+)$/, (_, w) => `あなたの依頼：${w}`],
+    [/^(?:One conversation in it has|(\d+) conversations in it have) a work tier of (?:its|their) own and keeps? going: (.+)\. Pause (?:it|them) from (?:its|their) own menu\.$/, (_, n, w) => (n ? `この中の${n}件の会話は独自の作業ティアがあり、続きます：${w}。それぞれのメニューから一時停止してください。` : `この中の1件の会話は独自の作業ティアがあり、続きます：${w}。それ自身のメニューから一時停止してください。`)],
+    [/^It is paused with (?:one other|(\d+) others) that share its work tier; resuming starts them too: (.+)$/, (_, n, w) => (n ? `同じ作業ティアの他の${n}件と一緒に一時停止中です。再開するとそれらも始まります：${w}` : `同じ作業ティアの他の1件と一緒に一時停止中です。再開するとそれも始まります：${w}`)],
     // a focus page's For you here: what was said to the person with no reply after it, under the needs count
     [/^(\d+) messages? to you with no reply after (?:it|them)$/, (_, n) => `あなた宛てで、その後に返信のないメッセージ${n}件`],
     // The home's list of focuses, the In short and what is new since the last look

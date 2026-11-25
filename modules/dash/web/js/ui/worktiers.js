@@ -1,11 +1,11 @@
 // Work tiers (core/tiers.py; the person, 111311199053): each focus, thread and timer sits in a tier; a tier can be paused and has a
 // stop point. Settings > Work tiers changes them through /api/work-tiers; a focus card and a thread's bar show a chip from the same read.
 // State is in plain words and never a usage figure (a9179's review, rung WT-1): Running, Paused until Thu 9:00, Off, Stopped: …
-import { h } from "../core/dom.js";
+import { h, tr } from "../core/dom.js";
 import { LOC } from "../core/format.js";
 import { status as st } from "../core/status.js";
 import { S, can, jget, post } from "../core/store.js";
-import { focusById, focusName } from "../core/foci.js";
+import { focusById, focusName, focusOf } from "../core/foci.js";
 import { threadTitle } from "../core/model.js";
 import { clock, dayName, ago } from "../core/format.js";
 import { section, block, blocks, button, field, fieldErr, input, invalid, statusLabel, waiting } from "./kit.js";
@@ -39,14 +39,26 @@ const STATE_HINT = { inuse: "new work in this tier can start", paused: "nothing 
 const stopText = t => String(t.id) === OFF ? "Nothing in it runs." : t.stop == null ? "Runs until your accounts reach their own limits." : `Starts nothing new past ${t.stop}% of the week's usage.`;
 
 /** The tier a focus or thread sits in, as the page shows it: thread placement (exact, else the longest glob), else its focus, else the default. */
-const glob = g => new RegExp("^" + g.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+// fnmatch.fnmatchcase, as core/tiers.py matches: * any run, ? one character, [seq] and [!seq] one of (or none of) a set
+const isGlob = g => /[*?[]/.test(g);
+const glob = g => { let r = "", i = 0;
+  while (i < g.length) { const c = g[i++];
+    if (c === "*") r += ".*"; else if (c === "?") r += ".";
+    else if (c === "[") { let j = i; if (g[j] === "!") j++; if (g[j] === "]") j++; while (j < g.length && g[j] !== "]") j++;
+      if (j >= g.length) r += "\\["; else { let seq = g.slice(i, j).replace(/[\\\]]/g, "\\$&"); if (seq[0] === "!") seq = "^" + seq.slice(1); else if (seq[0] === "^") seq = "\\" + seq; r += "[" + seq + "]"; i = j + 1; } }
+    else r += c.replace(/[.+^${}()|\\\]\/]/g, "\\$&"); }
+  try { return new RegExp("^" + r + "$", "s"); } catch { return /^(?!)/; } };
 export function tierOfFocus(fid) {
   const ts = tiers(); return ts.find(t => ((t.holds || {}).focus || []).includes(fid)) || ts.find(t => t.default) || null;
 }
+/** The thread placement that decides a conversation's tier, as [placement, tier], or null when it follows its focus. */
+function placementOf(th) {
+  const pl = tiers().flatMap(t => ((t.holds || {}).thread || []).map(g => [g, t]));
+  return pl.find(([g]) => g === th) || pl.filter(([g]) => isGlob(g) && glob(g).test(th)).sort((a, b) => b[0].length - a[0].length)[0] || null;
+}
 export function tierOfThread(th, fid) {
-  const ts = tiers(), pl = ts.flatMap(t => ((t.holds || {}).thread || []).map(g => [g, t]));
-  const hit = pl.find(([g]) => g === th) || pl.filter(([g]) => /[*?]/.test(g) && glob(g).test(th)).sort((a, b) => b[0].length - a[0].length)[0];
-  return hit ? hit[1] : fid ? tierOfFocus(fid) : ts.find(t => t.default) || null;
+  const hit = placementOf(th);
+  return hit ? hit[1] : fid ? tierOfFocus(fid) : tiers().find(t => t.default) || null;
 }
 
 /** A small chip: the tier's name, and its state when that isn't Running. `title` says what it means. */
@@ -203,12 +215,18 @@ export function tiersSection(ctx) {
 // ---- Pause / Resume on one conversation or focus (friction-redesign, ad748 11250102f453: "one obvious Pause / Resume on a thread and on a
 // focus ... say what pausing does"). Built on the work tiers above, so the starter honours it: a held tier starts no new run.
 // A focus that has a tier to itself pauses that tier, so it can lift by itself at a time; anything else moves into the Off tier until resumed,
-// and Resume puts it back where it was (remembered in this browser; without that, a thread follows its focus again and a focus goes to the default).
-export const PAUSE_SAYS = "Agents save and stop; nothing new starts. One at work finishes the step it is on first. A message you write still starts one.";
+// and Resume puts it back where it was (core/tiers.py keeps where it stood on the Off tier; without that, a thread follows its focus again and a focus goes to the default).
+// The words say only what the starter does: a held tier starts no new run. It doesn't stop one already running (no signal is sent), so they
+// don't promise "agents stop" (review a937f, 11250223e6cf).
+export const PAUSE_SAYS = "Nothing new starts. An agent already at work carries on until it stops. A message you write still starts one.";
+// Where a thing stood before Pause moved it into Off: core/tiers.py keeps it on the Off tier ("was"), so Resume on any device puts it back
+// (a0ad9's review, 112503361aba). This browser's own note is kept only for a core too old to say.
 const WAS_KEY = "hive.pause.was";
+const offTier = () => tiers().find(t => String(t.id) === OFF);
+const wasFor = k => { const o = offTier(), w = o && o.was; return w && typeof w === "object" ? w[k] : wasOf()[k]; };
 const wasOf = () => { try { return JSON.parse(localStorage.getItem(WAS_KEY) || "{}") || {}; } catch { return {}; } };
 const setWas = (k, v) => { try { const m = wasOf(); if (v == null) delete m[k]; else m[k] = v; localStorage.setItem(WAS_KEY, JSON.stringify(m)); } catch { /* private mode: Resume falls back */ } };
-const keyName = k => { const [kind, x] = splitKey(k); return kind === "focus" ? (focusById(x) ? focusName(x) : x) : kind === "thread" ? (x.includes("*") ? `conversations ${x}` : (threadTitle(x) || x)) : `the timer ${x}`; };
+const keyName = k => { const [kind, x] = splitKey(k); return kind === "focus" ? (focusById(x) ? focusName(x) : x) : kind === "thread" ? (isGlob(x) ? `conversations ${x}` : (threadTitle(x) || x)) : `${tr("the timer")} ${x}`; };   // tr: the line it goes in is translated whole, its names are not (product-test nightly 2026-11-25)
 
 /** Where a focus or conversation stands for Pause / Resume, or null before the tiers are read (or without the right to change them).
  *  held: nothing new in it starts now. by: the placement that holds it ("thread:x", "focus:y", or "tier" when its tier itself is paused).
@@ -239,12 +257,14 @@ export function askPause(kind, id, fid, done) {
     if (p.by === "tier") {
       const also = p.others.map(keyName);
       const go = () => run("resume", { tier: String(p.t.id) }, `${name} runs again.`);
+      // the default tier also holds everything with no tier of its own, which no list names (review a937f)
+      if (p.t.default) also.push(tr("every conversation and focus with no work tier of its own"));
       if (!also.length) return now(go);
-      return confirm({ title: `Resume ${name}?`, ok: "Resume", body: [`It is paused with ${also.length === 1 ? "one other" : `${also.length} others`} that share its work tier; resuming starts them too: ${also.slice(0, 6).join(", ")}${also.length > 6 ? ` and ${also.length - 6} more` : ""}.`], onOk: go });
+      return confirm({ title: `Resume ${name}?`, ok: "Resume", body: [`It is paused with ${also.length === 1 ? `one other` : `${also.length} others`} that share its work tier; resuming starts them too: ${also.slice(0, 6).join(", ")}${also.length > 6 ? ` and ${also.length - 6} more` : ""}.`], onOk: go });
     }
     if (p.by === "elsewhere") { location.hash = "#settings/work-tiers"; return; }
     // held by its own place in Off (or its focus's): back where it was
-    const k = p.by, was = wasOf()[k], back = was != null && tiers().some(z => String(z.id) === String(was)) ? String(was) : null;
+    const k = p.by, was = wasFor(k), back = was != null && tiers().some(z => String(z.id) === String(was)) ? String(was) : null;
     const what = `${keyName(k)} runs again.`;
     const go = () => (back ? run("set", { what: k, tier: back }, what) : run("unset", { what: k }, what)).then(r => { setWas(k, null); return r; });
     if (k === me) return now(go);
@@ -252,12 +272,18 @@ export function askPause(kind, id, fid, done) {
   }
   // Pause. A focus alone in its tier can end at a time; otherwise it lasts until Resume.
   let pick = "none";
+  // a conversation of this focus placed in a tier of its own follows that tier, not the focus (core/tiers.py tier_of): say which keep going
+  // That covers a pattern too: "fw-*" placed in tier B keeps fw-bench running while its focus pauses (a0ad9's review, 112503361aba).
+  const apart = kind !== "focus" ? [] : [...new Set([
+    ...tiers().flatMap(t => String(t.id) === OFF ? [] : ((t.holds || {}).thread || []).filter(x => !isGlob(x) && focusOf(x) === id)),
+    ...[...S.threads.keys()].filter(th => focusOf(th) === id).map(placementOf).filter(hit => hit && String(hit[1].id) !== OFF).map(hit => hit[0])])].map(x => keyName("thread:" + x));
   const opt = ([v, l]) => h("label", { class: "opt" }, h("input", { type: "radio", name: "pausepick", value: v, checked: v === pick || null, onchange: () => { pick = v; } }), h("b", null, l));
   confirm({
     title: `Pause ${name}?`, ok: "Pause",
     body: [h("p", { class: "pause-says" }, PAUSE_SAYS),
       p.alone ? h("div", { class: "pause-until", role: "radiogroup", "aria-label": "How long" }, PAUSES.map(opt))
         : h("p", { class: "meta" }, "It stays paused until you press Resume here."),
+      apart.length ? h("p", { class: "meta pause-apart" }, `${apart.length === 1 ? `One conversation in it has` : `${apart.length} conversations in it have`} a work tier of ${apart.length === 1 ? "its" : "their"} own and keep${apart.length === 1 ? "s" : ""} going: ${apart.slice(0, 4).join(", ")}${apart.length > 4 ? ` and ${apart.length - 4} more` : ""}. Pause ${apart.length === 1 ? "it" : "them"} from ${apart.length === 1 ? "its" : "their"} own menu.`) : null,
       h("p", { class: "meta" }, "To see or change every pause, open Settings, Work tiers.")],
     onOk: () => {
       if (p.alone) { const c = PAUSES.find(x => x[0] === pick), u = c ? c[2]() : null; return run("pause", { tier: String(p.t.id), until: u }, `${name} is paused ${u ? "until " + whenText(u) : "until you resume it"}.`); }

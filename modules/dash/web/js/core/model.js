@@ -74,11 +74,22 @@ export function plainStep(d) {
   const m = /^Running:\s*([\s\S]*)$/.exec(String(d || "")); if (!m) return d;
   let c = m[1].trim().split(/\s*(?:&&|;|\|\|?|\n)\s*/).map(x => x.trim()).filter(x => x && !/^(?:cd|export|set|source|\.)\b/.test(x))[0] || "";
   c = c.replace(/^(?:\w+=\S*\s+)+/, "").replace(/^(?:(?:heavy|nice|time|env|sudo|setsid|nohup)(?:\s+--?\w[\w-]*)*\s+|timeout\s+\S+\s+)+/, "").replace(/^timeout\s+\S+\s+/, "");
-  const w = c.split(/\s+/), cmd = (w[0] || "").split("/").pop(), args = w.slice(1).filter(x => !/^-/.test(x));
+  const w = c.split(/\s+/), cmd = (w[0] || "").split("/").pop(), raw = w.slice(1), args = raw.map(x => x.replace(/[\d&]?[<>].*$/, "")).filter((x, i) => x && !/^-/.test(x) && !/[<>]$/.test(raw[i - 1] || ""));   // a redirect ("2>/dev/null", "> out.json", "< in.txt", "x.py>/dev/null") and its target are not a file the command works on
   const file = (args.filter(x => /[\w~]\/|\.\w{1,5}$/.test(x) && !/^['"]/.test(x)).pop() || "").replace(/['"]/g, "").split("/").pop();
+  // a write: "sed -i", or output sent into a file ("cat > x.py", "echo … >> notes.md"; not "2>/dev/null" or "&>" noise), reads as editing, not reading (a0ad9 #1)
+  const into = (/(?:^|[^\d&>])1?>>?\s*([^\s&|;<>]+)/.exec(c) || [])[1];
+  const target = into && !/^\/dev\//.test(into) ? into.replace(/['"]/g, "").split("/").pop() : "";
+  if (/^(?:sed|cat|head|tail|awk|jq|echo|printf|tee|perl)$/.test(cmd) && (target || (cmd === "sed" || cmd === "perl") && /(?:^|\s)-\w*i/.test(c) || cmd === "tee")) {
+    const f = target || file; return f ? `Editing ${f}` : "Editing files";
+  }
   if (/^(?:sed|cat|head|tail|less|wc|awk|jq|diff|cmp|stat|file|xxd|od)$/.test(cmd)) return file ? `Reading ${file}` : "Reading files";
   if (/^(?:grep|rg|egrep|find|ls|tree|fd|du|locate)$/.test(cmd)) return "Looking through the files";
-  if (cmd === "git") return /^(?:commit|add|merge|rebase|cherry-pick|stash)$/.test(args[0] || "") ? "Saving the changes" : /^(?:push|pull|fetch|clone)$/.test(args[0] || "") ? "Syncing the code" : "Checking the history";
+  if (cmd === "git") {
+    // the subcommand is the first word after git's own options: "git -C ~/core commit" commits; -C and -c take a value
+    let i = 1; while (i < w.length && /^-/.test(w[i])) i += /^-[Cc]$/.test(w[i]) ? 2 : 1;
+    const sub = w[i] || "";
+    return /^(?:commit|add|merge|rebase|cherry-pick|stash|revert|tag)$/.test(sub) ? "Saving the changes" : /^(?:push|pull|fetch|clone)$/.test(sub) ? "Syncing the code" : "Checking the history";
+  }
   if (/^(?:pytest|npm|npx|node|python3?|bash|sh|make|cargo|go|deno)$/.test(cmd)) {
     if (/\btest|spec|drive_|check/i.test(c)) return "Running the tests";
     if (/shot|playwright|chrom/i.test(c)) return "Taking screenshots";
@@ -86,8 +97,10 @@ export function plainStep(d) {
   }
   if (/^(?:curl|wget)$/.test(cmd)) return "Fetching a page";
   if (cmd === "systemctl" || cmd === "journalctl") return /restart|start|stop|reload/.test(c) ? "Restarting a service" : "Checking a service";
-  if (/^(?:ps|pgrep|pkill|kill|top|free|uptime|lsof)$/.test(cmd)) return "Checking what's running";
-  if (/^(?:mkdir|cp|mv|rm|ln|touch|chmod|tar|unzip|rsync)$/.test(cmd)) return "Moving files around";
+  if (/^(?:kill|pkill|killall)$/.test(cmd)) return "Stopping a process";
+  if (/^(?:ps|pgrep|top|free|uptime|lsof)$/.test(cmd)) return "Checking what's running";
+  if (/^(?:rm|rmdir|shred)$/.test(cmd)) return "Removing files";
+  if (/^(?:mkdir|cp|mv|ln|touch|chmod|tar|unzip|rsync)$/.test(cmd)) return "Moving files around";
   if (cmd === "sleep") return "Waiting";
   if (cmd === "gh") return "Checking GitHub";
   if (cmd === "h2" || cmd === "hive") return "Reading the board";
@@ -928,6 +941,9 @@ export function threadStand(th, read, waits) {
     if (b && b.kind === "waiting") return b.tail ? out(cur.key, w, b.tail, offAlso || detail, b.line) : out(cur.key, w, only, offAlso, only);
     // A Done, Blocked or Told to stop line is from before this run: it stays in the open summary, not beside the word that says it runs now
     if (b) return out(cur.key, w, again, offAlso);
+    // a summary with no state line, queued for an agent at work elsewhere: why it waits leads, the summary's first line under it (friction-dash said
+    // "Waiting to start · <summary>" beside a strip saying that agent was working)
+    if (busyElse) return out(cur.key, w, again, offAlso || first);
     return out(cur.key, w, first, offAlso || detail, first);
   }
   // 4. the last run ended badly: the list has it, or it happened after the summary was written, so the summary can't know

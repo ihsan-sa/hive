@@ -7,7 +7,7 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 # glibc gives each thread its own 64 MB heap arena; the dash runs ~40 threads and held 24 arenas, most of 1.8 GB (2026-11-25, 28 OOM kills). Two arenas keep it lean.
 Environment=MALLOC_ARENA_MAX=2
 ExecStart=/usr/bin/python3 -I %h/modules/dash/dash.py serve
-Restart=on-failure
+Restart=always
 MemoryMax=2G
 # Never in the way of the hive: last in line for CPU and disk, and a hard ceiling.
 CPUQuota=100%

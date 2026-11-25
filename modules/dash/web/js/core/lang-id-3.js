@@ -266,7 +266,20 @@ export default {
   "Tier 2": "Tingkat 2",
   "Held": "Ditahan",
   "goes first; its jobs use the heavy fast lane": "didahulukan; tugasnya memakai jalur cepat heavy",
-  "the keeper starts no rounds on it; to stop agents now, use Pause": "keeper tidak memulai putaran untuk ini; untuk menghentikan agen sekarang, pakai Jeda",
+  // friction pass 11-25 (thread friction-redesign): one-tap answer, Pause words
+  "10 seconds to undo.": "10 detik untuk membatalkan.",
+  "Answer with one tap": "Jawab dengan satu ketukan",
+  "How long": "Berapa lama",
+  "It stays paused until you press Resume here.": "Tetap dijeda sampai Anda menekan Lanjutkan di sini.",
+  "Last 24 hours: nothing yet": "24 jam terakhir: belum ada",
+  "Let agents start on it again": "Biarkan agen mulai lagi di sini",
+  "Nothing new starts. An agent already at work carries on until it stops. A message you write still starts one.": "Tidak ada yang baru dimulai. Agen yang sudah bekerja terus sampai berhenti. Pesan yang Anda tulis tetap memulai satu agen.",
+  "Sending": "Mengirim",
+  "Sends": "Mengirim",
+  "To see or change every pause, open Settings, Work tiers.": "Untuk melihat atau mengubah semua jeda, buka Pengaturan, Tingkat kerja.",
+  "Undo": "Urungkan",
+  "every conversation and focus with no work tier of its own": "setiap percakapan dan fokus tanpa tingkat kerja sendiri",
+  "the keeper starts no rounds on it; Pause stops new starts at once": "keeper tidak memulai putaran untuk ini; Jeda langsung menahan setiap mulai baru",
   "after tier 2": "setelah tingkat 2",
   "Back to the list": "Kembali ke daftar",
   "remove your dashboard setting": "hapus pengaturan dasbor Anda",
@@ -563,7 +576,12 @@ export default {
   "Got it": "Mengerti",
   "Hide this line": "Sembunyikan baris ini",
   "One row per focus, a piece of your work with a goal, under where it stands: the ones that wait on you come first. Each row is the focus in a sentence or two. Click a focus name for the whole picture; Cards, beside the heading, shows every focus with its lines.": "Satu baris per fokus, bagian pekerjaan Anda dengan tujuan, dikelompokkan menurut perkembangannya: yang menunggu Anda didahulukan. Setiap baris adalah fokus dalam satu atau dua kalimat. Klik nama fokus untuk gambaran lengkap; Kartu, di samping judul, menampilkan setiap fokus dengan barisnya.",
+  // a timer job named in a pause line (ui/worktiers.js keyName: "the timer improve")
+  "the timer": "pengatur waktu",
   __patterns: [
+    [/^You asked: (.+)$/, (_, w) => `Anda bertanya: ${w}`],
+    [/^(?:One conversation in it has|(\d+) conversations in it have) a work tier of (?:its|their) own and keeps? going: (.+)\. Pause (?:it|them) from (?:its|their) own menu\.$/, (_, n, w) => (n ? `${n} percakapan di dalamnya punya tingkat kerja sendiri dan tetap berjalan: ${w}. Jeda masing-masing dari menunya sendiri.` : `Satu percakapan di dalamnya punya tingkat kerja sendiri dan tetap berjalan: ${w}. Jeda dari menunya sendiri.`)],
+    [/^It is paused with (?:one other|(\d+) others) that share its work tier; resuming starts them too: (.+)$/, (_, n, w) => (n ? `Dijeda bersama ${n} lainnya yang berbagi tingkat kerjanya; melanjutkannya juga memulai: ${w}` : `Dijeda bersama satu lainnya yang berbagi tingkat kerjanya; melanjutkannya juga memulai: ${w}`)],
     // a focus page's For you here: what was said to the person with no reply after it, under the needs count (focus.js yoursSec, HA-17)
     [/^(\d+) messages? to you with no reply after (?:it|them)$/, (_, n) => `${n} pesan untuk Anda tanpa balasan setelahnya`],
     // The home's list of focuses, the In short and what is new since the last look

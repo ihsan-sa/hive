@@ -268,7 +268,20 @@ export default {
   "Tier 2": "티어 2",
   "Held": "보류",
   "goes first; its jobs use the heavy fast lane": "가장 먼저 처리되며, 작업은 heavy 고속 레인을 사용합니다",
-  "the keeper starts no rounds on it; to stop agents now, use Pause": "키퍼가 이 일에 라운드를 시작하지 않습니다. 에이전트를 지금 멈추려면 일시정지를 쓰세요",
+  // friction pass 11-25 (thread friction-redesign): one-tap answer, Pause words
+  "10 seconds to undo.": "10초 안에 취소할 수 있습니다.",
+  "Answer with one tap": "한 번에 답하기",
+  "How long": "기간",
+  "It stays paused until you press Resume here.": "여기서 다시 시작을 누를 때까지 일시정지됩니다.",
+  "Last 24 hours: nothing yet": "최근 24시간: 아직 없음",
+  "Let agents start on it again": "에이전트가 다시 시작하도록 허용",
+  "Nothing new starts. An agent already at work carries on until it stops. A message you write still starts one.": "새 작업은 시작되지 않습니다. 이미 일하는 에이전트는 멈출 때까지 계속합니다. 직접 쓴 메시지는 여전히 에이전트를 시작합니다.",
+  "Sending": "보내는 중",
+  "Sends": "보냄",
+  "To see or change every pause, open Settings, Work tiers.": "모든 일시정지를 보거나 바꾸려면 설정의 작업 등급을 여세요.",
+  "Undo": "취소",
+  "every conversation and focus with no work tier of its own": "자체 작업 등급이 없는 모든 대화와 포커스",
+  "the keeper starts no rounds on it; Pause stops new starts at once": "키퍼가 이 일에 라운드를 시작하지 않습니다. 일시정지를 누르면 새 시작이 바로 멈춥니다",
   "after tier 2": "티어 2 이후",
   "Back to the list": "목록으로 돌아가기",
   "remove your dashboard setting": "대시보드에서 설정한 값 제거",
@@ -565,7 +578,12 @@ export default {
   "Got it": "확인",
   "Hide this line": "이 줄 숨기기",
   "One row per focus, a piece of your work with a goal, under where it stands: the ones that wait on you come first. Each row is the focus in a sentence or two. Click a focus name for the whole picture; Cards, beside the heading, shows every focus with its lines.": "포커스마다 한 행씩 있으며, 포커스는 목표가 있는 작업의 한 부분으로 진행 상태별로 묶여 있습니다. 확인을 기다리는 것이 먼저 나옵니다. 각 행은 포커스를 한두 문장으로 요약한 것입니다. 포커스 이름을 누르면 전체 내용을 볼 수 있고, 제목 옆의 카드를 누르면 모든 포커스를 줄 내용과 함께 볼 수 있습니다.",
+  // a timer job named in a pause line (ui/worktiers.js keyName: "the timer improve")
+  "the timer": "타이머",
   __patterns: [
+    [/^You asked: (.+)$/, (_, w) => `요청한 내용: ${w}`],
+    [/^(?:One conversation in it has|(\d+) conversations in it have) a work tier of (?:its|their) own and keeps? going: (.+)\. Pause (?:it|them) from (?:its|their) own menu\.$/, (_, n, w) => (n ? `이 안의 대화 ${n}개는 자체 작업 등급이 있어 계속됩니다: ${w}. 각 대화의 메뉴에서 일시정지하세요.` : `이 안의 대화 1개는 자체 작업 등급이 있어 계속됩니다: ${w}. 그 대화의 메뉴에서 일시정지하세요.`)],
+    [/^It is paused with (?:one other|(\d+) others) that share its work tier; resuming starts them too: (.+)$/, (_, n, w) => (n ? `같은 작업 등급의 다른 ${n}개와 함께 일시정지 중입니다. 다시 시작하면 그것들도 시작됩니다: ${w}` : `같은 작업 등급의 다른 1개와 함께 일시정지 중입니다. 다시 시작하면 그것도 시작됩니다: ${w}`)],
     // a focus page's For you here: what was said to the person with no reply after it, under the needs count (focus.js yoursSec, HA-17)
     [/^(\d+) messages? to you with no reply after (?:it|them)$/, (_, n) => `나에게 온 메시지 ${n}건에 이후 답장이 없습니다`],
     // The home's list of focuses, the In short and what is new since the last look

@@ -118,6 +118,7 @@ export default {
   "was ended by the starter after going quiet": "a été arrêté par le lanceur après être devenu silencieux",
   "was on": "était sur",
   "was on:": "était sur :",
+  "before this run:": "avant cette exécution :",
   "what is this about": "de quoi il s'agit",
   "worse than the day before": "pire que la veille",
   "you asked": "tu l'as demandé",

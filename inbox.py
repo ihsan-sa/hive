@@ -418,7 +418,7 @@ def end_decision(name, rec, post):
     (these checks are once-only, so what they say can't wait for a Stop that would no longer repeat it). A post handed over by a tool call beside this
     one holds it first: ending would throw it away unread, and the starter counts it as delivered. The reply call this saves is 1.46% of run money."""
     if delivered_since(name, post_time(post) - END_FRESH_S): why = "A post reached you around this one, so read it first."
-    else: why = "\n\n".join(x for x in (unanswered(name, rec) or intent_only(name, rec) or owns_open(name, rec), stop_gate(name, rec), rungs_owed(name, rec), focus_nudge(name, rec)) if x)
+    else: why = "\n\n".join(x for x in (unanswered(name, rec) or intent_only(name, rec) or owns_open(name, rec), stop_gate(name, rec), rungs_owed(name, rec), rung_split_owed(name, rec), focus_nudge(name, rec)) if x)
     if why:
         d = STATE / "end-held"; d.mkdir(parents=True, exist_ok=True); (d / name).write_text(post["id"])
         return "Not ended on that post, because:\n\n" + why
@@ -599,6 +599,70 @@ def rungs_owed(name, rec):
             "and post the result. Re-dating, ticking, parking or noting an existing rung is not a new one. If you weighed real candidates "
             "and none would move the measure (every way left needs the person, say which), write one `Weighed YYYY-MM-DD: ...` line under "
             "the rungs instead. Asked once; the next stop goes on.")
+
+YOUR_RUNG = re.compile(r"\*\*Your rung:\*\* (.+)")
+def rung_brief(rec):
+    """(goals path, rung text) from this run's keeper brief when it handed a rung (goals.brief: "**Your rung:** ..."), else None."""
+    ids = ({rec.get("post")} | {s.get("id") for s in rec.get("slept") or [] if isinstance(s, dict)}) - {None}
+    if not ids: return None
+    try:
+        with BOARD.open(errors="replace") as fh:
+            for ln in fh:
+                if "Your rung:" not in ln: continue
+                try: p = json.loads(ln)
+                except ValueError: continue
+                if p.get("id") not in ids: continue
+                r = YOUR_RUNG.search(p.get("text") or ""); m = re.search(r"section of (\S+?): read that whole file", p.get("text") or "")
+                if not (r and m): continue
+                path = Path(os.path.expanduser(m.group(1)))
+                return (path if path.is_absolute() else HOME / path), r.group(1).strip()
+    except OSError: pass
+    return None
+
+def rung_still_open(text, rung, now=None):
+    """The brief's rung in the goals file as it stands: True when it is still `- [ ]` and carries no after: date still ahead
+    (the shape that left landed fixes graded as misses), False when ticked, [!], re-dated ahead or not found."""
+    now = now or dt.datetime.now(dt.timezone.utc); key = RUNG_KEY(rung)
+    for l in text.splitlines():
+        m = re.match(r"\s*- \[(.)\]\s*(.*)", l)
+        if not m or RUNG_KEY(m.group(2)) != key: continue
+        if m.group(1) != " ": return False
+        for d in re.findall(r"after:(\S+)", m.group(2)):
+            try:
+                a = dt.datetime.fromisoformat(d.rstrip(".,;)").replace("Z", "+00:00"))
+                if (a if a.tzinfo else a.replace(tzinfo=dt.timezone.utc)) > now: return False
+            except ValueError: continue
+        return True
+    return False
+
+def rung_split_owed(name, rec, worked=None):
+    """Once per run, at Stop: a keeper round handed a rung that edited files or committed (outcomes.worked_after on its transcript)
+    yet leaves the rung still `- [ ]` with no after: date ahead is asked to split it: the landed fix as its own [x] rung, the reading
+    that needs time as an after: rung (hive-meta R74: 6 of 23 Sonnet rung-round misses over 7 days landed a fix and left the rung
+    open, so the grader saw a rung not done). A rung still truly in progress says so and stops; asked once."""
+    if os.environ.get("HIVE_DOOR") or not rec.get("at") or WARDEN.fullmatch(name): return None
+    f = STATE / "split-asked" / name
+    try:
+        if f.read_text().strip() == rec["at"]: return None
+    except OSError: pass
+    try:
+        got = rung_brief(rec)
+        if not got: return None
+        path, rung = got
+        try: text = path.read_text()
+        except OSError: return None
+        if not rung_still_open(text, rung): return None
+        if worked is None:
+            import outcomes
+            worked = outcomes.worked_after(rec.get("session"), rec["at"], dt.datetime.now(dt.timezone.utc).isoformat())
+        if not worked: return None
+        f.parent.mkdir(parents=True, exist_ok=True); f.write_text(rec["at"])
+        with (STATE / "split-asked.jsonl").open("a") as lg: lg.write(json.dumps({"at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "name": name, "run": rec["at"], "goals": str(path), "rung": rung[:120]}) + "\n")
+    except Exception: return None
+    return (f"You edited or committed this run, and your rung in {path} is still `- [ ]` with no date ahead. If a fix landed and its "
+            "check needs time to read, split it before you stop: mark the fix as its own `- [x]` rung (with your post id), and put the "
+            "reading on a new `- [ ] after:YYYY-MM-DDTHH:MMZ ... check: ...` rung, then tick with `hive goals --tick`. If the rung's check "
+            "passes now, tick it. If the work is truly unfinished, say what is left in your post and stop. Asked once.")
 
 def focus_nudge(name, rec):
     """A reminder at Stop when the run posted a result in a thread that is in a focus whose summary is older than that result
@@ -838,7 +902,7 @@ def main():
             why = end_decision(name, rec, end)
             print(json.dumps({"continue": False, "stopReason": "ended on its post (hive post --end)"} if why is None else {"hookSpecificOutput": {"hookEventName": event, "additionalContext": why}}))
             return
-        if event == "Stop" and (why := "\n\n".join(x for x in (unanswered(name, rec) or intent_only(name, rec) or open_at_stop(name, rec), stop_gate(name, rec), rungs_owed(name, rec)) if x)):
+        if event == "Stop" and (why := "\n\n".join(x for x in (unanswered(name, rec) or intent_only(name, rec) or open_at_stop(name, rec), stop_gate(name, rec), rungs_owed(name, rec), rung_split_owed(name, rec)) if x)):
             print(json.dumps({"decision": "block", "reason": "\n\n".join(x for x in (why, focus_nudge(name, rec)) if x)}))
         elif event == "Stop" and (fn := focus_nudge(name, rec)):
             print(json.dumps({"decision": "block", "reason": fn}))

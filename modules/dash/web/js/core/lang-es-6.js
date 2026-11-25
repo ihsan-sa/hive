@@ -10,7 +10,9 @@ const of = n => OF[n] || `de ${who(n)}`;   // "de" + who wrote: "del agente", "d
 const when = t => (t === "just now" ? "ahora mismo" : `hace ${t.replace(/ ago$/, "")}`);   // format.js ago(): "just now", "12s ago", "5m ago", "2.5h ago", "3d ago"
 const AGO = "(just now|\\d+(?:[.,]\\d)?[smhd] ago)";
 const RETRY = { "no connection to Claude": "sin conexión con Claude", "the machine restarted": "la máquina se reinició", "went silent with nothing running": "se quedó en silencio sin nada en marcha",
-  "ended before it finished": "terminó antes de acabar", "reached its budget or turn limit": "llegó a su presupuesto o límite de turnos" };
+  "ended before it finished": "terminó antes de acabar", "reached its budget or turn limit": "llegó a su presupuesto o límite de turnos",
+  "the machine ran out of memory and killed it": "la máquina se quedó sin memoria y lo paró", "killed by a signal the starter didn't send": "lo paró una señal que no envió el arrancador",
+  "ended mid-turn, most likely killed": "terminó a mitad de turno, seguramente lo pararon" };
 const THEN = " y entonces lee tu mensaje";   // the paused run reads the person's held message when it carries on (model.js threadStand)
 const LABEL = { "Asked": "Pedido", "Asked earlier": "Pedido antes", "Earlier": "Antes", "Later": "Después", "Not needed": "No hace falta" };
 export default {
@@ -27,7 +29,6 @@ export default {
   "on it now": "en ello ahora",
   "on it again since the summary": "otra vez en ello desde el resumen",
   "still on it after the summary": "sigue en ello después del resumen",
-  "about to carry on from the summary": "a punto de seguir desde el resumen",
   "carrying on after your reply": "sigue tras tu respuesta",
   "not picked up yet": "nadie lo ha recogido aún",
   "taking a break; it carries on by itself": "se toma un descanso; sigue por sí solo",
@@ -58,7 +59,42 @@ export default {
     "La línea bajo el título de una conversación dice cómo va: trabajando, esperando, hecha o si te necesita. Toca el título para ver el resumen completo.",
   "The agent on it keeps it current. Home, a focus, this line, then the conversation itself: each is one click deeper.":
     "El agente que la lleva la mantiene al día. Inicio, un enfoque, esta línea y luego la conversación: cada uno está un clic más adentro.",
+  // a job's step in plain words (model.js plainStep) and the job line around it
+  "Reading files": "Leyendo archivos",
+  "Looking through the files": "Buscando en los archivos",
+  "Saving the changes": "Guardando los cambios",
+  "Syncing the code": "Sincronizando el código",
+  "Checking the history": "Revisando el historial",
+  "Running the tests": "Pasando las pruebas",
+  "Taking screenshots": "Haciendo capturas",
+  "Running a program": "Ejecutando un programa",
+  "Fetching a page": "Descargando una página",
+  "Restarting a service": "Reiniciando un servicio",
+  "Checking a service": "Revisando un servicio",
+  "Checking what's running": "Mirando qué está en marcha",
+  "Moving files around": "Moviendo archivos",
+  "Editing files": "Editando archivos",
+  "Stopping a process": "Deteniendo un proceso",
+  "Removing files": "Borrando archivos",
+  "Checking GitHub": "Revisando GitHub",
+  "Reading the board": "Leyendo el tablón",
+  "Looking things up": "Buscando información",
+  "Running a command": "Ejecutando un comando",
+  "Running:": "Ejecutando:",
+  "no output yet": "aún sin salida",
+  // now.js: an agent card whose bar said Done reads "last finished: the clean-up"
+  "last finished:": "lo último que terminó:",
+  // Agents: the housekeeping button's parts and the Totals line's
+  "Also show": "Mostrar también",
+  "housekeeping run": "tarea de mantenimiento",
+  "at API prices, not billed": "a precios de la API, no se cobra",
   __patterns: [
+    // plainStep with a file name: "Reading away.py", "Running build.py"
+    [/^Reading ([\w.~-]+\.\w{1,5})$/, "Leyendo $1"],
+    [/^Editing ([\w.~-]+)$/, "Editando $1"],
+    [/^Running ([\w.~-]+\.\w{1,5})$/, "Ejecutando $1"],
+    // a run waiting to start behind its agent's work in another conversation (threadStand, friction-dash-review2)
+    [/^(.+) finishes what it's on first$/, (_, n) => `${who(n)} termina primero lo que está haciendo`],
     // the second fact: the summary's own ask, or the list's entry that is out of the count; the words after the label are the agent's and stay
     [/^(Asked|Asked earlier|Earlier|Later|Not needed): (.+)$/s, (_, l, x) => `${LABEL[l]}: ${x}`],
     // the bar's age and author

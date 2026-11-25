@@ -804,6 +804,16 @@ def died_unfinished(out):
     if result is not None: said.append(str(result.get("result", "")))
     return "connection" if any(TRANSIENT.search(t) for t in said[-6:]) else "other"
 
+def has_result(out):
+    """Whether the run's output holds a result line, clean or error: a run killed mid-turn leaves none."""
+    try: lines = Path(out).read_text(errors="replace").splitlines()[-200:]
+    except (OSError, TypeError): return False
+    for l in lines:
+        try: e = json.loads(l)
+        except ValueError: continue
+        if isinstance(e, dict) and e.get("type") == "result": return True
+    return False
+
 def no_session(out):
     """The CLI couldn't find the session it was asked to resume."""
     try: return "No conversation found" in Path(out).read_text(errors="replace")[-4000:]
@@ -917,7 +927,9 @@ def end_cause(r, rc, by, hit, authed, died, oom=False):
     a usage limit, a rejected login, the machine restarting, an OOM kill (oom: oom_picks chose it), another signal, its own finish or error. rc None: the run
     was started by an earlier starter (it outlived a restart, KillMode=process), so its exit code can't be read."""
     if by: return by
-    if rc is not None and 128 < rc < 160 and box(): rc = 128 - rc  # sandbox_inner exits 128+sig for a killed agent: read it as the signal
+    # sandbox_inner exits 128+sig for a killed agent, and the CLI itself exits 128+sig when it catches a SIGHUP, SIGINT or SIGTERM (a plain
+    # kill or pkill gives 143): read those as the signal, for an unboxed run only when it left no clean result (a0ad9, 112502376175)
+    if rc is not None and 128 < rc < 160 and (box() or (died and rc in (129, 130, 137, 143))): rc = 128 - rc
     if (STATE / "killed" / f"{r['name']}.json").exists(): return "person_killed"
     if hit: return "limit"
     if authed: return "login_rejected"
@@ -1137,7 +1149,7 @@ def running(st=None, by_hand=False):
             by = end_cause(r, rc, cause.get(r["name"]), hit, authed, died, r["name"] in picks)
             run_rss.pop(r["name"], None)
             if by.startswith("signal_") and died == "other": died = "killed"
-            elif by == "other" and rc is None: died = "unseen"
+            elif by == "other" and rc is None and not has_result(r.get("out")): died = "unseen"  # an error result keeps the error words
             if by == "oom": died = "oom"; oom_seen["left"] -= 1  # said as such in its thread, and it carries on like any other death
             log(event="end", name=r["name"], session=r["session"], pid=r["pid"], exit=rc, by=by, **({"cost": cost} if (cost := run_cost(r.get("out"))) is not None else {}))
             if st is not None and not hit and not authed and not died:
@@ -3116,6 +3128,12 @@ def read_before_move(st, u):
 
 
 def main():
+    # Called hive-starter, not python3, as the service: the machine's earlyoom adds 300 to any python3, so in a memory squeeze it took
+    # the dash and could take the starter before a 6.5 GB job (08:47Z 2026-11-25). A hand-run copy keeps python3.
+    try:
+        if Path("/proc/self/cgroup").read_text().strip().endswith("/hive-starter.service"):
+            import ctypes; ctypes.CDLL(None).prctl(15, b"hive-starter", 0, 0, 0)   # PR_SET_NAME: /proc/self/comm. Keep this name: root's oom_score_adj timer finds the starter by it
+    except (OSError, AttributeError): pass
     for d in (RUN, STATE, HOME / "sessions"): d.mkdir(exist_ok=True)
     # One starter per home: two would both read the board and start every agent twice. A second one waits here and takes over
     # when the first ends (a restart that overlaps, a hand-run copy beside the service). The fd isn't inherited by agents.

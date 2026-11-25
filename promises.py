@@ -155,13 +155,31 @@ PROMISE = re.compile(r"\b(?:I'?ll|I will|I'm (?:going to )?(?:post|send)|will (?
 SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
 FENCE = re.compile(r"```.*?(?:```|$)", re.S)
 DELIVERS = re.compile(r"```|https?://|\b(?:projects|kb|modules|core)/\S+\.\w{1,5}\b|\.(?:png|jpe?g|mp4|pdf|svg|csv|zip|html)\b", re.I)
-HANDOFF = re.compile(r"\b(?:hand(?:ed|ing)? (?:it |this |that )?(?:over )?to|over to|passing (?:it |this )?to|taking (?:it )?over|now with)\s+`?@?a[0-9a-f]{4}\b", re.I)
+HANDOFF = re.compile(r"\b(?:hand(?:ed|ing)? (?:it |this |that )?(?:over )?to|over to|passing (?:it |this )?to|taking (?:it )?over|now with)\s+`?(?:@[\w-]+|[a-z][0-9a-f]{4,}\b)"
+                     r"|\bhand(?:ed|ing) (?:it|this|that|the \w+) over\b", re.I)   # any named agent or keeper, and "handing it over this minute" (review a0ad9, 11-25)
 BRIEF = re.compile(r"\s*@[\w-]+")
 PAST = re.compile(r"\b(?:ago|took|ran|been running|roll(?:s|ed)? back|heads-up|notice:)", re.I)   # a time that was, or a notice, not a promise
 FOR_SPAN = re.compile(r"\bfor\s+(?:about\s+|around\s+|roughly\s+|~\s*)?(?:[\d.]+\s*|(?:an?|one|two|three|four|five|ten|fifteen|twenty|thirty|half an?|a few|a couple(?: of)?|few)\s+)"
                       r"(?:s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?|w|weeks?)\b", re.I)   # how long a thing lasts ("stops for about a minute"), not when it is due
 REVISE = re.compile(r"\b(?:slower|later than|longer than|delayed|pushed|instead|revised|new (?:eta|estimate|time)|now (?:about|around|roughly|due|at|in))\b", re.I)
 PROGRESS = re.compile(r"\b(?:still|not (?:yet|done)|in progress|halfway|so far)\b|\d%", re.I)
+QUOTED = re.compile(r"`[^`\n]*`|\"[^\"\n]*\"|\u201c[^\u201d\n]*\u201d")   # inline code and a quote inside a sentence: someone else's words
+NOT_PROMISE = re.compile(r"^\W*(?:if|unless)\b(?!\s+(?:you|they|the person)(?:'d|\s+would)?\s+(?:want|like|prefer|wish|need)\b|[^,]*,[^,]*\banyway\b)"
+                         r"|^\W*(?:the|a|an|this|that|its|my|our)?\s*(?:[\w-]+\s+){0,2}?(?:timer|cron|daily|hourly|nightly|weekly)\b(?!,?\s+(?:I|we)\b)|\bevery (?:day|hour|morning|night|week)\b", re.I)
+NEGATED = re.compile(r"\b(?:I|we)\s+(?:will not|won't|wouldn't|shan't|do not|don't|shouldn't|should not|never)\b|\b(?:I|we)'(?:ll|d) not\b|\b(?:I|we)(?:'m| am|'re| are)? not going to\b", re.I)
+CLAUSE = re.compile(r"[;,:]\s+|\s+(?:but|and|so|then)\s+|\s+[—–-]\s+", re.I)
+# a condition, a negation, or a schedule's own run ("If the test passes I'll post it in 30 min", "I will not post until the review is in,
+# about 2 h", "The timer will post at 14:00 UTC every day"): review a0ad9 11-25, each opened a wait in tests. The negation only right after
+# I/we and the schedule word only as the subject: "I'll post it in 30 min, don't worry", "I'll fix the timer and post the result in 30 min"
+# and "I'll post the daily report draft in 30 min" are promises (a0ad9 fourth pass, 112503263733). The negation only in the clause that
+# promises: "We don't need it, but I'll post it in 30 min" is a promise (a0ad9 fifth pass, 11250338a13c)
+
+
+def negated(sen):
+    """The clause of `sen` that promises is itself negated: "I will not post until the review is in", not "..., don't worry"."""
+    return any(PROMISE.search(c) and NEGATED.search(c) for c in CLAUSE.split(sen))
+ON_PERSON_TEXT = re.compile(r"\b(?:the person's|your (?:answer|choice|call|reply|go|test|attempt|ok)|send your|(?:once|when|after|if) (?:you|the person)\b"
+                            r"|for (?:you|them|the person) to)\b", re.I)   # a text promise that waits on the person: "done in 40 min for them to test"
 DELIVER_LEN = 1200     # a post this long is an answer, not a "still on it"
 
 
@@ -178,18 +196,83 @@ def promise_in(text, at, revising=False):
     if BRIEF.match(str(text or "")): return None
     body = "\n".join(l for l in FENCE.sub(" ", str(text or "")).splitlines() if not l.lstrip().startswith(">") and not STOP_LINE.match(l))
     best = None
-    for sen in SENTENCE.split(body):
-        if not sen.strip() or not (PROMISE.search(sen) or revising and REVISE.search(sen)) or PAST.search(sen): continue
+    for sen in SENTENCE.split(QUOTED.sub(" ", body)):
+        if not sen.strip() or not (PROMISE.search(sen) or revising and REVISE.search(sen)) or PAST.search(sen) or NOT_PROMISE.search(sen) or negated(sen): continue
         d = named_due(FOR_SPAN.sub(" ", sen), at)
         if d is not None and d > at and (best is None or d > best[1]): best = (" ".join(sen.split())[:300], d)
     return best
+
+
+def opening(text):
+    """The first sentence of a post, past any @names it opens with and outside code blocks."""
+    body = NOT_ASK.sub("", FENCE.sub(" ", str(text or "")).strip())
+    return next((s for s in SENTENCE.split(body) if s.strip()), "")
+
+
+def interim(p):
+    """A post that only says the work goes on: its opening sentence is progress or work ahead ("Still rendering, 80%", "I'm re-cutting it now").
+    Any other later post from the agent is a result, however short: "E100 done", "#185 is merged", "It works now: the button is live"
+    (review a0ad9, 11-25: 9 of 20 text wakes in a 7-day replay went to agents that had posted one)."""
+    return goes_on(opening(p.get("text")))
+
+
+def goes_on(o):
+    """A sentence that says the work goes on: progress, work ahead, or "Progress on the rung: ..." (af1e3, ae214 11-18/19). Work ahead
+    with a done-word and nothing still to come is a result: "The V1 review ... is back with 9 findings", "Next 20 done: ...", "Done at
+    projects/reel/out.mp4; next post is the sound pass", "Using the new path now; the fix is live" (a0ad9 fourth pass, 112503263733)."""
+    if PROGRESS.search(o) or re.search(r"\bprogress\b", o, re.I): return True
+    return bool(START.search(o)) or done_then_more(o) or bool(AHEAD.search(o)) and not finished_in(o)   # "Writing the plan now: the rule is fixed before the run"
+
+
+DONE_WORD = re.compile(r"\b(?:done|fixed|works|merged|pushed|landed|shipped|finished|cleared|delivered|completed?|answered|posted|ready|in place"
+                       r"|(?:is|are|was|were|it's|now) (?:live|in|back|up|out|green)|came back|back with \d+|rolled back)\b", re.I)
+FUTURE = re.compile(r"\b(?:I'?ll|I will|we'?ll|will be|going to|soon|shortly|in (?:a bit|about|~?\d)|by \d|once|being \w+(?:ed|en))\b", re.I)
+
+
+CLAIM = re.compile(r"^\W*(?:(?:yes|ok(?:ay)?|sure|right)\W+)?(?:on it\b|taking (?:it|this|that|both|the)\b|(?:I'm|I am|we're|we are) (?:now )?(?:on\b|\w+ing\b)"
+                   r"|now,? \w+ing\b)", re.I)   # an opening that takes the work on: "On it: ...", "Taking this: ...", "Yes, I'm building it ...", "I'm on the 22:20 hold"
+ASIDE = re.compile(r"`[^`]*`|\"[^\"\n]*\"|“[^”\n]*”|\b(?:so|because|while|since|although|though|until|as soon as)\b[^;:.!?),]*", re.I)   # a quote, a reason
+AS_ADJ = re.compile(r"\b(?:the|a|an|its|their|our|my)\s+$", re.I)   # "the fixed manual": a done-word that names a thing
+GOES_LATER = re.compile(r"(?:[;:,]\s*|\b(?:and|then)\s+)(?:(?:I'm|I am|we're|we are|now,?)\s+)?(?:working on|looking (?:at|into)|waiting (?:on|for)|starting (?:on|the|to|with|it|now)\b|\w+ing\b[^;:,.!?]*\bnow\b)"
+                        r"|\b(?:next,? I|then I|I'?ll|queued|running again)\b", re.I)   # a later clause that goes on: "...; working on the second now"
+
+
+def finished_in(o):
+    """A sentence that says something is done and promises nothing more in it: "E100 done.", "C345 is in: 8b8d53b, pushed.". Not one that
+    opens by taking the work on ("On it: ...", "Taking this: ... fixed-point ..."), a done-word in brackets, after so/because/while, or as an
+    adjective ("the fixed manual", "done fresh"), or one where a later clause goes on ("Fixed the first half; working on the second now",
+    "The fix is in; waiting on the build now"): a0ad9 fifth pass, 11250338a13c, 13 of 33 posts in a 7-day replay."""
+    if CLAIM.search(o) or FUTURE.search(o) or PROGRESS.search(o): return False
+    o, last = _last_done(o)
+    return last is not None and not GOES_LATER.search(o, last.end())
+
+
+def _last_done(o):
+    """(o without asides, the last done-word that is its clause's verb or None)."""
+    o, last = ASIDE.sub(" ", o), None
+    for m in DONE_WORD.finditer(o):
+        if not AS_ADJ.search(o, 0, m.start()) and not o.startswith("-", m.end()): last = m   # not "the fixed manual", "fixed-point"
+    return o, last
+
+
+def done_then_more(o):
+    """A done clause followed by one that goes on: "The fix is in; waiting on the build now"."""
+    o, last = _last_done(o)
+    return last is not None and bool(GOES_LATER.search(o, last.end()))
+
+
+def finished(p):
+    """A post whose opening says a thing is done (finished_in), or that delivers."""
+    return delivers(p) or finished_in(opening(p.get("text")))
 
 
 def delivers(p):
     """A post that hands over a result: a file, a block, a link or path, a long answer, or the work handed to another agent by name."""
     text = str(p.get("text", ""))
     if p.get("files") or len(text) >= DELIVER_LEN or HANDOFF.search(text) or FENCE.search(text): return True
-    return bool(DELIVERS.search(text)) and not PROGRESS.search(text)   # "still rendering projects/reel/out.mp4, 60%" names a path, delivers nothing
+    # "still rendering projects/reel/out.mp4, 60%" names a path and delivers nothing; "The film is at projects/reel/out.mp4. I still want to
+    # tighten the cut." delivers: only the opening sentence is read for progress (review a0ad9, 11-25)
+    return bool(DELIVERS.search(text)) and not goes_on(opening(text))   # "Rendering now from projects/reel/cut3.mp4 – next post is the film" (a0ad9 third pass)
 
 
 def overdue(now, stops=None, posts=None, reminders=None, lookback=LOOKBACK_S):
@@ -227,7 +310,8 @@ def overdue(now, stops=None, posts=None, reminders=None, lookback=LOOKBACK_S):
 
     def opened(at, why, kind, pid, cur):
         d = named_due(why, at)
-        if d is None and cur and cur["named"]: return cur   # "Waiting: the render" after "about 23:30": still 23:30
+        if d is None and cur and cur["named"] and at <= cur["due"]: return cur   # "Waiting: the render" after "about 23:30": still 23:30
+        # ...but written after 23:30 it says what holds it now ("Waiting: printer offline"): a fresh 3 h (review a0ad9, 11-25: 5 of 13 stop-line false wakes)
         return {"at": at, "why": why, "due": at + DEFAULT_S if d is None else d, "named": d is not None, "kind": kind, "post": pid}
 
     out = []
@@ -251,19 +335,20 @@ def _pair(name, thread, es, opened, now, lookback, pt, by_thread, remind):
             continue
         lines = [str(p.get("reason", ""))] + [l.strip().lstrip("*") for l in str(p.get("text", "")).splitlines() if STOP_LINE.match(l)]
         wait = next((l for l in lines if _waiting(l)), None)
-        if wait: cur = opened(at, wait, "stop", p.get("id"), cur)
+        if wait: cur = opened(at, wait, "stop", p.get("id"), None if finished(p) else cur)   # "C345 is in ... Waiting: item 1": the held time is answered; the new wait is its
+        # own. "Render started on the GPU. Waiting: the render" answers nothing: the promised time stands (a0ad9 fourth pass)
         elif any(STOP_LINE.match(l) for l in lines if l): cur = None
         elif delivers(p): cur = None   # before promise_in: "here it is; I'm around until 18:00Z" delivers, it doesn't promise
         elif (pr := promise_in(p.get("text"), at, revising=cur is not None)):
             cur = {"at": at, "why": pr[0], "due": pr[1], "named": True, "kind": "text", "post": p.get("id")}
-        elif cur and not cur["named"]: cur = None   # a wait with no time: any later word from it closes it, as before (only a named time is held)
+        elif cur and (not cur["named"] or not interim(p)): cur = None   # a wait with no time: any later word closes it; a named one, any word but "still on it"
     if not cur: return None
     why, at, d = cur["why"], cur["at"], cur["due"]
     if ON_KEEPER.search(why): return None
     if now < d + grace(at, d) or now - d > lookback: return None
     after = [x for x in pt.get(thread, ()) if x[0] > at]
     spoke = max((a for a, who, _ in after if who in ("person", "hives")), default=0)
-    if cur["kind"] == "stop" and ON_PERSON.search(why) and not spoke: return None
+    if (ON_PERSON if cur["kind"] == "stop" else ON_PERSON_TEXT).search(why) and not spoke: return None
     said = [(a, who, "\n".join([str(p.get("reason", ""))] + [l for l in str(p.get("text", "")).splitlines() if STOP_LINE.match(l)]))
             for a, who, p in after if p.get("reason") or STOP_LINE.search(str(p.get("text", "")))]
     if any(a > max(at, spoke) and who != name and who not in NOT_AGENT and name not in w for a, who, w in by_thread.get(thread, []) + said): return None
@@ -290,7 +375,13 @@ def wake_text(w, now):
 # The first reply to the person's ask says when the result comes (ad748, friction-chase 1125022053f9): of the person's chases in the 7 days
 # to 11-25, most came after a first reply that named work ahead and no time. Only a warning at `hive post`: the post is on the board already.
 AHEAD = re.compile(r"\b(?:I'?ll|I will|I'm (?:now )?\w+ing\b|I am \w+ing\b|taking (?:it|this|that|both|the)\b|on it\b|starting (?:it|now|on|the|a|with|both)\b|(?:working|looking) on\b"
-                   r"|will (?:post|send|follow|report|land|have|be)|going to\b|next,? I\b|then I\b|kicking off|queued|running (?:it|the|a)\b)", re.I)
+                   r"|will (?:post|send|follow|report|land|have|be)|going to\b|next,? I\b|then I\b|kicking off|queued|running (?:it|the|a)\b"
+                   r"|^\W*next(?: up)?\s*[:,]|\bnext post\b|^(?!\W*(?:no|nothing|none)\b).*\bbeing \w+(?:ed|en)\b[^.!?\n]*\bnow\b|\b(?:I|we)(?:'m|'re| am| are)\s+(?!working\b|showing\b|running fine\b)\w+ing\b[^.!?\n]*\bnow\b|^\W*back (?:soon|shortly|in\b|with\b[^.!?\n]*\b(?:in|soon|shortly|later)\b))", re.I)
+START = re.compile(r"^\W*now,?\s+\w+ing\b|^\W*(?!(?:no|some|any|every)thing\b|(?:follow|accord|regard|includ|dur|pend|us)ing\b)\w+ing\b"
+                   r"(?!\s+(?:is|are|was|were|has|have)\b)[^.!?\n]*\bnow\b", re.I)   # "Taking E113 ...: an Opus reader is checking ... now", not "Buying is now a module"
+AHEAD = re.compile(AHEAD.pattern + "|" + START.pattern, re.I)
+# "Now writing the client and tests", "Re-rendering now, next post is the film", "Next up: the color pass", "Back with the film in a bit":
+# no "I'm ...ing", and each was missed (review a0ad9 third pass, 11250302c92d: 112311578404, 112312008db5)
 PERSON_ACK = re.compile(r"^\W*(?:(?:perf(?:ect)?|excellent|great|nice|cool|good|awesome|amazing|thanks|thank you|thx|ty|ok(?:ay)?|got it|sounds good|yes|no|yep|nope|go|do it)\W*)+$", re.I)
 NOT_ASK = re.compile(r"^(?:@\S+\s+)*\(from [^)]*\)\s*|^(?:@\S+\s+)+")
 STOPPING = re.compile(r"\b(?:withdraw(?:ing|n)?|dropping (?:my|the|that|this)|paus(?:e|ed|ing)|stop(?:ped|ping)?|halt(?:ed|ing)?|on hold|pass(?:ed|ing) (?:it |this |that )?(?:on )?to|handed (?:it |this )?to)\b", re.I)   # a pause or a hand-off promises no result
@@ -350,12 +441,15 @@ def progress_warning(post, ask):
             "(\"by 14:30Z\", \"in about 20 min\"), or what it waits on and when you will next say.")
 
 
-def _closes(p):
-    """A post that delivers, unless its last paragraph says more is coming ("Next is the whole film at this pace...": a25fa 11-18 21:09
+def _closes(p, ask=None):
+    """A post that delivers or isn't an interim word, unless its last paragraph says more is coming ("Next is the whole film at this pace...": a25fa 11-18 21:09
     posted a clip and named the film next; its 21:36 "re-rendering now" was chased at 22:22). A Done:-type stop line always closes."""
     t = str(p.get("text", ""))
     if REPLY_DONE.match(str(p.get("reason", ""))) or any(REPLY_DONE.match(l) for l in t.splitlines()): return True
-    if not delivers(p): return False
+    named = re.findall(r"@(\w+)", str((ask or {}).get("text", "")))
+    if not delivers(p) and (interim(p) or (named and str(p.get("from")) not in named)): return False
+    # a short result closes it, as it closes a wait ("E100 done.", a0ad9 third pass), but only from the agent the ask named:
+    # rootwarden's "Yes, it counts." didn't close a0144's ask (11231145df8e, 11-23)
     paras = [x for x in re.split(r"\n\s*\n", FENCE.sub(" ", t)) if x.strip() and not STOP_LINE.match(x)]
     return not (paras and (AHEAD.search(paras[-1]) or NEXT.search(paras[-1])))
 
@@ -371,7 +465,7 @@ def open_ask(thread, pid, posts):
             return ask if ask is not None and replies and not closed and promised <= now else None   # a time named since that still stands: the person has one
         if _real_ask(p): ask, replies, closed, promised = p, 0, False, 0
         elif AGENT.fullmatch(str(p.get("from", ""))) and str(p.get("from")) not in NOT_AGENT and not BRIEF.match(str(p.get("text", ""))):
-            replies += 1; closed = closed or _closes(p); promised = max(promised, _named(p))
+            replies += 1; closed = closed or _closes(p, ask); promised = max(promised, _named(p))
     return None
 
 

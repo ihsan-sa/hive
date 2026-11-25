@@ -7251,8 +7251,19 @@ def local_get(path, port=None, timeout=10):
         return r.read()
 
 
+def name_self(unit, name):
+    """Run as UNIT, the process is called NAME rather than python3. The machine's earlyoom (root's) adds 300 to any process called
+    python3, so at 08:47Z 2026-11-25 it SIGTERMed the dash right after the jobs, while a 6.5 GB openroad job ran on. Test servers
+    keep python3, so they still go first."""
+    try:
+        if Path("/proc/self/cgroup").read_text().strip().endswith("/" + unit):
+            import ctypes; ctypes.CDLL(None).prctl(15, name.encode(), 0, 0, 0)   # PR_SET_NAME: /proc/self/comm
+    except (OSError, AttributeError): pass
+
+
 def serve(port):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    name_self("hive-dash.service", "hive-dash")   # keep this name: root's oom_score_adj timer finds the dash by it, and silently skips it if the two differ
     from urllib.parse import parse_qs, urlparse
     global USAGE
     usage = USAGE = Usage()

@@ -3501,7 +3501,8 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .cm-notes .cm-one-t{overflow:hidden;text-overflow:ellipsis}
 .cm-one-also{margin:0 0 2px 6px;white-space:pre-wrap}
 .cm-showall[aria-pressed="true"]{background:var(--hover,rgba(127,127,127,.18))}
-@media (max-width:640px){.cm-one-b{min-height:44px;display:flex;align-items:center}}
+@media (max-width:640px){.cm-one-b{min-height:44px;display:flex;align-items:center}
+  .cm-one-t{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}   /* a flex button doesn't cut its text with "…"; the span must (a0ad9 #4: "…agent A: Taking the Spanis" at 390) */
 
 .cm-sa-s{display:none}
 @media (max-width:640px){.cm-sa-l{display:none}.cm-sa-s{display:inline}}
@@ -3998,6 +3999,7 @@ button.rc-buy-open:disabled{opacity:.6;cursor:progress}
 :root:not([data-dev]) .nowtbl .tr .nt-x>.now-answer{opacity:1}
 .nowtbl .nt-x{align-items:center}
 .nowtbl .now-stop{display:inline-flex}
+.nowtbl .nt-x>.now-stop>.ac-kill{opacity:1}   /* the .now-stop wrapper carries the hover/focus opacity; .ac-kill's own hide only lifts on tr:hover, and these rows are .tr divs */
 @media (max-width:640px){
   .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-x>.btn.now-answer:first-child{display:inline-flex;width:auto;min-width:0;height:40px;padding:0 var(--s3)}
   .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-x>.now-stop>.btn{width:40px;height:40px;min-width:40px;padding:0}

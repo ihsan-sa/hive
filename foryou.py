@@ -27,7 +27,8 @@ STEP = re.compile(r"\b(?:say|reply|answer|tell|pick|choose|decide|approve|confir
 # A machine-level word has to name its post: the root word command reads the post by id, so the id is the step, not a code to explain (ad748, friction-asks 11250213f5ed).
 WORD_STEP = re.compile(r"\bh2ward" r"en-word\b|\b(?:tow" r"er|standing) word\b", re.I)
 # "Nothing for you today", "nothing new on you": no step is missing, there is none (ad748, 11250213f5ed). NOTHING itself stays narrow: other code reads it as "the line is empty".
-NOTHING_FOR_YOU = re.compile(r"^\W*nothing\b|\bnothing (?:\w+ ){0,2}(?:for|on|from) you\b", re.I)
+NOTHING_FOR_YOU = re.compile(r"^\W*nothing\W*$|\bnothing (?:else |more |new )?(?:(?:needed|waits|left|to do) )?(?:for|on|from) you\b", re.I)   # not "nothing changed on the build; k2840 is still open" (a0ad9, 112503027c3b)
+POST_ID = re.compile(r"(?<![\w/.-])(?=[0-9a-f]{0,11}\d)(?=[0-9a-f]{0,11}[a-f])[0-9a-f]{12}(?![\w/-])")
 FENCE, SPAN = re.compile(r"```.*?```", re.S), re.compile(r"`[^`\n]*`")
 URL = re.compile(r"^(?:https?://|www\.|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:ca|com|org|net|io|dev|ai|app|cc|co|uk|de)/)", re.I)
 PATH = re.compile(r"(?<!\S)[\w.~-]*/[\w.~/-]*(?=[\s,;:!?)]|$)")
@@ -58,10 +59,10 @@ ORDER = ["command", "ids", "many", "long", "chain", "vague", "ours", "offer"]  #
 # The test before a For you line: only these six are the person's; anything else an agent decides and writes up as Decided. A word list, so it warns and never refuses.
 THEIRS = re.compile(r"\$|\b(?:pay|buy|purchase|order|checkout|check out|invoice|budget|price|cost|bill|subscription|funds?|spend|quote"  # money
                     r"|account|github|waterlooworks|sign(?:ing)?[ -]?(?:in|up)|log[ -]?in|token|password|credentials?|api key|keys?|cookies?|secret|permission|invite|2fa"  # an account
-                    r"|your (?:own )?(?:voice|name|word|number|career|cv|resume|interview|site|website|domain|form|application)|in your name|submit(?:s|ting|ted)?|e-?mail|dm|slack|message|reply to|linkedin|show hn|publish(?:ing|ed)?|post on|send|own words|dictat(?:e|ion)|(?:your|their) (?:own )?predictions?"  # their voice (own words, dictation, a prediction: 2026-11-23)
-                    r"|phone|iphone|laptop|mac|windows|pc|powershell|print|printer|device|call|usb|browser|bench|solder|hardware|scope"  # a device
+                    r"|your (?:own )?(?:voice|name|word|number|career|cv|resume|interview|site|website|domain|form|application)|in your name|submit(?:s|ting|ted)?|submissions?|upload(?:s|ing|ed)?|e-?mail|dm|slack|message|reply(?: yes| no)? to|(?:h\d|another hive)'s board|linkedin|show hn|publish(?:ing|ed)?|post on|send|own words|dictat(?:e|ion)|(?:your|their) (?:own )?predictions?"  # their voice (own words, dictation, a prediction: 2026-11-23)
+                    r"|phone|iphone|laptop|mac|windows|pc|powershell|print|printer|device|call|usb|browser|bench|solder|hardware|scope|tell me (?:what (?:it|each|they) shows?|if it (?:works|loads))"  # a device
                     r"|root|rootwarden|sudo|warden"  # root
-                    r"|hard limit|delete|history|to the outside|outside world|public)\b", re.I)  # a hard limit (opening the machine to the outside: 2026-11-23; your site, in your name, submit, public: the 5 false decidables of 11-24, thread improve-survey)
+                    r"|hard limits?|delete|history|to the outside|outside world|public)\b", re.I)  # a hard limit (opening the machine to the outside: 2026-11-23; your site, in your name, submit, public: the 5 false decidables of 11-24, thread improve-survey)
 DECIDE = ("Test before a For you line: is it money, an account, their voice, a device, root or a hard limit? "
           "This one names none of them, so decide it yourself, write `Decided: <what>` and carry on; keep the For you line only if it really is one of the six.")
 
@@ -122,7 +123,8 @@ def flags(line):
     if CHAIN.search(REPORT_BACK.sub(" ", bare)): out.append("chain")
     if OURS.search(bare.lower()) and not DEVICE.search(bare): out.append("ours")
     if OFFER.match(bare): out.append("offer")
-    if not WORD_STEP.search(line) and IDS.search(" ".join(t for t in re.sub(r"`([^`\s]+)`", r"\1", line).split() if not URL.match(t))): out.append("ids")
+    said = " ".join(t for t in re.sub(r"`([^`\s]+)`", r"\1", line).split() if not URL.match(t))
+    if IDS.search(POST_ID.sub(" ", said) if WORD_STEP.search(line) else said): out.append("ids")   # a word line must name its post; any other id (k2997) still needs saying
     if not STEP.search(bare) and not NOTHING_FOR_YOU.search(line) and not STOOD_DOWN.search(line): out.append("vague")
     return out
 
@@ -140,6 +142,11 @@ def decidable_lines(text):
             at = text.find(l.split()[-1])
             m = FENCE.search(text, at) if at >= 0 else None
             block = m.group(0) if m else ""
+        # the line runs on below with no blank line (`in a terminal on the host, run` then a root-command line), or points at a line or command
+        # shown above it (`paste that line into the box` after a `yes:` word block): 2 of the 6 false decidables of 2026-11-25, thread meta-person
+        at = text.find(l)
+        if at >= 0: block += "\n" + text[at + len(l):].split("\n\n", 1)[0]
+        if re.search(r"\b(?:that|this|the) (?:line|word|command|block)\b", l, re.I): block += "\n" + "\n".join(m.group(0) for m in FENCE.finditer(text))
         out.append(decidable(l) and not THEIRS.search(block))
     return out
 

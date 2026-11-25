@@ -226,6 +226,13 @@ def title_of(kind, fields):
     """An issue's title from its template; the optional cause reads ": why" after the code."""
     return KINDS[kind][0].format(**{"cause": "", **fields, **({"cause": ": " + fields["cause"]} if fields.get("cause") else {})})
 
+def side_of(kind, fields):
+    """The side of a public failure from its kind and fields (what an issue is built from)."""
+    if kind in PLAN_KINDS: return "plan"
+    if kind in STOP_KINDS: return "stopped"
+    if kind == "agent-exit" and fields.get("code") in EXPECTED_EXIT: return "stopped"
+    return cause_side(fields["cause"]) if kind == "agent-exit" and fields.get("cause") else "hive"
+
 def osname(o):
     return {"linux": "Linux", "darwin": "macOS", "windows": "Windows"}.get((o or "").split("/")[0], "Other")
 
@@ -242,10 +249,10 @@ def issue_text(sig, fields, count, hives, versions, oses, first, last, by="a Hiv
     b = ("### What happened, and what you expected\n\n%s Reported automatically by Hives that share failure reports. "
          "Expected: this doesn't happen.\n\n### Version\n\n%s\n\n### Where it runs\n\n%s\n\n### How you installed it\n\n_No response_\n\n"
          "### Output or log, if you have it\n\n```text\nkind: %s\n%s\n```\n\n"
-         "| | |\n|---|---|\n| Reports | %d |\n| Hives | %d |\n| Versions | %s |\n| OS | %s |\n| First seen | %s |\n| Last seen | %s |\n\n"
+         "| | |\n|---|---|\n| Whose fault | %s |\n| Reports | %d |\n| Hives | %d |\n| Versions | %s |\n| OS | %s |\n| First seen | %s |\n| Last seen | %s |\n\n"
          "_Opened by %s: only the failure kind, its message, versions and counts are shown; nothing from anyone's chats or files._\n\n"
          "<!-- hive-auto-report sig=%s -->\n") % (
-        KINDS[kind][1], vs[-1], ", ".join(sorted(c)), kind, title.lower(), count, hives, ", ".join(vs),
+        KINDS[kind][1], vs[-1], ", ".join(sorted(c)), kind, title.lower(), SIDE_WORDS[side_of(kind, fields)], count, hives, ", ".join(vs),
         ", ".join("%s (%d)" % x for x in c.most_common()), first, last, by, sig)
     return title, b
 
@@ -333,6 +340,8 @@ def exit_cause(out, events=(), code=None):
     return "no result (%s)" % (_first(NORESULT_TEXT[:2], said) or SIGNALS.get(_signal(code)) or _first(NORESULT_TEXT[2:], said) or "output stopped")
 
 PLAN_KINDS, STOP_KINDS = {"limited", "logins-paused", "provider-held"}, {"killed"}
+SIDE_WORDS = {"hive": "the Hive's own fault", "plan": "the Claude plan (usage limit, login or credit)",
+              "network": "the network or the Claude API", "stopped": "stopped on purpose"}   # what each side reads as, in issues, triage and hive-report show
 def side(r):
     """hive, plan, network or stopped for a failure report ("" for any other): whose fault it is, from its kind and fixed message only."""
     if r.get("type") != "failure": return ""
@@ -1062,7 +1071,11 @@ def main(a):
     elif cmd == "show":
         fs = sent_files(); n = int(a[1]) if len(a) > 1 else 1
         if not fs: print("nothing has been sent")
-        for f in fs[-n:]: print(f + "\n" + open(f).read())
+        for f in fs[-n:]:
+            t = open(f).read()
+            try: sd = side(json.loads(t))
+            except (ValueError, AttributeError): sd = ""
+            print(f + "\n" + t + ("\nwhose fault: " + SIDE_WORDS[sd] if sd else ""))
     elif cmd == "status":
         wf, wu = load_share()
         print("failure reports and daily check-in: %s, usage reports: %s" % ("on" if wf else "off", "on" if wu else "off"))

@@ -10,7 +10,7 @@ import { overview, cols } from "../templates.js";
 import { pageHeader, section, tally, stats, list, share, empty, waiting, button, statusDot, statusWord, pageNav } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 import { table } from "../ui/table.js";
-import { displayText } from "../core/model.js";
+import { agentCard as cardRows, displayText } from "../core/model.js";
 import { killButton } from "../actions.js";
 import { railSay } from "../core/foci.js";
 import { chart } from "../ui/chart.js";
@@ -25,7 +25,28 @@ const TONE = { working: "good", queue: "warn", stuck: "bad", quiet: "quiet" };
 
 // "Doing now" is the agent's own summary of its work (the person, 11081450f3e1: "its self written summary", not its tool call):
 // its `hive me` line, else the first line of its conversation's status bar, else what its brief asks for. The raw last step stays in the hover.
-const nowSay = a => agentSay(a.name, a.thread);
+// A line from before this run sits beside "working" (a0ad9's review, 112503361aba: "working" beside "was on … · 2.5h"): the conversation's
+// status bar, when it was written in this run, says what the run is on; else the old line stays, led "before this run:" (onWords).
+export const nowSay = a => {
+  const say = agentSay(a.name, a.thread); if (!say) return say;
+  const s = S.lastSess[a.name], bar = say.before && s && a.thread && S.threadStatus && S.threadStatus[a.thread];
+  const line = bar && bar.at * 1e3 >= s.start && bar.text && bar.text.split("\n").map(x => x.trim()).find(Boolean);
+  return line ? { text: plainCommits(line) } : { ...say, text: plainCommits(say.text) };
+};
+
+// Commit ids read as a count (a0ad9's review: "third pass on 0b3a004, e837fd5, 1979235"): a run of 7-40 hex ids, one of them with a letter
+// and a digit, is "3 commits", one is "a commit"; "commit 0b3a004" is "a commit". 12 hex is a post id, which scrub() takes out; a word, a code
+// of 5 or a number alone stays.
+const HEX = "(?:[0-9a-f]{7,11}|[0-9a-f]{13,40})(?![\\w-])";
+// "core 6f400f5" (the board's most common lead, a0ad9 re-check 112504460309) is "a core commit", not "core a commit"; so is "dash".
+const COMMITS = new RegExp(`(?<![\\w#/.-])((?:([Cc]ore|[Dd]ash)\\s+)?(?:(?:[Cc]ommits?|[Cc]ommit ids?)\\s+)?)${HEX}(?:(?:\\s*,\\s*|\\s*,?\\s+and\\s+|\\s*[+/]\\s*)${HEX})*`, "g");
+export const plainCommits = s => String(s || "").replace(COMMITS, (m, lead, repo) => {
+  const ids = m.slice(lead.length).match(/[0-9a-f]{7,40}/g) || [];
+  if (!ids.some(x => /[a-f]/.test(x) && /\d/.test(x))) return m;
+  const r = (repo || "").toLowerCase(), one = r === "core" ? "a core commit" : r === "dash" ? "a dash commit" : "a commit";   // whole, so the language tables find them
+  const w = ids.length > 1 ? ids.length + (r ? " " + r : "") + " commits" : one;
+  return /^[CD]/.test(lead) ? capFirst(w) : w;
+});
 
 // The "asked" line in the app look (design 1125 §7): the person's own ask in their words, an agent's as who asked, with no brief to wade through.
 // A path reads as its file name ("~/projects/x/fetch.py" is "fetch.py"); a line that is only a path goes.
@@ -35,7 +56,16 @@ export function askedLine(task, from) {
   const who = from || task.from;
   if (who && who !== "person") return `${capFirst(agentLabel(who))} asked it`;
   const words = plainPaths(labelCodes(firstSentence(displayText(task)))).trim();
-  return words && !/^[\w.@+-]+\.\w+$/.test(words) ? "You asked: " + words : null;
+  return words && !/^[\w.@+-]+\.\w+$/.test(words) ? `You asked: ${words}` : null;
+}
+
+// The lead-in before an agent's own line: "on …" now, "before this run: …" from an earlier run (it read "was on …", beside "working"). A line that is a stop reason doesn't follow "was on"
+// ("was on Done with the clean-up", ad748 1125032072ba): a Done line reads "last finished: the clean-up"; a Waiting or Blocked word goes.
+export function onWords(say) {
+  const t = String(say.text || "").trim(), done = /^(?:done|finished)\b\s*(?::\s*|with\s+|-\s+)?/i.exec(t);
+  if (done && t.length > done[0].length) return ["last finished: ", t.slice(done[0].length)];
+  const why = /^(?:waiting|blocked|needs the person|told to stop)\s*:\s*(?:on\s+)?/i.exec(t);
+  return [say.before ? "before this run: " : "on ", why && t.length > why[0].length ? t.slice(why[0].length) : t];
 }
 
 // Running agents as rows, not cards: one line to scan, the same columns all the way down, however many there are.
@@ -47,11 +77,12 @@ function agentRows(run, states, t, waits, hp, update) {   // hp: helpers() below
       { label: "Agent", lead: true, cls: "nt-a", width: "minmax(8rem,16rem)", render: a => [agentRef(a.name), hp.show ? null : helperChip((hp.by.get(a.name) || []).length)] },
       { label: "Conversation", cls: "nt-th", width: "minmax(6rem,15rem)", render: a => threadRef(a.thread) },
       { label: "State", cls: "nt-st", width: "minmax(5rem,6.5rem)", render: a => { const st = states.get(a.name), head = st.text.split(", ")[0]; return h("span", { title: [head !== st.text ? st.text : null, status(st.key).hint].filter(Boolean).join("\n") || null }, waits.has(a.thread) ? tag("info", "waits on you") : tag(TONE[st.key], head)); } },   // the narrow column says the first part ("2 jobs running"); the rest is in the hover, where seven wrapped lines were (R-1111a-e)
+      { label: "Model", cls: "nt-md meta now-model", render: a => (cardRows(a.name)[0] || {}).short || "–" },   // kept quiet, but kept: the person asked for the model here (11062230cb09); design 1125 §7 tags it now-model
       { label: "Doing now", cls: "nt-do", clip: true, render: a => {   // the spare width goes here, where the words are, not to the gap after State (1110h)
         const task = S.byId[a.post], say = nowSay(a);   // what it says it is on, in its own words; the command it happens to be running is only in the hover (the person, 11081450f3e1)
         const asked = askedLine(task, a.from);
         return h("div", { title: [say && say.own ? `Its own words, said ${ago(say.at)}${say.before ? ", before this run" : ""}` : null, a.doing ? "Last step: " + a.doing : null].filter(Boolean).join("\n") || null },
-          say ? h("div", { class: "nt-now" + (say.own ? " nt-on" : "") }, say.own ? h("span", { class: "meta" }, say.before ? "was on " : "on ") : null, railSay(labelCodes(say.text), 200), say.own ? h("span", { class: "meta" }, " · " + ago(say.at).replace(/ ago$/, "")) : null) : null,
+          say ? h("div", { class: "nt-now" + (say.own ? " nt-on" : "") }, ...(([lead, text]) => [say.own ? h("span", { class: "meta" }, lead) : null, railSay(labelCodes(text), 200)])(onWords(say)), say.own ? h("span", { class: "meta" }, " · " + ago(say.at).replace(/ ago$/, "")) : null) : null,
           asked ? h("div", { class: say ? "nt-ask meta" : "nt-now", title: task.text }, asked) : say ? null : h("span", { class: "muted" }, "–"));
       } },
       { label: "Up", num: true, cls: "meta", render: a => dur(t - a.since * 1e3) },
