@@ -7,17 +7,20 @@
 // With a second installer and its version (node test/setupexe.js OLD.exe NEW.exe 0.1.1), the update a person does: the
 // window is moved and sized while the old version runs, the newer installer (also download-marked) goes over it, and
 // there must then be one Apps & features entry, at the new version, in the same folder; opened from the Start menu the
-// new version must keep the window where it was and reach the Hive (or setup). The uninstall then runs on the new one.
+// new version must keep the window where it was and reach the Hive (or setup).
+// With a third (... NEWEST.exe 0.1.2), the update the app's notice leads to: the newest installer runs while the new
+// version is still open, and must close it, leave one entry at the newest version, and a Start menu shortcut that opens
+// it at the Hive. The uninstall then runs on the last one installed.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, execFile } = require('child_process');
 const { _electron } = require('playwright-core');
 const exe = process.argv[2];
 if (process.platform !== 'win32' || !exe || !fs.existsSync(exe)) { console.error('usage (Windows only): node test/setupexe.js PATH-TO-Hive-Setup.exe'); process.exit(2); }
 const version = require('../package.json').version;
-const [newer, newVersion] = [process.argv[3], process.argv[4]];
-if (newer && (!fs.existsSync(newer) || !newVersion)) { console.error('usage: node test/setupexe.js OLD.exe [NEW.exe NEW-VERSION]'); process.exit(2); }
+const [newer, newVersion, newest, newestVersion] = process.argv.slice(3, 7);
+if ((newer && (!fs.existsSync(newer) || !newVersion)) || (newest && (!newer || !fs.existsSync(newest) || !newestVersion))) { console.error('usage: node test/setupexe.js OLD.exe [NEW.exe NEW-VERSION [NEWEST.exe NEWEST-VERSION]]'); process.exit(2); }
 // A fresh account may have no Uninstall key at all, and an unreadable subkey makes Get-ItemProperty complain: neither is a
 // failure here, so errors are silenced and the exit is 0; anything PowerShell itself cannot run still shows its stderr.
 const ps = cmd => {
@@ -26,6 +29,10 @@ const ps = cmd => {
   } catch (err) { throw new Error(`PowerShell failed (${err.status}): ${(err.stderr || '').toString().trim().slice(0, 800) || err.message.slice(0, 300)}`); }
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// The installer run without blocking this process, so the open app's connection keeps being served while it works.
+const runInstaller = (file, args) => new Promise((resolve, reject) => execFile(file, args, { timeout: 5 * 60000 }, err => err ? reject(new Error(`${path.basename(file)} ${args.join(' ')} failed: ${err.killed ? 'still running after 5 min (a dialog waiting on nobody?)' : err.message}`)) : resolve()));
+const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const hiveProcs = () => { const out = ps(`Get-Process -Name Hive | Select-Object Id,Path | ConvertTo-Json -Compress`); if (!out) return []; const p = JSON.parse(out); return Array.isArray(p) ? p : [p]; };
 const entry = () => {
   const out = ps(`Get-ChildItem HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object { $_.DisplayName -like 'Hive*' -and $_.UninstallString } | Select-Object DisplayName,DisplayVersion,InstallLocation,UninstallString,DisplayIcon | ConvertTo-Json -Compress`);
   if (!out) return null;
@@ -133,6 +140,43 @@ const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWin
     if (off > 2) throw new Error(`the update lost the window's place: before ${JSON.stringify(kept)}, after ${JSON.stringify(now)}`);
     console.log(`ok setup-exe upgrade: ${version} to ${newVersion} in ${Math.round((Date.now() - t1) / 1000)} s; one Apps & features entry, "${e2[0].DisplayName}" ${e2[0].DisplayVersion}, same folder; window kept at ${now.width}x${now.height}+${now.x}+${now.y}; ${newVersion} opens ${reached}`);
     unexe = unexe2;
+  }
+
+  if (newest) {
+    // 3c. The update the app's own notice leads to: its download page opens from the running app, so the newer
+    // Hive-Setup.exe is run while the old version is still open and its files are in use. It must end with the old app
+    // gone, one entry at the newest version in the same folder, and the Start menu shortcut reaching the Hive at it.
+    let reached0;
+    ({ app, reached: reached0 } = await openFromStart(links().find(x => /Programs\\Hive\.lnk$/i.test(x.Path)), 'setupexe-open'));
+    const pid = app.process().pid;
+    const from = await app.evaluate(({ app: a }) => a.getVersion());
+    await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.setBounds({ x: 61, y: 41, width: 833, height: 599 }); });
+    await sleep(1500);
+    const kept3 = await bounds(app);
+    const copy3 = marked(newest);
+    const t2 = Date.now();
+    await runInstaller(copy3, ['/S']);
+    let e3 = null;
+    for (let i = 0; i < 60; i++) { e3 = entry(); if (e3 && e3.some(x => x.DisplayVersion === newestVersion)) break; await sleep(2000); }
+    await Promise.race([app.close().catch(() => { }), sleep(10000)]); // its process is gone, so this only tidies up
+    if (alive(pid)) throw new Error(`the installer finished but the open ${from} app (pid ${pid}) is still running`);
+    if (!e3 || e3.length !== 1 || e3[0].DisplayVersion !== newestVersion) throw new Error(`after the update with the app open, Apps & features shows ${JSON.stringify(e3)}, not one entry at ${newestVersion}`);
+    const unexe3 = (e3[0].UninstallString.match(/^"([^"]+)"/) || [null, e3[0].UninstallString.split(' /')[0]])[1];
+    if (real(path.dirname(unexe3)) !== real(e.InstallLocation)) throw new Error(`the update went to ${path.dirname(unexe3)}, not over ${e.InstallLocation}`);
+    // Did the installer start the new version itself (as it does after a normal install)? Said so, then closed, so the
+    // shortcut below is what opens it.
+    const started = hiveProcs();
+    if (started.length) { ps(`Get-Process -Name Hive | Stop-Process`); await sleep(2000); }
+    const start3 = links().find(x => /Programs\\Hive\.lnk$/i.test(x.Path));
+    if (!start3 || real(start3.Target) !== real(bin)) throw new Error('after the update with the app open, the Start menu shortcut is missing or wrong: ' + JSON.stringify(links()));
+    ({ app, reached } = await openFromStart(start3, 'setupexe-update-open'));
+    const running3 = await app.evaluate(({ app: a }) => a.getVersion());
+    const now3 = await bounds(app);
+    await app.close();
+    if (running3 !== newestVersion) throw new Error(`after the update with the app open, the Start menu shortcut opens ${running3}, not ${newestVersion}`);
+    const off3 = kept3 && now3 ? Math.max(...['x', 'y', 'width', 'height'].map(k => Math.abs(kept3[k] - now3[k]))) : Infinity;
+    console.log(`ok setup-exe upgrade while open: ${from} open at ${reached0.replace(/^the Hive at /, '')}, ${newestVersion} installed over it in ${Math.round((Date.now() - t2) / 1000)} s; the open app was closed by the installer; one Apps & features entry, "${e3[0].DisplayName}" ${e3[0].DisplayVersion}, same folder; ${started.length ? 'the installer started ' + newestVersion + ' itself; ' : ''}window ${off3 <= 2 ? 'kept' : 'not kept (' + JSON.stringify(kept3) + ' then ' + JSON.stringify(now3) + ')'}; ${newestVersion} opens ${reached}`);
+    unexe = unexe3;
   }
 
   // 4. Uninstall it from Apps & features' own command; the app and its shortcuts go.

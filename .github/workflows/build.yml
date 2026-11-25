@@ -73,17 +73,22 @@ jobs:
         run: node test/real.js "${{ matrix.app }}"
       # The file a Windows person downloads: Hive-Setup.exe with the browser's download mark, installed, opened from its
       # Start menu shortcut (the Hive from the step above, or the setup screen where there is none), then uninstalled.
-      # On windows-latest it is also the update a person does: a second Hive-Setup.exe, one patch version on, goes over it.
+      # On windows-latest it is also the update a person does: a second Hive-Setup.exe, one patch version on, goes over it,
+      # then a third, one more on, goes over it while it is still open.
       - if: matrix.os == 'windows-latest'
         shell: bash
         run: |
           NEXT=$(node -p "require('./package.json').version.replace(/[0-9]+$/, n => +n + 1)")
           echo "HIVE_NEXT=$NEXT" >> "$GITHUB_ENV"
           npx electron-builder --win --publish never -c.extraMetadata.version=$NEXT -c.directories.output=dist-next
+          # And one more on, run while the previous version is still open (the update its notice leads to).
+          NEXT2=$(node -p "'$NEXT'.replace(/[0-9]+$/, n => +n + 1)")
+          echo "HIVE_NEXT2=$NEXT2" >> "$GITHUB_ENV"
+          npx electron-builder --win --publish never -c.extraMetadata.version=$NEXT2 -c.directories.output=dist-next2
       - if: runner.os == 'Windows'
-        timeout-minutes: 25
+        timeout-minutes: 30
         shell: bash
-        run: node test/setupexe.js dist/Hive-Setup.exe ${HIVE_NEXT:+dist-next/Hive-Setup.exe $HIVE_NEXT}
+        run: node test/setupexe.js dist/Hive-Setup.exe ${HIVE_NEXT:+dist-next/Hive-Setup.exe $HIVE_NEXT} ${HIVE_NEXT2:+dist-next2/Hive-Setup.exe $HIVE_NEXT2}
       # The zip a Mac person downloads: unpacked with the download mark, moved into /Applications, the README's Open
       # Anyway (its command-line form), then opened from there: it must go straight to the Hive from the step above.
       # Read, not a red build, like the real install it stands on.
