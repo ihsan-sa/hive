@@ -21,7 +21,7 @@ const ps = cmd => {
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const entry = () => {
-  const out = ps(`Get-ChildItem HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object { $_.DisplayName -like 'Hive*' -and $_.UninstallString } | Select-Object DisplayName,DisplayVersion,InstallLocation,UninstallString | ConvertTo-Json -Compress`);
+  const out = ps(`Get-ChildItem HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object { $_.DisplayName -like 'Hive*' -and $_.UninstallString } | Select-Object DisplayName,DisplayVersion,InstallLocation,UninstallString,DisplayIcon | ConvertTo-Json -Compress`);
   if (!out) return null;
   const e = JSON.parse(out);
   return Array.isArray(e) ? e : [e];
@@ -50,14 +50,18 @@ const links = () => {
   if (!e) throw new Error('no Hive entry in Apps & features after the install');
   if (e.length !== 1) throw new Error('more than one Hive entry in Apps & features: ' + JSON.stringify(e));
   e = e[0];
+  // electron-builder's per-user entry may leave InstallLocation empty; its uninstaller sits in the app's own folder.
+  const unexe = (e.UninstallString.match(/^"([^"]+)"/) || [null, e.UninstallString.split(' /')[0]])[1];
+  e.InstallLocation = e.InstallLocation || path.dirname(unexe);
   const bin = path.join(e.InstallLocation, 'Hive.exe');
-  if (!fs.existsSync(bin)) throw new Error(`Apps & features says ${e.InstallLocation}, but there is no Hive.exe in it`);
-  if (!e.InstallLocation.toLowerCase().startsWith((process.env.LOCALAPPDATA || '').toLowerCase())) throw new Error(`installed outside this account's folder: ${e.InstallLocation}`);
+  if (!fs.existsSync(bin)) throw new Error(`Apps & features points at ${e.InstallLocation}, but there is no Hive.exe in it: ` + JSON.stringify(e));
+  const real = x => { try { return fs.realpathSync.native(x).toLowerCase(); } catch { return String(x).toLowerCase(); } }; // 8.3 names (RUNNER~1) vs long ones
+  if (!process.env.LOCALAPPDATA || !real(e.InstallLocation).startsWith(real(process.env.LOCALAPPDATA))) throw new Error(`installed outside this account's folder: ${e.InstallLocation}`);
   if (e.DisplayVersion !== version) throw new Error(`Apps & features shows version ${e.DisplayVersion}, the app is ${version}`);
   const l = links();
   const start = l.find(x => /Programs\\Hive\.lnk$/i.test(x.Path));
   if (!start) throw new Error('no Hive shortcut in the Start menu: ' + JSON.stringify(l));
-  for (const x of l) if (path.resolve(x.Target).toLowerCase() !== path.resolve(bin).toLowerCase()) throw new Error(`${x.Path} opens ${x.Target}, not the installed app`);
+  for (const x of l) if (real(x.Target) !== real(bin)) throw new Error(`${x.Path} opens ${x.Target}, not the installed app`);
   console.log(`ok setup-exe install: ${Math.round((Date.now() - t0) / 1000)} s, "${e.DisplayName}" ${e.DisplayVersion} in ${e.InstallLocation}; shortcuts: ${l.map(x => x.Path).join(', ')}`);
 
   // 3. Start it the way a person does: the Start menu shortcut.
@@ -79,7 +83,7 @@ const links = () => {
   else throw new Error(`the installed app never showed the Hive or its setup screen (at "${at}", "${t}")`);
 
   // 4. Uninstall it from Apps & features' own command; the app and its shortcuts go.
-  const un = (e.UninstallString.match(/^"([^"]+)"/) || [null, e.UninstallString.split(' /')[0]])[1];
+  const un = unexe;
   execFileSync(un, ['/S', '/currentuser'], { timeout: 5 * 60000, stdio: 'inherit' });
   const end2 = Date.now() + 3 * 60000;
   while ((entry() || fs.existsSync(bin) || links().length) && Date.now() < end2) await sleep(2000);
