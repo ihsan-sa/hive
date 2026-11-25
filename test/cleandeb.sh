@@ -6,6 +6,8 @@
 # apt installed it without a word and the app could not start.
 # The second: with plain libasound2, apt on Ubuntu 24.04 met it with another package that provides the name and the
 # app died on a missing ALSA symbol; Depends now names libasound2t64 first.
+# IMAGE@gdebi or IMAGE@pkcon installs with what a double-click opens instead of apt: gdebi on Mint, GNOME Software's
+# PackageKit on Debian (the same engines, without a screen).
 set -u
 deb=$1; shift
 [ -f "$deb" ] || { echo "usage: test/cleandeb.sh PATH.deb IMAGE..."; exit 2; }
@@ -14,7 +16,16 @@ dir=$(mktemp -d); cp "$deb" "$dir/app.deb"
 cat > "$dir/in.sh" <<'IN'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null 2>&1
-apt-get install -y -qq /w/app.deb > /tmp/apt.log 2>&1 || { echo "FAILED apt install: $(tail -3 /tmp/apt.log)"; exit 1; }
+case "$HOW" in
+  gdebi) apt-get install -y -qq gdebi-core > /dev/null 2>&1 || { echo "FAILED gdebi-core install"; exit 1; }
+         gdebi -n /w/app.deb > /tmp/apt.log 2>&1 ;;
+  pkcon) apt-get install -y -qq packagekit packagekit-tools polkitd dbus > /dev/null 2>&1 || { echo "FAILED packagekit install"; exit 1; }
+         mkdir -p /run/dbus; dbus-daemon --system --fork; sleep 1
+         pk=$(ls /usr/libexec/packagekitd /usr/lib/packagekit/packagekitd 2>/dev/null | head -1); $pk > /tmp/pk.log 2>&1 & sleep 3
+         cp /w/app.deb /tmp/app.deb; pkcon -y --noninteractive install-local /tmp/app.deb > /tmp/apt.log 2>&1 ;;
+  *) apt-get install -y -qq /w/app.deb > /tmp/apt.log 2>&1 ;;
+esac || { echo "FAILED ${HOW:-apt} install: $(grep -v '^$' /tmp/apt.log | tail -3 | tr '\n' ' ')"; exit 1; }
+dpkg -s hive-app 2>/dev/null | grep -q '^Status: install ok installed' || { echo "FAILED ${HOW:-apt} install left hive-app not installed: $(grep -v '^$' /tmp/apt.log | tail -3 | tr '\n' ' ')"; exit 1; }
 missing=$(ldd /opt/Hive/hive-app | grep 'not found' | awk '{print $1}' | tr '\n' ' ')
 [ -z "$missing" ] || { echo "FAILED missing after install: $missing"; exit 1; }
 # Only the test needs a screen; the app's own start is what's checked.
@@ -23,13 +34,16 @@ export HOME=/tmp/home HIVE_APP_TEST=1; mkdir -p $HOME
 xvfb-run -a /opt/Hive/hive-app --no-sandbox > /tmp/app.out 2>&1 &
 i=0; while [ $i -lt 45 ]; do grep -qs '^.*screen ' $HOME/.config/Hive/app.log && break; sleep 1; i=$((i+1)); done
 shown=$(grep -hs 'screen ' $HOME/.config/Hive/app.log | head -1 | sed 's/^.*screen /screen /')
-[ -n "$shown" ] || { echo "FAILED no screen in 45 s: $(grep -v '^$' /tmp/app.out | tail -3)"; exit 1; }
-echo "$(apt-cache policy hive-app 2>/dev/null | sed -n 's/ *Installed: //p') installed with apt, nothing missing, the app showed its $shown in ${i} s"
+[ -n "$shown" ] || { echo "FAILED no screen in 45 s: $(grep -v '^$' /tmp/app.out | tail -3 | tr '\n' ' ')"; exit 1; }
+echo "$(dpkg-query -W -f='${Version}' hive-app) installed with ${HOW:-apt}, nothing missing, the app showed its $shown in ${i} s"
 IN
 fail=0
-for img in "$@"; do
-  out=$($run run --rm --network=host -v "$dir:/w:ro" "$img" sh /w/in.sh 2>&1 | tail -1)
-  case "$out" in FAILED*) echo "FAILED clean deb $img: ${out#FAILED }"; fail=1;; *) echo "ok clean deb $img: $out";; esac
+for spec in "$@"; do
+  img=$spec; how=; case "$spec" in *@gdebi|*@pkcon) img=${spec%@*}; how=${spec##*@};; esac
+  out=$($run run --rm --network=host -e HOW="$how" -v "$dir:/w:ro" "$img" sh /w/in.sh 2>&1 | tail -1)
+  # Only the script's own last line counts as a pass; anything else (a crash, a log line) is a failure.
+  case "$out" in *" installed with "*", the app showed its screen "*) echo "ok clean deb $spec: $out";;
+    *) echo "FAILED clean deb $spec: ${out#FAILED }"; fail=1;; esac
 done
 rm -rf "$dir"
 exit $fail
