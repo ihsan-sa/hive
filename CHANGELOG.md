@@ -4,6 +4,10 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Smaller fixes, 2026-11-25
+
+- Settings › Set once › Model now works when you're signed in from outside, and on a Hive with no settings file. It says where the choice is saved and when it takes effect. The power, sandbox and sharing choices still change only on this machine.
+
 ## Smaller fixes, 2026-11-24
 
 - `kb find` now names a document by its live copy, not an old copy kept in a project's archive folder.

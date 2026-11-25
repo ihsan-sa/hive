@@ -219,10 +219,17 @@ function end() {
   mark(null);
   win.remove(); ringEl.remove(); win = ringEl = null;
 }
-/** Offer it once in this browser, once someone is signed in and the install's setup is finished: not over the walkthrough. */
+// Who the offer is for (friction-dash 6): someone new to this Hive. "Once in this browser" alone opened it over the list for the person on every new
+// browser and phone, a year in. A Hive is new to its person while they have written fewer than five messages and none of them over a day ago.
+// ?tour=1 offers it whatever the Hive's age (the preview and the tour drives use it). It judges only once the whole board is in (S.history): the first
+// read holds just the newest part, where a busy Hive's person may have written nothing yet that day, and that read as a new Hive (a54ea's review, 2026-11-25).
+const newHive = () => { const mine = S.posts.filter(p => p.from === "person"), day = Date.now() - 864e5; return mine.length < 5 && !mine.some(p => p.t < day); };
+const asked = () => { try { return !!new URLSearchParams(location.search).get("tour"); } catch (e) { return false; } };
+/** Offer it once in this browser, on a Hive new to its person, once someone is signed in and setup is finished: not over the walkthrough. */
 export function offerTour() {
   const look = () => {
     if (win || !S.app || !S.app.app || !can("post") || document.querySelector("dialog[open]")) return;
+    if (!asked() && (!S.history || !newHive())) return;   // wait for the whole board before judging the Hive's age, unless ?tour=1 asks
     const s = S.app.setup || {}; if (!(s.signed_in || s.api_key)) return;
     if (S.app.settings && S.app.settings.setup_done === false) return;
     let seen = "1"; try { seen = localStorage.getItem(simpleOn() ? SEEN_SIMPLE : SEEN); } catch (e) { /* no storage: don't nag */ }

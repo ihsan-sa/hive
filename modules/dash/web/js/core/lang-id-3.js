@@ -266,7 +266,7 @@ export default {
   "Tier 2": "Tingkat 2",
   "Held": "Ditahan",
   "goes first; its jobs use the heavy fast lane": "didahulukan; tugasnya memakai jalur cepat heavy",
-  "agents save it and stop; nothing new starts": "agen menyimpannya lalu berhenti; tidak ada yang baru dimulai",
+  "the keeper starts no rounds on it; to stop agents now, use Pause": "keeper tidak memulai putaran untuk ini; untuk menghentikan agen sekarang, pakai Jeda",
   "after tier 2": "setelah tingkat 2",
   "Back to the list": "Kembali ke daftar",
   "remove your dashboard setting": "hapus pengaturan dasbor Anda",

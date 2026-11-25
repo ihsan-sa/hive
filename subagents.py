@@ -63,6 +63,13 @@ def codex_thread(out_file):
     return None
 
 
+def drop_cache(fh):
+    """Read once, then the memo holds the row: drop the file's page cache, which would otherwise be charged to the dashboard's
+    memory cgroup (a week of helper transcripts kept it at its 2G cap, a54ea's review 2026-11-25)."""
+    try: os.posix_fadvise(fh.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+    except (OSError, AttributeError, ValueError): pass
+
+
 def iso(ts): return dt.datetime.fromtimestamp(ts, dt.timezone.utc).isoformat(timespec="seconds")
 
 
@@ -82,15 +89,17 @@ def claude_helpers(since, cm, memo=None):
             except (OSError, ValueError): meta = {}
             first = last = None; msgs = {}; tools = 0
             try:
-                for line in open(f, errors="replace"):
-                    try: e = json.loads(line)
-                    except ValueError: continue
-                    ts = e.get("timestamp")
-                    if ts: first = first or ts; last = ts
-                    m = e.get("message") or {}
-                    if e.get("type") == "assistant" and m.get("usage"):
-                        msgs[m.get("id") or len(msgs)] = (m.get("model"), m["usage"])
-                        tools += sum(1 for c in m.get("content") or [] if isinstance(c, dict) and c.get("type") == "tool_use")
+                with open(f, errors="replace") as fh:
+                    for line in fh:
+                        try: e = json.loads(line)
+                        except ValueError: continue
+                        ts = e.get("timestamp")
+                        if ts: first = first or ts; last = ts
+                        m = e.get("message") or {}
+                        if e.get("type") == "assistant" and m.get("usage"):
+                            msgs[m.get("id") or len(msgs)] = (m.get("model"), m["usage"])
+                            tools += sum(1 for c in m.get("content") or [] if isinstance(c, dict) and c.get("type") == "tool_use")
+                    drop_cache(fh)
             except OSError: continue
             usd = sum(cm.price(mo, u) for mo, u in msgs.values()) if cm else None
             out_tok = sum((u.get("output_tokens") or 0) for _, u in msgs.values())

@@ -257,7 +257,7 @@ export default {
   "Tier 2": "Stufe 2",
   "Held": "Angehalten",
   "goes first; its jobs use the heavy fast lane": "kommt zuerst; seine Jobs nutzen die schnelle heavy-Spur",
-  "agents save it and stop; nothing new starts": "Agenten speichern es und stoppen; nichts Neues startet",
+  "the keeper starts no rounds on it; to stop agents now, use Pause": "der Keeper startet dafür keine Runden; um Agenten sofort zu stoppen, nutze Pausieren",
   "after tier 2": "nach Stufe 2",
   "Back to the list": "Zurück zur Liste",
   "remove your dashboard setting": "deine Dashboard-Einstellung entfernen",

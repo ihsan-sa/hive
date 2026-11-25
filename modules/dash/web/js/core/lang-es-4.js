@@ -267,7 +267,7 @@ export default {
   "Tier 2": "Nivel 2",
   "Held": "En espera",
   "goes first; its jobs use the heavy fast lane": "va primero; sus trabajos usan el carril rápido de heavy",
-  "agents save it and stop; nothing new starts": "los agentes la guardan y paran; no empieza nada nuevo",
+  "the keeper starts no rounds on it; to stop agents now, use Pause": "el keeper no inicia rondas en ella; para parar a los agentes ya, usa Pausa",
   "after tier 2": "después del nivel 2",
   "Back to the list": "Volver a la lista",
   "remove your dashboard setting": "quita lo que pusiste en el panel",

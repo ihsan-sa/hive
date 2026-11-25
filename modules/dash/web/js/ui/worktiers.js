@@ -6,6 +6,7 @@ import { LOC } from "../core/format.js";
 import { status as st } from "../core/status.js";
 import { S, can, jget, post } from "../core/store.js";
 import { focusById, focusName } from "../core/foci.js";
+import { threadTitle } from "../core/model.js";
 import { clock, dayName, ago } from "../core/format.js";
 import { section, block, blocks, button, field, fieldErr, input, invalid, statusLabel, waiting } from "./kit.js";
 import { act, isBusy } from "./activity.js";
@@ -197,4 +198,79 @@ export function tiersSection(ctx) {
         button("Add", null, { type: "submit", busy: isBusy("tiers-new") })),
       h("p", { class: "field-h" }, "Upkeep (backups, guards, the watchdog) is never paused.")];
   return section({ title: "Work tiers", note: "what may start new work, and until when", level: 1 }, body);
+}
+
+// ---- Pause / Resume on one conversation or focus (friction-redesign, ad748 11250102f453: "one obvious Pause / Resume on a thread and on a
+// focus ... say what pausing does"). Built on the work tiers above, so the starter honours it: a held tier starts no new run.
+// A focus that has a tier to itself pauses that tier, so it can lift by itself at a time; anything else moves into the Off tier until resumed,
+// and Resume puts it back where it was (remembered in this browser; without that, a thread follows its focus again and a focus goes to the default).
+export const PAUSE_SAYS = "Agents save and stop; nothing new starts. One at work finishes the step it is on first. A message you write still starts one.";
+const WAS_KEY = "hive.pause.was";
+const wasOf = () => { try { return JSON.parse(localStorage.getItem(WAS_KEY) || "{}") || {}; } catch { return {}; } };
+const setWas = (k, v) => { try { const m = wasOf(); if (v == null) delete m[k]; else m[k] = v; localStorage.setItem(WAS_KEY, JSON.stringify(m)); } catch { /* private mode: Resume falls back */ } };
+const keyName = k => { const [kind, x] = splitKey(k); return kind === "focus" ? (focusById(x) ? focusName(x) : x) : kind === "thread" ? (x.includes("*") ? `conversations ${x}` : (threadTitle(x) || x)) : `the timer ${x}`; };
+
+/** Where a focus or conversation stands for Pause / Resume, or null before the tiers are read (or without the right to change them).
+ *  held: nothing new in it starts now. by: the placement that holds it ("thread:x", "focus:y", or "tier" when its tier itself is paused).
+ *  alone: a focus with a tier to itself, so a pause there can end at a set time. others: what else a tier Resume would start. */
+export function pauseOf(kind, id, fid) {
+  if (!T.data || !can("tier")) return null;
+  const t = kind === "focus" ? tierOfFocus(id) : tierOfThread(id, fid); if (!t) return null;
+  const k = tierState(t)[0], off = String(t.id) === OFF, holds = t.holds || {}, me = `${kind}:${id}`;
+  const own = (holds[kind] || []).includes(id);
+  const others = ["focus", "thread", "job"].flatMap(x => (holds[x] || []).map(y => `${x}:${y}`)).filter(x => x !== me);
+  const held = off || k === "paused";
+  // what holds it: its own place in Off, its focus's place in Off, a pattern such as "1125*" in Off ("elsewhere": Resume opens Settings), or a paused tier
+  const by = !held ? null : off ? (own ? me : kind === "thread" && fid && tierOfFocus(fid) === t ? `focus:${fid}` : "elsewhere") : "tier";
+  return { t, held, by, own, off, until: !off && t.paused && t.paused.until ? t.paused.until : null, alone: kind === "focus" && own && !others.length && !t.default && !off, others: by === "tier" ? others : [] };
+}
+
+/** "Paused" or "Paused until Thu 9:00", for a chip beside the name. */
+export const pausedWords = p => p && p.held ? (p.until ? "Paused until " + whenText(p.until) : "Paused") : "";
+
+/** Open Pause (with its "until" choices where the tier allows it) or Resume for one focus or conversation. done redraws the page. */
+export function askPause(kind, id, fid, done) {
+  const p = pauseOf(kind, id, fid); if (!p) return;
+  const me = `${kind}:${id}`, name = keyName(me), redraw = () => done && done();
+  // act logs it under "What's happening"; a refusal throws, so a dialog shows it beside its buttons and keeps itself open.
+  const run = (op, body, what) => act("tiers-" + op, what, () => post("/api/work-tiers", { op, ...body }), redraw, what).then(r => { if (r && r.tiers) { T.data = r; T.at = Date.now(); } redraw(); });
+  const now = f => f().catch(() => redraw());
+  if (p.held) {
+    if (p.by === "tier") {
+      const also = p.others.map(keyName);
+      const go = () => run("resume", { tier: String(p.t.id) }, `${name} runs again.`);
+      if (!also.length) return now(go);
+      return confirm({ title: `Resume ${name}?`, ok: "Resume", body: [`It is paused with ${also.length === 1 ? "one other" : `${also.length} others`} that share its work tier; resuming starts them too: ${also.slice(0, 6).join(", ")}${also.length > 6 ? ` and ${also.length - 6} more` : ""}.`], onOk: go });
+    }
+    if (p.by === "elsewhere") { location.hash = "#settings/work-tiers"; return; }
+    // held by its own place in Off (or its focus's): back where it was
+    const k = p.by, was = wasOf()[k], back = was != null && tiers().some(z => String(z.id) === String(was)) ? String(was) : null;
+    const what = `${keyName(k)} runs again.`;
+    const go = () => (back ? run("set", { what: k, tier: back }, what) : run("unset", { what: k }, what)).then(r => { setWas(k, null); return r; });
+    if (k === me) return now(go);
+    return confirm({ title: `Resume ${keyName(k)}?`, ok: "Resume", body: [`This conversation is paused with its focus, ${keyName(k)}. Resuming starts the focus and its conversations again.`], onOk: go });
+  }
+  // Pause. A focus alone in its tier can end at a time; otherwise it lasts until Resume.
+  let pick = "none";
+  const opt = ([v, l]) => h("label", { class: "opt" }, h("input", { type: "radio", name: "pausepick", value: v, checked: v === pick || null, onchange: () => { pick = v; } }), h("b", null, l));
+  confirm({
+    title: `Pause ${name}?`, ok: "Pause",
+    body: [h("p", { class: "pause-says" }, PAUSE_SAYS),
+      p.alone ? h("div", { class: "pause-until", role: "radiogroup", "aria-label": "How long" }, PAUSES.map(opt))
+        : h("p", { class: "meta" }, "It stays paused until you press Resume here."),
+      h("p", { class: "meta" }, "To see or change every pause, open Settings, Work tiers.")],
+    onOk: () => {
+      if (p.alone) { const c = PAUSES.find(x => x[0] === pick), u = c ? c[2]() : null; return run("pause", { tier: String(p.t.id), until: u }, `${name} is paused ${u ? "until " + whenText(u) : "until you resume it"}.`); }
+      if (p.own) setWas(me, String(p.t.id)); else setWas(me, null);
+      return run("set", { what: me, tier: OFF }, `${name} is paused until you resume it.`);
+    },
+  });
+}
+
+/** The visible pair while paused: a "Paused…" chip and Resume. null while it runs. */
+export function pausedStrip(kind, id, fid, done) {
+  const p = pauseOf(kind, id, fid); if (!p || !p.held) return null;
+  return h("span", { class: "pause-strip", "data-key": "pause-" + kind, role: "group", "aria-label": pausedWords(p) },
+    h("span", { class: "chip tier-chip", "data-tone": st("paused").tone, title: PAUSE_SAYS }, pausedWords(p)),
+    button("Resume", e => { if (e && e.stopPropagation) e.stopPropagation(); askPause(kind, id, fid, done); }, { size: "s", kind: "quiet", icon: "play", cls: "pause-resume", busy: isBusy("tiers-resume") || isBusy("tiers-set") || isBusy("tiers-unset") }));
 }

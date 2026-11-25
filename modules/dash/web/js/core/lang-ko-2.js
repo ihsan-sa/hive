@@ -29,6 +29,7 @@ export default {
   "Filters": "필터",
   "Columns": "열",
   "Total cost": "총 비용",
+  "At API prices": "API 가격 기준",
   "Tokens": "토큰",
   "Agent time": "에이전트 시간",
   "under a minute": "1분 미만",

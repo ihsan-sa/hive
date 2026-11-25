@@ -29,6 +29,7 @@ export default {
   "Filters": "फ़िल्टर",
   "Columns": "कॉलम",
   "Total cost": "कुल लागत",
+  "At API prices": "API कीमतों पर",
   "Tokens": "टोकन",
   "Agent time": "एजेंट समय",
   "under a minute": "एक मिनट से कम",

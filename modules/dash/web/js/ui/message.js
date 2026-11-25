@@ -14,7 +14,8 @@ import { artifactSeries, collectPages, inChat } from "../rich/artifact.js";
 import { agentRef, threadRef, agentAvatar } from "./refs.js";
 import { agentHref, threadHref, href } from "../core/router.js";
 import { button, icon, statusDot, copyPress, scrim } from "./kit.js";
-import { replyTo, draft, quoteRef } from "./composer.js";
+import { replyTo, quoteRef } from "./composer.js";
+import { pickBar, picked } from "./pick.js";
 import { wordButton } from "./rootword.js";
 import { voiceMemo, VOICE } from "./voicememo.js";
 import { readAloud, stopReading, reading } from "./speak.js";
@@ -492,7 +493,7 @@ function appMessage(p, opts) {
       wordButton(p),
       messageReceipt(p),
       versionBar(p, opts),
-      asks ? askActions(p) : null),
+      kind === "agent" && (asks || picked(p) === true || choiceOpen(p)) ? askActions(p) : null),
     simpleOn() ? null : msgTools(p, ws));
 }
 
@@ -545,24 +546,21 @@ function msgAvatar(p, kind) {
   return h("span", { class: "av", "aria-hidden": "true", "data-name": p.from }, h("span", null, kind === "sys" ? icon("bell") : kind === "me" ? "Y" : String(simpleOn() && kind !== "out" ? hiveName() : p.from).slice(0, 2)));
 }
 
+/** Is this agent message the last one to you, unanswered (the thread's state names it)? Its numbered choices then show as one-tap buttons
+ *  even when it doesn't end on a question mark ("Pick one:" and a list), and in the simple look too. */
+function choiceOpen(p) {
+  if (!isAgent(p.from) || !p.men.includes("person")) return false;
+  const st = threadState(p.th); return (st.key === "asks" || st.key === "foryou") && !!st.post && st.post.id === p.id;
+}
 /** Is this agent message the question the conversation is waiting on you for (the thread's state names it)? */
 function asksYou(p) {
   if (!isAgent(p.from) || !p.men.includes("person") || !asksQuestion(p)) return false;
   const st = threadState(p.th); return st.key === "asks" && !!st.post && st.post.id === p.id;
 }
-/** Numbered options in a question: "1. …", "2) …", "Option 2: …". At most three, starting at 1. */
-export function picksIn(text) {
-  const n = [...String(text || "").matchAll(/^[ \t>*-]*(?:\*\*)?(?:\(?([1-9])[.):]|option ([1-9])\b[:.]?)\s+\S/gim)].map(m => +(m[1] || m[2]));
-  const u = [...new Set(n)].sort((a, b) => a - b);
-  return u[0] === 1 && u[1] === 2 ? u.filter((x, i) => x === i + 1).slice(0, 3) : [];
-}
-// Answer opens a reply to this message in the composer; Go with N puts the words in the box: you still press Send.
+// One tap on a numbered choice sends "Go with N." with 10 s to undo (ui/pick.js); no Answer: the composer is addressed to it and the hover bar has Reply (the Nov 8 handoff §8.3).
 function askActions(p) {
   if (!can("post")) return null;
-  const picks = picksIn(displayText(p));   // no Answer: the composer is addressed to it and the hover bar has Reply (the Nov 8 handoff §8.3)
-  if (!picks.length) return null;
-  return h("div", { class: "msg-acts" },
-    picksIn(displayText(p)).map(n => button(`Go with ${n}`, () => { const d = draft(p.th); d.text = `Go with ${n}.`; replyTo(p); }, { size: "s", kind: "quiet", cls: "msg-pick" })));
+  return pickBar({ ...p, disp: displayText(p) }, { cls: "msg-acts" });
 }
 
 // "What it did": a closing section of steps, commands or checks folds under the words (the hand-off: technical detail, folded by default).
@@ -847,7 +845,7 @@ function helperFold(k, opts) {
     h("summary", null, icon("chevron-right"),
       h("span", { class: "avs" }, [asker, helper].filter(Boolean).map(x => agentAvatar(x, { size: "s" }))),
       h("span", { class: "cm-helper-t" }, h("b", null, capFirst(agentLabel(asker))), helper ? " asked a helper: " : " started: ", task.length > 70 ? short(task, 70) : task),
-      h("span", { class: "meta" }, ` · ${n} ${n === 1 ? "message" : "messages"} · last: ${short(mdPlain(displayText(lastP)).replace(/\s+/g, " "), 60)}`),
+      h("span", { class: "meta cm-helper-m" }, `${n} ${n === 1 ? "message" : "messages"} · last: ${short(mdPlain(displayText(lastP)).replace(/\s+/g, " "), 60)}`),
       h("span", { class: "meta num cm-helper-when" }, span)),
     h("div", { class: "cm-helper-b" }));
   if (HELP_OPEN.has(k.name)) { d.open = true; fill(d); }

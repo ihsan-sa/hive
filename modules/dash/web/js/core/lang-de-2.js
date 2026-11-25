@@ -26,6 +26,7 @@ export default {
   "Filters": "Filter",
   "Columns": "Spalten",
   "Total cost": "Gesamtkosten",
+  "At API prices": "Zu API-Preisen",
   "Tokens": "Tokens",
   "Agent time": "Agentenzeit",
   "under a minute": "unter einer Minute",

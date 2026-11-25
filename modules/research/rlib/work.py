@@ -467,6 +467,42 @@ def strip_speaker(sig, name):
     return str(sig)[m.end():] if m else sig
 
 
+AI_WORDS = re.compile(r"\b(?:AI|A\.I\.|artificial intelligence|generative|ChatGPT|machine learning)\b", re.I)
+def whole_quote(sig, text):
+    """A statement cut inside its quotation marks, made whole from its page, and without a reporter's lead-in when the quote itself carries the AI words and the attribution: GMU's story stored Saskia Campbell's signal as "Campbell also addressed emerging trends shaping the workplace. “Employers now expect graduates to use AI tools effectively." and the page goes on "Students who stay curious, ... will thrive,” she said." (fnwords136 review: narration labelled statement, a quote cut short). Returns the signal unchanged when the page doesn't hold it."""
+    s, t = str(sig or ""), str(text or "")
+    if not s or s.startswith("(") or not t: return sig
+    opens, closes = s.count("\u201c"), s.count("\u201d")
+    if opens > closes:
+        flat = re.sub(r"\s+", " ", t)
+        i = flat.find(re.sub(r"\s+", " ", s))
+        if i < 0: return sig
+        rest = flat[i + len(re.sub(r"\s+", " ", s)):]
+        j = rest.find("\u201d")
+        if j < 0 or j > 600: return sig
+        k = re.match(r"[^.!?\u201c]{0,80}?\b" + SAID + r"\b[^.!?\u201c]{0,80}[.!?]", rest[j + 1:])   # the attribution only, not the reporter's next sentence (Willigan's quote took "Career AI consists of three main components.", fnwords137 review)
+        s = re.sub(r"\s+", " ", s) + rest[:j + 1] + (k.group(0) if k else "")
+    m = re.match(r"([^\u201c\u201d\"]{10,}?[.!?:])\s+(?=\u201c)", s)
+    if m:
+        q = s[m.end():]
+        if AI_WORDS.search(q) and not AI_WORDS.search(m.group(1)) and re.search(r"\u201d\s*,?\s*(?:\w+\s+){0,4}?\b" + SAID + r"\b", q): s = q
+    return s if s != sig else sig
+
+
+
+def without_trailing_narration(sig):
+    """A statement without the reporter's sentence after the person's quote and its attribution: GMU's story stored Kerry Willigan's signal as "“What employers are looking for is changing ...,” says Kerry Willigan, .... “AI is a really critical piece, ... is really important.” Career AI consists of three main components." (fnwords137 review: a stray fragment). Only when the quote carries the AI words and the tail is a whole sentence that quotes no one and attributes nothing; a sentence break after an abbreviation ("said Dr. Jane Smith.") is not a tail."""
+    s = str(sig or "")
+    if s.startswith("(") or "\u201d" not in s: return sig
+    i = s.rfind("\u201d") + 1
+    head, tail = s[:i], s[i:]
+    m = re.match(r"\s*,?\s*[^.!?\u201c]{0,160}?\b" + SAID + r"\b[^.!?\u201c]{0,200}[.!?]", tail)
+    if m: head, tail = head + tail[:m.end()], tail[m.end():]
+    t = tail.strip()
+    if (not t or not re.match(r"[A-Z][^.!?]*(?:\s+\S+){3,}[.!?]$", t) or re.search("[\u201c\u201d\"]", t) or re.search(r"\b" + SAID + r"\b", t, re.I)
+            or not AI_WORDS.search(head) or not re.search(r"(?:\u201d|[a-z]{3,}[.!?]|[A-Z]{2,}[.!?])$", head)): return sig
+    return head
+
 def signal_page_date(page, url):
     """When the page a signal came from was written: its own date, the address's, or a line holding nothing but a past date ("Thursday, July 11, 2024" under a news story's pull quote: Germanna's story lent Lance her signal undated, fnwords114 review). '' if none."""
     today = dt.date.today()
@@ -765,6 +801,16 @@ def stored_signal_url(r):
 
 
 
+STALE_PAGE_NOTE = re.compile(r"the page is dated (\d{4}-\d\d-\d\d): may be out of date")
+def shown_page_date(r, case):
+    """The row as the CSV shows it, without a page_date that is only the day its staff page was read: UF's team page gives a dateModified of the moment it is served (2026-11-24, read that evening), which says nothing about when its list was last edited (fnwords133 and fnwords136 reviews). A staff page's real last edit stays: it is what says the list is kept current. Works on a copy."""
+    pd = str(r.get("page_date") or "")[:10]
+    pg = case.page_at(r.get("source_url") or "") if case and pd and r.get("source_url") else None
+    if pg and pg.get("fetched_at") and extract.PEOPLE_PAGE.search(r["source_url"]) and pd == extract.local_day(pg["fetched_at"]) and pd == str(r.get("read_on") or "")[:10]:
+        r = dict(r, page_date="")
+    return r
+
+
 def with_signal_url(r):
     """A copy of the row for the CSV with the page its signal is from: source_url is the page that confirms the title, and on 7 of 11 verified rows in fnwords134 the signal was on another page named only in the note (review)."""
     return dict(r, signal_url=stored_signal_url(r) or r.get("source_url", ""))
@@ -842,7 +888,7 @@ def signal_kind(signal, source_url=""):
     if m and (menu_like(text) or BREADCRUMB.search(text)): return "menu"  # a menu is the organisation's site linking to a page; a person's signal in Title Case is a headline or a job title about them (Healey's taskforce, Dallas College's grant; review 112215240022)
     return "statement"
 
-LISTED_KINDS = ("publication", "unit", "paraphrase", "organisation")   # labels the CSV gives a row the hunt took as a statement; signal_kinds still filters on signal_kind
+LISTED_KINDS = ("publication", "unit", "paraphrase", "narration", "organisation")   # labels the CSV gives a row the hunt took as a statement; signal_kinds still filters on signal_kind
 SAID = r"(?:said|says|noted|notes|explained|explains|added|adds|stated|states|told|shared|shares|believes|believe)"
 def listed_kind(r):
     """The kind a row's CSV line shows: signal_kind, narrowed when the hunt took a signal as a statement that isn't the person speaking. `publication` is their own article named by its byline ("... Workforce Development Lens by Ian Roark"); `unit` is the story's line about their office (UNIT_LINE); `paraphrase` is the reporter's words for what they said, with no quotation marks ("... Anahid Petrosian, Ph.D., said for the last two years, STC has invested ..."). All three were labelled statement on CONFIRMED rows in fnwords133-134 (reviews)."""
@@ -855,8 +901,21 @@ def listed_kind(r):
     if not toks: return k
     full = r"\b" + r"\W+(?:\w+\.?\W+){0,2}".join(re.escape(t) for t in (toks[:1] + toks[-1:] if len(toks) > 1 else toks)) + r"\b"
     if re.search(r"(?:^|\s)by\s+(?:\w+\.?\s+){0,1}" + full + r"\W*$", sig, re.I) or re.match(r"\s*by\s+" + full, sig, re.I): return "publication"
+    if re.search(full + r"(?:[^.;:!?]|\.(?=[\w,])){0,120}?\b(?:published|co-?authored|authored|co-?wrote|wrote|penned)\s+(?:a|an|the|her|his|their)\s+(?:[\w-]+\s+){0,2}?(?:article|paper|book|chapter|essay|op-ed|column|study|piece)\b", sig, re.I): return "publication"   # the newsroom's line that they published an article ("Dr. Tonya Cooper, associate dean ..., recently published the article, \u201cThe Impact of Artificial Intelligence on the Workforce ...\u201d"): their work, named by someone else, not their words (fnwords136 review)
     if paraphrased(sig, r.get("name")): return "paraphrase"
+    if narrated(sig, r.get("name")): return "narration"
     return k
+
+
+THIRD_PERSON = re.compile(r"\b(?:he|his|him|she|her|hers)\b", re.I)
+FIRST_PERSON = re.compile(r"\b(?:I|I'm|I’m|I've|I’ve|we|we're|we’re|my|our|me|us)\b")
+def narrated(sig, name):
+    """The page's own words about the person, with no quotation marks and nothing of theirs in the first person: a profile ("Andy Chan, Vice President for Personal and Career Development at Wake Forest University, is a leading voice on preparing students for the AI-forward future of work ..."), an event blurb ("... hosted by Natalia Guarin-Klein, Executive Director of Alumni and Career Engagement"), a bio ("At Tri-C, his portfolio spans ..."). Both were labelled statement on CONFIRMED rows in fnwords138 (review)."""
+    sig = str(sig or "")
+    if not sig.strip() or QUOTE_MARK.search(sig) or re.search(r"[„«»]", sig) or FIRST_PERSON.search(sig): return False
+    toks = [t for t in re.findall(r"[^\W\d_][\w'’-]*", people.clean_name(name or "")) if len(t) >= 2]
+    nm = r"(?:" + "|".join(re.escape(t) for t in dict.fromkeys(toks[:1] + toks[-1:])) + r")" if toks else None
+    return bool((nm and re.search(r"\b" + nm + r"\b", sig)) or THIRD_PERSON.search(sig))
 
 
 def paraphrased(sig, name):
@@ -1700,7 +1759,7 @@ class Hunt:
                 if told and j != i and not SPOKEN.search(sents[j]): continue  # after a writer's summary of them, only their quotation beside it is theirs  # the line after the name is theirs only as their quote or their own "he/she ..."; otherwise it is the writer's (Kostenbauder's "While AI can help read X-rays...", Griffith's "Students being trained in the AI and Innovation Lab...", fnwords120 review)
                 t = ASIDE.sub(" ", NAV_AI.sub(" ", bare[j] if not cell else people.without_events(sn[:cell.start()])))
                 if len(t) > 25 and any(people.term_regex(m).search(fold(t)) for m in terms) and not EARLIER_JOB.search(t):
-                    got = strip_speaker(sents[j] if told else " ".join(sents[min(i, j):max(i, j) + 1]), name); got = got if len(got) <= 500 else got[:501].rsplit(" ", 1)[0]   # at a whole word ("Dr. Gregory Newman of The Universi", Cooper, fnwords121)
+                    got = strip_speaker(sents[j] if told else " ".join(sents[min(i, j):max(i, j) + 1]), name); got = got if len(got) <= (800 if j != i else 500) else got[:501].rsplit(" ", 1)[0]   # at a whole word ("Dr. Gregory Newman of The Universi", Cooper, fnwords121); two whole sentences stay whole, or the one naming them is cut (Brooklyn's panel line ended "moderated by Zoey Russo, a student", fnwords138 review)
                     if j == i and not lab and not QUOTE_MARK.search(got) and (NARRATES.search(got) or paraphrased(got, name)):  # a host's or writer's summary of them ("Jane Doe of Triton College explains why ...", "Anahid Petrosian, Ph.D., said for the last two years, STC has invested ..."): their own quoted line, or their transcript answer, comes first (Petrosian's "With the launch of our new Essentials of AI course ...," she said, fnwords134 review)
                         summary, told = summary or got, True; continue
                     return got
@@ -2979,7 +3038,10 @@ class Hunt:
         age = {}   # days between a verified row's signal and its reading, when over a year (with_age_note); not stored on the row
         for r in list(self.leads.values()) + list(self.near.values()):
             local_read_day(r, self.case)
+            if r.get("signal") and not str(r["signal"]).startswith("(") and self.case and (sp := self.case.page_at(stored_signal_url(r) or r.get("source_url") or "")): r["signal"] = whole_quote(r["signal"], sp.get("text"))
+            if r.get("signal") and not str(r["signal"]).startswith("("): r["signal"] = without_trailing_narration(r["signal"])
             if r.get("signal") and not str(r["signal"]).startswith("("): r["signal"] = strip_speaker(r["signal"], r.get("name"))   # stored before the strip (fnwords125)
+            if r.get("note"): r["note"] = "; ".join(x for x in note_items(r["note"]) if not ((m := STALE_PAGE_NOTE.fullmatch(x)) and m.group(1) not in (str(r.get("page_date") or "")[:10], str(r.get("signal_date") or "")[:10])))   # a date of a page the row no longer rests on: Dranka's note kept "the page is dated 2018-05-19: may be out of date" from the listing it was first read on, after his row moved to his directory page and his article of 2026-05-19 (fnwords136 review)
             r["signal_kind"] = listed_kind(r)
             r["title"] = title_without_org(r.get("title"), r.get("organisation"))
             if r.get("note"): r["note"] = "; ".join(x for x in note_items(r["note"]) if x.count(")") <= x.count("("))   # a tail a split note left behind ("its page is a staff or bio page)", Castonguay, fnwords135)
@@ -2992,9 +3054,9 @@ class Hunt:
             age[id(r)] = with_age_note(r)
         rows = sorted(self.leads.values(), key=lambda r: (r["check_status"] != "verified", r["signal_near_person"] != "yes", r["organisation"]))
         with open(out_dir / "leads.csv", "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=LEAD_COLS, extrasaction="ignore"); w.writeheader(); w.writerows(safe_row(with_signal_url(r)) for r in rows)
+            w = csv.DictWriter(f, fieldnames=LEAD_COLS, extrasaction="ignore"); w.writeheader(); w.writerows(safe_row(shown_page_date(with_signal_url(r), self.case)) for r in rows)
         with open(out_dir / "near_misses.csv", "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=LEAD_COLS, extrasaction="ignore"); w.writeheader(); w.writerows(safe_row(with_signal_url(r)) for r in self.near.values())
+            w = csv.DictWriter(f, fieldnames=LEAD_COLS, extrasaction="ignore"); w.writeheader(); w.writerows(safe_row(shown_page_date(with_signal_url(r), self.case)) for r in self.near.values())
         n_ver = sum(r["check_status"] == "verified" for r in rows)
         kc = collections.Counter(r["signal_kind"] for r in rows if r["check_status"] == "verified")
         kinds = ", ".join(f"{kc[k]} {k}" for k in SIGNAL_KINDS + LISTED_KINDS if kc[k]) + (f", {kc['']} with no signal" if kc[""] else "")  # what the verified rows rest on: a list of course pages is not a list of statements
@@ -3006,7 +3068,7 @@ class Hunt:
         status = "reached" if len(rows) >= self.target else "SHORT"
         orgs = collections.Counter(r["organisation"] for r in rows)
         untried = [o for o in self.orgs if not any(t[0] == o and not str(t[1]).startswith("(statement) ") for t in self.tried)]  # a menu search alone is not a try for leads
-        lines = [f"# Hunt: {self.s.get('goal', '')}", "", f"**{status}: {len(rows)} of {self.target}** ({n_ver} on the organisation's own site{': ' + kinds if kinds else ''}; {len(rows) - n_ver} on another site). Stopped: {self.stop_reason}.", "", *([f"{len(aged)} of the {n_ver} verified rows rest on a signal more than a year older than the day its page was read (an old signal is not a current priority): " + ", ".join(f"{r['name']} ({str(r['signal_date'])[:10]}, {age[id(r)] / 365.25:.1f} years)" for r in aged[:20]) + ".", ""] if aged else []), "Every row is backed by a saved page: `check_quote` is the text next to the name on `source_url`, and `page_date` is that page's date; `signal_url` is the page the signal is from, dated `signal_date`. It says what the page says on the day it was read, not that the person still holds the post. No addresses were inferred.", "",
+        lines = [f"# Hunt: {self.s.get('goal', '')}", "", f"**{status}: {len(rows)} of {self.target}** ({n_ver} on the organisation's own site{': ' + kinds if kinds else ''}; {len(rows) - n_ver} on another site). Stopped: {self.stop_reason}.", "", *([f"{len(aged)} of the {n_ver} verified rows rest on a signal more than a year older than the day its page was read (an old signal is not a current priority): " + ", ".join(f"{r['name']} ({str(r['signal_date'])[:10]}, {age[id(r)] / 365.25:.1f} years)" for r in aged[:20]) + ".", ""] if aged else []), "Every row is backed by a saved page: `check_quote` is the text next to the name on `source_url`, and `page_date` is that page's date (for a staff or directory page its last edit, which says the list is kept current; blank when the only date it gives is the day it was read); `signal_url` is the page the signal is from, dated `signal_date`. It says what the page says on the day it was read, not that the person still holds the post. No addresses were inferred.", "",
                  f"{sum(1 for l in self.log_rows if l['org'] != '(discover)')} org-and-angle searches over {len(orgs)} organisations with leads, of {len(self.orgs)} considered; {len(self.near)} near misses in `near_misses.csv`; {len(self.blocked)} pages unread.", ""]
         if self.misreads: lines += ["## Misread names dropped", f"- {len(self.misreads)} rows from an earlier run carried a name their page, read again, doesn't give (a degree taken for a first name, the tail of a post); each went, or took the name the page gives where it was the person's only row: {', '.join(self.misreads[:20])}.", ""]
         if self.moved: lines += ["## Moved out by this spec", f"- {len(self.moved)} rows from an earlier run on this case don't pass the spec as it now stands and are now near misses: {', '.join(self.moved[:20])}.", ""]

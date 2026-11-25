@@ -9,7 +9,7 @@ import { act, isBusy } from "./activity.js";
 import { confirm } from "./dialog.js";
 import { copyButton } from "./refs.js";
 import { ago } from "../core/format.js";
-import { shopsBlock, forgetShops } from "./shop_signin.js";
+import { shopsBlock, forgetShops, sitesBlock } from "./shop_signin.js";
 
 const B = { v: null, err: "", say: null, ticking: false, t: 0, c: {}, line2: false, loading: false, gen: 0 };
 const FIELDS = [["name", "Full name", "name"], ["email", "Email", "email"], ["phone", "Phone", "tel"], ["line1", "Address", "address-line1"],
@@ -130,3 +130,6 @@ export function buyingSection(ctx) {
     v.error ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, "The buy module didn't answer: " + v.error) : null,
     blocks(signinBlock(v, ctx.update), shopsBlock(!!v.here, ctx.update), contactBlock(v, ctx.update), buysBlock(v)), msg(), B.err ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, B.err) : null);
 }
+
+/** Settings › Connectors › Sign in to a site: shown once /api/buy has said whether this app is the person's own. */
+export const sitesPart = update => B.v ? sitesBlock(!!B.v.here, update) : null;

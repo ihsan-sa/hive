@@ -34,6 +34,8 @@ AFTER = re.compile(r"\bafter:\s*(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?)Z?\b")   # a
 GATE = re.compile(r"\b(?:on or after|not before|after|on|from|until|revisits?|re-?recheck|re-?check|recheck|read(?:ing)?|judge)\b[^.;:()]{0,24}?\b(\d{4}-\d{2}-\d{2})\b", re.I)   # the same wait in words: 38 of 47 floor rounds that did nothing (2026-11-09/10) woke on a reading written with a date but no after:
 CHECK_ON = re.compile(r"check:\s*(?:on or after|not before|on|after|from)\s+(\d{4}-\d{2}-\d{2})\b", re.I)   # a check that opens with its date ("check: on 2026-11-18 ...") can't pass before it; other dates in a check don't gate (rsi-lab 11-11: 3 such rungs woke the keeper every 2 h)
 PARKED = re.compile(r"^Parked until (\d{4}-\d{2}-\d{2}):\s*(.+)$", re.M)
+FINISHED = re.compile(r"^Finished:\s*(.+)$", re.M)   # `Finished: <the person's post id>: why`; the keeper and the floor skip the ladder for good (friction D1)
+POST_ID = re.compile(r"\b[0-9a-f]{12}\b")
 PARK_MAX_D = 3   # a parked ladder comes back within this many days; a date further out doesn't count, so nobody parks a focus for good
 WAIT = re.compile(r"no step left|changed nothing|nothing (has )?changed|nothing left|all with the person|no new person posts|started no round|(?<!nothing )\bwaits? (only )?on (the person|a sign-in)", re.I)   # how a round says it did no work
 ROUND = re.compile(r"\bkeeper round\b", re.I)
@@ -75,7 +77,8 @@ def section(txt, m, heading, t=None):
     # every park line counts, not just the first: a lapsed line above a fresh one left fellows-prep unparked and woke a1f59 three times in 90 min on 11-22 (ad388)
     live = [p for p in PARKED.finditer(body) if today < p.group(1) <= (t.date() + dt.timedelta(days=PARK_MAX_D)).isoformat()]
     p = max(live, key=lambda m: m.group(1), default=None); parked = {"until": p.group(1), "why": p.group(2).strip()} if p else None
-    return {"thread": th.group(1).lower() if th else None, "rungs": rungs, "next": nxt, "parked": parked, "done": sum(r["state"] == "x" for r in rungs),
+    fin = FINISHED.search(body); finished = {"why": fin.group(1).strip(), "posts": POST_ID.findall(fin.group(1))} if fin else None
+    return {"thread": th.group(1).lower() if th else None, "rungs": rungs, "next": nxt, "parked": parked, "finished": finished, "done": sum(r["state"] == "x" for r in rungs),
             "due_more": [r["text"] for r in due[1:]], "blocked": [r["text"] for r in rungs if r["state"] == "!"][:5], "left": sum(r["state"] == " " for r in rungs), "no_check": sum(r["state"] == " " and not r["checked"] for r in rungs)}
 
 def rounds(board, threads, since):
@@ -310,9 +313,39 @@ def ask_due(row, t, every_h=ASK_EVERY_H):
     except ValueError: return True
     return (t - (last if last.tzinfo else last.replace(tzinfo=dt.timezone.utc))).total_seconds() >= every_h * 3600
 
+_PERSON_POSTS = {}
+
+def person_said(ids, board=None):
+    """The first of these post ids that the board holds as a post from the person, or None. Only the person's word finishes a ladder:
+    an agent that could write `Finished:` alone could retire a focus for good, which PARK_MAX_D exists to stop."""
+    ids = [i for i in ids if i]
+    if not ids: return None
+    key = (tuple(ids), str(board or BOARD))
+    try: mt = Path(board or BOARD).stat().st_mtime
+    except OSError: return None
+    if key in _PERSON_POSTS and _PERSON_POSTS[key][0] == mt: return _PERSON_POSTS[key][1]
+    found, want = None, set(ids)
+    try:
+        with open(board or BOARD, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if '"person"' not in line or not any(i in line for i in want): continue
+                try: p = json.loads(line)
+                except ValueError: continue
+                if p.get("id") in want and p.get("from") == "person": found = p["id"]; break
+    except OSError: pass
+    _PERSON_POSTS[key] = (mt, found)
+    return found
+
 def with_ladder(row, g, t=None):
     lad = g["ladder"] if g else None
     row["ladder"] = bool(lad); row["goals_path"] = g["path"] if g else None
+    # friction D1 (abundant-take-home, 11-24): a project the person called finished still got "write the next 3 to 5 rungs" rounds, and
+    # `Continue: off` only stops Next: chaining. A `Finished: <person's post id>: why` line takes the ladder out like a park with no end date.
+    if lad and lad.get("finished") and (pid := person_said(lad["finished"]["posts"])):
+        row.update(rung=None, due_more=[], blocked=[], rungs_left=lad["left"], rungs_done=lad["done"], rungs_no_check=lad["no_check"], idle=False,
+                   finished={"post": pid, "why": lad["finished"]["why"]}, parked={"until": "finished", "why": f"the person called it finished ({pid}): {lad['finished']['why']}"},
+                   **({"section": lad["section"]} if lad.get("section") else {}))
+        return row
     if lad:
         row.update(rung=lad["next"]["text"] if lad["next"] else None, due_more=lad.get("due_more", []), blocked=lad.get("blocked", []), rungs_left=lad["left"], rungs_done=lad["done"], rungs_no_check=lad["no_check"], parked=lad["parked"], **({"section": lad["section"]} if lad.get("section") else {}))
         if lad["parked"]: row["idle"] = False
@@ -502,7 +535,7 @@ def brief(row):
     prev = to if to != "new" and stuck(to, row.get("thread")) else None
     if prev: to = "new"
     head = f"@{to} Keeper round on {row['name']}. The ladder is the `## {row.get('section') or 'Ladder'}` section of {row.get('goals_path') or 'this focus project goals.md (create it, one line a rung)'}: read that whole file, and obey any notes in the section.\n\n"
-    rung = f"**Your rung:** {row['rung']}\n\nDo this rung. Land real work, then run its check." if row.get("rung") else "**The ladder has no rung you can take.** Your work this round is to write the next 3 to 5 rungs from the measure in that file, then do the first one. Each rung is a line `- [ ] what. check: how to tell`; a numbered list is not read, so convert one that is there."
+    rung = f"**Your rung:** {row['rung']}\n\nDo this rung. Land real work, then run its check." if row.get("rung") else "**The ladder has no rung you can take.** Your work this round is to write the next 3 to 5 rungs from the measure in that file, then do the first one. Each rung is a line `- [ ] what. check: how to tell`; a numbered list is not read, so convert one that is there. First read the thread: if the person has said this project is finished or told the keeper to stop on it, write no rungs; add the line `Finished: <their post id>: their reason` under the section heading (the keeper then skips it for good; delete the line if they ask for more) and end with `Done:`."
     if row.get("ask_more") and not row.get("rung"):
         rung = (f"**The ladder has no rung you can take.** {ASK}; the first opens {row['gated_until'].replace('T', ' ')} UTC. A date is when a reading can be taken, not a reason for the goal to stand still until then. "
                 "Your work this round is to ask what else would move the Measure in that file before then (a cause nobody has tried, a check that can run on what exists now, a part of the goal the dated rungs leave out), "

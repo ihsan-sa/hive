@@ -114,25 +114,27 @@ function loginMarks() {
       return h("i", { style: `height:${Math.max(2, Math.round(Math.min(100, v) * 0.14))}px`, "data-tone": l.paused ? "quiet" : inUse(l, S.usage) ? null : "bad" }); })),
     `${full} of ${all.length} full`);
 }
+/** A state band: what is true right now, with a × that puts it away until its words change (banner.js). */
+const stateBand = (tone, dot, text, action) => banner({ tone, cls: "band", lead: dot, text, actions: action, age: false });
 /** The band under the bar when the hive has stopped: says why in words, and where to look. */
 function band(current) {
-  if (S.failed && S.signedOut) return banner({ tone: "bad", cls: "lost", text: [h("b", null, "Your sign-in has run out."), " Sign in again to see your Hive; your typing is kept."],
+  if (S.failed && S.signedOut) return banner({ tone: "bad", cls: "lost", dismiss: false, text: [h("b", null, "Your sign-in has run out."), " Sign in again to see your Hive; your typing is kept."],
     actions: button("Sign in again", () => location.reload(), { size: "s", kind: "quiet" }) });
-  if (S.failed) return banner({ tone: "bad", cls: "lost", text: [h("b", null, "Can't reach your Hive."), S.fresh ? ` What you see is from ${clock(S.fresh)}.` : "", S.failWhy ? " " + S.failWhy : "", " Trying again every few seconds; your typing is kept."],
+  if (S.failed) return banner({ tone: "bad", cls: "lost", dismiss: false, text: [h("b", null, "Can't reach your Hive."), S.fresh ? ` What you see is from ${clock(S.fresh)}.` : "", S.failWhy ? " " + S.failWhy : "", " Trying again every few seconds; your typing is kept."],
     actions: button("Try now", () => poll(), { size: "s", kind: "quiet" }) });
-  const sign = signInWords(); if (sign) return h("div", { class: "band banner", role: "status", "data-tone": "bad", "data-key": "band" }, statusDot("limited"), h("span", null, sign),
+  const sign = signInWords(); if (sign) return stateBand("bad", statusDot("limited"), sign,
     can("logins") ? button("Sign in", null, { href: href("settings"), size: "s", kind: "quiet" }) : null);
-  if (simpleOn() && needsAccount() && current !== "start" && current !== "settings") return h("div", { class: "band banner", role: "status", "data-tone": "warn", "data-key": "band" }, statusDot("limited"),
-    h("span", null, can("logins") ? "Your Hive can't start until you add your Claude account." : "Your Hive isn't ready yet. The person setting it up still has a step to finish."),
+  if (simpleOn() && needsAccount() && current !== "start" && current !== "settings") return stateBand("warn", statusDot("limited"),
+    can("logins") ? "Your Hive can't start until you add your Claude account." : "Your Hive isn't ready yet. The person setting it up still has a step to finish.",
     can("logins") ? button("Add it", null, { href: href("settings"), size: "s", kind: "quiet" }) : null);
   const st = hiveStopped(); if (!st) return null;
   if (st.why === "off" && current === "start" && S.app.setup && S.app.setup.starter === false) return null;   // Start says this itself, with the button that fixes it
-  if (simpleOn()) return h("div", { class: "band banner", role: "status", "data-tone": "bad", "data-key": "band" }, statusDot(st.why === "off" ? "failed" : "limited"),
-    h("span", null, st.why === "off" ? "Your Hive isn't running right now, so it won't answer yet." : "Your Hive has used up its allowance for now and is taking a break." + (st.own ? " What you send still gets an answer." : "") + (st.until ? ` It comes back ${stamp(st.until)}. Nothing is lost.` : " Nothing is lost.")));
+  if (simpleOn()) return stateBand("bad", statusDot(st.why === "off" ? "failed" : "limited"),
+    (st.why === "off" ? "Your Hive isn't running right now, so it won't answer yet." : "Your Hive has used up its allowance for now and is taking a break." + (st.own ? " What you send still gets an answer." : "") + (st.until ? ` It comes back ${stamp(st.until)}. Nothing is lost.` : " Nothing is lost.")));
   const text = st.why === "off" ? "The Hive isn't running, so nothing you send starts an agent."
     : st.why === "paused" ? "Every Claude account is paused, so no new agents start. Running ones finish their turn."
     : (st.own ? "Agents have stopped starting on their own: every Claude account is past its usage line. Your own messages still start one, and running ones finish their turn." : "The Hive has stopped starting agents: every Claude account is past its usage line. Running ones finish their turn.") + (st.until ? ` Agents start again ${stamp(st.until)}.` : "");
-  return h("div", { class: "band banner", role: "status", "data-tone": "bad", "data-key": "band" }, statusDot(st.why === "off" ? "failed" : "limited"), h("span", null, text),
+  return stateBand("bad", statusDot(st.why === "off" ? "failed" : "limited"), text,
     (to => current === to ? null : button(to === "settings" ? "Settings" : "Usage", null, { href: href(to), size: "s", kind: "quiet" }))(st.why === "off" ? "settings" : "usage"));   // no link to the page you're on
 }
 

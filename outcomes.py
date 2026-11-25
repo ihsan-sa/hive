@@ -114,6 +114,10 @@ def posts_of(run, posts, by_id):
     if post and run.get("also") is not None and (run.get("from"), run.get("thread")) != (post.get("from"), post.get("thread")):
         run["from"], run["thread"] = post.get("from"), post.get("thread")  # a restarted run answers to whoever woke it, in that thread
         after = [p for p in posts if p.get("thread") == run["thread"] and p.get("from") != run["name"] and p.get("at", "") > run["ended"]][:2]
+    if post and post.get("at", "") < t0:
+        # The post reached the agent mid-run (inbox hook) and it answered there, before the starter restarted it on that post (a limit move,
+        # a kill): that answer is this ask's. ad5b1's "nothing" grades of 11-25 00:53 and 04:05 both answered the person a few minutes before.
+        mine = [p for p in posts if p.get("from") == run["name"] and p.get("thread") == post.get("thread") and post["at"] < p.get("at", "") < t0] + mine
     if post and run.get("also"):  # the other posts that woke it, shown with the first so the grade covers them all
         post = {**post, "text": "\n".join([str(post.get("text", ""))] + [f"(also, {by_id[i].get('from')}): {by_id[i].get('text', '')}" for i in run["also"] if i in by_id])}
     return post, mine, after

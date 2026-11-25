@@ -1,1 +1,1 @@
-export const wordButton = () => null, wordBoxButton = () => null, wordBoxPanel = () => null, inShell = () => false, shellSlot = () => null, tellShell = () => null;   // there is no root warden in the release to give a word to
+export const wordButton = () => null, wordBoxButton = () => null, wordBoxPanel = () => null, inShell = () => false, shellSlot = () => null, tellShell = () => null, forCard = () => false, cardWhy = () => "", openApproval = () => false, backFromCard = () => null, sawApproval = () => null;   // there is no root warden in the release to give a word to

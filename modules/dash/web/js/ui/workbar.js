@@ -46,13 +46,28 @@ function segment(p, w, label, total) {
   return p.id ? h("a", { ...props, href: href("focus", p.id) }, text) : h("span", { ...props, tabindex: "0" }, text);
 }
 
+// Folded to one line by default (friction pass 11-25, design §10): the bars are a look the person takes now and then, not every visit.
+// Open or folded is kept per browser.
+const KEY = "hive.workbar.open";
+const isOpen = () => { try { return localStorage.getItem(KEY) === "1"; } catch { return false; } };
+const setOpen = v => { try { v ? localStorage.setItem(KEY, "1") : localStorage.removeItem(KEY); } catch {} };
+/** The folded line: the day's amount and where most of it went. */
+export function gist(r, activity) {
+  const t = r.total("day");
+  if (!t) return "Last 24 hours: nothing yet";
+  const top = r.parts.filter(p => p.id).map(p => ({ p, d: work(p.by("day")) / t })).sort((a, b) => b.d - a.d)[0];
+  return `Last 24 hours: ${amount(activity.total.day)}${top && top.d ? `, most on ${nameOf(top.p)} (${pct(top.d)})` : ""}`;
+}
+
 /** The block on the home, or null where it has nothing to say. */
 export function workBar(activity) {
   if (simpleOn()) return null;
   const r = workParts(activity); if (!r) return null;
   const shown = r.parts.filter(p => WINDOWS.some(([w]) => work(p.by(w))));
-  return h("section", { class: "wkb", "data-key": "workbar", "aria-label": "Where the work went" },
-    h("div", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Where the work went")),
+  const open = isOpen();
+  return h("details", { class: "wkb", "data-key": "workbar", "data-folded": open ? null : "", open: open || null, "aria-label": "Where the work went",
+      ontoggle: (e, n) => { if (e.target !== n) return; setOpen(n.open); n.toggleAttribute("data-folded", !n.open); } },
+    h("summary", { class: "wkb-sum" }, h("b", null, "Where the work went"), h("span", { class: "wkb-gist" }, gist(r, activity))),
     WINDOWS.map(([w, label]) => { const t = r.total(w), all = activity.total[w];
       return h("div", { class: "wkb-r", "data-key": w },
         h("div", { class: "wkb-h" }, h("span", null, label), h("span", { class: "meta" }, t ? amount(all) : "Nothing yet")),
@@ -63,4 +78,5 @@ export function workBar(activity) {
 }
 
 /** The room the block will take while the focuses are read, so nothing around it moves when it lands: px is its last height (core/room.js), or the CSS's one-line key. */
-export const workBarHeld = px => (simpleOn() ? null : h("div", { class: "wkb wkb-held", "data-key": "workbar", "aria-hidden": "true", style: px ? `min-height:${px}px` : null }));
+export const workBarHeld = px => { if (simpleOn()) return null; const folded = !isOpen(); if (folded && px > 120) px = null;   // a height kept from before the fold (209 px) would leave a gap that closes when the line lands
+  return h("div", { class: "wkb wkb-held", "data-key": "workbar", "data-folded": folded ? "" : null, "aria-hidden": "true", style: px ? `min-height:${px}px` : null }); };

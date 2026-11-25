@@ -8,7 +8,7 @@ import argparse, datetime as dt, json, math, re, subprocess, sys, time
 from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))   # run with -I, which leaves this folder off the path
-import asks, foryou
+import asks, foryou, promises
 
 HOME = Path.home()
 STATE = HOME / ".hive"
@@ -97,9 +97,10 @@ def needs_order():
     except (OSError, ValueError, AttributeError): rows = []
     rank, links = {}, {}
     for i, r in enumerate(rows):
-        for key in (r.get("ask"), r.get("post"), norm(r.get("action"))):
-            if key: rank.setdefault(key, i)
-        if r.get("post") and r.get("ask"): links.setdefault(str(r["post"]), set()).add(r["ask"])
+        for x in [r] + [a for a in r.get("also") or [] if isinstance(a, dict)]:   # also: rows the summary merged into this one (needs_you.merge_dups): the same thing to do, so its post links to the row's ask
+            for key in (x.get("ask"), x.get("post"), norm(x.get("action"))):
+                if key: rank.setdefault(key, i)
+            if x.get("post") and (x.get("ask") or r.get("ask")): links.setdefault(str(x["post"]), set()).add(x.get("ask") or r["ask"])
     return rank, links
 
 def stalled_threads(since, now):
@@ -141,6 +142,7 @@ def done_but_open(th, text):
 def for_yous(posts, items, links, cut, latest_only=False, dropped=None):
     """Every For you line still outstanding: one row a line, gone only on evidence. The ask it names or belongs to left state person,
     the person replied to that post, or the person wrote in the thread after it and named its author. Another person post in the thread clears nothing.
+    A later post in the thread from the same agent (or the owner of the line's ask) that tells the person nothing waits on them now (foryou.stood_down) overtakes its earlier lines there.
     An agent's `hive foryou close` retracts a line. dropped, a list, collects each line code took off, with its rule.
     latest_only also drops a line when the same agent has a later post in the thread with a For you of its own, even an answered one: that agent has moved on from it. So does a later line in the thread with nearly the same words from anyone: a new agent restating a wait is one wait."""
     rows, in_thread, newest = [], {}, {}
@@ -155,6 +157,12 @@ def for_yous(posts, items, links, cut, latest_only=False, dropped=None):
                 if re.search(rf"@{r['from']}\b", said) or re.search(rf"\b{r['from']}\b", to): r["answered"] = True
             continue
         if not (AGENT.match(who) or who in WATCHERS) or th in SELF_THREADS or t < cut: continue
+        if foryou.stood_down(body, p.get("to")):   # "nothing waits on you" (ad5b1, 2026-11-25) overtakes that agent's own earlier lines, or ones whose ask it owns:
+            for r in in_thread.get(th, []):         # not another agent's (aa008's review: a86e6 on its own fix had cleared ae6a2's E17 decision)
+                if r["from"] == who or any(str(items[k].get("owner") or "").lower() == who for k in r["asks"]): r.setdefault("stood", p.get("id"))
+        if (pg := premise_line(body)):   # "Premise gone: why" (ad748, 2026-11-25: a printer unplugged, a project paused): the speaker's own earlier lines, and any it names by ask or post id
+            for r in in_thread.get(th, []):
+                if premise_covers(pg, who, r["from"], {str(items[k].get("owner") or "").lower() for k in r["asks"]}, set(r["asks"]) | {str(r["post"])}): r.setdefault("gone", p.get("id"))
         for m in FOR_YOU.finditer(body):
             newest[(th, who)] = p.get("id")
             line = " ".join(m[1].split())
@@ -170,9 +178,9 @@ def for_yous(posts, items, links, cut, latest_only=False, dropped=None):
             seen.append(w)
     out, closed = [], closed_for_yous()
     for r in rows:
-        repeat, answered = r.pop("repeat", False), r.pop("answered", False)
+        repeat, answered, stood, gone = r.pop("repeat", False), r.pop("answered", False), r.pop("stood", None), r.pop("gone", None)
         if str(r["post"]) in closed: continue
-        rule = ("repeat" if repeat else "answered" if answered else "ask moved" if r["asks"] and all(items[k].get("status") != "person" for k in r["asks"])
+        rule = ("repeat" if repeat else "answered" if answered else "premise gone" if gone else "stood down" if stood else "ask moved" if r["asks"] and all(items[k].get("status") != "person" for k in r["asks"])
                 else "newer line" if latest_only and newest.get((r["thread"], r["from"])) != r["post"] else None)
         if rule:
             if dropped is not None: dropped.append({**r, "rule": rule})
@@ -181,14 +189,147 @@ def for_yous(posts, items, links, cut, latest_only=False, dropped=None):
         out.append(r)
     return out
 
-def view_rule(r, done):
-    """Why open_on_person leaves out a For you that for_yous kept, or None."""
+# A stated deadline (friction-asks A10, 2026-11-25). Read narrowly, since a wrong close hides a live ask and a missed one only stays on the list (a0ad9's and the
+# independent review's cases): the marker must be followed straight away by the time or date ("by 26 November", "before about 06:33Z", "due 11-27 3:13 pm"), with only
+# filler words between. "until" and "expires"/"closes" are left out: "ran until 13:00Z" tells what happened, and a token that expires matters more after, not less.
+DEADLINE = re.compile(r"\b(?:by|before|no later than|deadline(?:\s+is)?|due(?!\s+to\b)(?:\s+(?:by|on|at))?)\b", re.I)
+WORDSPAN = re.compile(r"\b(?:half an|an|a|one|two|three|four|five|six|ten|fifteen|twenty|thirty|forty|forty-five|a few|a couple(?: of)?)\s+(?:minutes?|hours?|days?|weeks?)\b", re.I)   # "two hours": a length of time, not a deadline (own copy: promises.py has none committed)
+FILLER = re.compile(r"(?:\s|,|~|\b(?:about|around|roughly|approximately|approx|on|at|the|end|of|this|today|tonight|noon)\b)*", re.I)
+WHEN_START = re.compile(r"\d|\btomorrow\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", re.I)
+CLAUSE_END = re.compile(r"[;!?\n]|\.(?=\s+[A-Z(]|\s*$)(?<!\b[ap]\.m\.)|\bor\b|\band\b|,\s+(?!\d)")
+FALLBACK = re.compile(r"\b(?:after (?:that|this|then)\b|later,|otherwise\b|or after\b|if (?:you )?miss\b|failing that\b)", re.I)   # the ask stands past the time; only the route changes
+DEADLINE_GRACE_S = 12 * 3600   # past a stated deadline before the line leaves the list: the person may be a little late, and a timezone guess may be off
+PREMISE = re.compile(r"^premise gone:[ \t]*(.+)$", re.I | re.M)   # an agent's line: what it asked of the person no longer applies. Only the bare label at the start of a line: a bullet or bold label is someone explaining the rule (a0ad9, 1125021150a6: ac178's own 1125015472ab parsed as one)
+PREMISE_IDS = re.compile(r"(?<![\w/])(k\d{4,}|[0-9a-f]{12})(?![\w/])")
+
+def deadline(text, at):
+    """Unix time of the deadline a line states ("by 26 November", "before about 06:33Z", "due 11-27"), or None. Only a marker word followed at once (filler aside) by a clock time,
+    a date or "tomorrow" counts, read up to the end of its clause. None when the line names a fallback ("after that, ..."), when a bare clock time was already past when the line was
+    written (at), and for a length of time ("takes about two hours")."""
+    out = deadlines(text, at)
+    return max(w for w, _, _ in out) if out else None
+
+def deadlines(text, at, roll=False):
+    """[(unix time, start, end)] of each deadline the line states, as deadline() reads them, with the span of its words ("before about 06:33Z") in text.
+    roll: a bare clock time already past at `at` is the next day's instead of none, for a line whose `at` is later than when it was first said (a restored ask's status_at)."""
+    if not at: return []
+    text = str(text or "")
+    if FALLBACK.search(text): return []
+    out = []
+    for m in DEADLINE.finditer(text):
+        rest = text[m.end():]
+        lead = FILLER.match(rest).end()
+        if not WHEN_START.match(rest, lead): continue
+        end = CLAUSE_END.search(rest, lead); bit = rest[lead:end.start() if end else len(rest)][:40]
+        if promises.SPAN.search(bit) or WORDSPAN.search(bit): continue
+        bit = bit + (rest[len(bit) + lead:len(bit) + lead + 1] if rest[len(bit) + lead:len(bit) + lead + 1] == "." else "")   # "3:30 p.m." keeps its last dot
+        dated = any(r.search(bit) for r in (promises.DATE, promises.DAYMON, promises.MD, promises.TOMORROW))
+        clocks = [x for x in promises.CLOCK.finditer(bit) if x[2] is not None or x[3]]
+        if not dated:
+            c = clocks[0] if clocks else None
+            if not c: continue
+            h, mi, ap = int(c[1]), int(c[2] or 0), (c[3] or "").lower().replace(".", "")
+            if ap: h = h % 12 + (12 if ap == "pm" else 0)
+            if h > 23 or mi > 59: continue
+            base = dt.datetime.fromtimestamp(at, promises._tz(c[4]))
+            when = base.replace(hour=h, minute=mi, second=0, microsecond=0).timestamp()
+            if when < at and not roll: continue   # a clock time already past when it was written: "next morning" or a slip; not read as a deadline
+            if when < at: when += 86400
+            out.append((when, m.start(), m.end() + lead + c.end())); continue
+        t = promises.due(bit, at)
+        ends = [x.end() for r in (promises.DATE, promises.DAYMON, promises.MD, promises.TOMORROW) for x in r.finditer(bit)] + [x.end() for x in clocks]
+        if t != at + promises.DEFAULT_S and t > at: out.append((t, m.start(), m.end() + lead + max(ends)))
+    return out
+
+def passed_said(text, at, now):
+    """The line with each deadline it states that has already passed taken out, and a note saying it passed: "Approve the change before about 06:33Z so it can go in" reads
+    "Approve the change so it can go in (its deadline passed)". A restored ask can outlive its deadline, and a passed time shown as live reads as urgent (a0ad9, 1125021150a6).
+    `at` may be later than the line was first said (k1161's status_at is 10:57Z, its "before about 06:33Z" was said at 02:58Z), so a bare clock time is the latest day it can mean:
+    past `at`, the next one. No date in the note: which day a bare time meant is a guess. The line unchanged when no deadline in it has passed."""
+    text = str(text or ""); gone = [d for d in deadlines(text, at, roll=True) if d[0] <= now]
+    if not gone: return text
+    for _, a, b in sorted(gone, key=lambda d: -d[1]): text = text[:a].rstrip() + text[b:]
+    text = re.sub(r"\s+([.,;:!?)])", r"\1", re.sub(r"[ \t]{2,}", " ", text)).strip()
+    return f"{text} (its deadline passed)"
+
+def past_deadline(text, at, now):
+    """The stated deadline when it passed more than DEADLINE_GRACE_S before now, else None."""
+    d = deadline(text, at)
+    return d if d and now > d + DEADLINE_GRACE_S else None
+
+def premise_line(body):
+    """(why, {ids named}) from an agent post's "Premise gone: why" line, or None. Quoted lines and code blocks don't count: a review quoting one closes nothing."""
+    body = re.sub(r"```.*?```", " ", str(body or ""), flags=re.S)
+    body = "\n".join(l for l in body.splitlines() if not l.lstrip().startswith(">"))
+    m = PREMISE.search(body)
+    if not m or not " ".join(m[1].split()) or NOTHING.match(m[1]): return None
+    return clip(" ".join(m[1].split()), 160), set(PREMISE_IDS.findall(m[1]))
+
+def premise_covers(pg, who, author, owners, ids):
+    """Whether a Premise gone line from `who` reaches a line or ask: the speaker's own (it wrote it or owns its ask), or one the line names by ask or post id."""
+    return who == str(author or "").lower() or who in owners or bool(pg[1] & set(map(str, ids)))
+
+def premise_gone(posts):
+    """{thread: [(unix time, post id, from, why, ids)]} of agent "Premise gone: why" lines in each thread: what the speaker asked of the person before it no longer applies
+    (the device is unplugged, the project finished or paused), plus any ask or post it names by id. The line itself is the evidence and stays on the board."""
+    out = {}
+    for p in posts:
+        who, th, t = str(p.get("from", "")).lower(), p.get("thread"), stamp(p.get("at"))
+        if not th or t is None or not (AGENT.match(who) or who in WATCHERS): continue
+        pg = premise_line(p.get("text"))
+        if pg: out.setdefault(th, []).append((t, p.get("id"), who, pg[0], pg[1]))
+    return out
+
+SHOP_STATUS = HOME / ".hive" / "shop-status.json"   # written by modules/dash/shops.py: {shop id: {"state": "in"|"out"|"unknown", "at": epoch of the check}}
+SHOP_NAMES = {"jlc": ("JLCPCB", r"\bJLC(?:PCB)?\b"), "lcsc": ("LCSC", r"\bLCSC\b"), "inventree": ("InvenTree", r"\bInvenTree\b"),
+              "link": ("Link", r"\b(?:Stripe )?Link(?= (?:app|account|sign|log|cookie|session|wallet))")}
+SHOP_SIGNIN = re.compile(r"\bcookies?\b|\bsign(?:ed|s|ing)?[- ]?in\b|\blog(?:ged|s|ging)?[- ]?in\b|\blogin\b|\bsession\b|\bre-?auth", re.I)
+
+def shop_status():
+    """shops.py's last check of each shop, or {} when there is none."""
+    try: d = json.loads(SHOP_STATUS.read_text())
+    except (OSError, ValueError): return {}
+    return d if isinstance(d, dict) else {}
+
+def shop_signed(e, shops):
+    """(shop label, check epoch) when person ask e waits on a shop's sign-in or cookies (its ask or why names the shop and a sign-in word) and shops.py's check of that shop,
+    made after the ask went to the person, says signed in; else None. Only a check newer than the wait counts: an older "in" doesn't answer an agent that hit a dead session since
+    (k1484: fresh JLC cookies asked for at 05:38 while the person had signed in the night before; a4d66 and ad748, friction-asks 11250232ed0b)."""
+    text, since = f"{e.get('ask') or ''} {e.get('why') or ''}", stamp(e.get("status_at") or e.get("when") or e.get("at"))
+    if since is None or not SHOP_SIGNIN.search(text): return None
+    for k, (label, rx) in SHOP_NAMES.items():
+        st = (shops or {}).get(k) or {}
+        if st.get("state") == "in" and (st.get("at") or 0) > since and re.search(rx, text, re.I if k != "link" else 0): return label, st["at"]
+    return None
+
+def ask_rule(e, gone, now, shops=None):
+    """Why a person ask is no longer the person's to do, by code's rules, or None: an agent said its premise is gone after it went to them (its owner, or naming it), or its stated
+    deadline passed, or it waits on a shop sign-in that a check since shows signed in (shop_signed; shops: shop_status(), read when None). The deadline is read from when the ask
+    was written. An ask a rule dropped once and someone put back to the person (it still carries the rule) isn't dropped again by its deadline: they put it back knowing the date."""
+    since = stamp(e.get("status_at") or e.get("when") or e.get("at"))
+    for g in gone.get(e.get("thread") or e.get("post")) or []:
+        if since is not None and g[0] > since and premise_covers((g[3], g[4]), g[2], e.get("owner"), set(), {e.get("id"), e.get("post")}): return "premise gone"
+    if shop_signed(e, shop_status() if shops is None else shops): return "shop signed in"
+    if e.get("rule"): return None
+    written = stamp(e.get("when") or e.get("at"))
+    return "deadline passed" if written is not None and past_deadline(e.get("ask"), written, now) else None
+
+def premise_of(e, gone):
+    """The Premise gone entry that closed ask e (see ask_rule), or None."""
+    since = stamp(e.get("status_at") or e.get("when") or e.get("at"))
+    return next((g for g in gone.get(e.get("thread") or e.get("post")) or [] if since is not None and g[0] > since and premise_covers((g[3], g[4]), g[2], e.get("owner"), set(), {e.get("id"), e.get("post")})), None)
+
+def view_rule(r, done, now=None):
+    """Why open_on_person leaves out a For you that for_yous kept, or None. With now, a line whose stated deadline passed (past_deadline) goes too, even one tied to an open ask."""
     if r["thread"] in done: return "done bar"
+    if now is not None and past_deadline(r["text"], r["at"], now): return "deadline passed"
     if r["asks"]: return None
     return "ends by itself" if BY_THEMSELVES.search(r["text"]) else "offer" if foryou.OFFER.match(r["text"]) else None
 
-RULE_WHY = {"repeat": "a later line in the thread says nearly the same", "answered": "the person replied or named its author in the thread", "ask moved": "the ask it belongs to left the person",
-            "newer line": "the same agent wrote a newer For you in the thread", "done bar": "the thread's status bar says Done", "ends by itself": "a wait that ends with no one's help", "offer": "an offer: nothing stops until it is answered"}
+RULE_WHY = {"repeat": "a later line in the thread says nearly the same", "stood down": "a later agent post in the thread says nothing waits on the person", "answered": "the person replied or named its author in the thread", "ask moved": "the ask it belongs to left the person",
+            "newer line": "the same agent wrote a newer For you in the thread", "done bar": "the thread's status bar says Done", "ends by itself": "a wait that ends with no one's help", "offer": "an offer: nothing stops until it is answered",
+            "deadline passed": "the deadline it stated has passed", "premise gone": "an agent said in the thread that what it asked no longer applies",
+            "shop signed in": "it waited on a shop sign-in, and the shop check since says signed in"}
 
 def rule_closes(now=None, posts=None, items=None, links=None, done=None):
     """Every For you line within the horizon that code, not an agent, keeps off the person's list, each with its rule."""
@@ -199,7 +340,7 @@ def rule_closes(now=None, posts=None, items=None, links=None, done=None):
     done = status_done() if done is None else done
     out = []
     for r in for_yous(posts, items, links, now - FOR_YOU_DAYS * 86400, latest_only=True, dropped=out):
-        if rule := view_rule(r, done): out.append({**r, "rule": rule})
+        if rule := view_rule(r, done, now): out.append({**r, "rule": rule})
     return out
 
 def unlogged_closes(rows=None):
@@ -208,7 +349,7 @@ def unlogged_closes(rows=None):
     seen = {(str(e.get("post")), e.get("line")) for e in lines(CLOSED) if e.get("rule")}
     return [r for r in rows if (str(r["post"]), r["text"]) not in seen]
 
-def log_rule_closes(now=None, posts=None, items=None, links=None, done=None):
+def log_rule_closes(now=None, posts=None, items=None, links=None, done=None, written=None):
     """Writes one row per line code closed, once, in the same file as agents' closes (review B1), so they can be counted and audited. The first run backdates what it finds to the post's time and marks it, since when each dropped isn't known."""
     now = now or time.time()
     rows = unlogged_closes(rule_closes(now, posts, items, links, done))
@@ -220,19 +361,67 @@ def log_rule_closes(now=None, posts=None, items=None, links=None, done=None):
                 rec = {"post": r["post"], "at": r["at"] if first else now, "by": "code", "why": RULE_WHY[r["rule"]], "rule": r["rule"], "line": r["text"], "thread": r["thread"], "from": r["from"]}
                 if first: rec["backfill"] = True
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                if written is not None and not first: written.append(r)   # a backfill is history: nobody is told of it
     return len(rows)
+
+def fmt_t(t): return dt.datetime.fromtimestamp(t, dt.timezone.utc).strftime("%m-%d %H:%MZ")
+
+def expire_notes(rows, now):
+    """{thread: text} for the code closes that deserve a word to whoever asked: a line whose deadline passed. One line each, naming its author so they can restate it with a new date.
+    A Premise gone close needs none: an agent said it in that thread."""
+    out = {}
+    for r in rows:
+        if r.get("rule") == "shop signed in":   # the ask is the agent's again: wake it (a4d66/ad748, friction-asks)
+            who = r.get("from") or ""; name = f"@{who}" if AGENT.match(who) else f"`{who}`" if who else "whoever owns it"
+            out.setdefault(r["thread"], []).append(f"Off the person's list and back to its agent, {name}: ask {r['id']} (\"{clip(r.get('text') or '', 90)}\") waited on them for a sign-in, and {r.get('why') or 'the shop check says signed in'}. Carry on; if the shop still refuses, say what failed and put it back to them.")
+            continue
+        if r.get("rule") != "deadline passed": continue
+        d = deadline(r.get("text"), r.get("at")); who = r.get("from") or ""
+        name = f"@{who}" if AGENT.match(who) else f"`{who}`" if who else ""
+        what = f"ask {r['id']}" if r.get("id") else f"For you {r.get('post')}"
+        out.setdefault(r["thread"], []).append(f"Off the person's list: {what} (\"{clip(r.get('text') or '', 90)}\") stated a deadline, {fmt_t(d) if d else 'a date'}, that passed. If it still matters, put it to them again with a new date{', ' + name if name else ''}.")
+    return {th: "\n".join(v) for th, v in out.items()}
+
+def expire_person(now=None, posts=None, items=None, by="code", shops=None):
+    """Moves the register to match ask_rule: each person ask whose stated deadline passed, or whose thread an agent marked "Premise gone:", is dropped with its why; one that
+    waited on a shop sign-in the shop check since shows signed in goes back to its owner (owned, or open with none).
+    Returns the rows dropped ({id, thread, rule, why, text, from, at}); `hive asks person ID --why ...` puts one back."""
+    now = now or time.time()
+    posts = list(lines(HOME / "board.jsonl")) if posts is None else posts
+    items = asks.ledger() if items is None else items
+    gone, out, shops = premise_gone(posts), [], shop_status() if shops is None else shops
+    for i, e in items.items():
+        if e.get("status") != "person" or e.get("kind") == "direction": continue
+        rule = ask_rule(e, gone, now, shops)
+        if not rule: continue
+        th = e.get("thread") or e.get("post")
+        if rule == "shop signed in":   # not dropped: the work still needs doing, by its agent (ad748, friction-asks 11250232ed0b)
+            label, at = shop_signed(e, shops)
+            why = f"{label} shows signed in (shop check {fmt_t(at)}, after this went to the person)"
+            asks.append(asks.LEDGER, {"id": i, "at": dt.datetime.fromtimestamp(now, dt.timezone.utc).isoformat(timespec="seconds"), "by": by, "status": "owned" if e.get("owner") else "open", "why": why, "rule": rule})
+            out.append({"id": i, "thread": th, "rule": rule, "why": why, "text": e.get("ask") or "", "from": str(e.get("owner") or ""), "at": stamp(e.get("when") or e.get("at"))})
+            continue
+        g = premise_of(e, gone) if rule == "premise gone" else None
+        why = (f"its stated deadline passed ({fmt_t(deadline(e.get('ask'), stamp(e.get('when') or e.get('at'))))})" if rule == "deadline passed"
+               else f"premise gone, post {g[1]} by {g[2]}: {g[3]}")
+        asks.append(asks.LEDGER, {"id": i, "at": dt.datetime.fromtimestamp(now, dt.timezone.utc).isoformat(timespec="seconds"), "by": by, "status": "dropped", "why": why, "rule": rule})
+        out.append({"id": i, "thread": th, "rule": rule, "why": why, "text": e.get("ask") or "", "from": str(e.get("owner") or ""), "at": stamp(e.get("when") or e.get("at"))})
+    return out
 
 def open_on_person(now=None, posts=None, items=None, links=None, done=None):
     """The one answer to "what waits on the person": every surface states pair(this). {"threads": {thread: {"asks": [ids], "for_yous": [post ids], "newest": epoch}}, "asks": rows, "for_yous": rows}.
     A thread is open when it has an ask in state person, or a For you open by evidence: for_yous' rules, the latest from each agent, not in a thread whose status bar says Done, not a wait that ends by itself, not an offer ("if you want...") with no ask behind it.
-    An ask stays until the register moves it, whatever the thread's bar says. links and done default to the live files, as posts and items do."""
+    An ask stays until the register moves it, whatever the thread's bar says, unless its stated deadline passed or an agent wrote "Premise gone:" in its thread after it went to the person (ask_rule). links and done default to the live files, as posts and items do."""
     now = now or time.time()
     posts = list(lines(HOME / "board.jsonl")) if posts is None else posts
     items = asks.ledger() if items is None else items
     links = needs_order()[1] if links is None else links
     done = status_done() if done is None else done
-    rows = [r for r in for_yous(posts, items, links, now - FOR_YOU_DAYS * 86400, latest_only=True) if not view_rule(r, done)]
+    gone = premise_gone(posts)
     person = [{**e, "id": i} for i, e in items.items() if e.get("status") == "person" and e.get("kind") != "direction"]
+    shops = shop_status(); dead = {e["id"] for e in person if ask_rule(e, gone, now, shops)}   # the register catches up on the next sweep (asks.expire_person); the list doesn't wait for it
+    person = [e for e in person if e["id"] not in dead]
+    rows = [r for r in for_yous(posts, items, links, now - FOR_YOU_DAYS * 86400, latest_only=True) if not view_rule(r, done, now) and not (r["asks"] and all(k in dead for k in r["asks"]))]
     threads = {}
     def thread(th, at):
         t = threads.setdefault(th, {"asks": [], "for_yous": [], "newest": 0})

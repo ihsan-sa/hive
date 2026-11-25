@@ -25,6 +25,7 @@ import { railSay } from "../core/foci.js";
 import { jump } from "../ui/message.js";
 import { openQuick } from "../ui/quick.js";
 import { uploadFile } from "../core/upload.js";
+import { loadTiers, pauseOf, askPause, pausedStrip, PAUSE_SAYS } from "../ui/worktiers.js";
 
 const idOf = arg => (arg === "misc" ? null : arg);
 const say = t => (simpleOn() ? plainPills(t) : pills(t));
@@ -260,14 +261,19 @@ function page(ctx) {
     : h("section", { class: "fp-sec", "data-key": "fp-ag", "aria-label": "Agents" }, head("Agents"), h("p", { class: "fp-calm" }, "No agent has been on this in the last day."));
   const meta = [h("span", null, plural(rows.length, "conversation")), ag.now.length ? h("span", null, `${ag.now.length} working now`) : null, up ? h("span", null, when(up, "t", "updated")) : null];
   // Send in the box below is the page's primary; New conversation is the plain button, Flow an icon (the Nov 8 handoff §3.1).
+  // Pause / Resume (ad748, friction-redesign): Pause… sits with the page's buttons; while paused, the state line says so and holds Resume.
+  const tierOn = !f.misc && can("tier") && !simpleOn(); if (tierOn) loadTiers(ctx.update);
+  const pz = tierOn ? pauseOf("focus", id) : null;
   const actions = h("div", { class: "fp-a" }, can("post") ? button("New conversation", () => newIn(id), { size: "s", icon: "new" }) : null,
+    pz && !pz.held ? button("Pause…", () => askPause("focus", id, null, ctx.update), { size: "s", kind: "quiet", icon: "pause", cls: "fp-pause", title: PAUSE_SAYS }) : null,
     !simpleOn() ? button("This focus in Flow", null, { href: href("flow"), kind: "icon", size: "s", icon: "bands", cls: "fp-flow" }) : null);
   const allDone = checks.length && done.length === checks.length;
   const extra = quiet.length + arch.length;
   return h("div", { class: "page fp", "data-key": "fp:" + (id || "misc") },
     h("header", { class: "fp-hd" },
       h("div", { class: "fp-hd-t" },
-        f.misc ? null : h("div", { class: "fp-state" }, lead && lead.state ? leadWord(lead, since, st.key === "moving" || st.moving) : statusWord(st.tone, st.word), ag.now.length && !simpleOn() ? h("span", { class: "fc-ag" }, ag.now.slice(0, 4).map(n => agentRef(n, { pill: true }))) : null),
+        f.misc ? null : h("div", { class: "fp-state" }, lead && lead.state ? leadWord(lead, since, st.key === "moving" || st.moving) : statusWord(st.tone, st.word), ag.now.length && !simpleOn() ? h("span", { class: "fc-ag" }, ag.now.slice(0, 4).map(n => agentRef(n, { pill: true }))) : null,
+          pz && pz.held ? pausedStrip("focus", id, null, ctx.update) : null),
         h("h1", { class: "fp-title" }, name),
         h("p", { class: "fp-aim" }, f.misc ? "Conversations not filed under a focus." : f.aim || null),
         simpleOn() ? null : h("p", { class: "fp-meta" }, meta)),

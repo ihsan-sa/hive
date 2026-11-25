@@ -31,6 +31,7 @@ export default {
   "Filters": "Filter",
   "Columns": "Kolom",
   "Total cost": "Total biaya",
+  "At API prices": "Dengan harga API",
   "Tokens": "Token",
   "Agent time": "Waktu agen",
   "under a minute": "kurang dari semenit",

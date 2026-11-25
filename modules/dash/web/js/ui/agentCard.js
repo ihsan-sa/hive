@@ -3,7 +3,7 @@
 // then one quiet line of what it runs on. On a phone it folds to name, state and the now line; tap to open.
 import { h } from "../core/dom.js";
 import { S } from "../core/store.js";
-import { agentState, agentCard as cardRows , displayText } from "../core/model.js";
+import { agentState, agentCard as cardRows , displayText, plainStep } from "../core/model.js";
 import { dur, firstSentence, now } from "../core/format.js";
 import { status } from "../core/status.js";
 import { killButton } from "../actions.js";
@@ -21,7 +21,7 @@ export function agentCard(a, { open, onToggle } = {}) {
       threadRef(a.thread),
       onCallWith(a.name) ? h("span", { class: "ac-call", title: "Talking with you on a voice call now" }, h("span", { class: "ac-call-i", "aria-hidden": "true" }, "\u260E"), "On a call") : null,
       h("span", { class: "ac-st", title: S_.hint }, st.text)),
-    h("p", { class: "ac-now clamp-2" }, a.doing || "Starting"),
+    h("p", { class: "ac-now clamp-2" }, (a.doing && S.app && S.app.app ? plainStep(a.doing) : a.doing) || "Starting"),
     h("dl", { class: "ac-dl" },
       h("dt", null, "Asked"), h("dd", { class: "clamp-2", title: task ? task.text : null }, a.from ? (a.from === "person" && S.app.app ? "you" : a.from) + ": " : "", firstSentence(task && displayText(task))),
       a.said ? [h("dt", null, "Said"), h("dd", { class: "clamp-2", title: a.said }, firstSentence(a.said))] : null),

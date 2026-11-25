@@ -1,7 +1,7 @@
 // Now: what each agent is doing. Template: overview.
 import { h } from "../core/dom.js";
 import { S, SYS } from "../core/store.js";
-import { threadTitle, agentLabel, labelCodes, agentOn, agentSay, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse, limitStop, liveHelpersBy, liveLoose } from "../core/model.js";
+import { threadTitle, agentLabel, capFirst, labelCodes, agentOn, agentSay, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse, limitStop, liveHelpersBy, liveLoose } from "../core/model.js";
 import { needsKnown, needsN } from "../core/needs.js";
 import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, DAY, MIN, fix } from "../core/format.js";
 import { TIERS, status } from "../core/status.js";
@@ -10,7 +10,7 @@ import { overview, cols } from "../templates.js";
 import { pageHeader, section, tally, stats, list, share, empty, waiting, button, statusDot, statusWord, pageNav } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 import { table } from "../ui/table.js";
-import { agentCard as cardRows, displayText } from "../core/model.js";
+import { displayText } from "../core/model.js";
 import { killButton } from "../actions.js";
 import { railSay } from "../core/foci.js";
 import { chart } from "../ui/chart.js";
@@ -27,25 +27,35 @@ const TONE = { working: "good", queue: "warn", stuck: "bad", quiet: "quiet" };
 // its `hive me` line, else the first line of its conversation's status bar, else what its brief asks for. The raw last step stays in the hover.
 const nowSay = a => agentSay(a.name, a.thread);
 
+// The "asked" line in the app look (design 1125 §7): the person's own ask in their words, an agent's as who asked, with no brief to wade through.
+// A path reads as its file name ("~/projects/x/fetch.py" is "fetch.py"); a line that is only a path goes.
+export const plainPaths = s => String(s || "").replace(/(\b[a-z]+:\/\/\S+)|(?<![\w:\/.])(?:~\/|\/)(?:[\w.@+-]+\/)*([\w@+-][\w.@+-]*)|(?<![\w:\/.])(?:[\w.@+-]+\/)+([\w@+-]+\.[a-z0-9]{1,6})\b/gi, (m, u, a, b) => u || a || b);   // a link stays whole
+export function askedLine(task, from) {
+  if (!task) return null;
+  const who = from || task.from;
+  if (who && who !== "person") return `${capFirst(agentLabel(who))} asked it`;
+  const words = plainPaths(labelCodes(firstSentence(displayText(task)))).trim();
+  return words && !/^[\w.@+-]+\.\w+$/.test(words) ? "You asked: " + words : null;
+}
+
 // Running agents as rows, not cards: one line to scan, the same columns all the way down, however many there are.
 // An agent whose conversation waits on the person says so, and sorts first.
 function agentRows(run, states, t, waits, hp, update) {   // hp: helpers() below; their rows sit under their agent's, in the agent's columns
-  return table({ caption: "Running agents", cls: "nowtbl", rows: run, key: a => a.name, sub: a => (hp.show ? helperKids(a.name, hp.by.get(a.name), { update }) : null),
-    rowAttrs: a => { const st = states.get(a.name); return { "data-tone": status(st.key).tone, "data-attn": st.key === "stuck" ? "" : null }; },
+  return table({ caption: "Running agents", cls: "nowtbl now-tg", rows: run, key: a => a.name, sub: a => (hp.show ? helperKids(a.name, hp.by.get(a.name), { update }) : null),
+    rowAttrs: a => { const st = states.get(a.name); return { "data-tone": status(st.key).tone, "data-attn": st.key === "stuck" ? "" : null, "data-state": waits.has(a.thread) ? "asks" : st.key }; },
     columns: [
       { label: "Agent", lead: true, cls: "nt-a", width: "minmax(8rem,16rem)", render: a => [agentRef(a.name), hp.show ? null : helperChip((hp.by.get(a.name) || []).length)] },
       { label: "Conversation", cls: "nt-th", width: "minmax(6rem,15rem)", render: a => threadRef(a.thread) },
       { label: "State", cls: "nt-st", width: "minmax(5rem,6.5rem)", render: a => { const st = states.get(a.name), head = st.text.split(", ")[0]; return h("span", { title: [head !== st.text ? st.text : null, status(st.key).hint].filter(Boolean).join("\n") || null }, waits.has(a.thread) ? tag("info", "waits on you") : tag(TONE[st.key], head)); } },   // the narrow column says the first part ("2 jobs running"); the rest is in the hover, where seven wrapped lines were (R-1111a-e)
-      { label: "Model", cls: "nt-md meta", render: a => (cardRows(a.name)[0] || {}).short || "–" },
       { label: "Doing now", cls: "nt-do", clip: true, render: a => {   // the spare width goes here, where the words are, not to the gap after State (1110h)
         const task = S.byId[a.post], say = nowSay(a);   // what it says it is on, in its own words; the command it happens to be running is only in the hover (the person, 11081450f3e1)
-        const askText = task ? labelCodes(firstSentence(displayText(task))) : "", asked = askText ? (a.from ? agentLabel(a.from) + ": " : "") + askText : null;
+        const asked = askedLine(task, a.from);
         return h("div", { title: [say && say.own ? `Its own words, said ${ago(say.at)}${say.before ? ", before this run" : ""}` : null, a.doing ? "Last step: " + a.doing : null].filter(Boolean).join("\n") || null },
           say ? h("div", { class: "nt-now" + (say.own ? " nt-on" : "") }, say.own ? h("span", { class: "meta" }, say.before ? "was on " : "on ") : null, railSay(labelCodes(say.text), 200), say.own ? h("span", { class: "meta" }, " · " + ago(say.at).replace(/ ago$/, "")) : null) : null,
-          asked ? h("div", { class: say ? "nt-ask meta" : "nt-now", title: task.text }, "Asked by " + asked) : say ? null : h("span", { class: "muted" }, "–"));
+          asked ? h("div", { class: say ? "nt-ask meta" : "nt-now", title: task.text }, asked) : say ? null : h("span", { class: "muted" }, "–"));
       } },
       { label: "Up", num: true, cls: "meta", render: a => dur(t - a.since * 1e3) },
-      { label: h("span", { class: "vh" }, "Actions"), cls: "nt-x", render: a => (a.alive ? killButton(a.name) : null) },
+      { label: h("span", { class: "vh" }, "Actions"), cls: "nt-x", render: a => [waits.has(a.thread) ? button("Answer", null, { size: "s", kind: "primary", href: threadHref(a.thread), cls: "now-answer" }) : null, a.alive ? h("span", { class: "now-stop" }, killButton(a.name)) : null] },
     ] });
 }
 
