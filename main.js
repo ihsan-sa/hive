@@ -95,7 +95,7 @@ function checkNewer() {
       const mark = () => { try { fs.writeFileSync(seenFile, v); } catch { } };
       const { Notification } = require('electron');
       if (process.env.HIVE_APP_TEST === '1') { mark(); return; }
-      if (!Notification.isSupported()) return;
+      if (!Notification.isSupported()) { log('notification not supported'); return; }
       shown = new Notification({ title: 'A newer Hive app is available', body: `Version ${v}. Click to open the download page.` });
       // Said in the log either way, so a report (and the Windows runner's toast test) shows whether it really appeared.
       shown.on('show', () => { log('notification shown ' + v); mark(); });

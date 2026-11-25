@@ -11,6 +11,8 @@
 // must be the new version, keep the window's place (its data folder is outside the bundle) and reach the Hive.
 // With HIVE_DL_EXPECT=setup (the Apple silicon runner, where no Hive can run) the app must instead open on its setup
 // screen, and never on a Hive page; everything else is the same.
+// Last, the update notice: opened with open -a against a stand-in site with a newer app, the notification must show
+// (ok mac notice), or why it did not is said in words; the app must at least notice the newer version.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -95,6 +97,36 @@ const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWin
     const off = kept && now ? Math.max(...['x', 'y', 'width', 'height'].map(k => Math.abs(kept[k] - now[k]))) : Infinity;
     if (off > 2) throw new Error(`the update lost the window's place: before ${JSON.stringify(kept)}, after ${JSON.stringify(now)}`);
     console.log(`ok mac download upgrade: ${old} to ${newVersion} dragged over ${dest} in ${Math.round((Date.now() - t1) / 1000)} s; window kept at ${now.width}x${now.height}+${now.x}+${now.y}; ${newVersion} opens ${at}`);
+  }
+  // The update notice as a Mac person sees it: the app opened the Finder's way (open -a, so no HIVE_APP_TEST, which skips the
+  // notification) with a stand-in site whose app is newer. macOS asks once before an app may post notifications and this
+  // app is only ad-hoc signed, so a notification that never shows is said in words (with a screenshot), not a red build;
+  // an app that never noticed the newer one is.
+  {
+    const http = require('http');
+    const body = '{"version":"9.9.9"}\n';
+    const site = http.createServer((q, r) => { r.writeHead(q.url === '/app-version.json' ? 200 : 404, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }); r.end(body); });
+    await new Promise(r => site.listen(0, '127.0.0.1', r));
+    const data = path.join(os.homedir(), 'Library/Application Support/Hive');
+    const seenFile = path.join(data, 'newer-seen.txt'), logF = path.join(data, 'app.log');
+    fs.rmSync(seenFile, { force: true });
+    const before = fs.existsSync(logF) ? fs.statSync(logF).size : 0;
+    const said = () => { try { const b = fs.readFileSync(logF); return b.subarray(Math.min(before, b.length)).toString('utf8'); } catch { return ''; } };
+    sh('open', ['-n', '-a', dest, '--env', `HIVE_SITE=http://127.0.0.1:${site.address().port}`]);
+    const t3 = Date.now(); let seen = '';
+    while (Date.now() - t3 < 30000) {
+      try { seen = fs.readFileSync(seenFile, 'utf8').trim(); } catch { }
+      if (seen || /notification (failed|not supported)/.test(said())) break;
+      await sleep(1000);
+    }
+    await sleep(2000);
+    try { sh('screencapture', ['-x', 'test/shots/macnotice.png']); } catch { }
+    const lines = said().split(/\r?\n/).filter(x => /update notice|notification /.test(x)).map(x => x.replace(/^.*?(update notice|notification )/, '$1'));
+    try { sh('pkill', ['-f', dest + '/Contents/MacOS/Hive']); } catch { }
+    await sleep(2000); site.close();
+    if (!lines.some(x => x === 'update notice 9.9.9')) throw new Error(`the app from ${dest} never noticed the stand-in site's 9.9.9 in 30 s (log: ${lines.join('; ') || 'nothing about it'})`);
+    if (seen === '9.9.9' && lines.includes('notification shown 9.9.9')) console.log(`ok mac notice: the app from ${dest} showed "A newer Hive app is available" for 9.9.9 in ${Math.round((Date.now() - t3) / 1000)} s (log: ${lines.join('; ')}; screen in test/shots/macnotice.png)`);
+    else console.log(`no mac notice on this runner: newer-seen.txt ${seen ? 'says ' + seen : 'not written'} after 30 s; log: ${lines.join('; ')}; screen in test/shots/macnotice.png`);
   }
   fs.rmSync(dest, { recursive: true, force: true });
 })().catch(err => { console.error('FAILED', err.message || err); try { fs.rmSync(dest, { recursive: true, force: true }); } catch { } process.exit(1); });
