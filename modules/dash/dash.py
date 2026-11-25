@@ -598,7 +598,7 @@ def record_loadtime(d, route):
     """One line per report: how long the page took to reach the chat in a real browser, so a slow load through the public name is measured, not guessed."""
     keep = {k: round(float(d[k])) for k in ("ttfb", "dom", "boot", "chat", "load", "files", "bytes", "width") if isinstance(d.get(k), (int, float)) and not isinstance(d.get(k), bool)}
     if not keep or any(v < 0 or v > 10**9 for v in keep.values()): raise ValueError("no figures")
-    keep.update(t=time.strftime("%Y-%m-%dT%H:%M:%S"), route=route, cold=d.get("cold") is True)
+    keep.update(t=time.strftime("%Y-%m-%dT%H:%M:%S"), route=route, cold=d.get("cold") is True, hidden=d.get("hidden") is True)
     LOADTIMES.parent.mkdir(parents=True, exist_ok=True)
     try: lines = LOADTIMES.read_text().splitlines()[-199:]
     except OSError: lines = []

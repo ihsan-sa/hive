@@ -6,6 +6,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png"><link rel="apple-touch-icon" href="icons/apple-touch-180.png">
 <script>{/* Link sends its approval pop-up back here when the person answers (buy.py --completion-callback-url, rich/buy.js): close it, or, opened as a tab, show the thread. The answer itself comes from Link's status, never from this address. */const q=new URLSearchParams(location.search);if(q.get("linkback")==="1"){const t=q.get("t")||"";try{window.close()}catch(e){}history.replaceState(null,"","/"+(/^[A-Za-z0-9_-]{1,64}$/.test(t)?"#comms/"+t:""))}}</script>
 <script>{const t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}</script>
+<script>{/* R-1125-c: was this load begun or left in a background tab? Read here, before the modules load; core/loadtime.js reports it. */window.h2LoadHidden=document.visibilityState==="hidden";document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="hidden")window.h2LoadHidden=true})}</script>
 <link rel="stylesheet" href="css/tokens.css">
 <link rel="stylesheet" href="css/base.css">
 <link rel="stylesheet" href="css/components.css">

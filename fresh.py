@@ -19,10 +19,12 @@ ROWS = [
     ("modules/dash/reel", ["modules/dash/web/js/core/nav.js", "modules/dash/web/js/ui/tour.js"], "ui-docs"),
     ("@docs-fresh-test", ["modules/dash/web/test/test_docs_fresh.mjs"], "ui-docs"),
     ("core/docs/install.md", ["core/dist/install.sh"], "core-docs"),
-    ("projects/hivelab-site", ["core/docs"], "hivelab-site"),
     ("@ui-design-watch", ["projects/ui-redesign/human-workflow.md"], "ui-redesign"),
 ]
 COVERED_DIRS = ["core/docs"]   # every .md here must be an artifact or source above
+# No row for docs.hivelab.ca: dist/site/build.sh copies core/docs at each release, and release.sh runs
+# dist/site/docs_release_check.py against live after deploying (a row on projects/hivelab-site went stale on
+# every core/docs commit with nothing to update there; removed 24 Nov, i-log in thread improve).
 
 def p(rel): return H / rel
 def _git(*a, cwd=CORE):
