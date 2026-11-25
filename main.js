@@ -98,7 +98,7 @@ function checkNewer() {
       if (!Notification.isSupported()) return;
       shown = new Notification({ title: 'A newer Hive app is available', body: `Version ${v}. Click to open the download page.` });
       shown.on('show', mark);
-      shown.on('click', () => { external(lib.downloadPage()); shown = null; });
+      shown.on('click', () => { external(lib.downloadPage('update')); shown = null; });
       shown.on('close', () => { shown = null; });
       shown.show();
     })

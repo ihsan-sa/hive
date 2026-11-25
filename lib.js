@@ -193,6 +193,7 @@ function newerApp(mine, text) {
   for (let i = 0; i < 3; i++) if (b[i] !== a[i]) return b[i] > a[i] ? v : null;
   return null;
 }
-const downloadPage = () => SITE + '/download';
+// The page's #update part says how to update on each system; the update notice opens there.
+const downloadPage = part => SITE + '/download' + (part ? '#' + part : '');
 
 module.exports = { newerApp, downloadPage, downloadPath, appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };

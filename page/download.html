@@ -11,18 +11,28 @@ details{margin:1rem 0}
 <p>One file, double-click, and you are in the Hive. The terminal install line still works too: <code>curl -fsSL https://hivelab.ca/install.sh | sh</code> on Linux, <code>irm https://hivelab.ca/install.ps1 | iex</code> in Windows PowerShell, <code>curl -fsSL https://hivelab.ca/install-mac.sh | sh</code> on a Mac.</p>
 <div id="buttons">
   <a class="btn" id="btn-win" data-os="win" href="downloads/Hive-Setup.exe">Windows 10/11 — Hive-Setup.exe</a>
-  <a class="btn" id="btn-mac" data-os="mac" href="downloads/Hive-mac.dmg">macOS 13+ — Hive.dmg</a>
+  <a class="btn" id="btn-mac" data-os="mac" data-chip="arm64" href="downloads/Hive-mac-arm64.zip">Mac with Apple chip (M1 or later) — Hive-mac-arm64.zip</a>
+  <a class="btn" id="btn-mac-intel" data-os="mac" data-chip="x64" href="downloads/Hive-mac-x64.zip">Mac with Intel chip — Hive-mac-x64.zip</a>
   <a class="btn" id="btn-linux" data-os="linux" href="downloads/Hive-linux-amd64.deb">Linux — Hive.deb</a>
 </div>
 <p id="note"></p>
 <details id="help-win"><summary>Windows says "Windows protected your PC"</summary>
 <p>That is expected: the app is not signed yet. Press <b>More info</b>, then <b>Run anyway</b>. Windows may ask permission once, and may need one restart; open Hive again afterwards and it carries on.</p></details>
 <details id="help-mac"><summary>Mac says "Hive" Not Opened</summary>
+<p>Which Mac? Apple menu, <b>About This Mac</b>: "Chip Apple M…" takes the Apple chip file, "Processor … Intel" the Intel one. Open the downloaded zip (Safari unpacks it for you), drag Hive into Applications and double-click it.</p>
 <ol><li>Press <b>Done</b> (not Move to Trash).</li>
 <li>Open <b>System Settings</b>, <b>Privacy &amp; Security</b>, scroll down to <b>Security</b>. It says "Hive" was blocked to protect your Mac. Press <b>Open Anyway</b>, then confirm with your password or Touch ID.</li>
 <li>Hive opens. The Mac asks this once only.</li></ol></details>
 <details id="help-linux"><summary>Linux</summary>
 <p>Double-click the .deb (or run <code>sudo apt install ./Hive-linux-amd64.deb</code>), then open Hive from your applications.</p></details>
+<h2 id="update">Already have Hive? Update it</h2>
+<p>Download the new file from the button above, then:</p>
+<ul>
+<li id="update-win"><b>Windows:</b> run the new Hive-Setup.exe. Hive can stay open: the installer closes it, puts the new one in its place and keeps your window and sign-in. If Hive does not come back by itself, open it from the Start menu.</li>
+<li id="update-mac"><b>Mac:</b> quit Hive first (Hive menu, <b>Quit</b>). Open the new zip, drag Hive into Applications and choose <b>Replace</b>, then open Hive. Your window and sign-in stay.</li>
+<li id="update-linux"><b>Linux:</b> double-click the new .deb, or run <code>sudo apt install ./Hive-linux-amd64.deb</code>, over the old one. An open Hive keeps working; the next time you open it, it is the new one.</li>
+</ul>
+<p>Nothing is lost either way: your Hive and its chats live on your machine, not in the app.</p>
 <script>
 function detectOS(ua, platform) {
   ua = String(ua || ''); platform = String(platform || '');
@@ -32,10 +42,17 @@ function detectOS(ua, platform) {
   if (/Linux|X11|CrOS/i.test(ua) || /Linux/i.test(platform)) return 'linux';
   return null;
 }
+// A Mac's browser says "Intel Mac OS X" whatever the chip. Its graphics name can tell: an Intel or AMD one means an Intel
+// Mac. Anything else (Safari says only "Apple GPU") gets the Apple chip file, as most Macs sold since 2021 have; both stay shown.
+function macChip(gpu) { gpu = String(gpu || ''); return /Intel|AMD|Radeon/i.test(gpu) && !/Apple/i.test(gpu) ? 'x64' : 'arm64'; }
+function gpuName(doc) {
+  try { const gl = doc.createElement('canvas').getContext('webgl'); const x = gl.getExtension('WEBGL_debug_renderer_info'); return gl.getParameter(x ? x.UNMASKED_RENDERER_WEBGL : gl.RENDERER); } catch (e) { return ''; }
+}
 function pick(doc, nav) {
   const os = detectOS(nav.userAgent, nav.platform);
+  const chip = os === 'mac' ? macChip(nav.gpu !== undefined ? nav.gpu : gpuName(doc)) : null;
   const els = doc.querySelectorAll('.btn');
-  for (const b of els) if (b.dataset.os === os) { b.className = 'btn pick'; }
+  for (const b of els) if (b.dataset.os === os && (!chip || b.dataset.chip === chip)) { b.className = 'btn pick'; }
   const n = doc.getElementById('note');
   if (n) n.textContent = os ? '' : 'Pick your system below.';
   return os;

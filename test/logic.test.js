@@ -21,6 +21,7 @@ t('update notice: only a newer x.y.z from the version file', () => {
   for (const mine of ['', 'x', '1.0']) assert.strictEqual(lib.newerApp(mine, '{"version":"9.9.9"}'), null, mine);
   for (const bad of ['', 'nope', '{}', '{"version":"1.0"}', '{"version":"1.0.0-beta"}', '{"version":"<b>9.9.9</b>"}', '{"version":9}']) assert.strictEqual(lib.newerApp('0.1.0', bad), null, bad);
   assert.ok(lib.downloadPage().startsWith(lib.SITE + '/'));
+  assert.strictEqual(lib.downloadPage('update'), lib.SITE + '/download#update');
   console.log('ok update notice logic');
 });
 t('mac', () => {
