@@ -63,6 +63,10 @@ jobs:
           NEXT2=$(node -p "'$NEXT'.replace(/[0-9]+$/, n => +n + 1)")
           npx electron-builder --linux deb --x64 --publish never -c.extraMetadata.version=$NEXT2 -c.directories.output=dist-next2
           xvfb-run -a -s "-screen 0 1280x1024x24" node test/deb.js dist-next/Hive-linux-amd64.deb $NEXT dist-next2/Hive-linux-amd64.deb $NEXT2
+      # The runner has nearly every library already; a person's plain Ubuntu or Debian may not. The .deb on clean images:
+      # apt must bring in everything the app links to, and the app must show its first screen.
+      - if: runner.os == 'Linux'
+        run: sh test/cleandeb.sh dist/Hive-linux-amd64.deb ubuntu:22.04 ubuntu:24.04 ubuntu:26.04 debian:12 debian:13
       # The same on Windows (its WSL 2) and on the Intel Mac (its VM; Apple silicon runners can't start one). These machines
       # differ from a person's computer, so a stop here is read, not a red build.
       # Which Linux systems the Windows runner already has before the install (the installer makes its own, "Hive").
