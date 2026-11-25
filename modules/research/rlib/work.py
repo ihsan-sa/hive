@@ -803,6 +803,24 @@ DEPT_PATH = re.compile(r"/(?:schools?-(?:and-)?departments?|academic-departments
 SCHOOL_HOST = {"business", "law", "engineering", "medicine", "nursing", "education", "cns", "chss", "cas", "las", "artsci", "finearts", "liberalarts", "sciences"}
 
 
+PRO_SCHOOL = ("law", "business", "medicine", "medical", "nursing", "pharmacy", "dentistry", "dental")
+PRO_SCHOOL_SEG = re.compile(r"(?:school-?of-?|college-?of-?)?(" + "|".join(PRO_SCHOOL) + r")(?:-?school)?")
+
+
+def pro_school(url, title=""):
+    """The professional school (law, business, medicine, nursing, pharmacy, dentistry) a row's page or title places a person in, or "": its host's first label, its path's first segment, or "School of Law" / "Law School" in the title. Such a school keeps its own career office: Kasprzak, director of career development on HPU's /law/faculty-and-staff/ page, was held under Hall, HPU's vice president of career and professional development (fnwords142 review)."""
+    u = urllib.parse.urlsplit(url or "")
+    host = (u.hostname or "").lower().split(".")
+    segs = [x for x in (u.path or "").lower().split("/") if x][:1] + (host[:-2] if len(host) > 2 else [])
+    for x in segs:
+        if (m := PRO_SCHOOL_SEG.fullmatch(x)): return {"medical": "medicine", "dental": "dentistry"}.get(m.group(1), m.group(1))
+    t = fold(title or "")
+    if (m := re.search(r"\b(?:school|college) of (" + "|".join(PRO_SCHOOL) + r")\b|\b(" + "|".join(PRO_SCHOOL) + r") school\b", t)):
+        w = m.group(1) or m.group(2)
+        return {"medical": "medicine", "dental": "dentistry"}.get(w, w)
+    return ""
+
+
 def academic_unit_page(url, title, org=""):
     """The school or academic department a signal page belongs to, as (its name, a key the person's own address would share when it is theirs too), or None: a department path (GRCC's /schools-departments/computer-information-systems/), a school's subdomain (business.purdue.edu), or a school named in the page title after the site's separator ('… | American University, Kogod School of Business'). A careers or workforce school (continuing education, workforce development) is not academic."""
     u = urllib.parse.urlsplit(url or "")
@@ -1023,12 +1041,21 @@ def mentioned_publication(r):
 
 
 EVENT_WORD = re.compile(r"\b(?:fair|summit|expo|conference|symposium|showcase|career day|career week|festival|forum|convention|open house|networking night|meet-up|meetup)s?\b", re.I)
+PLACE_WORD = re.compile(r"\b(?:renovat\w*|re-?open(?:s|ed|ing)?|reimagined|ribbon[- ]cutting|grand opening|space|spaces|building|buildings|facility|facilities|anniversary)\b", re.I)   # a renovated career center, its reopening or its anniversary (FAU's, fnwords142); not "center", which every office's name has
+LIST_LEAD = r"\b(?:like|such as|including)\s+"
+def ai_list_item(sentence, must):
+    """The sentence's AI term is one item in a list of things ("emerging technologies like AI and virtual reality", "tools such as VR, AI and 3D printers"), not what it is about."""
+    f = fold(sentence)
+    t = "(?:" + "|".join(people.term_regex(m).pattern for m in must) + ")"
+    return bool(re.search(LIST_LEAD + r"(?:[^.;:!?]{0,60}?)" + t + r"\s*(?:,|\band\b|\bor\b|&)\s*(?!the\b|that\b|which\b|it\b|we\b|they\b)[a-z0-9]", f)
+                or re.search(LIST_LEAD + r"[^.;:!?]{0,60}?(?:,|\band\b|\bor\b|&)\s*(?:the\s+)?" + t, f))
 DEICTIC_START = re.compile(r"^\W*(?:this|that|it|these|those|which|here)\b", re.I)
 THIN_SIGNAL = "a thin signal: "
 def thin_signal_why(r, page_text="", page_title="", must=()):
     """Why a row's own signal is too thin to verify it on its own, or ''. Two shapes from fnwords141's review, both WEAK:
     (1) a newsroom's one-line mention that they published a paper with AI in its title, more than a year old, with nothing of theirs on AI (Cooper, Collin's "In Brief: February 2025");
-    (2) their quote is about an event, and its only AI words are one short sentence pointing back at it ("This is one way we are navigating artificial intelligence", Hall on High Point's career summit), with no other sentence on the page tying them or their unit to AI (a guest speaker's AI talk on the same page is hers, not theirs)."""
+    (2) their quote is about an event, and its only AI words are one short sentence pointing back at it ("This is one way we are navigating artificial intelligence", Hall on High Point's career summit), with no other sentence on the page tying them or their unit to AI (a guest speaker's AI talk on the same page is hers, not theirs).
+    From fnwords142's review (WEAK): the quote may be about a place, and the AI words one item in a list ("This newly renovated space is open, barrier-free, and intentionally designed for emerging technologies like AI and virtual reality", Montalvo on FAU's career center)."""
     sig = str(r.get("signal") or "")
     if not sig.strip() or sig.startswith("(") or r.get("signal_near_person") != "yes": return ""
     if mentioned_publication(r):
@@ -1043,8 +1070,11 @@ def thin_signal_why(r, page_text="", page_title="", must=()):
     has = lambda t: any(people.term_regex(m).search(fold(t)) for m in must)
     said = [s.strip() for q in parts for s in people._sentences(" ".join(q.split())) if s.strip()]   # each quoted span on its own: joined, "... space," and "This is one way ..." ran together
     ai = [s for s in said if has(s)]
-    if len(ai) != 1 or len(said) < 2 or len(ai[0].split()) > 15 or not DEICTIC_START.search(ai[0]): return ""
-    if not (EVENT_WORD.search(quoted) or EVENT_WORD.search(page_title or "")): return ""
+    if len(ai) != 1 or len(said) < 2: return ""
+    listed = ai_list_item(ai[0], must)
+    if not listed and (len(ai[0].split()) > 15 or not DEICTIC_START.search(ai[0])): return ""
+    about = next((w for w, rx in (("an event", EVENT_WORD), ("a place", PLACE_WORD)) if rx.search(quoted) or rx.search(page_title or "")), "")
+    if not about: return ""
     toks = [t for t in re.findall(r"[^\W\d_][\w'\u2019-]*", people.clean_name(r.get("name") or "")) if len(t) >= 2]
     surname = re.compile(r"\b" + re.escape(fold(toks[-1])) + r"\b") if toks else None
     unit = re.search(r"\b(?:of|for)\s+(.+)$", str(r.get("title") or ""), re.I)
@@ -1054,7 +1084,8 @@ def thin_signal_why(r, page_text="", page_title="", must=()):
         f = fold(s)
         if own and own in f: continue   # the quote's own sentence, with "Hall said" beside it
         if has(s) and ((surname and surname.search(f)) or (unit and unit in f)): return ""
-    return f"{THIN_SIGNAL}their only AI words are one passing sentence in a quote about an event ({ai[0][:80]})"
+    what = "one item in a list in one sentence" if listed else "one passing sentence"
+    return f"{THIN_SIGNAL}their only AI words are {what} in a quote about {about} ({ai[0][:80]})"
 
 HUNT_SPEC_KEYS = frozenset("fresher_signal org_signal_shapes goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms head_terms allow_org_signal allow_weak_org_signal roster_verifies person_signal held_signal official_recheck sources read_per_search skip_hosts allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words signal_kinds menu_statement unit_signal people_first".split())
 
@@ -1330,6 +1361,27 @@ class Hunt:
                 del self.leads[k]
                 self.moved.append(r["name"])
             elif not self.s.get("allow_org_signal") and r.get("signal_near_person") != "yes": self.shape_noted(r)  # a stored row listed on its unit's page takes the unit's sentence too
+        self.recheck_case_heads()
+
+    HEAD_GONE = "the head the case listed above them no longer counts"  # stored_readmits judges them again on their stored page
+
+    def recheck_case_heads(self):
+        """A near miss held under a head the case lists (UNDER_CASE_HEAD) is judged again against the case as it now stands: that reason was written once and never read again, so it went on naming a head the case no longer counts as theirs (Kasprzak under Hall, fnwords142 review). The same head keeps the note; another takes its place; with none, the next reason the stored row fails takes the note, or HEAD_GONE when it fails none, and stored_readmits judges it on its page. Returns how many notes changed."""
+        changed = 0
+        for k, r in list(self.near.items()):
+            note = str(r.get("note") or "")
+            if not note.startswith(f"not listed: {self.UNDER_CASE_HEAD}"): continue
+            items = note_items(note[12:])
+            hd = self.head_in_case(r)
+            if hd: new = [f"{self.UNDER_CASE_HEAD} ({hd})"] + items[1:]
+            else:
+                rest = items[1:]
+                why = self.stored_why(dict(r, note="; ".join(rest))) or self.HEAD_GONE
+                new = [why] + [x for x in rest if x != why]
+            if new != items:
+                r["note"] = "not listed: " + "; ".join(new); changed += 1
+                self.log(f"  ~ {r['name']} ({r.get('organisation', '')}): held now as {new[0][:120]}")
+        return changed
 
     def misread(self, r):
         """A stored row whose page, read today, names someone else in its place: a degree an older read took for a first name ("EdD Erin Tipton" for Erin Tipton) or the tail of another person's post ("Training Network" from Patricia Parma's "Associate Vice Chancellor of Workforce Training Network"), fnwords129. A row its page still reads, or one that page reads no one from, stays (None). Else the name the page reads in its place (a degree misread), or "" (no person)."""
@@ -1546,7 +1598,7 @@ class Hunt:
     NO_SIGNAL = "no page of the organisation's site says the signal word yet"   # its heads wait here; refresh_unsignalled gives them the signal once one is found
     LEAKED_FAR = "the signal isn't near this person"
     SPEC_FILTERS = ("the title does not name the role focus", "no function word in the title", "the role doesn't fit the spec", "the signal rests on a ", "the spec's must words aren't on its page", "the signal is the organisation's, not this person's", ROSTER_HELD)
-    READ_AGAIN = ("the signal's page is not one the module now takes", "the page puts them at ", "the page is from ", "a search result says they left", "an interim title, and ", "an interim title on an old", "only in the news, and ", "adult basic education, not ", "the organisation's signal is ", "an event page that doesn't tie them")  # the module's own reading of the page: a fix to it (a greeting read as an employer, fnwords41; a 2018 CMS date on a staff page whose text names Fall 2026, fnwords44; a namesake's retirement, fnwords44) must reach the stored rows too
+    READ_AGAIN = ("the signal's page is not one the module now takes", "the page puts them at ", "the page is from ", "a search result says they left", "an interim title, and ", "an interim title on an old", "only in the news, and ", "adult basic education, not ", "the organisation's signal is ", "an event page that doesn't tie them", "the head the case listed above them no longer counts")  # the module's own reading of the page: a fix to it (a greeting read as an employer, fnwords41; a 2018 CMS date on a staff page whose text names Fall 2026, fnwords44; a namesake's retirement, fnwords44) must reach the stored rows too
 
     def stored_readmits(self):
         """A near miss held back only by a spec filter (role focus, function words, roles, signal kinds, must words, org signal), or by the module's reading of who employs them, is judged again on its stored page, as a live run judges it, and comes back when the spec as it now stands passes it and its organisation has room. One the spec passes at a full organisation gets the note 'not listed: the organisation is full' in place of the older spec's reason, and comes back on a later run once a slot frees. Without this a wider spec on a stored case brings nobody back (fnwords35/36). Returns how many came back."""
@@ -1751,9 +1803,11 @@ class Hunt:
         orgw = set(re.findall(r"[a-z]+", fold(org)))
         mine = {w for w in title_words(title) - orgw if len(w) > 3} | {w for w in ("career", "workforce") if w in fold(title)}
         me = people.name_regex(r.get("name", ""))
+        school = pro_school(r.get("source_url"), title)
         for o in list(self.leads.values()) + list(self.near.values()):
             t = o.get("title", "") or ""
             if o.get("organisation") != org or me.search(fold(o.get("name", ""))) or BELOW_DIRECTOR.search(t): continue  # an associate dean or assistant vice president heads a unit; an associate director does not
+            if pro_school(o.get("source_url"), t) != school: continue  # a law or business school's career office is not the university's
             if not re.search(r"\b(?:director|dean|vice\s+president|vice\s+chancellor|vice\s+provost)\b", fold(t)): continue
             if plain and not (re.search(r"\b(?:executive|senior|managing)\s+director\b|\bvice\s+(?:president|chancellor|provost)\b|\bdean\b", fold(t)) and not core_function_director(t)): continue
             theirs = {w for w in title_words(t) - orgw if len(w) > 3} | {w for w in ("career", "workforce") if w in fold(t)}
@@ -3226,11 +3280,11 @@ class Hunt:
         if self.case_moved: lines += ["## Held by the rest of the case", f"- {len(self.case_moved)} rows found on this run are near misses after all: another page of the organisation's site gives them a permanent post beside an interim one, or its staff page lists its people without them: {', '.join(self.case_moved[:20])}.", ""]
         if self.readmitted: lines += ["## Back from the near misses", f"- {len(self.readmitted)} near misses from an earlier run on this case, held back then by a spec filter, pass the spec as it now stands on their stored pages and are on the list again: {', '.join(self.readmitted[:20])}.", ""]
         if self.errors: lines += ["## Sources that failed (all runs on this case)", "Historical failures are retained here; an entry does not mean the source failed on this run.", *[f"- {e} (×{n})" for e, n in self.errors.most_common(10)], ""]
-        ang = collections.Counter(); 
+        ang = collections.Counter(str(r.get("angle") or "(no angle recorded)") for r in rows)  # the rows listed, by the angle that found each: the search log's counts were taken when each search ran, so a row held or moved later still counted and one that came another way (a staff link, a readmit) never did (fnwords142 review)
         for l in self.log_rows:
-            if l["org"] != "(discover)" and not str(l["angle"]).startswith("(statement) "): ang[l["angle"]] += l["found"]
+            if l["org"] != "(discover)" and not str(l["angle"]).startswith("(statement) "): ang[l["angle"]] += 0  # an angle searched that found none of them
         ms = sum(1 for l in self.log_rows if str(l["angle"]).startswith("(statement) "))
-        lines += ["## What each angle found", *[f"- {n}: `{a}`" for a, n in ang.most_common()], *([f"- {ms} searches of an organisation's own site for a statement in place of a menu signal (all runs on this case); {self.menu_statement_found} found one on this run."] if ms else []), ""]
+        lines += ["## What each angle found", f"The {len(rows)} listed rows by the angle that found each, and the angles searched (all runs on this case) that found none of them.", *[f"- {n}: `{a}`" for a, n in ang.most_common()], *([f"- {ms} searches of an organisation's own site for a statement in place of a menu signal (all runs on this case); {self.menu_statement_found} found one on this run."] if ms else []), ""]
         if self.blocked: lines += ["## Pages that couldn't be read", *[f"- {u} — {w}" for u, w in list(self.blocked.items())[:20]], ""]
         far = sum("signal isn't near" in r.get("note", "") for r in self.near.values())
         if far and self.must: lines += ["## Held back", f"- {far} near misses are only held because the `must` words aren't close to the person. If those words describe the organisation rather than the person, set `\"allow_page_signal\": true` in the spec.", ""]

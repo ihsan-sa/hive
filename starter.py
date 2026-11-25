@@ -716,6 +716,13 @@ def waiting_posts(st, r):
              else c.get("wake_person_s", 60) if any(p.get("from") in ("person", "hives", r["name"]) for p in ps) else c.get("wake_agent_s", 600))  # its own post: `hive model`; hives: another Hive waiting on a reply, paced like the person (line 644)
     return ps if ps and finished_but_alive(r, grace) else []
 
+def not_handed(name, ps):
+    """The posts in `ps` the inbox hook has not already handed `name`'s run mid-run (~/.hive/delivered/<name>); a continuation stays,
+    since its id is the post it follows, not a post for this agent."""
+    try: got = set((STATE / "delivered" / name).read_text().split())
+    except OSError: got = set()
+    return [p for p in ps if p["id"] not in got or p.get("continue")]
+
 def release_shells(pid):
     """End the agent's parked claude but leave its background shells running, with their place in the heavy queue. Only SIGKILL
     does that: claude can't clean up, and the shells write to their task files, not to it. Anything else it started is ended."""
@@ -3311,10 +3318,11 @@ def main():
                 keep = [p for p in st["pending"][n] if not plain(p)]
                 if keep: st["pending"][n] = keep
                 else: st["pending"].pop(n)
-            if "shells" in r:   # woken mid-run: the inbox hook already handed it some of these (an edit's first version, everyday E12d)
-                try: got = set((STATE / "delivered" / n).read_text().split())
-                except OSError: got = set()
-                waiting = [p for p in waiting if p["id"] not in got or p.get("continue")]
+            # woken mid-run: the inbox hook already handed it some of these (an edit's first version, everyday E12d). So for a reap resume:
+            # a post the hook handed over during the reaped run was answered there, yet woke the resume, which the grader then read
+            # alone as "nothing" (ad5b1 2026-11-25 00:12 and 03:52, on the person's posts it had answered 30 min before; 9 such
+            # resumes 11-18..11-25, hive-meta R78)
+            if "shells" in r or r.get("reaped"): waiting = not_handed(n, waiting)
             # a queued post that asked for a model holds here too: a parked agent woken for it comes back on that model
             model = r.get("model") if pv else next((p["model"] for p in waiting if p.get("model") in MODELS), r.get("model"))
             start(c, n, [{"id": r["post"], "thread": r.get("thread"), "from": r.get("from"), "model": model}], to,

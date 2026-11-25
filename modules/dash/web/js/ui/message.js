@@ -16,7 +16,7 @@ import { agentHref, threadHref, href } from "../core/router.js";
 import { button, icon, statusDot, copyPress, scrim } from "./kit.js";
 import { replyTo, quoteRef } from "./composer.js";
 import { pickBar, picked } from "./pick.js";
-import { wordButton } from "./rootword.js";
+import { wordButton, approvalLine, cardSig } from "./rootword.js";
 import { voiceMemo, VOICE } from "./voicememo.js";
 import { readAloud, stopReading, reading } from "./speak.js";
 import { openPreview, openDoc, previewKey, kindOf, badgeOf, remember } from "./preview.js";
@@ -45,7 +45,7 @@ export async function pollDelivered() {
   } catch (e) { return false; }
 }
 /** What read marks currently depend on, as a string to compare. */
-export const marksSig = () => DELIV.sig + JSON.stringify((S.live && S.live.pending) || []);
+export const marksSig = () => DELIV.sig + JSON.stringify((S.live && S.live.pending) || []) + cardSig();   // and what the approval lines say (rootword.js approvalLine)
 
 /** Where a post stands with one recipient: {key: seen|interrupt|waiting|queued|unseen, tone, text}. null when it doesn't apply.
  *  seen says when it reached the agent when that is known: the hook's time, or the start of the session that had it. */
@@ -458,6 +458,7 @@ function phoneCall(p) {
       h("summary", null, icon("phone"), h("b", null, "Phone call"), h("span", { class: "meta" }, ` · ${m[1]} · ${lines.length} lines · ${clock(p.t)}`)),
       h("div", { class: "msg-call-t" }, lines.map(l => h("p", { class: l.startsWith("(") ? "meta" : null }, l)))));
 }
+export { approvalLine };
 export function message(p, opts = {}) {
   if (!S.app.app) return devMessage(p, opts);
   return opts.showThread === false ? inConversation(p.th, () => appMessage(p, opts)) : appMessage(p, opts);   // read in its own conversation, it names agents by their place there
@@ -470,6 +471,7 @@ function appMessage(p, opts) {
   }
   if (btwOpener(p)) return btwMessage(p, ws);
   const call = phoneCall(p); if (call) return call;
+  if (EDIT.id !== p.id) { const ap = approvalLine(p); if (ap) return ap; }   // the person's yes:, yes, standing: or withdraw standing: as one line saying whether it counts
   const kind = SYS.has(p.from) || isScript(p.from) ? "sys" : p.from === "person" ? "me" : OUTSIDE.has(p.from) ? "out" : "agent";
   const asks = kind === "agent" && !simpleOn() && asksYou(p), split = kind === "agent" && !SOURCE.has(p.id) ? didSplit(p) : null;
   let q = split ? { ...p, disp: split.text } : p;

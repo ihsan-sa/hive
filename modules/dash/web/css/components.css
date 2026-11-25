@@ -4045,3 +4045,21 @@ button.rc-buy-open:disabled{opacity:.6;cursor:progress}
 .cm-need-pk{grid-column:1;margin-top:6px}
 .msg .msg-acts.pk{margin-top:var(--s2)}
 @media (max-width:699px){.pk-b{min-height:40px}.pk-undo{min-height:40px}}
+
+/* An approval in the chat (ui/rootword.js approvalLine): the person's yes: line as one set-apart line saying whether it counts, not a bubble */
+.msg-appr{display:flex;justify-content:flex-end}
+.appr{display:flex;flex-wrap:wrap;align-items:flex-start;gap:var(--s3);width:min(560px,100%);padding:10px 14px;border:1px solid var(--line);border-left:3px solid var(--tone,var(--edge));border-radius:var(--r-l);background:var(--surface)}
+.msg-appr[data-tone=good]{--tone:var(--good)}
+.msg-appr[data-tone=info]{--tone:var(--info)}
+.msg-appr[data-tone=bad]{--tone:var(--bad)}
+.appr-i{flex:none;display:grid;place-items:center;width:24px;height:24px;margin-top:1px;color:var(--tone,var(--ink-3))}
+.appr-i svg{width:18px;height:18px}
+.appr-c{flex:1 1 200px;min-width:0;display:grid;gap:2px}
+.appr-c p{margin:0}
+.appr-h{font-size:var(--fs-small)}
+.appr-w{overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.appr-s{font-size:var(--fs-small);color:var(--ink-3)}
+.appr-s[data-tone=good]{color:var(--good-ink)}
+.appr-s[data-tone=bad]{color:var(--bad-ink)}
+.appr-b{flex:none;align-self:center}
+.appr-c+.appr-b{margin-left:auto}
