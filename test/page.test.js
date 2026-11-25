@@ -69,6 +69,19 @@ console.log('ok page: Windows, Mac (Apple chip or Intel) and Linux each get thei
 }
 
 {
+  // The .deb installs only with apt on an Intel or AMD PC: the Linux help must say so and send everyone else
+  // (Fedora, Arch, ARM) to the install line, which installs with apt, dnf or pacman.
+  const html = require('fs').readFileSync(require('path').join(__dirname, '../page/download.html'), 'utf8');
+  const help = (html.match(/<details id="help-linux">([\s\S]*?)<\/details>/) || [])[1] || '';
+  assert(/Ubuntu/.test(help) && /Debian/.test(help) && /apt/.test(help) && /Intel or AMD/.test(help), 'Linux help: who the .deb is for');
+  assert(/Fedora/.test(help) && /Arch/.test(help) && /ARM/.test(help) && /curl -fsSL https:\/\/hivelab\.ca\/install\.sh \| sh/.test(help), 'Linux help: the install line for everyone else');
+  // Double-click doesn't install a .deb everywhere (Ubuntu 23.10 and some later versions say there is no app for
+  // "Debian package" files): the help must name that message and give the apt line for it.
+  assert(/no app installed for "Debian package" files/.test(help) && /sudo apt install \.\/Hive-linux-amd64\.deb/.test(help), 'Linux help: what to do when double-click finds no app');
+  console.log('ok page linux who');
+}
+
+{
   // The site's /app-version.json goes up with the downloads: it must name the version they carry (build-all.sh writes it).
   const fs = require('fs'), path = require('path');
   const site = JSON.parse(fs.readFileSync(path.join(__dirname, '../page/app-version.json'), 'utf8')).version;

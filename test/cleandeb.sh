@@ -4,6 +4,8 @@
 # missing and that the app starts and shows its first screen. Runs with podman, or docker if there's no podman.
 # The first find (2026-11-25): libasound.so.2 wasn't in the package's Depends, so on a clean Ubuntu 24.04 or Debian 12
 # apt installed it without a word and the app could not start.
+# The second: with plain libasound2, apt on Ubuntu 24.04 met it with another package that provides the name and the
+# app died on a missing ALSA symbol; Depends now names libasound2t64 first.
 set -u
 deb=$1; shift
 [ -f "$deb" ] || { echo "usage: test/cleandeb.sh PATH.deb IMAGE..."; exit 2; }

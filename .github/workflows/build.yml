@@ -66,6 +66,7 @@ jobs:
       # The runner has nearly every library already; a person's plain Ubuntu or Debian may not. The .deb on clean images:
       # apt must bring in everything the app links to, and the app must show its first screen.
       - if: runner.os == 'Linux'
+        timeout-minutes: 20
         run: sh test/cleandeb.sh dist/Hive-linux-amd64.deb ubuntu:22.04 ubuntu:24.04 ubuntu:26.04 debian:12 debian:13
       # The same on Windows (its WSL 2) and on the Intel Mac (its VM; Apple silicon runners can't start one). These machines
       # differ from a person's computer, so a stop here is read, not a red build.
