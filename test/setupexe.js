@@ -47,7 +47,8 @@ const marked = file => {
   console.log(`ok download mark: ${copy} carries ZoneId=3 (${fs.statSync(copy).size} bytes)`);
   return copy;
 };
-const hiveAt = /^http:\/\/(localhost|127\.0\.0\.1):\d+\//;
+// The app may open the Hive at /login#key, which signs in and goes on; only a page past /login is the Hive signed in.
+const hiveAt = /^http:\/\/(localhost|127\.0\.0\.1):\d+\/(?!login\b)/;
 // Started the way a person does, from its Start menu shortcut; resolves once the Hive or the setup screen shows.
 async function openFromStart(start, shot) {
   const app = await _electron.launch({ executablePath: start.Target, args: start.Args ? start.Args.split(/\s+/) : [], env: { ...process.env, HIVE_APP_TEST: '1' } });

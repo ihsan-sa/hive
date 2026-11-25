@@ -20,6 +20,8 @@ const sh = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', timeout: 1
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const dest = '/Applications/Hive.app';
 const hiveUrl = /^http:\/\/(localhost|127\.0\.0\.1):\d+\//;
+// The app opens the Hive at /login#key, which signs in and goes on; only a page past /login is the Hive signed in.
+const signedIn = u => hiveUrl.test(u) && !/^http:\/\/[^/]+\/login\b/.test(u);
 if (newer && (!fs.existsSync(newer) || !newVersion)) { console.error('usage: node test/macdl.js OLD.zip [NEW.zip NEW-VERSION]'); process.exit(2); }
 // Unpacked as the browser leaves it (the download mark on every file), then dragged into Applications (a move keeps the mark).
 function download(file) {
@@ -49,15 +51,16 @@ async function open(shot) {
   for (;;) {
     at = await where(); t = await title();
     if (t === 'Set up the Hive' || t === 'Before it installs') sawSetup = true;
-    if (hiveUrl.test(at) || Date.now() > end) break;
+    if (signedIn(at) || Date.now() > end) break;
     await sleep(500);
   }
   fs.mkdirSync('test/shots', { recursive: true });
   await page.screenshot({ path: `test/shots/${shot}.png` }).catch(() => { });
-  const fail = !hiveUrl.test(at) ? `the app from ${dest} never reached the Hive (at "${at}", "${t}"); is the Hive from test/real.js there?`
+  const fail = !signedIn(at) ? `the app from ${dest} never reached the Hive signed in (at "${at}", "${t}"); is the Hive from test/real.js there?`
     : sawSetup ? `the app from ${dest} showed the setup screen ("${t}") before the Hive` : '';
   if (fail) { await app.close().catch(() => { }); throw new Error(fail); }
-  return { app, at };
+  const name = await page.title().catch(() => '');
+  return { app, at: `${at} (${name})` };
 }
 const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; return w ? w.getNormalBounds() : null; });
 (async () => {
