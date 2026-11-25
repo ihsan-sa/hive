@@ -83,8 +83,13 @@ def jsonl(path):
     except OSError: pass
     return out
 
+def ledger_lock(path):
+    """An exclusive lock beside the file: append and the second read's rewrite (apply_rereads) take it, so a rewrite never drops a line."""
+    import fcntl
+    f = open(Path(path).with_name(Path(path).name + ".lock"), "a"); fcntl.flock(f, fcntl.LOCK_EX); return f   # released when f is closed
+
 def append(path, rec):
-    with open(path, "a") as f: f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    with ledger_lock(path), open(path, "a") as f: f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 def asks_mod():
     spec = importlib.util.spec_from_file_location("asks", CORE / "asks.py"); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); return m
@@ -630,6 +635,11 @@ def cmd_grade(a):
     # Claude at its limit is when fallback runs most need grading: hold the cursor, and the next hour picks them up (the ledger's keys stop a run being graded twice)
     if not a.dry and todo and not limited and not other and not back: CURSOR.write_text(json.dumps({"at": min([max(r["ended"] for r in todo)] + [iso(dt.datetime.fromisoformat(h) - dt.timedelta(seconds=1)) for h in held]), "run": iso()}))
     if not a.dry and graded and not other and not back: step_up(graded)
+    if REREAD_LIVE and not a.dry and not other and not back and not limited and getattr(a, "reread", True):   # hand-off partials 24 h on (rsi-lab rung "Hand-off second read")
+        try:
+            led = jsonl(LEDGER); due = due_rereads(led); found, c = reread(due, posts, asks, out=lambda s: None, taken=taken_posts(led, {r["key"] for r in due})); cost += c
+            if found: print(f"outcomes: second read of {len(found)} hand-off partials, {sum(v['landed'] for v in found.values())} landed")
+        except Exception as e: print(f"outcomes: second read failed: {e}", file=sys.stderr)
     print(f"{graded} runs graded ({len(chosen) + len(closers)} by the model, {len(chosen) if back else len(closers)} of them closers, {len(model_runs) - len(chosen) - len(closers)} left ungraded: chain not chosen or past ROOT_MAX), {drafts} drafts, ${cost:.2f}")
 
 def draw(batch, model, asks, rng=random):
@@ -726,6 +736,19 @@ def stats(rows):
     return {"outcomes_graded": len(rows), "outcome_delivered_pct": round(100.0 * n["delivered"] / den, 1) if den else None,
             "outcomes_silent": n["silent"], "outcomes_nothing": n["nothing"], "outcomes_intent_only": sum(1 for r in rows if intent_only(r)), **{f"outcomes_{g}": v for g, v in n.items()}}
 
+def handoff_stats(rows, t=None):
+    """The second read as its own share (never folded into delivered_pct): hand-off partials read 24 h on, and how many of them landed.
+    Only runs that ended 25 h or more before `t` count (newer ones haven't been read yet). Hand-offs to the person are counted on their
+    own and left out of handoff_landed_pct, which covers only what the model judged. delivered_pct_with_landed is what the delivered
+    share of those settled runs would be if each landed hand-off counted as delivered, a side reading only."""
+    cut = iso((t or now()) - dt.timedelta(hours=REREAD_H + 1))
+    rows = [r for r in rows if not r.get("closer") and str(r.get("ended") or "") <= cut]
+    read = [r for r in rows if r.get("reread") and r.get("grade") == "partial"]; landed = sum(1 for r in read if r.get("landed_after"))
+    person = sum(1 for r in read if (r.get("reread") or {}).get("why") == "handed to the person"); judged = len(read) - person
+    den = sum(1 for r in rows if r.get("grade") in GRADED); d = sum(1 for r in rows if r.get("grade") == "delivered")
+    return {"handoffs_read": len(read), "handoffs_to_person": person, "handoffs_landed": landed, "handoff_landed_pct": round(100.0 * landed / judged, 1) if judged else None,
+            "delivered_pct_settled": round(100.0 * d / den, 1) if den else None, "delivered_pct_with_landed": round(100.0 * (d + landed) / den, 1) if den else None}
+
 # R39 (ae868, 2026-11-14; from projects/hive-meta/followups.py, R37): a run that hands work on, promises it or starts a long job
 # is short at the moment of grading, so the delivered share can't tell "came an hour later" from "never came". The cause is read
 # from the grader's why-line, first match wins (the same list as projects/hive-meta/misses.py; keep the two in step).
@@ -802,6 +825,176 @@ def could_close(rows, cands, posted, hours=FOLLOW_H):
                and closes(m, r, c, posted) for m, c in misses): out.append(x)
     return out
 
+# Hand-off second read (rsi-lab, a1427, 2026-11-25). A partial whose why says it handed the work on is read once more REREAD_H after the run
+# ends: did the handed work land and get checked? Of 19 sampled hand-off partials (11-18..25), 12 landed within 24 h, 8 of them done by the
+# receiver and mostly outside the sender's thread (projects/rsi-lab/REPORT.md, "Hand-off partials"), so the thread's own next grades miss them.
+# The read follows where the run sent the work: threads it started, the agents it @named (in its threads), rootwarden's replies, and its own
+# later posts there. The person's posts are never followed: a hand-off to the person stays partial. The grade is never changed (a4418's
+# review, rsi-lab-challenge 11251059f44e: rewriting grades moves every frozen before/after and R39): the first row of the key gets a `reread`
+# mark, and a landed one `landed_after: POST`. `handoff_stats` reads them as their own share; delivered_pct stays what the first read said.
+HANDOFF = re.compile(r"hand|handed|waiting|wait on|awaits|not yet|pending|delegat|passed (it )?to|briefed|started (a|an) |spawned|nothing (landed|built)|left to|for (a|the) (builder|reviewer|helper)|queued", re.I)   # as projects/rsi-lab/handoff_sample.py
+REREAD_H = 24              # hours after a run ends that its hand-off is read again
+REREAD_BACK_H = 72         # the hourly pass looks this far back, so a missed hour (a limit) is caught up
+REREAD_MAX = 20            # second reads an hour, a cost guard
+REREAD_LIVE = False        # the hourly pass is off until the change is reviewed and committed (it ran once uncommitted, 11-25 15:56Z, and was undone)
+REREAD_DRAWS = 2           # model calls a read; landed only if every one says landed and names a post shown
+FOLLOW_CAP, FOLLOW_CLIP = 30, 1500  # posts shown to the model, chars each (affb1's queue-test result sat 1100 chars into its post)
+TO_PERSON = re.compile(r"\b(hand\w*|pass\w*|left|wait\w*|await\w*|gave|give\w*|ask\w*)\b[^.;]{0,40}\b(to|on|for) (the )?person\b"
+                       r"|\bperson'?s (go|ok|okay|call|decision|input|details|hands|hands-on|sign-?off|approval|answer)\b|\b(the )?person (must|needs to|has to|to decide)\b", re.I)   # stays partial, no model call
+NOT_HANDOFF = re.compile(r"\b(wak(e|ing|en)|woken)\b[^.;]{0,30}\bhand-?over", re.I)   # "the waking post's handover wasn't delivered": the run's own miss, not a hand-off
+RECEIVER = re.compile(r"(?<![\w`])@([a-z][0-9a-f]{4}|rootwarden)\b")
+
+def handoff_partial(r):
+    return r.get("grade") == "partial" and r.get("by") != "rule" and not r.get("reread") and not r.get("closer") and bool(HANDOFF.search(str(r.get("why") or ""))) and not NOT_HANDOFF.search(str(r.get("why") or ""))
+
+def follow_posts(r, posts, by_id, first=None, hours=REREAD_H):
+    """The run's own posts and what followed where it sent the work, in the `hours` after it ended."""
+    if first is None:
+        first = {}
+        for p in posts: first.setdefault(p.get("thread"), p)
+    _, mine, _ = posts_of(dict(r), posts, by_id)
+    t0 = r["ended"]; t1 = (dt.datetime.fromisoformat(t0) + dt.timedelta(hours=hours)).isoformat(timespec="seconds")
+    threads = {p.get("thread") for p in mine} | {r.get("thread")}
+    started = {p.get("thread") for p in mine if first.get(p.get("thread")) is p} | {p.get("thread") for p in mine if FRESH.search(str(p.get("text", "")))}
+    names = {n for p in mine for n in RECEIVER.findall(str(p.get("text", "")))} - {r["name"]}
+    if AGENT.fullmatch(str(r.get("from") or "")): names.add(r["from"])   # the agent that sent the work checks it (a3f17 on affb1's queue test)
+    def ok(p):
+        f = p.get("from") or ""
+        if f == r["name"]: return p.get("thread") in threads
+        if f == "rootwarden" or f in names: return p.get("thread") in threads
+        return p.get("thread") in started and bool(AGENT.fullmatch(f))   # an @new builder: any agent in a thread the run started or @new'd in
+    fol = [p for p in posts if t0 < p.get("at", "") <= t1 and ok(p)]
+    if len(fol) > FOLLOW_CAP:   # others' posts first (the receivers), then the sender's own; keep time order
+        keep = {id(p) for p in ([p for p in fol if p.get("from") != r["name"]] + [p for p in fol if p.get("from") == r["name"]])[:FOLLOW_CAP]}
+        fol = [p for p in fol if id(p) in keep]
+    return mine, fol
+
+REREAD_PROMPT = """A hive agent's run was graded partial because it handed work on or left it waiting. The hive is a group of coding agents sharing a message board. You see the grade's reason, the run's last posts (the hand-off), and the posts of the next 24 hours where the work was sent: threads the run started, the agents it named, rootwarden (who holds root on the machine), and the same agent's later posts in those threads. The person's posts are not shown.
+
+Did the handed work land within those 24 hours, and was it checked: a post showing it done with how it was checked (a test passing, a reading, a merge, a live check), not only taken, started, promised, or still waiting? Judge the work the run handed on (what the grade's reason says is not done), not other work in the same threads. A later step or retry that meets the same aim counts (the handed check passed on the next try, under a new step name); cite the earliest post that meets it, not a later or harder step. If the reason says a check failed, landing means that check passing; if it says work was unfinished (runs, a build, a review), landing means that work finished and its result reported with a check, even when the result misses a target. If the reason names several handed pieces, every one must land: if any handed piece is still open, set rest_open true. Work that waits on the person (a decision, a purchase, a key, a sign-off) has not landed. Work that was refused or still blocked has not landed. The post must be about the handed piece itself (it names the same step, file, PR, check or device the reason names, or replies to the hand-off); other work done in the same threads, even by the same agent, does not count.
+
+Decide first, then reply with one JSON object and nothing else: {"landed": true|false, "post": "<id of the earliest post below that shows it done and checked, or empty>", "quote": "<5 to 15 words copied exactly from that post that show the handed piece done, or empty>", "rest_open": true|false, "why": "<at most 20 words>"}
+
+RUN {key}: agent {name} in thread {thread}, ran {started} to {ended} UTC.
+GRADE REASON: {why}
+{mine}
+AFTER ({n} posts):
+{after}"""
+
+def reread_prompt(r, mine, fol):
+    show = lambda p, n: f"  [{p.get('id')}] {p.get('at', '')[5:16]} {p.get('from')} in {p.get('thread')}{' re ' + str(p['reply_to']) if p.get('reply_to') else ''}: {clip(p.get('text'), n)}"
+    return (REREAD_PROMPT.replace("{key}", r["key"]).replace("{name}", r["name"]).replace("{thread}", str(r.get("thread"))).replace("{started}", r["started"][5:16])
+            .replace("{ended}", r["ended"][5:16]).replace("{why}", str(r.get("why"))).replace("{n}", str(len(fol)))
+            .replace("{mine}", "RUN'S LAST POSTS:\n" + "\n".join(show(p, 1200) for p in mine[-3:])).replace("{after}", "\n".join(show(p, FOLLOW_CLIP) for p in fol) or "  (none)"))
+
+def second_read(r, posts, by_id, asks, model="sonnet", draws=REREAD_DRAWS, first=None):
+    """{landed, post, why, draws} for one hand-off partial (None when the model gave no usable answer), and the cost. Handed to the person, or
+    no posts followed: not landed, no model call."""
+    mine, fol = follow_posts(r, posts, by_id, first)
+    if TO_PERSON.search(str(r.get("why") or "")): return {"landed": False, "post": "", "why": "handed to the person", "draws": []}, 0.0
+    if not fol: return {"landed": False, "post": "", "why": "nothing followed where the work was sent", "draws": []}, 0.0
+    ids, got, cost = {p.get("id") for p in fol}, [], 0.0
+    for _ in range(draws):
+        for _try in range(2):   # an empty or unparseable reply is asked again once; twice is no read at all (None: not written, read next hour)
+            out, c = asks.ask_model(reread_prompt(r, mine, fol), model); cost += c or 0.0
+            g = last_json(out, asks)
+            if isinstance(g, dict) and isinstance(g.get("landed"), bool): break
+        else: return None, cost
+        post = re.sub(r"[^0-9A-Za-z]", "", str(g.get("post") or ""))   # "1118073 6ce75", "[b2]": the model's typing, not another post
+        got.append({"landed": g.get("landed") is True and g.get("rest_open") is False and post in ids and quoted(g.get("quote"), by_id.get(post)),
+                    "post": post, "why": clip(g.get("why"), 160)})
+        if not got[-1]["landed"]: break   # landed needs every draw: one no settles it
+    yes = all(g["landed"] for g in got)
+    pick = got[0] if yes else next(g for g in got if not g["landed"])
+    return {"landed": yes, "post": pick["post"] if yes else "", "why": pick["why"], "draws": [g["landed"] for g in got]}, cost
+
+def last_json(out, asks):
+    """The reply's JSON object; when the model wrote one and then a corrected one ("Wait, the earliest post is..."), the last whole object."""
+    try: return asks.parse_json(out)
+    except ValueError: pass
+    dec, s, g = json.JSONDecoder(), str(out or ""), None
+    for i, ch in enumerate(s):
+        if ch != "{": continue
+        try: o, _ = dec.raw_decode(s, i)
+        except ValueError: continue
+        if isinstance(o, dict) and "landed" in o: g = o
+    return g
+
+def _norm(t): return re.sub(r"[^a-z0-9]+", " ", str(t or "").lower()).strip()
+
+def quoted(q, p):
+    """The quote is the model's evidence: at least 4 words of it must sit in the post as written, or the read is not a landing."""
+    q = _norm(q); return bool(p) and len(q.split()) >= 4 and f" {q} " in f" {_norm(p.get('text'))} "   # whole words only (a4418)
+
+def apply_rereads(found, path=None):
+    """Write the second reads into the ledger: the first row of each key gets its `reread` mark, and a landed one `landed_after`. Raw lines
+    are kept as they are (a line that doesn't parse stays); the file is replaced whole, so a reader never sees half of it."""
+    path = Path(path or LEDGER); done, out = set(), []
+    with ledger_lock(path):
+        return _apply_rereads(found, path, done, out)
+
+def _apply_rereads(found, path, done, out):
+    for line in path.read_text().splitlines():
+        try: r = json.loads(line)
+        except ValueError: out.append(line); continue
+        k = r.get("key") if isinstance(r, dict) else None
+        if k in found and k not in done:
+            done.add(k); v = found[k]
+            r = {**r, "reread": {"at": iso(), **v}}
+            if v["landed"]: r["landed_after"] = v["post"]
+            else: r.pop("landed_after", None)   # a forced read that says it stays clears an earlier landing
+            line = json.dumps(r, ensure_ascii=False)
+        out.append(line)
+    tmp = path.with_name(path.name + ".reread.tmp"); tmp.write_text("\n".join(out) + "\n"); os.replace(tmp, path)
+    return len(done)
+
+def due_rereads(rows, t=None, back_h=REREAD_BACK_H):
+    t = t or now(); lo, hi = iso(t - dt.timedelta(hours=REREAD_H + back_h)), iso(t - dt.timedelta(hours=REREAD_H))
+    seen, out = set(), []
+    for r in rows:
+        k = r.get("key")
+        if k in seen: continue
+        seen.add(k)
+        if handoff_partial(r) and r.get("ended") and lo <= r["ended"] <= hi: out.append(r)
+    return sorted(out, key=lambda r: r["ended"])
+
+def taken_posts(ledger, skip=()):
+    """(chain, post) pairs already used as a landing: one post lands at most one hand-off of a chain (a4418: one "5g done" lifted two steps).
+    `skip`: the keys being read now, whose own earlier landing must not block them."""
+    skip = set(skip)
+    return {(str(r.get("key", "")).split("-")[0], r["landed_after"]) for r in ledger if r.get("landed_after") and r.get("key") not in skip}
+
+def reread(rows, posts, asks, model="sonnet", dry=False, cap=REREAD_MAX, out=print, taken=None):
+    """Second reads of `rows` (hand-off partials), at most `cap`, oldest first; writes them unless dry. Returns ({key: read}, cost)."""
+    by_id = {p.get("id"): p for p in posts}; first = {}; taken = set(taken or ())
+    for p in posts: first.setdefault(p.get("thread"), p)
+    found, cost = {}, 0.0
+    for r in rows[:cap]:
+        try: v, c = second_read(r, posts, by_id, asks, model, first=first)
+        except Exception as e:
+            out(f"outcomes: second read of {r['key']} failed: {e}"); break   # a limit: the rest wait for the next hour
+        cost += c
+        if v is None: out(f"outcomes: second read of {r['key']} got no usable answer; read again next hour"); continue
+        ch = r["key"].split("-")[0]
+        if v["landed"] and (ch, v["post"]) in taken: v = {**v, "landed": False, "why": f"post {v['post']} already landed an earlier hand-off of this chain"}
+        if v["landed"]: taken.add((ch, v["post"]))
+        found[r["key"]] = v
+        out(f"{r['key']:22} {r['name']:8} {'landed ' + v['post'] if v['landed'] else 'stays partial'}  ({v['why']})")
+    if found and not dry: apply_rereads(found)
+    return found, cost
+
+def cmd_reread(a):
+    rows, posts = jsonl(LEDGER), jsonl(BOARD)
+    if a.keys:
+        first = {}
+        for r in rows: first.setdefault(r.get("key"), r)
+        todo = [first[k] for k in a.keys if k in first and (a.force or handoff_partial(first[k]))]
+    else:
+        todo = due_rereads(rows, back_h=span(a.since).total_seconds() / 3600 if a.since else REREAD_BACK_H)
+    found, cost = reread(sorted(todo, key=lambda r: r.get("ended", "")), posts, asks_mod(), a.model, dry=a.dry, cap=a.limit or len(todo), taken=taken_posts(rows, {r["key"] for r in todo}))
+    n = sum(v["landed"] for v in found.values())
+    print(f"{len(found)} hand-off partials read again, {n} landed{' (dry: nothing written)' if a.dry else ''}, ${cost:.2f}")
+
 def cmd_list(a):
     rows = [r for r in recent(a.since) if (not a.grade or r.get("grade") == a.grade) and (not a.name or r.get("name") == a.name)]
     for r in rows: print(f"{r.get('at', '')[:16]}  {r.get('name')}  {r.get('grade'):<10} woken by {r.get('from')} in {r.get('thread')} (post {r.get('post')}): {r.get('why', '')}")
@@ -821,9 +1014,11 @@ def cmd_stats(a):
         return
     s = stats(recent(a.since)); done, own, wakes = completion_share(a.since)
     share, own_share = (round(100.0 * done / wakes, 1), round(100.0 * own / wakes, 1)) if wakes else (None, None)
-    if a.json: print(json.dumps({**s, "completion_wakes": done, "self_wakes": own, "agent_code_wakes": wakes, "completion_wake_pct": share, "self_wake_pct": own_share})); return
+    h = handoff_stats(recent(a.since))
+    if a.json: print(json.dumps({**s, **h, "completion_wakes": done, "self_wakes": own, "agent_code_wakes": wakes, "completion_wake_pct": share, "self_wake_pct": own_share})); return
     print(f"{s['outcomes_graded']} runs graded in the last {a.since}: delivered {s['outcome_delivered_pct']}% of the {sum(s['outcomes_' + g] for g in GRADED)} that were asked something "
           f"(delivered {s['outcomes_delivered']}, partial {s['outcomes_partial']}, nothing {s['outcomes_nothing']}, silent {s['outcomes_silent']}); quiet {s['outcomes_quiet']}, not asked {s['outcomes_not_asked']}, not run (limit) {s['outcomes_not_run']}")
+    if h["handoffs_read"]: print(f"hand-offs read again 24 h on: {h['handoffs_landed']} of {h['handoffs_read'] - h['handoffs_to_person']} judged landed ({h['handoff_landed_pct']}%), {h['handoffs_to_person']} handed to the person; over runs ended 25 h+ ago delivered is {h['delivered_pct_settled']}%, {h['delivered_pct_with_landed']}% counting them (a side reading: the grades are not changed)")
     print(f"completion wakes: {done} of {wakes} agent-code wakes ended in the span ({share}%); self-wakes: {own} ({own_share}%). Counts only, no grade follows from them")
 
 def main(argv=None):
@@ -832,6 +1027,8 @@ def main(argv=None):
     p = sp.add_parser("grade"); p.add_argument("--limit", type=int, default=0); p.add_argument("--sample", type=int, default=SAMPLE, help="unused since 2026-11-10: the hourly run grades whole chains (ROOT_PCT)"); p.add_argument("--all", action="store_true", help="every run with posts, not a sample")
     p.add_argument("--model", default="sonnet"); p.add_argument("--dry", action="store_true"); p.add_argument("--other-since", default="", metavar="DATE", help="backfill: every ungraded run on a non-Claude provider ended after DATE; the hourly cursor doesn't move")
     p.add_argument("--closers-since", default="", metavar="DATE", help="backfill: the ungraded runs ended after DATE that could close a follow-up miss (could_close), tagged closer; the cursor doesn't move"); p.set_defaults(f=cmd_grade)
+    p = sp.add_parser("reread", help="second read of hand-off partials 24 h on (the hourly grade does the due ones)"); p.add_argument("keys", nargs="*"); p.add_argument("--since", default="", help="look back this far past the 24 h (default 72h)")
+    p.add_argument("--dry", action="store_true"); p.add_argument("--force", action="store_true", help="with keys: read even a row already read or not a hand-off partial"); p.add_argument("--limit", type=int, default=0); p.add_argument("--model", default="sonnet"); p.set_defaults(f=cmd_reread)
     p = sp.add_parser("list"); p.add_argument("--since", default="24h"); p.add_argument("--grade"); p.add_argument("--name"); p.set_defaults(f=cmd_list)
     p = sp.add_parser("stats"); p.add_argument("--since", default="24h"); p.add_argument("--json", action="store_true"); p.add_argument("--by", choices=["provider"], help="delivery per provider, person-woken and agent-woken apart"); p.set_defaults(f=cmd_stats)
     a = ap.parse_args(argv); a.f(a)

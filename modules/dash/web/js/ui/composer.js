@@ -21,7 +21,7 @@ import { sixSeven } from "../core/sixseven.js";
 import { startCall, phoneReady, inCall } from "./phone.js";
 import { run as eggRun } from "../core/easter.js";
 import { wordBoxButton, wordBoxPanel, forCard, replyWord, cardWhy, openApproval, backFromCard, sawApproval } from "./rootword.js";
-import { approveLabel } from "./wordkind.js";
+import { approveLabel, kindOf } from "./wordkind.js";
 import { delivery } from "./message.js";   // circular, used only at render time
 
 // menu: which of the bar's menus is open (to | add | aa | model), or false. mode: thread → "interrupt" while armed.
@@ -226,7 +226,7 @@ async function deliver(it) {
   it.state = "sending"; it.err = ""; refresh();
   try {
     if (!it.refs) { it.uploading = it.files.length > 0; refresh(); const refs = []; for (const f of it.files) refs.push(await uploadFile(f.file)); it.refs = refs; it.uploading = false; }
-    const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null, effort: simpleOn() ? null : it.effort || null, quote: it.quote || null, ...(it.interrupt ? { interrupt: true } : {}), ...(!it.th && it.focus ? { focus: it.focus } : {}) });
+    const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null, effort: simpleOn() ? null : it.effort || null, quote: it.quote || null, ...(it.interrupt ? { interrupt: true } : {}), ...(!it.th && it.focus ? { focus: it.focus } : {}), ...(kindOf(it.wire)[0] ? { plain_word: true } : {}) });   // send() sent it here, not to the card, on purpose (no card for it): dash.py stale_word
     it.id = res.id; it.state = "sent"; const thr = it.th;
     if (!it.th && res.thread) { it.th = res.thread; go("comms", res.thread); loadApp(); }   // the server files it under the focus picked in the box (and the agent gets that group's instructions, E37); a failure leaves it in Misc, where the title menu can file it
     else if (res.thread && res.thread !== it.th) { it.th = res.thread; it.aside = true; openAside(thr, res.thread, it.text.replace(/^\s*\/btw\s*/i, "")); loadApp(); }   // /btw: it lives in the side thread; stay here

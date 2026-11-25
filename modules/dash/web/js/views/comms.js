@@ -24,7 +24,7 @@ import { MN, onMail } from "../core/mailnew.js";
 import { heldRoom } from "../core/room.js";
 import { bar as skBar, button, empty, icon, input, list, scrim, seg, skeleton, statusDot, statusWord } from "../ui/kit.js";
 import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
-import { message, messageHead, messageReceipt, localMessage, draftMessage, markWords, pollDelivered, marksSig, delivery, onJump, helperFolds, chatPages, pageEdit } from "../ui/message.js";
+import { message, messageHead, messageReceipt, localMessage, draftMessage, markWords, pollDelivered, marksSig, approvalLine, delivery, onJump, helperFolds, chatPages, pageEdit } from "../ui/message.js";
 import { chatView } from "../rich/artifact.js";
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
 import { openQuick, quickOpen, closeQuick, quickPanel, laterButtons, setLater } from "../ui/quick.js";
@@ -38,7 +38,7 @@ import { callFor, hangUp } from "../ui/phone.js";
 import { brought } from "../ui/brought.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
 import { hiveStopped, TOPX } from "../ui/shell.js";
-import { openApproval, forCard, cardWhy } from "../ui/rootword.js";
+import { openApproval, forCard, cardWhy, pollCard } from "../ui/rootword.js";
 import { composer, interruptButton, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, hasDraft, quoteRef, prefill } from "../ui/composer.js";
 
 const STEP = 500, FIRST = 250, NEAR = 60, GROUP = 10 * MIN, HELPER_AFTER = 3 * MIN;
@@ -502,6 +502,8 @@ function refreshHead(a) {
   if (a._head === L.heads) return;
   a._head = L.heads;
   const p = S.byId[a.getAttribute("data-key")]; if (!p) return;
+  const ap = approvalLine(p);   // an approval line (rootword.js) is redrawn whole: what it says changes with root's record, and it may only now have become one
+  if (ap || a.classList.contains("msg-appr")) { const n = ap || message(p, L.opts); n.dataset.show = a.dataset.show || ""; n._head = L.heads; const b = morph(a, n); b._head = L.heads; return; }
   const hd = a.querySelector(":scope > .msg-h, :scope > .msg-c > .msg-h"), rc = a.querySelector(":scope > .msg-rc, :scope > .msg-c > .msg-rc");
   if (hd) morph(hd, L.opts.showThread === false ? inConversation(p.th, () => messageHead(p, L.opts)) : messageHead(p, L.opts));   // the same scope as message(), or a refresh renames the agent
   if (rc) morph(rc, messageReceipt(p));
@@ -1773,7 +1775,7 @@ export default {
   title: a => (a === "~list" ? (app() ? "Conversations" : "Threads") : a === "~new" ? (app() ? "New conversation" : "New thread") : null),   // the tab's title (app.js where): a thread is named by its h1
   tab: true,
   badge: () => { if (!app() || !S.live) return null; if (!simpleOn()) { loadFoci(); loadNeedsYou(); } if (!needsKnown()) return null; const n = needsN(); return n ? String(n) : null; },
-  poll: { every: 3000, run: async ctx => { if (await pollDelivered()) ctx.update(); } },
+  poll: { every: 3000, run: async ctx => { const [a, b] = await Promise.all([pollDelivered(), pollCard()]); if (a || b) ctx.update(); } },
   escape: () => { if (closeQuick()) return; if (C.menu || C.find) { C.menu = null; if (!C.q.trim()) C.find = false; L.ctx && L.ctx.update(); return; } if (C.more) { C.more = null; L.ctx && L.ctx.update(); return; } if (!cancelReply() && asideOpen()) closeAside(); },
   // The home is where the focus cards are: arriving on it is the person's look at them (core/foci.js markSeen; never from a driven browser).
   enter: ctx => { C.arrived = true; const c = conversation(ctx && ctx.arg); if (app() && c.home && !c.list && !c.archived) lookAt(null, true); },

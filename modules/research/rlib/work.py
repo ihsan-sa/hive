@@ -1023,12 +1023,21 @@ def mentioned_publication(r):
 
 
 EVENT_WORD = re.compile(r"\b(?:fair|summit|expo|conference|symposium|showcase|career day|career week|festival|forum|convention|open house|networking night|meet-up|meetup)s?\b", re.I)
+PLACE_WORD = re.compile(r"\b(?:renovat\w*|re-?open(?:s|ed|ing)?|reimagined|ribbon[- ]cutting|grand opening|space|spaces|building|buildings|facility|facilities|anniversary)\b", re.I)   # a renovated career center, its reopening or its anniversary (FAU's, fnwords142); not "center", which every office's name has
+LIST_LEAD = r"\b(?:like|such as|including)\s+"
+def ai_list_item(sentence, must):
+    """The sentence's AI term is one item in a list of things ("emerging technologies like AI and virtual reality", "tools such as VR, AI and 3D printers"), not what it is about."""
+    f = fold(sentence)
+    t = "(?:" + "|".join(people.term_regex(m).pattern for m in must) + ")"
+    return bool(re.search(LIST_LEAD + r"(?:[^.;:!?]{0,60}?)" + t + r"\s*(?:,|\band\b|\bor\b|&)\s*(?!the\b|that\b|which\b|it\b|we\b|they\b)[a-z0-9]", f)
+                or re.search(LIST_LEAD + r"[^.;:!?]{0,60}?(?:,|\band\b|\bor\b|&)\s*(?:the\s+)?" + t, f))
 DEICTIC_START = re.compile(r"^\W*(?:this|that|it|these|those|which|here)\b", re.I)
 THIN_SIGNAL = "a thin signal: "
 def thin_signal_why(r, page_text="", page_title="", must=()):
     """Why a row's own signal is too thin to verify it on its own, or ''. Two shapes from fnwords141's review, both WEAK:
     (1) a newsroom's one-line mention that they published a paper with AI in its title, more than a year old, with nothing of theirs on AI (Cooper, Collin's "In Brief: February 2025");
-    (2) their quote is about an event, and its only AI words are one short sentence pointing back at it ("This is one way we are navigating artificial intelligence", Hall on High Point's career summit), with no other sentence on the page tying them or their unit to AI (a guest speaker's AI talk on the same page is hers, not theirs)."""
+    (2) their quote is about an event, and its only AI words are one short sentence pointing back at it ("This is one way we are navigating artificial intelligence", Hall on High Point's career summit), with no other sentence on the page tying them or their unit to AI (a guest speaker's AI talk on the same page is hers, not theirs).
+    From fnwords142's review (WEAK): the quote may be about a place, and the AI words one item in a list ("This newly renovated space is open, barrier-free, and intentionally designed for emerging technologies like AI and virtual reality", Montalvo on FAU's career center)."""
     sig = str(r.get("signal") or "")
     if not sig.strip() or sig.startswith("(") or r.get("signal_near_person") != "yes": return ""
     if mentioned_publication(r):
@@ -1043,8 +1052,11 @@ def thin_signal_why(r, page_text="", page_title="", must=()):
     has = lambda t: any(people.term_regex(m).search(fold(t)) for m in must)
     said = [s.strip() for q in parts for s in people._sentences(" ".join(q.split())) if s.strip()]   # each quoted span on its own: joined, "... space," and "This is one way ..." ran together
     ai = [s for s in said if has(s)]
-    if len(ai) != 1 or len(said) < 2 or len(ai[0].split()) > 15 or not DEICTIC_START.search(ai[0]): return ""
-    if not (EVENT_WORD.search(quoted) or EVENT_WORD.search(page_title or "")): return ""
+    if len(ai) != 1 or len(said) < 2: return ""
+    listed = ai_list_item(ai[0], must)
+    if not listed and (len(ai[0].split()) > 15 or not DEICTIC_START.search(ai[0])): return ""
+    about = next((w for w, rx in (("an event", EVENT_WORD), ("a place", PLACE_WORD)) if rx.search(quoted) or rx.search(page_title or "")), "")
+    if not about: return ""
     toks = [t for t in re.findall(r"[^\W\d_][\w'\u2019-]*", people.clean_name(r.get("name") or "")) if len(t) >= 2]
     surname = re.compile(r"\b" + re.escape(fold(toks[-1])) + r"\b") if toks else None
     unit = re.search(r"\b(?:of|for)\s+(.+)$", str(r.get("title") or ""), re.I)
@@ -1054,7 +1066,8 @@ def thin_signal_why(r, page_text="", page_title="", must=()):
         f = fold(s)
         if own and own in f: continue   # the quote's own sentence, with "Hall said" beside it
         if has(s) and ((surname and surname.search(f)) or (unit and unit in f)): return ""
-    return f"{THIN_SIGNAL}their only AI words are one passing sentence in a quote about an event ({ai[0][:80]})"
+    what = "one item in a list in one sentence" if listed else "one passing sentence"
+    return f"{THIN_SIGNAL}their only AI words are {what} in a quote about {about} ({ai[0][:80]})"
 
 HUNT_SPEC_KEYS = frozenset("fresher_signal org_signal_shapes goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms head_terms allow_org_signal allow_weak_org_signal roster_verifies person_signal held_signal official_recheck sources read_per_search skip_hosts allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words signal_kinds menu_statement unit_signal people_first".split())
 

@@ -3835,6 +3835,16 @@ def voice_retry():
 
 
 # Must match EDIT_NOTE in web/js/core/model.js, byte for byte: the page signs it.
+# An approval line (root's card takes these three, web/js/ui/wordkind.js KINDS). Once the card is on (word_card), the dashboard never posts one as an
+# ordinary message: Send opens the card, and only Confirm there makes it the person's word. A page loaded before a change to those kinds (a tab or
+# the home-screen app left open) can still post one plainly, and then the person thinks it counts when it doesn't (the person, 112510214daf). So
+# /api/post refuses one unless the page says it means it (plain_word: the composer where there's no card for it, e.g. the tailnet).
+WORD_LINE = re.compile(r"\s*(?:yes:|yes, standing:|withdraw standing:)", re.I)
+STALE_WORD = ("Not sent: an approval counts only once you confirm it on root's card. Reload the page (or close and reopen the app, and sign in "
+              "if asked), then send it from the conversation's message box, where Send becomes Approve.")
+def stale_word(text, plain_word, card):
+    """True when /api/post should refuse this text: an approval line, the card is on, and the page didn't say it sends it plainly on purpose."""
+    return bool(card) and plain_word is not True and bool(WORD_LINE.match(str(text or "")))
 EDIT_NOTE = "(edited message {v}: this version replaces it. Answer it instead, as if that message and your answer to it were never sent; anything already done for it stays done, so don't redo it.)\n"
 
 def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None, sig=None, interrupt=False, effort=None, notice=False, edit_of=None, retry_of=None, files_from=None, focus=None):
@@ -7992,6 +8002,7 @@ def serve(port):
             if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/default-model", "/api/starter", "/api/module", "/api/voice", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/mcp-url", "/api/signin-codex", "/api/account-key", "/api/design", "/api/shop-signin", "/api/brand", "/api/slack-door"):
                 try:
                     if u.path == "/api/post" and isinstance(d.get("page"), dict): res = page_edit_post(d.get("page"), d.get("thread"), limited="config" not in self.can)
+                    elif u.path == "/api/post" and stale_word(d.get("text"), d.get("plain_word"), word_shell("word_card")): raise ValueError(STALE_WORD)
                     elif u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True, edit_of=d.get("edit_of"), retry_of=d.get("retry_of"), files_from=d.get("files_from"), focus=d.get("focus"))
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
