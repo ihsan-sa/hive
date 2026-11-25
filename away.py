@@ -246,10 +246,11 @@ def passed_said(text, at, now):
     "Approve the change so it can go in (its deadline passed)". A restored ask can outlive its deadline, and a passed time shown as live reads as urgent (a0ad9, 1125021150a6).
     `at` may be later than the line was first said (k1161's status_at is 10:57Z, its "before about 06:33Z" was said at 02:58Z), so a bare clock time is the latest day it can mean:
     past `at`, the next one. No date in the note: which day a bare time meant is a guess. The line unchanged when no deadline in it has passed."""
-    text = str(text or ""); gone = [d for d in deadlines(text, at, roll=True) if d[0] <= now]
-    if not gone: return text
+    text = str(text or ""); said = deadlines(text, at, roll=True); gone = [d for d in said if d[0] <= now]
+    if not gone or len(gone) < len(said): return text   # one still ahead ("by 26 November, before about 06:33Z"): the line stands as said (a0ad9, 112503027c3b)
     for _, a, b in sorted(gone, key=lambda d: -d[1]): text = text[:a].rstrip() + text[b:]
     text = re.sub(r"\s+([.,;:!?)])", r"\1", re.sub(r"[ \t]{2,}", " ", text)).strip()
+    text = re.sub(r"[,;:]+(?=[.!?]|$)", "", text).strip()   # "Approve the change," + "." left by the cut
     return f"{text} (its deadline passed)"
 
 def past_deadline(text, at, now):
@@ -291,16 +292,94 @@ def shop_status():
     except (OSError, ValueError): return {}
     return d if isinstance(d, dict) else {}
 
+SHOP_SIGNIN_ASK = re.compile(r"^\W*(?:please\s+)?(?:(?:sign|log)(?:\s+(?:back|again))?[- ]?(?:in|on)\b|re-?(?:auth\w*|log\s?in|sign[- ]?in)\b|refresh\s+(?:the\s+)?(?:\w+\s+){0,2}(?:session|login|sign[- ]?in|cookies?)\b)", re.I)
+SHOP_SPEND = re.compile(r"\b(?:pay|paid|paying|payment|check(?:ing)?[- ]?out|order(?:s|ed|ing)?|buy|bought|purchase|approv\w*|charg\w*|invoice|confirm\w*|submit\w*|accept\w*|"
+                        r"upload\w*|repl(?:y|ies|ied)|answer\w*|choose|pick|decide|review\w*|agree\w*|sign(?:s|ed)? (?:off|the)\b)\b|\$|€|£", re.I)   # a step of the person's own besides the sign-in
+SHOP_ONLY_SIGNIN = set("""sign signs signed signing log logs logged logging login in on into back again re-auth reauth reauthenticate refresh session sessions cookie cookies browser profile
+    account accounts site the a an to your its both please now with and then also too expired dead new fresh jlc jlcpcb lcsc inventree link stripe app
+    on from through via using here machine computer desktop pc server box laptop phone iphone dashboard dash page today tonight tomorrow morning soon possible as when you can""".split())   # where and when: "on the machine", "as soon as you can" (a0ad9, 112503535a3a)
+def _machine_words():
+    """This machine's own names, read at runtime so no site name sits in the source (ad748, 1125040184c6): the hostname and the words in ~/.hive/machine-names (what people call it)."""
+    import socket
+    w = set(re.findall(r"[a-z][a-z0-9-]*", socket.gethostname().split(".")[0].lower()))
+    try: w |= set(re.findall(r"[a-z][a-z0-9-]*", (HOME / ".hive" / "machine-names").read_text().lower()))
+    except OSError: pass
+    return w
+SHOP_ONLY_SIGNIN |= _machine_words()
+SHOP_PERSON_ASK = re.compile(r"^\W*(?:(?:please|can you|could you|would you)\s+)?(?:look|check|see|view|read|test|try|listen|watch|tell|say|let|open|inspect|compare|choose|pick|decide|answer|reply|"
+                             r"confirm|review|give|send|share|note|plug|press|walk|click|tap|fill|enter|type|paste|add|install|run|set|update|allow|accept|upload)\b|\byour?\b", re.I)   # the ask is a step of the person's own, whatever its why says
+SHOP_ONLY_WHY = re.compile(r"\b(?:only|just(?!\s+(?:now|expired|ended|died|lapsed|timed|logged|ran|went|got|been|happened|dropped|broke)\b)|all (?:that's|that is|it) (?:left|needs?)|nothing (?:else|more)|no other)\b", re.I)   # the why says the sign-in is the person's whole part
+SHOP_THEN_PERSON = re.compile(r"\b(?:then|afterwards?|after that|later|next)\b[^.;]*\b(?:the person|you)\b(?!')", re.I)   # "... then the person picks the finish", "next you choose the colour" (a0ad9, 11250411323b)
+SHOP_PERSON_SUBJ = re.compile(r"\b(?:the person|you(?:'(?:ll|d|ve|re))?)\b(?!')", re.I)   # "they" is mostly the cookies ("they expire every few days"), so it isn't a subject here (a0ad9, 11250428cd6d); "you'll" is (112504420137)
+SHOP_THEN_THEY = re.compile(r"\bthen,?\s+they\b", re.I)   # "..., then they pick the finish": "they" after "then" is the person (a0ad9, 112504420137)
+SHOP_STEP_SKIP = set("can could will would must should may might shall need needs needed has have had to do does did only just then also still afterwards afterward later next first simply again now please be".split())
+SHOP_STEP_NOT = set("""sign signs signing signed sign-in log logs logging logged login log-in re-auth reauth reauthenticate re-sign resign refresh refreshes refreshing in on into back out
+    is are was were the a an their its this that it it's them those these i we""".split())   # the word after the person that is no step of theirs: the sign-in itself, or no verb at all
+SHOP_SIGNIN_ORDER = re.compile(r"(?:^|[.;:!]\s*|\b(?:just|only|please)\s+)(?:sign|log)(?:\s+back)?\s+in\b", re.I)   # "just sign in, and then check the render": the sign-in as an order to the person, no subject (a0ad9, 112504469c01)
+SHOP_THEN_ORDER = re.compile(r"(?:^|[.;:!?,-]\s*)(?:and\s+)?(?:then|afterwards?|after that|next)\b,?", re.I)   # "just sign in to JLC; then check the render": a step as an order opening the next clause (a0ad9, 11250502652f)
+SHOP_STEP_JOIN = {"and", "then", "but", "plus"}   # "sign in and pick the finish", "sign in, then they pick": a second step in the same clause
+SHOP_SUBJ_WORDS = {"they", "you", "you'll", "you'd", "you've", "you're"}
+
+def _shop_word(w): return bool(re.fullmatch(r"[a-z][a-z'-]*", w))
+
+def _shop_step_at(toks, k):
+    """True when toks[k:] begins with the person's step: an optional subject, then modals and adverbs, then a verb that is no sign-in word."""
+    if toks[k:k + 2] == ["the", "person"]: k += 2
+    elif k < len(toks) and toks[k] in SHOP_SUBJ_WORDS: k += 1
+    while k < len(toks) and toks[k] in SHOP_STEP_SKIP: k += 1
+    return k < len(toks) and _shop_word(toks[k]) and toks[k] not in SHOP_STEP_NOT
+
+def _shop_clause_step(toks, k):
+    """After a sign-in word at toks[k], True when the same clause (up to . ; or a bracket) joins a second step: "sign in and approve the quote", "signs in, then picks the finish"."""
+    for n in range(k + 1, len(toks)):
+        if toks[n] in (".", ";", "?", "!"): return False   # a bracket goes on: "only you can sign in (then pick the finish)" (a0ad9, 112504469c01)
+        if toks[n] in SHOP_STEP_JOIN and _shop_step_at(toks, n + 1): return True
+    return False
+
+def shop_person_step(why):
+    """True when the why has the person doing something besides the sign-in: "the person then approves it", "afterwards the person picks the finish", "only you can sign in and confirm the cart".
+    After "the person" or "you", modals and adverbs are skipped ("can", "only needs to", "will then"); the next word is their step unless it is a sign-in word or no verb,
+    so "only the person can sign in again", "you just need to sign in", "as soon as you can." and "which the person does in the browser" name no step (a0ad9, 11250428cd6d).
+    After a sign-in word the clause is read on: "and", "then" or "but" followed by another verb is a second step (a0ad9, 112504420137)."""
+    if SHOP_THEN_PERSON.search(why): return True
+    low = why.lower()
+    for m in SHOP_THEN_THEY.finditer(low):
+        if _shop_step_at(re.findall(r"[a-z][a-z'-]*|\S", low[m.end():]), 0): return True
+    for m in SHOP_THEN_ORDER.finditer(low):
+        if _shop_step_at(re.findall(r"[a-z][a-z'-]*|\S", low[m.end():]), 0): return True
+    for m in SHOP_SIGNIN_ORDER.finditer(low):
+        if _shop_clause_step(re.findall(r"[a-z][a-z'-]*|\S", low[m.end():]), -1): return True
+    for m in SHOP_PERSON_SUBJ.finditer(low):
+        toks = re.findall(r"[a-z][a-z'-]*|\S", low[m.end():])
+        for k, w in enumerate(toks):
+            if w in SHOP_STEP_SKIP: continue
+            if _shop_word(w) and w not in SHOP_STEP_NOT: return True
+            if _shop_word(w) and _shop_clause_step(toks, k): return True
+            break
+    return False
+
+SHOP_REASON = re.compile(r"\b(?:so|because|since|as)\b(?![^.;]*\byour?\b)[^.;]*", re.I)   # "... so the cart can be refreshed": the agent's step, not the person's; "so you can confirm" is theirs
+SHOP_NOT_SIGNIN = re.compile(r"\bpass(?:word|code|key)s?\b|\b2fa\b|\btwo[- ]factor\b|\bverif\w*|\bOTP\b|\bphone\b|\bexport\w*|\bcookies?\.txt\b|\bcookies?\s+(?:file|to)\b|~/|/home/", re.I)
+
 def shop_signed(e, shops):
-    """(shop label, check epoch) when person ask e waits on a shop's sign-in or cookies (its ask or why names the shop and a sign-in word) and shops.py's check of that shop,
-    made after the ask went to the person, says signed in; else None. Only a check newer than the wait counts: an older "in" doesn't answer an agent that hit a dead session since
+    """(shop label, check epoch) when person ask e waits only on a shop's sign-in and shops.py's checks of every shop it names, made after the ask went to the person, say signed in; else None.
+    A sign-in wait is an ask whose verb is the sign-in itself ("Sign in to JLCPCB again", "Refresh the JLC session") or whose why says the wait is the sign-in or cookies (k1484: an agent
+    blocked on the JLC cart), only when that why says the sign-in is the person's only part ("only", "just", "nothing else"), names no step of theirs after it, and the ask is the agent's own job, not
+    a step of the person's ("Look at the JLC board render", anything to "you"). Never one that also spends or approves (pay, check out, order, buy, approve, charge, a price), nor one about a password, 2FA or verification, nor one that
+    wants a cookie export or a file, nor a sign-in ask with any step of the person's after it ("and confirm the quote", "then upload the gerbers"): shops.py reads the browser profile, not a file, and a signed-in shop still leaves those to the person (a0ad9, 112503027c3b). Every shop the ask
+    names must be in: "Sign in to JLCPCB and LCSC" stands while LCSC is out. Only a check newer than the wait counts: an older "in" doesn't answer an agent that hit a dead session since
     (k1484: fresh JLC cookies asked for at 05:38 while the person had signed in the night before; a4d66 and ad748, friction-asks 11250232ed0b)."""
-    text, since = f"{e.get('ask') or ''} {e.get('why') or ''}", stamp(e.get("status_at") or e.get("when") or e.get("at"))
-    if since is None or not SHOP_SIGNIN.search(text): return None
-    for k, (label, rx) in SHOP_NAMES.items():
-        st = (shops or {}).get(k) or {}
-        if st.get("state") == "in" and (st.get("at") or 0) > since and re.search(rx, text, re.I if k != "link" else 0): return label, st["at"]
-    return None
+    ask, why = str(e.get("ask") or ""), str(e.get("why") or "")
+    text, since = f"{ask} {why}", stamp(e.get("status_at") or e.get("when") or e.get("at"))
+    if since is None or SHOP_SPEND.search(ask) or SHOP_NOT_SIGNIN.search(text): return None
+    if not (SHOP_SIGNIN_ASK.search(ask) or SHOP_SIGNIN.search(why)): return None
+    if not SHOP_SIGNIN_ASK.search(ask) and (SHOP_PERSON_ASK.search(ask) or not SHOP_ONLY_WHY.search(why) or shop_person_step(why)): return None   # a why-only wait drops only when
+    # the why says the sign-in is the person's only part: a verb list always misses one ("Click Allow on the JLC page", "Enter the JLC coupon code"; a0ad9, 112503360d00 and 112503535a3a)
+    if SHOP_SIGNIN_ASK.search(ask) and set(re.findall(r"[a-z][a-z0-9-]*", SHOP_REASON.sub(" ", ask).lower())) - SHOP_ONLY_SIGNIN: return None   # "Sign in to JLCPCB and upload the gerbers": a second step stays theirs (a0ad9, 11250326d281); digits stay in a word so a hostname like the machine-names words matches (11250502652f)
+    named = [(k, label) for k, (label, rx) in SHOP_NAMES.items() if re.search(rx, text, re.I if k != "link" else 0)]
+    checks = [((shops or {}).get(k) or {}) for k, _ in named]
+    if not named or not all(st.get("state") == "in" and (st.get("at") or 0) > since for st in checks): return None
+    return " and ".join(label for _, label in named), min(st["at"] for st in checks)
 
 def ask_rule(e, gone, now, shops=None):
     """Why a person ask is no longer the person's to do, by code's rules, or None: an agent said its premise is gone after it went to them (its owner, or naming it), or its stated
@@ -397,7 +476,7 @@ def expire_person(now=None, posts=None, items=None, by="code", shops=None):
         th = e.get("thread") or e.get("post")
         if rule == "shop signed in":   # not dropped: the work still needs doing, by its agent (ad748, friction-asks 11250232ed0b)
             label, at = shop_signed(e, shops)
-            why = f"{label} shows signed in (shop check {fmt_t(at)}, after this went to the person)"
+            why = f"{label} {'show' if ' and ' in label else 'shows'} signed in (shop check {fmt_t(at)}, after this went to the person)"
             asks.append(asks.LEDGER, {"id": i, "at": dt.datetime.fromtimestamp(now, dt.timezone.utc).isoformat(timespec="seconds"), "by": by, "status": "owned" if e.get("owner") else "open", "why": why, "rule": rule})
             out.append({"id": i, "thread": th, "rule": rule, "why": why, "text": e.get("ask") or "", "from": str(e.get("owner") or ""), "at": stamp(e.get("when") or e.get("at"))})
             continue

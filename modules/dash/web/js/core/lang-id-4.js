@@ -125,6 +125,7 @@ export default {
   "was ended by the starter after going quiet": "dihentikan oleh starter setelah menjadi senyap",
   "was on": "sedang mengerjakan",
   "was on:": "sedang mengerjakan:",
+  "before this run:": "sebelum sesi ini:",
   "what is this about": "ini tentang apa",
   "worse than the day before": "lebih buruk dari hari sebelumnya",
   "you asked": "Anda yang meminta",

@@ -902,6 +902,7 @@ def listed_kind(r):
     full = r"\b" + r"\W+(?:\w+\.?\W+){0,2}".join(re.escape(t) for t in (toks[:1] + toks[-1:] if len(toks) > 1 else toks)) + r"\b"
     if re.search(r"(?:^|\s)by\s+(?:\w+\.?\s+){0,1}" + full + r"\W*$", sig, re.I) or re.match(r"\s*by\s+" + full, sig, re.I): return "publication"
     if re.search(full + r"(?:[^.;:!?]|\.(?=[\w,])){0,120}?\b(?:published|co-?authored|authored|co-?wrote|wrote|penned)\s+(?:a|an|the|her|his|their)\s+(?:[\w-]+\s+){0,2}?(?:article|paper|book|chapter|essay|op-ed|column|study|piece)\b", sig, re.I): return "publication"   # the newsroom's line that they published an article ("Dr. Tonya Cooper, associate dean ..., recently published the article, \u201cThe Impact of Artificial Intelligence on the Workforce ...\u201d"): their work, named by someone else, not their words (fnwords136 review)
+    if interview_intro(sig, r.get("name")): return "narration"
     if paraphrased(sig, r.get("name")): return "paraphrase"
     if narrated(sig, r.get("name")): return "narration"
     return k
@@ -918,13 +919,21 @@ def narrated(sig, name):
     return bool((nm and re.search(r"\b" + nm + r"\b", sig)) or THIRD_PERSON.search(sig))
 
 
+def interview_intro(sig, name):
+    """A channel's or host's introduction to its interview: "We sat down with Sandra Bachert, ... to discuss how OCC is adapting to AI-driven change". It is the channel's words about the conversation, not a restatement of hers, so `narration`, not `paraphrase` (fnwords139 review; fnwords135's had called it a paraphrase)."""
+    toks = [t for t in re.findall(r"[^\W\d_][\w'’-]*", people.clean_name(name or "")) if len(t) >= 2]
+    if not toks: return False
+    nm = r"(?:" + "|".join(re.escape(t) for t in dict.fromkeys(toks[:1] + toks[-1:])) + r")"
+    return bool(re.search(r"\b(?:sat down|spoke|speaks|talked|talks|chatted|chats|caught up|sits down|interviewed?)\s+(?:with\s+)?(?:\w+\.?\s+){0,3}?" + nm + r"\b", str(sig or ""), re.I))
+
+
 def paraphrased(sig, name):
     """A reporter's words for what the person said, with no quotation marks: their name with "said", "explained" and the like after it ("Anahid Petrosian, Ph.D., said for the last two years, STC has invested ..."), or "said"/"according to" before it."""
     sig = str(sig or "")
     toks = [t for t in re.findall(r"[^\W\d_][\w'’-]*", people.clean_name(name or "")) if len(t) >= 2]
     if not toks: return False
     nm = r"(?:" + "|".join(re.escape(t) for t in dict.fromkeys(toks[:1] + toks[-1:])) + r")"
-    if re.search(r"\b(?:sat down|spoke|speaks|talked|talks|chatted|chats|caught up|sits down|interviewed?)\s+(?:with\s+)?(?:\w+\.?\s+){0,3}?" + nm + r"\b", sig, re.I): return True  # an interview's introduction: "We sat down with Sandra Bachert, ... to discuss how OCC is adapting to AI-driven change" is the channel's words about her, not hers (fnwords135 review)
+    if interview_intro(sig, name): return True  # not their words either, so the hunt still looks for their own quote below it; listed_kind labels it narration first
     if not toks or re.search(r"[\"“”„«»]", sig): return False
     return bool(re.search(r"\b" + nm + r"\b(?:[^.;:!?]|\.(?=[\w,])){0,60}?\b" + SAID + r"\b", sig) or re.search(r"\b(?:" + SAID + r"|according to)\s+(?:\w+\s+){0,6}?" + nm + r"\b", sig, re.I))
 
@@ -2580,6 +2589,7 @@ class Hunt:
                 reg = registrable(domain_of(h["url"]))
                 tld = reg.rsplit(".", 1)[-1]
                 inst = tld in ("edu", "gov") or bool(re.search(r"\.(?:edu|ac|gov)\.[a-z]{2}$", reg))
+                if school and tld == "gov": continue  # a college is not its county's site: miamidade.gov spells "Miami Dade College" but is Miami-Dade County's; the college is mdc.edu (fnwords139 review)
                 if inst and (label_names(org, reg) or self.short_name_site(org, reg, h.get("title") or "")): got = own_site(org, domain_of(h["url"])); break  # "Lead the Way | Wake Tech" names no org, but waketech.edu, dmacc.edu, fscj.edu spell it (fnwords103)
                 if not people.names_org(org, h.get("title") or ""): continue
                 if people.official(org, h["url"], None, h.get("title") or "") or (inst and school):  # tri-c.edu spells nothing of Cuyahoga Community College, but its title names it
@@ -3084,7 +3094,9 @@ class Hunt:
         far = sum("signal isn't near" in r.get("note", "") for r in self.near.values())
         if far and self.must: lines += ["## Held back", f"- {far} near misses are only held because the `must` words aren't close to the person. If those words describe the organisation rather than the person, set `\"allow_page_signal\": true` in the spec.", ""]
         named = {r["organisation"] for r in self.near.values() if self.good_role(r.get("title", "")) and r.get("check_status") == "verified" and "puts them at" not in (r.get("note") or "")}  # a page that puts the person at another employer (Wake's NC Chamber speakers, fnwords103) names no head of this org  # a near miss in a head's role names a head: the org's head was found and held for another reason
-        nh = {o: u for o, u in self.no_head.items() if not self.org_count(o) and o not in named}
+        nh, seen_u = {}, set()
+        for o, u in self.no_head.items():  # one line per office page: "Seminole State College" and "...of Florida" both ended on connect.seminolestate.edu (fnwords139)
+            if not self.org_count(o) and o not in named and u not in seen_u: nh[o] = u; seen_u.add(u)
         if nh: lines += ["## No named head", "The office page was read and prints only a mailbox or phone, no person, and no page read on its site named a head in the role. This is a gap in the source or in the search:", *[f"- {o} — [{u}]({u})" for o, u in nh.items()], ""]
         if untried: lines += ["## Organisations not tried", *[f"- {o}" for o in untried[:30]], ""]
         (out_dir / "REPORT.md").write_text("\n".join(lines) + "\n")

@@ -212,8 +212,13 @@ ASK_WORDS = re.compile(r"\b(please|can you|could you|would you|next step for you
 ASKED_NAME = r"`@?([a-z][0-9a-f]{4}|rootwarden|warden)`"   # an agent code, or a named agent people ask for rulings and root work
 DO_VERBS = ("fix|add|check|build|make|take|run|send|restart|look|review|update|write|post|merge|remove|drop|test|measure|tell|cover|close|"
             "try|do|find|keep|move|answer|reply|confirm|rebuild|redo|finish|start|own|handle|rule|install|give|use|set|put|read|rerun|retest")
+STATUS_NEXT = (r"(?![ \t]+(?:is|was|are|were|has|had|landed|done|passes|passed|fails|failed|ended|merged|green|red|live|ok|"
+               r"committed|shipped|clean|in[ \t]+`?[0-9a-f]{7}|[0-9a-f]{7,}\b|\d))")   # "`a33b1`: fix landed", "test passes", "post 1125..." is a status row
 ASK_LINE = re.compile(r"(?m)^[ \t]*(?:[-*][ \t]+|\d+[.)][ \t]+)?(?:\*\*)?" + ASKED_NAME + r"(?:\*\*)?[ \t]*[:,][ \t]*(?:\*\*)?[ \t]*"
-                      r"(?:please[ \t]+|can you[ \t]+|could you[ \t]+)?(?:" + DO_VERBS + r")\b", re.I)   # "`a9d22`: fix X", "- `warden`, please rule on Y"
+                      r"(?:please[ \t]+|can you[ \t]+|could you[ \t]+)?(?:" + DO_VERBS + r")\b" + STATUS_NEXT, re.I)   # "`a9d22`: fix X", "- `warden`, please rule on Y"
+FENCED = re.compile(r"```.*?(?:```|\Z)", re.S)
+WHOEVER = re.compile(r"\b(whoever|anyone|anybody|someone|somebody)\b", re.I)
+WRITE_NAME = re.compile(r"\b(?:with|write|writing|mention|mentioning|add|include|including|put)[ \t]+`@[^`\n]*`", re.I)   # "post it with `@rootwarden`": the person is told what to write
 
 def unwoken_ask_note(text, to, me, thread, board=None, running=None):
     """A warning when an agent's post asks someone to act but names the agent it means only in backticks, so it wakes nobody.
@@ -225,15 +230,17 @@ def unwoken_ask_note(text, to, me, thread, board=None, running=None):
     post wakes. `board` and `running` are for replays. None on any error."""
     try:
         to = {str(n).lower() for n in to}
-        plain = "\n".join(l for l in (text or "").splitlines() if not l.lstrip().startswith(">"))   # a quoted older ask asks nothing now
+        plain = "\n".join(l for l in FENCED.sub("\n", text or "").splitlines() if not l.lstrip().startswith(">"))   # a quoted older ask or a fenced example asks nothing now
         board = list(posts()) if board is None else board
         live = (lambda n: (RUN / f"{n}.json").exists()) if running is None else (lambda n: n in running)
         seen = {str(q.get("from", "")).lower() for q in board}
         here = {str(q.get("from", "")).lower() for q in board if q.get("thread") == thread}
         lined = {m.group(1).lower() for m in ASK_LINE.finditer(plain)} & seen
         asked = set()
-        if not (to - {me}) and ASK_WORDS.search(CODE.sub(" ", plain)):
-            asked = {m.group(1).lower() for c in CODE.findall(plain) if (m := re.fullmatch(ASKED_NAME, c.strip()))} & here
+        spoken = QUOTE_SPAN.sub(" ", CODE.sub(" ", plain))   # "please add ..." inside a quoted example or draft asks nothing
+        if not (to - {me}) and any(ASK_WORDS.search(z) and not WHOEVER.search(z) for z in re.split(r"(?<=[.!?])\s+|\n", spoken)):
+            asked = {m.group(1).lower() for c in CODE.finditer(WRITE_NAME.sub(" ", plain))
+                     if (m := re.fullmatch(ASKED_NAME, c.group(0).strip()))} & here   # an ask aimed at "whoever ..." is aimed at nobody named
         idle = sorted(n for n in (lined | asked) - to - {me} if not live(n))
     except Exception: return None
     if not idle: return None

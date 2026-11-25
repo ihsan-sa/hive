@@ -6,7 +6,7 @@
 // agent instruction. The only motion is time, at one speed. Design: projects/ui-redesign/flow-architecture.md.
 import { h, s, selecting } from "../core/dom.js";
 import { S, SYS, can } from "../core/store.js";
-import { loadNeedsYou, waitingOn } from "../core/needs.js";
+import { loadNeedsYou, waitingOn, rowText } from "../core/needs.js";
 import { isRunning, sEnd, threadChildren, threadTitle, displayText } from "../core/model.js";
 import { ago, clock, dayName, dur, mdPlain, now, plural, short, DAY, HOUR, MIN } from "../core/format.js";
 import { threadHref, go, href } from "../core/router.js";
@@ -99,7 +99,7 @@ function read(l, t0, t1) {
   for (const w of v.stale || []) {
     if (!w || !l.threads.has(w.thread)) continue;
     const p = S.byId[w.post] || { th: w.thread, id: w.post };
-    waits.push({ from: at(w.at) || p.t || t1, until: null, stale: true, text: w.action || "", post: p, dflt: dfltOf(p) });
+    waits.push({ from: at(w.at) || p.t || t1, until: null, stale: true, text: rowText(w), post: p, dflt: dfltOf(p) });
   }
   const live = runs.filter(x => !x.end && isRunning(x.name));
   return { runs, hand, waits: waits.filter(w => w.until == null || w.until >= t0), marks: marks.filter(p => p.t >= t0), decided: decided.filter(d => d.t >= t0), results: results.filter(r => r.t >= t0), live };

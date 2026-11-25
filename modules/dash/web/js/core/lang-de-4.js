@@ -124,6 +124,7 @@ export default {
   "was ended by the starter after going quiet": "wurde vom Starter beendet, nachdem er verstummt war",
   "was on": "war an",
   "was on:": "war an:",
+  "before this run:": "vor diesem Lauf:",
   "what is this about": "worum es geht",
   "worse than the day before": "schlechter als am Vortag",
   "you asked": "du hast gefragt",

@@ -257,7 +257,20 @@ export default {
   "Tier 2": "Stufe 2",
   "Held": "Angehalten",
   "goes first; its jobs use the heavy fast lane": "kommt zuerst; seine Jobs nutzen die schnelle heavy-Spur",
-  "the keeper starts no rounds on it; to stop agents now, use Pause": "der Keeper startet dafür keine Runden; um Agenten sofort zu stoppen, nutze Pausieren",
+  // friction pass 11-25 (thread friction-redesign): one-tap answer, Pause words
+  "10 seconds to undo.": "10 Sekunden zum Rückgängigmachen.",
+  "Answer with one tap": "Mit einem Tippen antworten",
+  "How long": "Wie lange",
+  "It stays paused until you press Resume here.": "Bleibt pausiert, bis du hier auf Fortsetzen drückst.",
+  "Last 24 hours: nothing yet": "Letzte 24 Stunden: noch nichts",
+  "Let agents start on it again": "Agenten dort wieder starten lassen",
+  "Nothing new starts. An agent already at work carries on until it stops. A message you write still starts one.": "Nichts Neues startet. Ein Agent, der schon arbeitet, macht weiter, bis er aufhört. Eine Nachricht von dir startet trotzdem einen.",
+  "Sending": "Wird gesendet",
+  "Sends": "Sendet",
+  "To see or change every pause, open Settings, Work tiers.": "Alle Pausen siehst und änderst du unter Einstellungen, Arbeitsstufen.",
+  "Undo": "Rückgängig",
+  "every conversation and focus with no work tier of its own": "jede Unterhaltung und jeder Fokus ohne eigene Arbeitsstufe",
+  "the keeper starts no rounds on it; Pause stops new starts at once": "der Keeper startet dafür keine Runden; Pausieren verhindert sofort jeden neuen Start",
   "after tier 2": "nach Stufe 2",
   "Back to the list": "Zurück zur Liste",
   "remove your dashboard setting": "deine Dashboard-Einstellung entfernen",
@@ -560,7 +573,12 @@ export default {
   "Got it": "Verstanden",
   "Hide this line": "Diese Zeile ausblenden",
   "One row per focus, a piece of your work with a goal, under where it stands: the ones that wait on you come first. Each row is the focus in a sentence or two. Click a focus name for the whole picture; Cards, beside the heading, shows every focus with its lines.": "Eine Zeile pro Fokus, ein Teil deiner Arbeit mit einem Ziel, danach geordnet, wie es steht: Die, die auf dich warten, kommen zuerst. Jede Zeile ist der Fokus in ein bis zwei Sätzen. Klick auf einen Fokusnamen für das ganze Bild; Karten, neben der Überschrift, zeigt jeden Fokus mit seinen Zeilen.",
+  // a timer job named in a pause line (ui/worktiers.js keyName: "the timer improve")
+  "the timer": "der Timer",
   __patterns: [
+    [/^You asked: (.+)$/, (_, w) => `Du hast gefragt: ${w}`],
+    [/^(?:One conversation in it has|(\d+) conversations in it have) a work tier of (?:its|their) own and keeps? going: (.+)\. Pause (?:it|them) from (?:its|their) own menu\.$/, (_, n, w) => (n ? `${n} Unterhaltungen darin haben eine eigene Arbeitsstufe und laufen weiter: ${w}. Pausiere sie über ihr eigenes Menü.` : `Eine Unterhaltung darin hat eine eigene Arbeitsstufe und läuft weiter: ${w}. Pausiere sie über ihr eigenes Menü.`)],
+    [/^It is paused with (?:one other|(\d+) others) that share its work tier; resuming starts them too: (.+)$/, (_, n, w) => (n ? `Pausiert mit ${n} weiteren, die seine Arbeitsstufe teilen; Fortsetzen startet sie mit: ${w}` : `Pausiert mit einer weiteren, die seine Arbeitsstufe teilt; Fortsetzen startet sie mit: ${w}`)],
     // from lang-es-4.js
     // a focus page's For you here: what was said to the person with no reply after it, under the needs count (focus.js yoursSec, HA-17)
     [/^(\d+) messages? to you with no reply after (?:it|them)$/, (_, n) => `${n} ${n === "1" ? "Nachricht" : "Nachrichten"} an dich ohne Antwort danach`],

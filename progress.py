@@ -582,13 +582,15 @@ def runs_in(log, t0, t1):
         return False
     bad = [r for r in ends if r.get("exit") not in (0, None) and not resumed(r)]
     nlim = sum(1 for r in bad if limited(r))
-    reaped = sum(1 for r in log if r.get("event") == "reaped" and t0 <= r.get("at", "") <= t1)
+    # a move (move=True: parked on a login that ran out, ended so it resumes on another) is logged as reaped but is no stuck run;
+    # 4 of the 15 reaps on 11-24/25 were moves (i0441 read-back), so they count apart as runs_moved
+    reaped = sum(1 for r in log if r.get("event") == "reaped" and not r.get("move") and t0 <= r.get("at", "") <= t1)
     return len(starts), len(bad) - nlim, reaped, nlim
 
 def reaped_repeat(log, t0, t1):
     """Reaps of an agent already reaped within the 3 h before (the reaper doubles that agent's quiet time, i0156), counted in the window."""
     last, n = {}, 0
-    for r in sorted((r for r in log if r.get("event") == "reaped"), key=lambda r: r.get("at", "")):
+    for r in sorted((r for r in log if r.get("event") == "reaped" and not r.get("move")), key=lambda r: r.get("at", "")):
         try: t = dt.datetime.fromisoformat(r["at"]).timestamp()
         except (KeyError, ValueError): continue
         if r.get("name") in last and t - last[r["name"]] <= 3 * 3600 and t0 <= r["at"] <= t1: n += 1
@@ -600,7 +602,7 @@ def reaped_signalled(log, posts, t0, t1):
     n = 0
     bar_rows = jsonl(HOME / ".hive" / "thread-status.jsonl")
     for r in log:
-        if r.get("event") != "reaped" or not (t0 <= r.get("at", "") <= t1): continue
+        if r.get("event") != "reaped" or r.get("move") or not (t0 <= r.get("at", "") <= t1): continue
         mine = [p for p in posts if p.get("from") == r.get("name") and p.get("at", "") <= r.get("at", "")]
         if mine and re.search(r"(?mi)^\s*waiting:", max(mine, key=lambda p: p["at"]).get("text", "")): n += 1; continue
         try: tr = dt.datetime.fromisoformat(r["at"]).timestamp()
@@ -857,7 +859,7 @@ def window(t0, t1, log, posts, items):
     landed = [e for e in items.values() if t0 <= e.get("at", "") <= t1]
     judged = [e for e in items.values() if t0 <= e.get("judged_at", "") <= t1 and e.get("judged_by") != "late-check" and e.get("status") not in CLOSING]
     rsi = [r for r in jsonl(RSI_LEDGER) if t0 <= r.get("at", "") <= t1]
-    w = {"from": t0, "to": t1, "runs": runs, "runs_failed": failed, "runs_reaped": reaped, "runs_reaped_signalled": reaped_signalled(log, posts, t0, t1), "runs_reaped_repeat": reaped_repeat(log, t0, t1), "runs_limited": limited, "runs_woken": events_in(log, t0, t1, "woken"),
+    w = {"from": t0, "to": t1, "runs": runs, "runs_failed": failed, "runs_reaped": reaped, "runs_reaped_signalled": reaped_signalled(log, posts, t0, t1), "runs_reaped_repeat": reaped_repeat(log, t0, t1), "runs_moved": events_in(log, t0, t1, "reaped") - reaped, "runs_limited": limited, "runs_woken": events_in(log, t0, t1, "woken"),
          "fail_pct": round(100.0 * failed / runs, 1) if runs else 0.0,
          "posts": nposts, "person_posts": nperson, "person_noticed_first": noticed, "watchdog_trips": watchdog_in(t0, t1), "watchdog_repeat": watchdog_repeat_in(t0, t1),
          "person_reply_p50_s": pct(rs, 0.5), "person_reply_p90_s": pct(rs, 0.9), "person_replies": len(rs),

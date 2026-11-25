@@ -225,13 +225,14 @@ const shownHeld = items => { if (C.q.trim() || !L.th || showAll(L.th) || !items.
 const shownOf = p => { if (C.q.trim() || !L.th || showAll(L.th)) return null; const e = SH.get(L.th); return e && e.map ? e.map[p.id] || null : null; };
 function lineRow(p, sh, ctx) {
   // "14:10 ac5f5: ac5f5 taking round 17" read the agent's name twice once codes became names (design round 1111b): drop the author's own code when the post starts with it
-  const line = labelCodes(String(sh.line || "").replace(/^(\d\d:\d\d (@?[\w-]+): )@?\2\b[:,]?\s*/, "$1"));
+  // named as the conversation's own messages name the agent ("Agent A"), not as it is named elsewhere ("Friction dash review2's agent A", a0ad9 #4)
+  const line = inConversation(L.th || p.th, () => labelCodes(String(sh.line || "").replace(/^(\d\d:\d\d (@?[\w-]+): )@?\2\b[:,]?\s*/, "$1")));
   // The server writes the line's time from the board's UTC stamp; show it in the viewer's own clock, as every other time here is (the person, 112012278aed).
   const t = p.t || Date.parse(p.at), lt = t ? line.replace(/^\d\d:\d\d /, clock(t) + " ") : line;
   const open = () => { OPENED.add(p.id); L.rebuild = true; L.keep = true; L.ctx && L.ctx.update(); };
   return h("div", { class: "cm-oneline", "data-key": p.id, "data-show": KIND_NAME[postKind(p)] || "" },
     h("button", { type: "button", class: "cm-one-b", "aria-label": tr("Open the whole message") + ": " + tr(lt), title: "Open the whole message", onclick: open }, h("span", { class: "cm-one-t" }, lt)),
-    (sh.also || []).map(a => h("p", { class: "cm-one-also meta" }, labelCodes(a))));
+    (sh.also || []).map(a => h("p", { class: "cm-one-also meta" }, inConversation(L.th || p.th, () => labelCodes(a)))));
 }
 // Notes sent from a document's viewer (ui/docviewer.js) or a file preview (preview/markup.js) are the app's words, not the person's:
 // the chat draws them as one line, "Comments on DOC sent", opened in full on a click; only what the person typed shows as their message (the person, 112211212a89).
@@ -1057,7 +1058,7 @@ function titleMenu(c, n, d, off, ctx) {
     full ? titleExtras(th, { files: () => import("../ui/preview.js").then(m => m.openFiles()), close: () => { C.menu = null; ctx.update(); } }) : null);
   // Pause / Resume (ad748): through the work tiers, which the starter obeys; the dialog says what it does.
   const pz = full && can("tier") ? pauseOf("thread", th, focusOf(th)) : null;
-  const pause = pz ? act(pz.held ? "Resume" : "Pause…", pz.held ? "play" : "pause", () => askPause("thread", th, focusOf(th), ctx.update), pz.held ? "Let agents start on it again" : "Agents save and stop; nothing new starts until you resume it") : null;
+  const pause = pz ? act(pz.held ? "Resume" : "Pause…", pz.held ? "play" : "pause", () => askPause("thread", th, focusOf(th), ctx.update), pz.held ? "Let agents start on it again" : "Nothing new starts on it until you resume it; an agent already at work carries on until it stops") : null;
   const where = part(...more,
     pause,
     prio,
@@ -1225,7 +1226,7 @@ export function topicOf(text) {
 export function lineText(text, { pill = true, topic = true } = {}) {   // pill: false draws an agent code as bold mono in the sentence (the Nov 8 handoff §1.5)
   if (topic) text = scrub(text);   // ids out first: a step id ("IM-3: …") or a post id is not what the line is about
   const tp = topic ? topicOf(text) : null;
-  if (tp) return [h("b", { class: "ln-k" }, tp.key), ...lineText(tp.rest, { pill, topic: false })];
+  if (tp) return [h("b", { class: "ln-k" }, tp.key), ...(/^\s/.test(tp.rest) ? [" "] : []), ...lineText(tp.rest.trimStart(), { pill, topic: false })];   // the rest's own space was lost: "Ultra(Jlc quote hifi lite)" (a0ad9)
   if (simpleOn()) return [].concat(plainPills(text));
   return pills(text).map(x => x && x.nodeType === 1 && x.dataset.kind === "thread" ? h("a", { class: "th", href: x.getAttribute("href"), title: x.title }, x.textContent)
     : x && x.nodeType === 1 && x.dataset.kind === "agent" ? (pill && x.classList.add("pill"), x) : x);
@@ -1258,15 +1259,26 @@ function outcome(ev) { const ids = String(ev || "").match(/\b[0-9a-f]{12}\b/g) |
  * footnote marks ("[^1]"), list dashes, commit hashes or file paths (a path reads as its file's name). A post that opens on housekeeping ("False start:
  * the first launch ran without my H2_NAME …") says nothing of what was done, so the row shows no line for it rather than that one.
  */
-const HOUSE = /^(?:false start|restart(?:ed|ing)?|relaunch(?:ed)?|retry(?:ing)?|re-?ran|note to self|heartbeat|ignore (?:this|that))\b/i;
+// Housekeeping is the agent's note about its own run: "False start: …", "Restarted after the crash", "Retrying.", "Heartbeat". A restart or retry with an
+// object or an outcome is work and shows ("Restarted the timer and fixed the plate check", "Retrying didn't help: the cart is still empty", a0ad9 #3).
+const HOUSE = /^(?:false start|note to self|heartbeat|ignore (?:this|that))/i, REDO = /^(?:restart(?:ed|ing)?|relaunch(?:ed|ing)?|retry(?:ing)?|re-?ran|re-?running|resum(?:ed|ing))\b/i;
+// "Restarted: the dash crashed, fixed the leak" and "Relaunched — the dash is back with the fix" go on to the work, so they show; "Retrying: rate limit." doesn't (a0ad9 #3)
+const house = l => { if (HOUSE.test(l)) return true; const r = REDO.exec(l); if (!r) return false; const rest = l.slice(r[0].length), p = /^\s*[:\u2014\u2013-]\s*/.exec(rest);
+  return /^\s+(?:after|since|because|now|here|myself|this run|the run|the session|from scratch|in a fresh session)\b|^\s*(?:[.!]|\(|$)/i.test(rest) || !!p && rest.slice(p[0].length).split(/\s+/).filter(Boolean).length < 4; };
 export function finishWords(t) {
+  let coded = false;
   const ls = bareLinks(mdPlain(String(t || ""))).split("\n").filter(l => !/^\s*\[\^[^\]]+\]:/.test(l)).map(l => l
     .replace(/\[\^[^\]]+\]/g, "").replace(/^\s*(?:[-*+\u2022]|\d+[.)])\s+/, "").replace(/^(?:@\S+\s+)+/, "")
-    .replace(/(?:\s+(?:in|at|as|to))?\s*\b(?:commit\s+)?(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/g, "")
+    .replace(/^([0-9a-f]{5})(\s*\([^)]*\))?:\s+/, (all, c, paren) => /\d/.test(c) || paren || isAgent(c) ? (coded = true, "") : all)   // a leading agent code, "a5db4 (keeper): " (friction re-check 2026-11-25)
+    // a hash goes with the words that only pointed at it: "see core 0b3a004" and "in core 0b3a004, e837fd5" leave nothing behind (a0ad9 #3)
+    .replace(/\b(?:commits?\s+)?(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\s+and\s+(?!(?:commits?\s+)?(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b)/g, "")
+    .replace(/(?:,?\s*\b(?:see|in|at|as|to|on)(?:\s+(?:core|the repo|repo|git|branch\s+[\w./-]+))?)?(?:,?\s*(?:and\s+)?\b(?:commits?\s+)?(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b)+(?=\s*(?:[.,;:!?()]|$))/g, "")
     .replace(/(?:~\/|\.{1,2}\/|\/)?(?:[\w.@-]+\/)+([\w@-]+(?:\.\w+)*)(?::\d+(?:-\d+)?)?(?=[\s,.;:)]|$)/g, "$1")
     .replace(/\(\s*[,;]?\s*\)/g, "").replace(/\s+([,.;:])/g, "$1").replace(/\s+/g, " ").trim()).filter(l => l && !/^[\s\W]*$/.test(l));
-  if (!ls.length || HOUSE.test(ls[0])) return "";
-  const x = ls.join(" "), m = x.match(/^.{20,200}?[.!?](\s|$)/), one = (m ? m[0] : x).trim();
+  if (!ls.length || house(ls[0])) return "";
+  const x = ls.join(" "), m = x.match(/^.{20,200}?[.!?](\s|$)/);
+  let one = (m ? m[0] : x).trim();
+  if (coded && /^[a-z]+\b/.test(one)) one = one[0].toUpperCase() + one.slice(1);   // "a5db4: built the deck." reads "Built the deck.", not "built …"; "ipv6's route" keeps its case
   return one.length > 140 ? one.slice(0, 139) + "\u2026" : one;
 }
 /** The ask whose closing post a finished conversation's row shows: its own ask (the one its first post made) when it was done since the last visit, else
@@ -1289,7 +1301,7 @@ function finishedItems() {
 }
 function homeFinished() {
   const it = finishedItems(); if (!it.length) return null;
-  const row = x => h("li", { class: "cm-fin-r", "data-key": "fin:" + x.th }, h("a", { href: threadHref(x.th) }, threadTitle(x.th)), x.what ? h("span", { class: "cm-old-q" }, " \u2014 ", x.what) : null, h("span", { class: "meta" }, " \u00b7 ", when(x.t)), x.more ? h("span", { class: "meta cm-fin-more" }, x.more === "person" ? " \u00b7 another ask here waits on you" : " \u00b7 the Hive is still on another ask here") : null);
+  const row = x => h("li", { class: "cm-fin-r", "data-key": "fin:" + x.th }, h("a", { href: threadHref(x.th) }, threadTitle(x.th).replace(/\s*\((?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\)/g, "")), x.what ? h("span", { class: "cm-old-q" }, " \u2014 ", x.what) : null, h("span", { class: "meta" }, " \u00b7 ", when(x.t)), x.more ? h("span", { class: "meta cm-fin-more" }, x.more === "person" ? " \u00b7 another ask here waits on you" : " \u00b7 the Hive is still on another ask here") : null);
   return h("section", { class: "cm-older cm-fin", "data-key": "fin", "aria-label": "Finished since your last visit" },
     h("details", { class: "cm-older-d", open: FIN.open ? "" : null, ontoggle: (e, d) => { if (e.target === d) FIN.open = d.open; } },
       h("summary", null, h("b", null, "Finished since your last visit"), h("span", { class: "meta" }, ` \u00b7 ${plural(it.length, "conversation")}`)),

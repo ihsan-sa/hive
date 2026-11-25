@@ -125,6 +125,7 @@ export default {
   "was ended by the starter after going quiet": "응답이 없어 시작기가 종료했습니다",
   "was on": "담당했던 작업",
   "was on:": "담당했던 작업:",
+  "before this run:": "이번 실행 전:",
   "what is this about": "무엇에 관한 것인지",
   "worse than the day before": "전날보다 나빠짐",
   "you asked": "내가 요청함",

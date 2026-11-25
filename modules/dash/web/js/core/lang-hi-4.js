@@ -125,6 +125,7 @@ export default {
   "was ended by the starter after going quiet": "चुप हो जाने पर स्टार्टर ने इसे समाप्त कर दिया",
   "was on": "इस पर था",
   "was on:": "इस पर था:",
+  "before this run:": "इस रन से पहले:",
   "what is this about": "यह किस बारे में है",
   "worse than the day before": "पिछले दिन से बदतर",
   "you asked": "आपने कहा था",

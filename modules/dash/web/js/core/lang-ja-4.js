@@ -125,6 +125,7 @@ export default {
   "was ended by the starter after going quiet": "応答がなくなったため起動役が終了しました",
   "was on": "担当していたのは",
   "was on:": "担当していたのは:",
+  "before this run:": "今回の実行より前:",
   "what is this about": "これは何についてか",
   "worse than the day before": "前日より悪化",
   "you asked": "あなたの依頼",

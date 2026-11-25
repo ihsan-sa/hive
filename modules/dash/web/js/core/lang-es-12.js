@@ -241,5 +241,10 @@ export default {
   "in the last week": "en la última semana",
   "the focuses": "los enfoques",
 
+  // the approval box and the app's mic (ui/rootword.js)
+  "This approval has hidden characters in it. Retype it, then Approve.": "Esta aprobación tiene caracteres ocultos. Vuelve a escribirla y luego pulsa Aprobar.",
+  "Use plain letters in an approval: some of these can look like others. Retype it, then Approve.": "Usa letras normales en una aprobación: algunas de estas pueden parecerse a otras. Vuelve a escribirla y luego pulsa Aprobar.",
+  "the machine's phone service needs a restart before it can turn speech into text": "el servicio de teléfono de la torre necesita reiniciarse antes de poder pasar la voz a texto",
+  "that didn't sound like your enrolled voice, so no words were added": "eso no sonó como tu voz registrada, así que no se añadió ninguna palabra",
   __patterns: [],
 };

@@ -92,15 +92,20 @@ def open_items(items): return [e for e in items.values() if e.get("status") not 
 def moving(items, posts=None, t=None, live=None):
     """For each entry not closed: when it last moved (an agent post in its thread, or its owner alive), as ISO or None."""
     posts = board() if posts is None else posts; t = t or now(); live = live_names() if live is None else live
-    last = {}
+    last, by_agent = {}, {}
     for p in posts:
         if str(p.get("from", "")).lower() in NOT_AGENTS: continue
         th = p.get("thread") or p.get("id")
         if p.get("at", "") > last.get(th, ""): last[th] = p["at"]
+        a = str(p.get("from", ""))
+        if p.get("at", "") > by_agent.get(a, ""): by_agent[a] = p["at"]
     out = {}
     for e in open_items(items):
         th = e.get("thread") or e.get("post")
         m = last.get(th)
+        # the owner working in other threads (it delegated this ask to child agents) counts too: 2026-11-25 k2999 tripped while its owner posted in friction-chase
+        ob = by_agent.get(str(e.get("owner") or ""))
+        if ob and ob > (m or ""): m = ob
         if e.get("owner") in live: m = iso(t)
         if e.get("status") == "owned" and e.get("updated") and (t - dt.datetime.fromisoformat(e["updated"])).total_seconds() < OWN_GRACE_S: m = max(m or "", e["updated"])
         out[e["id"]] = m

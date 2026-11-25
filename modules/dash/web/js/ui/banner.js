@@ -3,19 +3,23 @@
 // page moves when one shows: it takes its own row in the shell, above the page.
 // Every banner can be put away (friction pass 11-25, design §9): a × on the row, or the note's own Later / No thanks. A
 // dismissed banner stays gone until its words change, kept per key in localStorage (hive.banner.<key>). A note (info
-// tone) also leaves on its own BANNER_AGE after it first showed. "Lost contact" has no × and doesn't age: it leaves when
-// contact is back. A state band (the hive stopped, sign-in) has a × but doesn't age, since what it says is still true.
+// tone) with a × also leaves on its own BANNER_AGE after it first showed. "Lost contact" has no × and doesn't age: it leaves when
+// contact is back. A state band (the hive stopped, sign-in) has a × but doesn't age, since what it says is still true; each
+// state has its own key, and the shell forgets a state's record once that state is over, so it shows again when it comes back.
+// A note with its own Later / No thanks (a newer version, the star ask) keeps no record here: it keeps its own.
 import { h, tr } from "../core/dom.js";
 
 export const BANNER_AGE = 6 * 3600e3;   // = --banner-age in tokens.css
 const KEY = k => "hive.banner." + k;
 function read(k) { try { return JSON.parse(localStorage.getItem(KEY(k)) || "null"); } catch { return null; } }
 function write(k, v) { try { localStorage.setItem(KEY(k), JSON.stringify(v)); } catch { /* private mode: it just shows again */ } }
+/** Forget a banner's record (its state is over): next time it is drawn it shows again, with its clock started over. */
+export function forget(k) { try { localStorage.removeItem(KEY(k)); } catch { /* private mode */ } }
 
 /** banner({tone, text, actions, cls, key, lead, dismiss, age}) → .banner[data-tone], or null when dismissed or aged out.
  *  `text` is a string or nodes; the first <b> reads as the lead. `lead` goes before the text (a status dot).
- *  dismiss: false for lost contact and for a note with its own Later button. age: true (the default for info) lets it leave on its own after BANNER_AGE. */
-export function banner({ tone = "info", text, actions = [], cls, key = "band", lead = null, dismiss = true, age = tone === "info", onDismiss } = {}) {
+ *  dismiss: false for lost contact and for a note with its own Later button. age: true (the default for an info note with a ×) lets it leave on its own after BANNER_AGE. */
+export function banner({ tone = "info", text, actions = [], cls, key = "band", lead = null, dismiss = true, age = dismiss && tone === "info", onDismiss } = {}) {
   const t = h("span", { class: "banner-t" }, text), words = t.textContent.trim();
   if (dismiss || age) {
     let s = read(key);

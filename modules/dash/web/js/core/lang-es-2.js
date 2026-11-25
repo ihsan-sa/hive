@@ -2,6 +2,14 @@
 // the keyboard shortcuts and the confirm windows. Merged into lang-es.js; same rules (exact English keys, __patterns for a number or name).
 // Left as written on purpose: product and model names (Claude, Codex, Opus, Sonnet…), tier names (Core, Normal, Extra: the person can
 // rename them), module names and their one-line descriptions (they come from each module, like a file name).
+// setup.js modelPart: "Saved in WHERE. WHEN If agents fail…" is one text built from these parts; the pattern at the end puts it together.
+const MODEL_WORDS = {
+  "this Hive's settings file (settings.json)": "el archivo de ajustes de este Hive (settings.json)",
+  "this Hive's core/config.json, as spawn_model": "el core/config.json de este Hive, como spawn_model",
+  "It applies to agents started after you change it: an agent that has already run keeps its own model, which you can change in its panel.": "Se aplica a los agentes que empiecen después del cambio: un agente que ya ha corrido conserva su modelo, que puedes cambiar en su panel.",
+  "It applies to new agents, and to agents nobody chose a model for the next time they wake. An agent given a model of its own, in a message or its panel, keeps it.": "Se aplica a los agentes nuevos y, la próxima vez que despierten, a los agentes a los que nadie eligió modelo. Un agente con un modelo propio, dado en un mensaje o en su panel, lo conserva.",
+  "If agents fail to start after a change, your plan may not include that model, so choose another.": "Si los agentes no arrancan tras un cambio, puede que tu plan no incluya ese modelo, así que elige otro.",
+};
 export default {
 
   // Flow
@@ -220,12 +228,12 @@ export default {
 
   // Settings › Set once
   "the name, the model, updates and spending caps; changes save as you make them": "el nombre, el modelo, las actualizaciones y los topes de gasto; los cambios se guardan al hacerlos",
-  "The Claude model an agent runs on, unless you ask for another in a message by writing --model and its name, like --model sonnet.": "El modelo de Claude con el que funciona un agente, salvo que pidas otro en un mensaje escribiendo --model y su nombre, como --model sonnet.",
+  "The Claude model a new agent starts on, unless you ask for another in a message by writing --model and its name, like --model sonnet.": "El modelo de Claude con el que empieza un agente nuevo, salvo que pidas otro en un mensaje escribiendo --model y su nombre, como --model sonnet.",
   "For hard work. It uses up a plan's limits faster than Sonnet.": "Para trabajo difícil. Gasta los límites del plan más deprisa que Sonnet.",
   "Uses a plan's limits more slowly. For everyday work.": "Gasta los límites del plan más despacio. Para el trabajo de cada día.",
   "The lightest. For small chores.": "El más ligero. Para tareas pequeñas.",
   "Another Claude model. Your plan may not include it.": "Otro modelo de Claude. Puede que tu plan no lo incluya.",
-  "An agent changes the next time it starts or wakes. One already working finishes on the model it has. If agents fail to start after a change, your plan may not include that model, so choose another.": "Un agente cambia la próxima vez que empieza o despierta. Uno que ya está trabajando termina con el modelo que tiene. Si los agentes no arrancan tras un cambio, puede que tu plan no incluya ese modelo, así que elige otro.",
+  ...MODEL_WORDS,
   "Shown in the top bar and the browser tab. Empty uses the default.": "Se muestra en la barra superior y en la pestaña del navegador. Vacío usa el predeterminado.",
   "Logo": "Logotipo",
   "Shown next to the name and as the tab's icon. PNG, JPEG, GIF, WebP or SVG, up to 2 MB. A square picture works best.": "Se muestra junto al nombre y como icono de la pestaña. PNG, JPEG, GIF, WebP o SVG, hasta 2 MB. Una imagen cuadrada queda mejor.",
@@ -243,7 +251,7 @@ export default {
   "Budget per run": "Presupuesto por ejecución",
   "Empty means no cap. A cap stops a run that reaches it (counted at API prices) and says so in its thread. Applies from each run's next start.": "Vacío significa sin tope. Un tope para la ejecución que lo alcanza (contado a precios de la API) y lo dice en su conversación. Se aplica desde el próximo inicio de cada ejecución.",
   "Daily cap": "Tope diario",
-  "Which model agents use": "Qué modelo usan los agentes",
+  "Which model new agents use": "Qué modelo usan los agentes nuevos",
   "Hive name": "Nombre del Hive",
   "no cap": "sin tope",
   "Budget per run in dollars": "Presupuesto por ejecución en dólares",
@@ -452,5 +460,7 @@ export default {
     [/^Stop (.+)\?$/, "¿Parar $1?"],
     [/^Nothing was (stopped|killed)$/, "No se paró nada"],
     [/^Doing now: (.+)$/s, "Haciendo ahora: $1"],
+    // setup.js modelPart: where the model is saved, when it takes effect, and what to do if agents then fail to start
+    [/^Saved in (.+?)\. (It applies .+?) (If agents fail to start after a change, .+)$/s, (_, w, n, f) => `Guardado en ${MODEL_WORDS[w] || w}. ${MODEL_WORDS[n] || n} ${MODEL_WORDS[f] || f}`],
   ],
 };

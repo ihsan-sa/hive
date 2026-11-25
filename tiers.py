@@ -232,7 +232,10 @@ def cmd_list(a, d):
     _, st = foci()
     h = holdings(d, st)
     if a.json:
-        print(json.dumps([{**t, "state": state_text(d, t), "holds": h.get(str(t["id"]), {}), "default": str(t["id"]) == str(d["default"])} for t in d["tiers"]], indent=1)); return
+        # the Off tier also says where each thing in it stood before ({key: tier id, or null when it wasn't placed})
+        was = {k: v for k, v in (d.get("was") or {}).items() if d["place"].get(k) == OFF}
+        print(json.dumps([{**t, "state": state_text(d, t), "holds": h.get(str(t["id"]), {}), "default": str(t["id"]) == str(d["default"]),
+                           **({"was": was} if str(t["id"]) == OFF else {})} for t in d["tiers"]], indent=1)); return
     for t in d["tiers"]:
         tid = str(t["id"])
         print(f"Tier {tid} {t['name']}{' (default)' if tid == str(d['default']) else ''}: {stop_text(t) if tid != OFF else 'nothing in it runs'}; {state_text(d, t)}")
@@ -260,6 +263,10 @@ def cmd_set(a, d):
     k = placement_key(a.what)
     was = d["place"].get(k)
     if k.startswith("job:") and k.split(":", 1)[1] in TIER0: sys.exit(f"hive tier: {k[4:]} is upkeep (tier 0) and is never held")
+    # into Off, remember where it stood, so Resume (hive tier set, or the page's, from any device) puts it back; out of Off, forget it
+    if str(t["id"]) == OFF:
+        if was != OFF: d.setdefault("was", {})[k] = was
+    else: d.get("was", {}).pop(k, None)
     d["place"][k] = str(t["id"]); save(d, by, f"set {k} {was} -> {t['id']}", a.post)
     print(f"{k.replace(':', ' ', 1)}: now in tier {t['id']} {t['name']} (was {was or 'not placed / default'}); it is {state_text(d, t)}")
     if k.startswith("job:") and not (UNITS / f"{k[4:]}.service.d" / DROPIN).exists():
@@ -270,7 +277,7 @@ def cmd_unset(a, d):
     by = who(a)
     k = placement_key(a.what)
     if k not in d["place"]: print(f"{k}: not placed; nothing changed"); return
-    was = d["place"].pop(k); save(d, by, f"unset {k} (was {was})", a.post)
+    was = d["place"].pop(k); d.get("was", {}).pop(k, None); save(d, by, f"unset {k} (was {was})", a.post)
     print(f"{k.replace(':', ' ', 1)}: no longer placed (was tier {was}); " + ("a job not placed always runs" if k.startswith("job:") else "it follows its focus or the default"))
 
 
@@ -336,6 +343,8 @@ def cmd_drop(a, d):
     if tid in (OFF, str(d["default"])): sys.exit("hive tier: the default tier and Off can't be dropped (make another the default first with `hive tier default N`)")
     moved = [k for k, v in d["place"].items() if str(v) == tid]
     for k in moved: d["place"][k] = str(d["default"])
+    for k, v in (d.get("was") or {}).items():   # a paused thing that came from this tier goes back to the default on Resume
+        if str(v) == tid: d["was"][k] = str(d["default"])
     d["tiers"].remove(t); save(d, by, f"drop {tid}; moved {moved} to {d['default']}", a.post)
     print(f"Tier {tid} {t['name']} dropped; {len(moved)} placements moved to the default tier {d['default']}")
 

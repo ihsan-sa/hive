@@ -4,7 +4,7 @@
 import { h, s } from "../core/dom.js";
 import { S } from "../core/store.js";
 import { agentCost, agentLabel, modelName, sEnd } from "../core/model.js";
-import { ago, dur, int, money, now, plural, stamp } from "../core/format.js";
+import { ago, dur, int, money, now, plural, stamp, MIN } from "../core/format.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { button } from "./kit.js";
 import { agentRef, copyButton, threadRef } from "./refs.js";
@@ -60,7 +60,8 @@ const taskLink = r => { const a = h("a", { class: "sa-desc", href: "#", title: s
 const what = r => h("span", { class: "sa-what" }, hx(r), helperTag(r), h("span", { class: "sa-type" }, r.type || "helper"), taskLink(r));
 /** One running helper as a row. dev: the developer table's cells (who, what it is doing, time); else the app table's (who, mode, model, calls, time). */
 function kid(r, dev) {
-  const calls = r.calls ? `${plural(r.calls, "call")} so far` : "starting";
+  // no calls yet: "starting" only in its first two minutes; a process's calls are never counted (a tmux session 25 days up isn't starting, ad748)
+  const calls = r.calls ? `${plural(r.calls, "call")} so far` : r.mode === "process" || (took(r) || 0) > 2 * MIN ? "running" : "starting";
   const line = [hModel(r), modeWord(r), r.calls ? plural(r.calls, "call") : null].filter(x => x && x !== "–").join(" · ");
   return h("li", { class: "sa-kid", "data-depth": (r.depth || 1) > 1 ? "2" : null, "data-key": helperKey(r) }, what(r),
     dev ? h("span", { class: "sa-k-model sa-meta", title: calls }, line) : [h("span", { class: "sa-k-mode sa-meta" }, modeWord(r)), h("span", { class: "sa-k-model sa-meta" }, hModel(r)), h("span", { class: "sa-k-st sa-meta" }, calls)],

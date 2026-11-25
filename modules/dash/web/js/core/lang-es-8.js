@@ -117,7 +117,6 @@ export default {
   "Nothing new waits on you": "No te espera nada nuevo",
   "older one": "más antigua",
   "What waits on you, newest first, each in its conversation": "Lo que te espera, lo más nuevo primero, cada cosa en su conversación",
-  "unread message": "mensaje sin leer",
   "No agent is waiting on you": "Ningún agente te está esperando",
   "Your Hive has used up its allowance for now, so new work waits until it comes back.":
     "Tu Hive ha gastado su cupo por ahora, así que el trabajo nuevo espera hasta que vuelva.",
@@ -372,6 +371,8 @@ export default {
   "Agents can send commands": "Los agentes pueden enviar comandos",
 
   __patterns: [
+    // the rail's Inbox count, read out by a screen reader (comms.js link's aria-label)
+    [/^(\d+) unread$/, "$1 sin leer"],
     [/^(\d+) commands? queued for (another board|a board), not sent here: (.*)\. Each goes only to its board, within 15 minutes of being queued\.$/, (_, n, b, l) =>
       `${n} ${n === "1" ? "comando en cola" : "comandos en cola"} para ${b === "a board" ? "una placa" : "otra placa"}, no enviados aquí: ${l}. Cada uno va solo a su placa, en los 15 minutos siguientes a ponerse en cola.`],
     [/^Board: (.+)$/, (_, t) => `Placa: ${t}`],

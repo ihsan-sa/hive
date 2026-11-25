@@ -67,7 +67,14 @@ function liveStates() {
 export function forYouStep(text) {
   const s = String(text || ""), m = FOR_YOU.exec(s); if (!m) return "";
   const para = s.slice(m.index + m[0].length - m[1].length).split(/\n\s*\n/)[0];
-  const one = firstSentence(para); return one ? one[0].toUpperCase() + one.slice(1) : "";
+  // a full stop inside `code` or in "e.g."/"i.e." does not end the step: "run `sudo approve-word "yes: a. b"` then say done." cut at "a." (a0ad9 #6).
+  // Each code span stands in as private-use characters of its own length while the sentence is found (the sentence's 20-character floor counts it whole),
+  // and comes back without its backticks, as mdPlain would give it.
+  const code = [], dot = "\uE0FF", fill = "\uE0FE";
+  const masked = para.replace(/`([^`\n]+)`/g, (_, c) => (code.push(c), String.fromCharCode(0xE000 + code.length - 1) + fill.repeat(c.length - 1)))
+    .replace(/\b(e\.g|i\.e|vs)\./gi, w => w.replace(/\./g, dot)).replace(/\b([Ee]tc)\.(?=\s+[a-z])/g, "$1" + dot);   // "etc." ends the step only before a capital
+  const one = (firstSentence(masked) || "").replace(/([\uE000-\uE0FD])\uE0FE*/g, (_, ch) => code[ch.charCodeAt(0) - 0xE000] ?? "").replace(/\uE0FE/g, "").split(dot).join(".");
+  return one ? one[0].toUpperCase() + one.slice(1) : "";
 }
 /** The words for a live entry: who asks or says what, or how the agent stopped. */
 function liveText({ st }) {
@@ -119,14 +126,36 @@ function waitingOnNow() {
   if (!simpleOn()) {
     const rest = [];
     // A later Done or Told to stop on the thread doesn't settle a row: a For you line waits until they answer it (answeredSince) or an agent drops it (brief.dropped). A thread with a live busy agent is out above.
-    for (const w of (v && v.waiting) || []) { const t = w && w.at ? Date.parse(w.at) : 0; if (w && !w.stale && w.thread && open(w.thread)) rest.push({ th: w.thread, text: w.action || "", t, src: "file", post: w.post || null, ...(w.confirmed ? { seenAt: Date.parse(w.confirmed) } : {}) }); }
-    for (const th of Object.keys(st)) { const s = standLine(st[th].text), t = st[th].at * 1e3; if (s.word === "needs the person" && now() - t < NEEDS_FOR && open(th)) rest.push({ th, text: s.line, t, src: "bar" }); }
+    for (const w of (v && v.waiting) || []) { const t = w && w.at ? Date.parse(w.at) : 0; if (w && !w.stale && w.thread && open(w.thread)) rest.push({ th: w.thread, text: rowText(w), t, src: "file", post: w.post || null, ...(w.confirmed ? { seenAt: Date.parse(w.confirmed) } : {}) }); }
+    for (const th of Object.keys(st)) { const s = standLine(st[th].text), t = st[th].at * 1e3; if (s.word === "needs the person" && now() - t < NEEDS_FOR && open(th)) rest.push({ th, text: s.line ? s.line[0].toUpperCase() + s.line.slice(1) : s.line, t, src: "bar" }); }   // a bar's tail is mid-sentence ("Needs the person: ribbon check…"); the row starts a sentence
     rest.sort((a, b) => b.t - a.t);
-    for (const w of rest) if (!answeredSince(w.th, Math.max(w.t, w.seenAt || 0))) take(w);   // once they've answered since, it's not waiting on them; an ask the register re-read since (confirmed) counts from that read
+    for (const w of rest) if (!answeredSince(w.th, Math.max(w.t, w.seenAt || 0)) && !saidBySummary(w, out)) take(w);   // once they've answered since, it's not waiting on them; an ask the register re-read since (confirmed) counts from that read
   }
   foldSameAct(out, v && v.brief && v.brief.needs);
   return out.filter(w => !w.foldedIn).sort((a, b) => b.t - a.t);
 }
+// The words that carry a row's meaning, as needs_you.py's words(): three letters or more, the glue words out.
+const GLUE = new Set("the and for you your with from that this then than are was were not but has have had will can its our any all into onto out off who what when where which there their them they".split(" "));
+const keyWords = t => new Set((String(t || "").toLowerCase().match(/[a-z][a-z0-9-]{2,}/g) || []).filter(x => !GLUE.has(x)));
+/** A focus summary bullet already on the list says this row's step: it is on the row's thread (its focus's thread or a #thread it names) and shares three or more
+ *  words, half or more of the shorter's. The two are keyed apart (a bullet by its focus, a file row by its thread), so without this one step showed twice in two
+ *  wordings ("Yes or no to two links on your own site" and "Decide yes or no on adding two small links on your own site", gtm-ladder; a0ad9, 112503360d00). */
+function saidBySummary(w, rows) {
+  const a = keyWords(w.text);
+  return rows.some(s => {
+    if (s.src !== "summary" || !(s.th === w.th || (String(s.text || "").match(/#[\w-]+/g) || []).some(x => x.slice(1) === w.th))) return false;
+    const b = keyWords(s.text); let n = 0; for (const x of a) if (b.has(x)) n++;
+    return n >= 3 && n / Math.max(1, Math.min(a.size, b.size)) >= 0.5;
+  });
+}
+/** A waiting row's action with the steps the file merged into its `also` ({ask, post, action}): the file's own `shown` (needs_you.py's row_text) when it has one, so the dash and the file
+ *  say one thing (a0ad9, 11250326d281); a file built before `shown` gets the simple join. A merged step shows where the row shows (a0ad9, 112503027c3b). */
+export const rowText = w => {
+  if (typeof w.shown === "string" && w.shown.trim()) return w.shown.trim();
+  const a = String(w.action || "").trim(), more = [];
+  for (const o of w.also || []) { const x = String((o && o.action) || "").trim(); if (x && !a.includes(x) && !more.includes(x)) more.push(x); }
+  return [more.length && a && !/[.!?]$/.test(a) ? a + "." : a, ...more.map(x => `Also: ${x}`)].join(" ").trim();
+};
 /** One act of the person's that settles several threads is one thing to do (the summary's `also` names the others): those threads' rows fold into the row that carries the act, which keeps its own key, words and time, so a folded thread's Later or Not needed neither revives nor hides it.
  *  A thread whose carrying row isn't on the list stays a row of its own. A focus bullet is never folded. */
 function foldSameAct(rows, briefNeeds) {

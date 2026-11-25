@@ -266,7 +266,20 @@ export default {
   "Tier 2": "स्तर 2",
   "Held": "रोका हुआ",
   "goes first; its jobs use the heavy fast lane": "पहले चलता है; इसके जॉब heavy तेज़ लेन का उपयोग करते हैं",
-  "the keeper starts no rounds on it; to stop agents now, use Pause": "कीपर इस पर कोई राउंड शुरू नहीं करता; एजेंटों को अभी रोकने के लिए Pause इस्तेमाल करें",
+  // friction pass 11-25 (thread friction-redesign): one-tap answer, Pause words
+  "10 seconds to undo.": "पूर्ववत करने के लिए 10 सेकंड।",
+  "Answer with one tap": "एक टैप से जवाब दें",
+  "How long": "कितनी देर",
+  "It stays paused until you press Resume here.": "यहाँ फिर से शुरू दबाने तक यह रुका रहेगा।",
+  "Last 24 hours: nothing yet": "पिछले 24 घंटे: अभी कुछ नहीं",
+  "Let agents start on it again": "एजेंटों को इस पर फिर शुरू करने दें",
+  "Nothing new starts. An agent already at work carries on until it stops. A message you write still starts one.": "कुछ नया शुरू नहीं होता। जो एजेंट पहले से काम पर है, वह रुकने तक चलता रहता है। आपका लिखा संदेश अब भी एक शुरू करता है।",
+  "Sending": "भेजा जा रहा है",
+  "Sends": "भेजता है",
+  "To see or change every pause, open Settings, Work tiers.": "सभी विराम देखने या बदलने के लिए सेटिंग्स, काम के स्तर खोलें।",
+  "Undo": "पूर्ववत करें",
+  "every conversation and focus with no work tier of its own": "हर बातचीत और फ़ोकस जिसका अपना काम का स्तर नहीं है",
+  "the keeper starts no rounds on it; Pause stops new starts at once": "कीपर इस पर कोई राउंड शुरू नहीं करता; Pause से नई शुरुआत तुरंत रुक जाती है",
   "after tier 2": "स्तर 2 के बाद",
   "Back to the list": "सूची पर वापस",
   "remove your dashboard setting": "डैशबोर्ड में आपकी सेटिंग हटाएँ",
@@ -563,7 +576,12 @@ export default {
   "Got it": "समझ गया",
   "Hide this line": "यह पंक्ति छिपाएँ",
   "One row per focus, a piece of your work with a goal, under where it stands: the ones that wait on you come first. Each row is the focus in a sentence or two. Click a focus name for the whole picture; Cards, beside the heading, shows every focus with its lines.": "हर फ़ोकस की एक पंक्ति, यानी लक्ष्य वाला आपके काम का एक हिस्सा, उसकी स्थिति के अनुसार: जो आपकी प्रतीक्षा में हैं वे पहले आते हैं। हर पंक्ति फ़ोकस को एक-दो वाक्यों में बताती है। पूरी तस्वीर के लिए फ़ोकस के नाम पर क्लिक करें; शीर्षक के बगल में कार्ड हर फ़ोकस को उसकी पंक्तियों के साथ दिखाता है।",
+  // a timer job named in a pause line (ui/worktiers.js keyName: "the timer improve")
+  "the timer": "टाइमर",
   __patterns: [
+    [/^You asked: (.+)$/, (_, w) => `आपने पूछा: ${w}`],
+    [/^(?:One conversation in it has|(\d+) conversations in it have) a work tier of (?:its|their) own and keeps? going: (.+)\. Pause (?:it|them) from (?:its|their) own menu\.$/, (_, n, w) => (n ? `इसमें ${n} बातचीतों का अपना काम का स्तर है और वे चलती रहती हैं: ${w}। इन्हें इनके अपने मेनू से रोकें।` : `इसमें एक बातचीत का अपना काम का स्तर है और वह चलती रहती है: ${w}। इसे इसके अपने मेनू से रोकें।`)],
+    [/^It is paused with (?:one other|(\d+) others) that share its work tier; resuming starts them too: (.+)$/, (_, n, w) => (n ? `यह अपने काम के स्तर वाली ${n} और के साथ रुका है; फिर शुरू करने से वे भी शुरू होंगी: ${w}` : `यह अपने काम के स्तर वाली एक और के साथ रुका है; फिर शुरू करने से वह भी शुरू होगी: ${w}`)],
     // a focus page's For you here: what was said to the person with no reply after it, under the needs count (focus.js yoursSec, HA-17)
     [/^(\d+) messages? to you with no reply after (?:it|them)$/, "$1 संदेश आपके लिए, जिनके बाद कोई जवाब नहीं"],
     // The home's list of focuses, the In short and what is new since the last look
