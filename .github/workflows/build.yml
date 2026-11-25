@@ -75,7 +75,7 @@ jobs:
       # The .rpm the same way on Fedora 44 and 45: dnf, then PackageKit as GNOME Software installs a double-clicked file.
       - if: runner.os == 'Linux'
         timeout-minutes: 20
-        run: sh test/cleandeb.sh dist/Hive-linux-x86_64.rpm fedora:44 fedora:45
+        run: sh test/cleandeb.sh dist/Hive-linux-x86_64.rpm fedora:44 fedora:45 fedora:45@pkcon
       # The same on Windows (its WSL 2) and on the Intel Mac (its VM; Apple silicon runners can't start one). These machines
       # differ from a person's computer, so a stop here is read, not a red build.
       # Which Linux systems the Windows runner already has before the install (the installer makes its own, "Hive").

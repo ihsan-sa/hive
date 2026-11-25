@@ -19,10 +19,15 @@ run=$(command -v podman || command -v docker)
 dir=$(mktemp -d); cp "$deb" "$dir/app.$kind"
 cat > "$dir/rpm.sh" <<'IN'
 # Fedora: the same steps as in.sh below, with dnf and rpm.
+# The test's own tools go in first: a dnf run between PackageKit's install and its remove changes the rpm database
+# under packagekitd, and its remove then fails ("no longer valid because the system repository has changed").
+dnf install -y -q xorg-x11-server-Xvfb xorg-x11-xauth procps-ng > /dev/null 2>&1 || { echo "FAILED xvfb install"; exit 1; }
 case "$HOW" in
   pkcon) dnf install -y -q PackageKit dbus-daemon polkit > /dev/null 2>&1 || { echo "FAILED packagekit install"; exit 1; }
+         # A system bus, as a real Fedora has; pkcon's first call starts packagekitd through it (D-Bus activation).
+         # Starting packagekitd by hand probably raced that: if it was slow to take its name, a second one was activated
+         # and pkcon said "The daemon crashed mid-transaction!" (1 run in 11).
          mkdir -p /run/dbus; dbus-daemon --system --fork; sleep 1
-         /usr/libexec/packagekitd > /tmp/pk.log 2>&1 & sleep 3
          cp /w/app.rpm /tmp/app.rpm
          if command -v pkgcli > /dev/null; then pkgcli -y install /tmp/app.rpm; else pkcon -y --noninteractive install-local /tmp/app.rpm; fi > /tmp/in.log 2>&1 ;;
   *) dnf install -y /w/app.rpm > /tmp/in.log 2>&1 ;;
@@ -30,7 +35,6 @@ esac || { echo "FAILED ${HOW:-dnf} install: $(grep -v '^$' /tmp/in.log | tail -3
 rpm -q hive-app > /dev/null 2>&1 || { echo "FAILED ${HOW:-dnf} install left hive-app not installed: $(grep -v '^$' /tmp/in.log | tail -3 | tr '\n' ' ')"; exit 1; }
 missing=$(ldd /opt/Hive/hive-app | grep 'not found' | awk '{print $1}' | tr '\n' ' ')
 [ -z "$missing" ] || { echo "FAILED missing after install: $missing"; exit 1; }
-dnf install -y -q xorg-x11-server-Xvfb xorg-x11-xauth procps-ng > /dev/null 2>&1 || { echo "FAILED xvfb install"; exit 1; }
 command -v xvfb-run > /dev/null || { echo "FAILED no xvfb-run"; exit 1; }
 export HOME=/tmp/home HIVE_APP_TEST=1; mkdir -p $HOME
 xvfb-run -a /opt/Hive/hive-app --no-sandbox > /tmp/app.out 2>&1 &
@@ -57,8 +61,8 @@ case "$HOW" in
   pkcon) apt-get install -y -qq packagekit polkitd dbus > /dev/null 2>&1 || { echo "FAILED packagekit install"; exit 1; }
          # PackageKit 1.3.4 (Ubuntu 26.04) has pkgcli in place of pkcon; older ones keep pkcon in packagekit-tools.
          command -v pkgcli > /dev/null || apt-get install -y -qq packagekit-tools > /dev/null 2>&1
+         # pkcon's first call starts packagekitd through the system bus (D-Bus activation), as on a real system.
          mkdir -p /run/dbus; dbus-daemon --system --fork; sleep 1
-         pk=$(ls /usr/libexec/packagekitd /usr/lib/packagekit/packagekitd 2>/dev/null | head -1); $pk > /tmp/pk.log 2>&1 & sleep 3
          cp /w/app.deb /tmp/app.deb
          if command -v pkgcli > /dev/null; then pkgcli -y install /tmp/app.deb; else pkcon -y --noninteractive install-local /tmp/app.deb; fi > /tmp/apt.log 2>&1 ;;
   *) apt-get install -y -qq /w/app.deb > /tmp/apt.log 2>&1 ;;
