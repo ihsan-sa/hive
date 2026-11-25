@@ -311,8 +311,15 @@ def cmd_done(a):
     set_status(a.id, "done", evidence=a.evidence, why=a.why); print(f"{a.id}: done ({a.evidence})")
     if left: print(f"+ {split_wait(items, e, left, a.evidence, me())['id']} waits on the person, split from {a.id}")
     elif e.get("status") == "held" and NAMES_PERSON.search(e.get("why") or ""): print(f"Its record still names a step for the person: {e['why'][:200]}\nIf that step is still owed, it needs its own row: hive asks done {a.id} --evidence {a.evidence} --left \"the step\"")   # three finished asks hid behind a record like this (lab, 11100413d290)
+HOLD_ON_PERSON = re.compile(r"\b(?:wait(?:s|ing)? (?:only )?(?:on|for)|needs?) (?:the person)\b|\bstill the person's\b|\bwait(?:s|ing)? on the person's\b", re.I)
+HOLD_OK = re.compile(r"duplicate|priorities|pause|carried|covered by|not (?:on )?the person", re.I)
+def hold_on_person(why):
+    """A hold whose reason says it waits on the person: held is for kb/priorities.md and other set-asides, so `person` is the state that keeps it on Needs you. Three of these on 2026-11-25 (k2971, k0529, k3011) left a thread on the summary with nothing open by evidence."""
+    return bool(HOLD_ON_PERSON.search(why or "")) and not HOLD_OK.search(why or "")
 @noting_bar
-def cmd_hold(a): need_why(a); set_status(a.id, "held", why=a.why); print(f"{a.id}: held ({a.why})")
+def cmd_hold(a):
+    need_why(a); set_status(a.id, "held", why=a.why); print(f"{a.id}: held ({a.why})")
+    if hold_on_person(a.why): print(f"Its reason says it waits on the person, and held hides it from Needs you. If nothing but the person moves it: hive asks person {a.id} --why \"...\"")
 def cmd_person(a):
     need_why(a); set_status(a.id, "person", why=a.why); print(f"{a.id}: waits on the person ({a.why})")
     if note := remind("on_person", a.id, a.why): print(note)

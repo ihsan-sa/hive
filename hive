@@ -1228,7 +1228,9 @@ def cmd_waits(a):
     # held: its wake waits for a paused or stopped work tier (`hive tier`), as in cmd_stalled; a keeper ping to it is held too (ae5e1 pinged twice on 2026-11-21, held each time)
     queued = set(st.get("pending", {})) | set(st.get("resume", {})) | set(st.get("held", {}))
     last, stops = {}, {}
-    for ln in (STATE / "stop-gate.jsonl").read_text().splitlines():
+    try: gate = (STATE / "stop-gate.jsonl").read_text().splitlines()
+    except OSError: gate = []  # a fresh install has no stop gate yet (sub-hive tidy-sandbox-bug: hive waits crashed here)
+    for ln in gate:
         try: r = json.loads(ln)
         except ValueError: continue
         if r.get("event") != "passed" or r.get("at", 0) < cutoff: continue

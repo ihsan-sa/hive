@@ -98,13 +98,17 @@ function page(it, signal) {
   const box = door && /^[0-9a-f]{16}$/.test(it.box || "") ? it.box : "";
   const src = () => viewHref(it) + (door ? "#door=" + key : "") + (box ? "&box=" + box + "&theme=" + theme() : "");
   // a pinned box gets the frame name pybox-pin (not in the address) so it fills the panel instead of sizing to its content
-  const fr = h("iframe", { class: "pv-frame", name: box ? "pybox-pin" : null, src: src(), title: it.label || it.name, sandbox: "allow-scripts allow-modals allow-pointer-lock", referrerpolicy: "no-referrer", loading: "lazy" });
-  if (door) relay(fr, door, key, signal);
+  const make = lazy => h("iframe", { class: "pv-frame", name: box ? "pybox-pin" : null, src: src(), title: it.label || it.name, sandbox: "allow-scripts allow-modals allow-pointer-lock", referrerpolicy: "no-referrer", loading: lazy ? "lazy" : null });
+  let fr = make(true);
+  if (door) relay({ get contentWindow() { return fr.contentWindow; } }, door, key, signal);   // whichever frame is shown now
   if (box && signal) { const paint = () => { fr.src = src(); }; addEventListener("themechange", paint, { signal }); DARK.addEventListener("change", paint, { signal }); }   // only the fragment changes: the box keeps its state
-  return h("div", { class: "pv-page" },
-    h("div", { class: "pv-note meta" }, h("span", null, door ? "Interactive page, sandboxed: it can't reach this dashboard, only its own practice service." : "Interactive page, sandboxed: it can't reach this dashboard or the network."),
-      h("button", { type: "button", class: "pv-zb", onclick: () => { fr.src = "about:blank"; setTimeout(() => { fr.src = src(); }); } }, "Reload")),
-    fr);
+  // Reload puts in a new frame: pointing the old one at about:blank and back left it blank when pressed while the page was still
+  // loading (the person, 112514142c42: "reload button doesnt always work"); a new frame has nothing in flight to race.
+  // The panel's header shows it as an icon by "changed … ago" (ui/preview.js; the person, 11251423d6d2).
+  const reload = () => { const n = make(false); fr.replaceWith(n); fr = n; };
+  return Object.assign(h("div", { class: "pv-page" },
+    h("div", { class: "pv-note meta" }, h("span", null, door ? "Interactive page, sandboxed: it can't reach this dashboard, only its own practice service." : "Interactive page, sandboxed: it can't reach this dashboard or the network.")),
+    fr), { _reload: reload });
 }
 
 // ---- notebooks ----

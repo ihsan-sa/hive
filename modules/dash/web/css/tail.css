@@ -42,20 +42,6 @@
 .secrets .sec-lead{font-size:var(--fs-small);color:var(--ink-2);margin-bottom:var(--s3);max-width:68ch}
 .secrets .frow .fmsg{margin:0}
 
-/* side question (/btw): drawn like the chat it sits in, a composer-style card with the person's words in a bubble */
-.ba{background:var(--surface);box-shadow:var(--e1);border:1px solid var(--line-2);border-radius:var(--r-xl);padding:10px 14px 12px;gap:10px;font-size:inherit}
-.ba-top{font-size:var(--fs-small)}
-.ba-h{color:var(--ink-2)}
-.ba-top>.meta{color:var(--ink-3)}
-.ba-p{gap:4px}
-.ba-p b{font-size:var(--fs-small);color:var(--ink)}
-.ba-p[data-me]{justify-items:end}
-.ba-p[data-me] b{display:none}
-.ba-p[data-me] .ba-b{max-width:min(78%,560px);padding:8px 14px;border-radius:var(--r-xl);background:var(--sunken);box-shadow:none}
-.ba-wait{font-size:var(--fs-small);color:var(--ink-3)}
-.ba-in{height:auto;padding:8px 2px 0;border:0;border-top:1px solid var(--line);border-radius:0;background:none;font-size:inherit}
-.ba-in:focus,.ba-in:focus-visible{outline:none;box-shadow:none;border-color:var(--line)}
-.ba:focus-within{border-color:color-mix(in oklch,var(--ink-3) 70%,var(--line-2));box-shadow:var(--e1),0 0 0 3px var(--accent-bg)}
 
 /* ---- a conversation exported as a transcript (js/ui/export.js): only print shows it ---- */
 .xp{display:none}

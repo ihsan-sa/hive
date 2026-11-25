@@ -3,6 +3,7 @@
 import { h } from "../core/dom.js";
 import { S, can } from "../core/store.js";
 import { clock } from "../core/format.js";
+import { btwParent } from "../core/model.js";
 import { quoteRef } from "../ui/composer.js";
 
 const postOf = el => { const m = el.closest("article.msg"); return m ? S.byId[m.dataset.key] : null; };
@@ -23,7 +24,7 @@ export const askButton = (getText, label, where) => h("button", {
 // ---- Ask on selected text: a small button beside a selection inside one chat message ----
 const BLOCK = /^(P|LI|PRE|TR|DIV|H[1-6]|BLOCKQUOTE|TABLE|UL|OL)$/;
 /** What a selection says: maths as its LaTeX, and without the tool rows the selection ran across. */
-function textOf(n) {
+export function textOf(n) {
   let out = "";
   for (const c of n.childNodes) {
     if (c.nodeType === 3) { out += c.nodeValue; continue; }
@@ -41,7 +42,7 @@ function textOf(n) {
 
 let pop = null, pointerDown = false, timer = 0;
 const selEl = n => (n?.nodeType === 1 ? n : n?.parentElement);
-function selected() {
+export function selected() {
   const s = getSelection();
   if (!s || s.isCollapsed || !s.rangeCount) return null;
   const a = selEl(s.anchorNode), z = selEl(s.focusNode), m = a?.closest("article.msg");
@@ -82,7 +83,19 @@ function show() {
       askQuote(now.m, now.text, post?.at ? clock(post.at) : "", true);
       getSelection().removeAllRanges(); hide();
     });
-    pop = h("div", { class: "rc-sel" }, b);
+    // Side chat: ask about the words in the side panel, with them kept highlighted (ui/sidechat.js). Not inside a side chat itself.
+    const th = p.th, side = S.app && S.app.app && !btwParent(th) ? h("button", { type: "button", class: "rc-side" }, "Side chat") : null;
+    if (side) {
+      side.addEventListener("pointerdown", e => e.preventDefault());
+      side.addEventListener("mousedown", e => e.preventDefault());
+      side.addEventListener("click", () => {
+        const now = selected(); if (!now) return hide();
+        const thr = S.byId[now.m.dataset.key]?.th || th;
+        if (btwParent(thr)) return hide();
+        import("../ui/sidechat.js").then(m => { m.newSideChat(thr, m.anchorFromRange(now.r, now.m, "text")); getSelection().removeAllRanges(); hide(); });
+      });
+    }
+    pop = h("div", { class: "rc-sel" }, b, side);
     document.body.append(pop);
     addEventListener("scroll", place, { capture: true, passive: true }); addEventListener("resize", place); addEventListener("keydown", onKey);
   }

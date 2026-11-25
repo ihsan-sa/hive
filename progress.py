@@ -265,8 +265,11 @@ def autojudge(post=True, t=None):
             w, v = judged_with(items, e), reading
             pb, pa = paused_windows(e, t)
             if max(pb, pa) > PAUSED_MAX:  # a count reads the pause; a rate or paired comparison loses sample, not meaning (ae868, 11131132a3fd): noted, kept
-                why += f"; window {round(100 * max(pb, pa))}% paused ({'before' if pb >= pa else 'after'} landing)" + (", a rate, so the reading stands on a smaller sample" if e.get("rate") else ", so the number reads the pause")
-                if not e.get("rate"): v = "inconclusive"
+                # a count that wanted down and read 0 over an after window with no pause in it holds on the after window alone:
+                # a paused baseline cannot make a clean week read 0 (i0316, i0317, i0353, i0355 were held by hand on this)
+                zero_clean = reading == "held" and base == after == 0 and e.get("want") == "down" and pa <= PAUSED_MAX
+                why += f"; window {round(100 * max(pb, pa))}% paused ({'before' if pb >= pa else 'after'} landing)" + (", a rate, so the reading stands on a smaller sample" if e.get("rate") else ", but it stayed at 0 with the after window unpaused, so the reading stands" if zero_clean else ", so the number reads the pause")
+                if not e.get("rate") and not zero_clean: v = "inconclusive"
             if e.get("late"): v, why = "inconclusive", why + f"; the check was written after landing, so this read {reading} is not a verdict"
             if w: v, why = "inconclusive", why + f"; shares its number with {', '.join(w)}, so this cannot credit one change"
             append(LEDGER, {"judge": e["id"], "at": iso(t), "by": "late-check" if e.get("late") else "check", "verdict": v, "reading": reading, "why": why, "before": e.get("before"), "after": after,
@@ -641,8 +644,9 @@ def reaped_signalled(log, posts, t0, t1):
 # the person finding a problem before the hive did: a chase ("hello?", "status?"), a thing not working or not showing, a "why is X not".
 # Plain "still" and "why is" matched ordinary feedback and design questions (13 of 29 matches on 2026-11-04), so they need a negative with them.
 # Bare "noticed" was 3 of 3 noise 11-08..11-22 (outreach drafts "I noticed you write...", "dig into my neck i noticed"), so it is gone.
+# "still not the same / as / quite" is a comparison in design notes ("a server is still not the same challenge as a switch", 11-25), not a report: the only noise match 10-26..11-25.
 # "broken" as the head of a compound ("the broken-test example", resume feedback 11-22) is a noun phrase, not a report: the only match 11-22..23 and noise.
-NOTICED = re.compile(r"\b(?:hello\?|status\?|not seeing|isn.t working|broken(?![-\w])|nothing happen|why am i not|still (?:not|no|isn|doesn|waiting|nothing|broken|missing)\b|why (?:is|are|does|do)\b[^?.!\n]{0,60}?\b(?:not|no|isn.t|doesn.t|don.t|only|gap|wrong|missing)\b)", re.I)
+NOTICED = re.compile(r"\b(?:hello\?|status\?|not seeing|isn.t working|broken(?![-\w])|nothing happen|why am i not|still (?:not(?! (?:the same|as|quite)\b)|no|isn|doesn|waiting|nothing|broken|missing)\b|why (?:is|are|does|do)\b[^?.!\n]{0,60}?\b(?:not|no|isn.t|doesn.t|don.t|only|gap|wrong|missing)\b)", re.I)
 
 def board_in(posts, t0, t1):
     ps = [p for p in posts if t0 <= p.get("at", "") <= t1]

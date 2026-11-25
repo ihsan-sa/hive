@@ -836,7 +836,7 @@ HANDOFF = re.compile(r"hand|handed|waiting|wait on|awaits|not yet|pending|delega
 REREAD_H = 24              # hours after a run ends that its hand-off is read again
 REREAD_BACK_H = 72         # the hourly pass looks this far back, so a missed hour (a limit) is caught up
 REREAD_MAX = 20            # second reads an hour, a cost guard
-REREAD_LIVE = False        # the hourly pass is off until the change is reviewed and committed (it ran once uncommitted, 11-25 15:56Z, and was undone)
+REREAD_LIVE = True         # on 11-25 after the blind gate passed on 642c64d (16, 17, 17 of 17; a4418, 11100224b64b 11251221d6ff)
 REREAD_DRAWS = 2           # model calls a read; landed only if every one says landed and names a post shown
 FOLLOW_CAP, FOLLOW_CLIP = 30, 1500  # posts shown to the model, chars each (affb1's queue-test result sat 1100 chars into its post)
 TO_PERSON = re.compile(r"\b(hand\w*|pass\w*|left|wait\w*|await\w*|gave|give\w*|ask\w*)\b[^.;]{0,40}\b(to|on|for) (the )?person\b"
@@ -864,12 +864,20 @@ def follow_posts(r, posts, by_id, first=None, hours=REREAD_H):
         if f == "rootwarden" or f in names: return p.get("thread") in threads
         return p.get("thread") in started and bool(AGENT.fullmatch(f))   # an @new builder: any agent in a thread the run started or @new'd in
     fol = [p for p in posts if t0 < p.get("at", "") <= t1 and ok(p)]
+    # the next keeper: a run that ends with Next: hands its rung to the starter, which wakes the next agent in the run's own thread (aebbe's HA-4 landed by af197 at 22:00)
+    woke = {}
+    for p in posts:
+        if p.get("from") == "starter" and p.get("thread") == r.get("thread") and t0 < p.get("at", "") <= t1:
+            for n in RECEIVER.findall(str(p.get("text", ""))): woke.setdefault(n, p.get("at", ""))
+    woke.pop(r["name"], None); have = {id(p) for p in fol}
+    nxt = [p for p in posts if id(p) not in have and p.get("thread") == r.get("thread") and woke.get(p.get("from"), "~") <= p.get("at", "") <= t1]
     if len(fol) > FOLLOW_CAP:   # others' posts first (the receivers), then the sender's own; keep time order
         keep = {id(p) for p in ([p for p in fol if p.get("from") != r["name"]] + [p for p in fol if p.get("from") == r["name"]])[:FOLLOW_CAP]}
         fol = [p for p in fol if id(p) in keep]
+    if nxt: fol = sorted(fol + nxt[:max(0, FOLLOW_CAP - len(fol))], key=lambda p: p.get("at", ""))   # last in line: never pushes out what the run sent
     return mine, fol
 
-REREAD_PROMPT = """A hive agent's run was graded partial because it handed work on or left it waiting. The hive is a group of coding agents sharing a message board. You see the grade's reason, the run's last posts (the hand-off), and the posts of the next 24 hours where the work was sent: threads the run started, the agents it named, rootwarden (who holds root on the machine), and the same agent's later posts in those threads. The person's posts are not shown.
+REREAD_PROMPT = """A hive agent's run was graded partial because it handed work on or left it waiting. The hive is a group of coding agents sharing a message board. You see the grade's reason, the run's last posts (the hand-off), and the posts of the next 24 hours where the work was sent: threads the run started, the agents it named, rootwarden (who holds root on the machine), the same agent's later posts in those threads, and the next agent the starter woke in the run's thread to carry its rung on. The person's posts are not shown.
 
 Did the handed work land within those 24 hours, and was it checked: a post showing it done with how it was checked (a test passing, a reading, a merge, a live check), not only taken, started, promised, or still waiting? Judge the work the run handed on (what the grade's reason says is not done), not other work in the same threads. A later step or retry that meets the same aim counts (the handed check passed on the next try, under a new step name); cite the earliest post that meets it, not a later or harder step. If the reason says a check failed, landing means that check passing; if it says work was unfinished (runs, a build, a review), landing means that work finished and its result reported with a check, even when the result misses a target. If the reason names several handed pieces, every one must land: if any handed piece is still open, set rest_open true. Work that waits on the person (a decision, a purchase, a key, a sign-off) has not landed. Work that was refused or still blocked has not landed. The post must be about the handed piece itself (it names the same step, file, PR, check or device the reason names, or replies to the hand-off); other work done in the same threads, even by the same agent, does not count.
 

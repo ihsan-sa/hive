@@ -398,3 +398,10 @@
   .kb:not([data-in])>.kb-main{display:none}
   .kb-cards{grid-template-columns:minmax(0,1fr)}
 }
+/* Knowledge file page: its view tabs (Page, Text, Source, Edit) and what they show (views/knowledge.js viewBody) */
+.kb-h>.kb-views{grid-column:1/-1;grid-row:auto;flex-wrap:wrap;align-items:center;margin-top:var(--s2)}
+.kb-views .pv-save{position:relative}
+.kb-pages{margin-top:var(--s3);border-radius:var(--r-m,8px);overflow:hidden}
+.kb-edwrap{margin-top:var(--s3);height:min(78vh,900px);display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--r-m,8px);overflow:hidden}
+.kb-edwrap>.kb-later{flex:1;min-height:0;display:flex;flex-direction:column}
+.kb-pdf{display:block;width:100%;height:min(85vh,1100px);margin-top:var(--s3);border:1px solid var(--line);border-radius:var(--r-m,8px);background:#fff}

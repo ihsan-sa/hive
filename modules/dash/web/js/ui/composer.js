@@ -16,7 +16,6 @@ import { go } from "../core/router.js";
 import { isAgent, isRunning, agentCard, agentMono, agentLabel, labelCodes, capFirst, ownStep, plainStep, inConversation, agentStatus, threadPeople, partner, displayText, typedText, threadTitle, threadState } from "../core/model.js";
 import { short, mdPlain, now, fix } from "../core/format.js";
 import { button, fieldErr, icon, input, invalid, statusDot } from "./kit.js";
-import { openAside } from "./aside.js";
 import { sixSeven } from "../core/sixseven.js";
 import { startCall, phoneReady, inCall } from "./phone.js";
 import { run as eggRun } from "../core/easter.js";
@@ -229,7 +228,7 @@ async function deliver(it) {
     const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null, effort: simpleOn() ? null : it.effort || null, quote: it.quote || null, ...(it.interrupt ? { interrupt: true } : {}), ...(!it.th && it.focus ? { focus: it.focus } : {}), ...(kindOf(it.wire)[0] ? { plain_word: true } : {}) });   // send() sent it here, not to the card, on purpose (no card for it): dash.py stale_word
     it.id = res.id; it.state = "sent"; const thr = it.th;
     if (!it.th && res.thread) { it.th = res.thread; go("comms", res.thread); loadApp(); }   // the server files it under the focus picked in the box (and the agent gets that group's instructions, E37); a failure leaves it in Misc, where the title menu can file it
-    else if (res.thread && res.thread !== it.th) { it.th = res.thread; it.aside = true; openAside(thr, res.thread, it.text.replace(/^\s*\/btw\s*/i, "")); loadApp(); }   // /btw: it lives in the side thread; stay here
+    else if (res.thread && res.thread !== it.th) { it.th = res.thread; it.aside = true; import("./sidechat.js").then(m => m.openSideChat(res.thread, { main: thr, pending: it.text.replace(/^\s*\/btw\s*/i, "") })); loadApp(); }   // /btw: it lives in the side thread, opened as a side chat beside this one (sidechat.js); stay here
     poll();
   } catch (e) { it.state = "failed"; it.tried = true; it.err = simpleOn() && !/sign in/.test(e.message) ? "Check your connection, then try again." : e.message; it.uploading = false; }
   saveUnsent(); refresh();

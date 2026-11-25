@@ -26,7 +26,7 @@ import { bar as skBar, button, empty, icon, input, list, scrim, seg, skeleton, s
 import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
 import { message, messageHead, messageReceipt, localMessage, draftMessage, markWords, pollDelivered, marksSig, approvalLine, delivery, onJump, helperFolds, chatPages, pageEdit } from "../ui/message.js";
 import { chatView } from "../rich/artifact.js";
-import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
+import { openSideList, sideChats, sync as scSync } from "../ui/sidechat.js";
 import { openQuick, quickOpen, closeQuick, quickPanel, laterButtons, setLater } from "../ui/quick.js";
 import { pickBar, onPick } from "../ui/pick.js";
 import { when } from "../ui/when.js";
@@ -430,12 +430,19 @@ function sync(c, ctx) {
       L.box = box; L.rebuild = true; L.stuck = true;
       box.addEventListener("scroll", () => {
         if (L.box !== box) return;
-        L.stuck = atEnd(box) || (L.stuck && !(performance.now() - L.hand < 1000));   // only the reader unsticks it: a scroll the browser makes when a message reflows late (a chart, code) keeps the end
+        const end = atEnd(box); if (end) L.endTop = box.scrollTop;
+        L.stuck = end || (L.stuck && !(performance.now() - L.hand < 1000));   // only the reader unsticks it: a scroll the browser makes when a message reflows late (a chart, code) keeps the end
         if (L.stuck && L.unseen) { L.unseen = 0; setJump(); }
         cardSeen(box);
         L.saved = L.stuck ? null : { key: L.key, fromEnd: box.scrollHeight - box.scrollTop };
       }, { passive: true });
       for (const t of ["wheel", "touchstart", "pointerdown", "keydown"]) box.addEventListener(t, () => { L.hand = performance.now(); }, { passive: true });
+      // A wheel over a page in the chat (artifact.js) scrolls the chat without the chat hearing it; the page tells us, a moment late.
+      // If the chat already moved up from the end by then, that was the reader: let go of the end (growth never moves it up).
+      box.addEventListener("rc-hand", () => {
+        L.hand = performance.now();
+        if (L.stuck && L.endTop != null && box.scrollTop < L.endTop - 4) { L.stuck = false; L.saved = { key: L.key, fromEnd: box.scrollHeight - box.scrollTop }; }
+      });
       // The box changes size when the composer grows, the keyboard opens or the window moves: stay at the end if that's where it was.
       L.ro = new ResizeObserver(() => { if (L.stuck) box.scrollTop = box.scrollHeight; });
       L.ro.observe(box);
@@ -1162,32 +1169,24 @@ function head(c, ctx) {
         onclick: () => { C.find = !find; if (!C.find) C.q = ""; ctx.update(); if (C.find) queueMicrotask(() => document.querySelector(".cm-find")?.focus()); } }, icon("search")),
       c.thread && SH.get(c.thread)?.map && Object.values(SH.get(c.thread).map).some(x => x.show !== "full") ? h("button", { type: "button", class: "btn cm-showall", "data-size": "s", "aria-pressed": String(showAll(c.thread)), title: "Show every message in full, not shortened to one line", "aria-label": "All: show every message", onclick: () => { setShowAll(c.thread, !showAll(c.thread)); L.rebuild = true; L.keep = true; ctx.update(); } }, h("span", { class: "cm-sa-l" }, "Show every message"), h("span", { class: "cm-sa-s", "aria-hidden": "true" }, "All")) : null,
       c.thread ? button("Files", () => import("../ui/preview.js").then(m => m.openFiles()), { kind: "icon", icon: "folder", cls: "cm-files", title: "Files: this conversation's and the projects'" }) : null,
-      c.thread ? asideBtn(c.thread, ctx) : null,
+      c.thread ? asideBtn(c.thread) : null,
       c.thread ? h("button", { type: "button", class: "btn cm-more-b", "data-kind": "icon", "aria-label": "More tools", title: "More tools", "aria-expanded": String(more),
         onclick: e => { e.stopPropagation(); C.more = more ? null : c.thread; ctx.update(); } }, icon("more")) : null),
     statusBar(c.thread),   // where it stands: its own row under the title and the tools (hidden on a phone, where the title's sub line says it)
     c.thread ? jobRows(c.thread) : null,   // HA-24: the jobs running for it, each with its newest line
-    C.menu === "title" || (C.menu === "asides" && c.thread) ? scrim(() => { C.menu = null; ctx.update(); }) : null,
+    C.menu === "title" ? scrim(() => { C.menu = null; ctx.update(); }) : null,
     C.menu === "title" ? titleMenu(c, n, d, off, ctx) : null,
-    C.menu === "asides" && c.thread ? asideMenu(c.thread) : null,
     who.length ? h("div", { class: "cm-people" }, who) : null);
 }
-// /btw side questions (the person, 11040224589b): a small button in the head's tools, like the others.
-// From the main conversation it opens a menu with a row per side question; from a side one, it goes back.
-const sideKids = th => [...S.threads.keys()].filter(t => btwParent(t) === th);
-function asideBtn(th, ctx) {
+// Side chats (ui/sidechat.js; /btw side threads): a button in the head's tools opens the list of this conversation's side chats in
+// the side panel, with New side chat and Draw a box. From a side chat opened as its own conversation, it goes back.
+function asideBtn(th) {
   const up = btwParent(th);
-  if (up) return button("Back to " + short(threadTitle(up), 28), null, { href: threadHref(up), size: "s", kind: "quiet", icon: "chevron-left", cls: "cm-aside-b", title: "This is a side question about " + threadTitle(up) });
-  const kids = sideKids(th);
-  return kids.length ? h("button", { type: "button", class: "btn cm-aside-b", "data-size": "s", "data-kind": "quiet", "aria-haspopup": "true", "aria-expanded": String(C.menu === "asides"), title: "Side questions you asked with /btw here",
-    onclick: e => { e.stopPropagation(); C.menu = C.menu === "asides" ? null : "asides"; ctx.update(); } }, h("span", null, "Side", h("span", { class: "cm-aside-w" }, " questions"), ` (${kids.length})`)) : null;
-}
-function asideMenu(th) {
-  return h("div", { class: "cm-menu cm-aside-m menu", role: "menu", "data-key": "asides", "data-side": "bottom-end" },
-    h("p", { class: "meta" }, "Side questions"),
-    sideKids(th).reverse().map(t => { const d = S.threads.get(t), last = d && d.posts.at(-1);
-      return h("a", { href: threadHref(t), class: "cm-aside-i menu-i", role: "menuitem", "data-key": t, title: threadTitle(t).replace(/^Aside: /, "") },
-        h("span", { class: "cm-aside-q" }, threadTitle(t).replace(/^Aside: /, "")), last ? h("span", { class: "meta" }, ago(last.t)) : null); }));
+  if (up) return button("Back to " + short(threadTitle(up), 28), null, { href: threadHref(up), size: "s", kind: "quiet", icon: "chevron-left", cls: "cm-aside-b", title: "This is a side chat about " + threadTitle(up) });
+  if (!app() || !can("post")) return null;
+  const n = sideChats(th).length;
+  return h("button", { type: "button", class: "btn cm-aside-b", "data-kind": "icon", "aria-label": n ? `Side chats (${n})` : "Side chats", title: n ? `Side chats (${n}): ask about part of this conversation on the side` : "Side chats: ask about part of this conversation on the side",
+    onclick: () => openSideList(th) }, icon("chat"), n ? h("span", { class: "cm-sc-n", "aria-hidden": "true" }, String(n)) : null);
 }
 
 // ---- home: start something, one line on what waits, then one card per focus ----
@@ -1776,7 +1775,7 @@ export default {
   tab: true,
   badge: () => { if (!app() || !S.live) return null; if (!simpleOn()) { loadFoci(); loadNeedsYou(); } if (!needsKnown()) return null; const n = needsN(); return n ? String(n) : null; },
   poll: { every: 3000, run: async ctx => { const [a, b] = await Promise.all([pollDelivered(), pollCard()]); if (a || b) ctx.update(); } },
-  escape: () => { if (closeQuick()) return; if (C.menu || C.find) { C.menu = null; if (!C.q.trim()) C.find = false; L.ctx && L.ctx.update(); return; } if (C.more) { C.more = null; L.ctx && L.ctx.update(); return; } if (!cancelReply() && asideOpen()) closeAside(); },
+  escape: () => { if (closeQuick()) return; if (C.menu || C.find) { C.menu = null; if (!C.q.trim()) C.find = false; L.ctx && L.ctx.update(); return; } if (C.more) { C.more = null; L.ctx && L.ctx.update(); return; } cancelReply(); },
   // The home is where the focus cards are: arriving on it is the person's look at them (core/foci.js markSeen; never from a driven browser).
   enter: ctx => { C.arrived = true; const c = conversation(ctx && ctx.arg); if (app() && c.home && !c.list && !c.archived) lookAt(null, true); },
   leave: () => { clearTimeout(qTimer); C.menu = null; C.more = null; C.find = false; L.newTh = undefined; opened = ""; seenLeave(); },
@@ -1825,16 +1824,16 @@ function frame(ctx, c, pane) {
     L.here = here; L.place = c.place || null;
     L.opts = { showThread: !c.thread, mark: words(C.q) };
     refresh(c);
-    queueMicrotask(() => sync(c, ctx));
+    queueMicrotask(() => { sync(c, ctx); scSync(); });
     if (c.thread && app()) { const un = unreadIn(c.thread), sig = c.thread + un.map(x => x.id).join(); if (un.length && sig !== L.marked && !document.hidden) { L.marked = sig; markRead({ ids: un.map(x => x.id) }); } }
     const post = S.app.app && can("post");
     const convo = pane || (c.archived ? archivedPane(c, ctx) : c.home ? homePane(ctx)
       : [head(c, ctx),
         // Keyed by conversation: another one is a new element, so it opens at its end. Wrapped so that swap doesn't move the composer, which would drop focus.
         h("div", { class: "cm-mw", "data-key": "mw" },
-          h("div", { class: "cm-msgs", "data-key": "m:" + (c.arg || ""), "data-own": "", "data-sig": "own", role: "log", "aria-live": "off", "aria-label": "Messages", tabindex: "0" })),
+          h("div", { class: "cm-msgs", "data-key": "m:" + (c.arg || ""), "data-own": "", "data-sig": "own", role: "log", "aria-live": "off", "aria-label": "Messages", tabindex: "0" }),
+          h("div", { class: "sc-layer", "data-key": "sc", "data-own": "", "data-sig": "sc" })),   // side chats' marks over the messages (ui/sidechat.js)
         c.thread && app() && !(post && c.thread) ? strip(c.thread) : null,
-        post && c.thread ? asidePanel(c.thread, ctx.update) : null,
         c.thread && app() ? openCard(c.thread, { jump: jumpTo, answer: p => replyTo(p), update: ctx.update, atEnd: !L.box || L.box.dataset.key !== "m:" + (c.arg || "") || L.stuck }) : null,   // what's open for the person, so they needn't read back (110401090fd2)
         c.thread && !can("post") ? readOnly(c.thread) : null,   // §5b: where this address can't post, say so in the composer's place
         post && c.thread ? composer({ thread: c.thread, update: ctx.update, top: app() ? strip(c.thread) : null }) : null,
