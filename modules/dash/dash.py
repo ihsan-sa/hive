@@ -34,6 +34,49 @@ APP_FILES = re.compile(r"(?:/new)?/(manifest\.webmanifest|call\.webmanifest|sw\.
 THREAD_HOURS = 12
 
 
+_VISIT = [0.0]
+def note_visit(now=None):
+    """Remember when a page was last opened: one timestamp in STATE/last-visit, written at most once a minute. The away line
+    reads it (away-from); the check-in sender, once it ships, is to read one yes/no (`visited`). The time never leaves the machine."""
+    now = time.time() if now is None else now
+    if now - _VISIT[0] < 60: return
+    _VISIT[0] = now
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        try: prev = float((STATE / "last-visit").read_text())
+        except (OSError, ValueError): prev = None
+        if prev is not None and now - prev >= 1800: (STATE / "away-from").write_text(f"{prev:.0f}\n")   # a new visit after a gap: remember where the gap began, for the banner
+        (STATE / "last-visit").write_text(f"{now:.0f}\n")
+    except OSError: pass
+
+def away_now(now=None):
+    """/api/away-banner: {"days", "jobs", "ok"} when this visit follows 3+ quiet days and agents worked on the person's jobs meanwhile, else {}.
+    Counts only. The gap is `away-from` (written by note_visit), honoured for 12 hours after that visit."""
+    now = time.time() if now is None else now
+    f = STATE / "away-from"
+    try: since = float(f.read_text()); fresh = now - f.stat().st_mtime < 12 * 3600
+    except (OSError, ValueError): return {}
+    days = int((now - since) // 86400)
+    if not fresh or days < 3: return {}
+    # a job is one of the person's own conversations (person_threads); it counts once if a run on it ended meanwhile, and went fine if its last such run did
+    run, last = {}, {}   # pid -> thread of the run that started with it; thread -> went fine, for the last run on it that ended since
+    try:
+        with open(LOG, "rb") as fh:
+            for line in fh:
+                st = b'"event": "start"' in line or b'"event":"start"' in line
+                if not st and b'"event": "end"' not in line and b'"event":"end"' not in line: continue
+                try: e = json.loads(line)
+                except ValueError: continue
+                if not isinstance(e, dict): continue
+                if st: run[e.get("pid")] = e.get("thread"); continue
+                th = run.pop(e.get("pid"), None)
+                try: at = datetime.fromisoformat(e["at"]).timestamp()
+                except (ValueError, KeyError, TypeError): continue
+                if th and at > since: last[str(th)] = e.get("exit") in (0, None)   # None: the starter lost track of a run (a restart), not a failure (outcomes.py reads it the same)
+    except OSError: pass
+    if last: mine = person_threads(); last = {t: v for t, v in last.items() if t in mine}
+    return {"days": days, "jobs": len(last), "ok": sum(last.values())} if last else {}
+
 def jload(p, d=None):
     try: return json.loads(Path(p).read_text())
     except Exception: return d
@@ -613,6 +656,64 @@ def record_opened(d, route):
     if not THREAD_NAME.fullmatch(th): raise ValueError("a thread name is letters, digits and . _ : -")
     THREAD_OPENED.parent.mkdir(parents=True, exist_ok=True)
     with THREAD_OPENED.open("a") as f: f.write(json.dumps({"at": round(time.time(), 3), "thread": th, "from": "app", "route": route}) + "\n")
+    return {"ok": True}
+
+
+TIPS_FILE = STATE / "tips-dismissed.json"   # which tips the person closed: ["day2_second_job", ...]
+TIP_TEXT = {  # one plain sentence each (wording rules: kb/user-wording.md); the label is the app's own word
+    "day2_second_job": "Try a second job: start a New conversation and another agent takes it on. You can close this page, they'll carry on.",
+    "day5_come_back": "Want your phone to tell you when an agent needs you? Turn on Phone alerts in Settings.",
+}
+
+def tip_pick(days, started, jobs, dismissed=(), phone_on=False):
+    """drafts/day_tips.py in the hive-gtm project: which tip, if any."""
+    if started and 2 <= days <= 4 and jobs == 1 and "day2_second_job" not in dismissed: return "day2_second_job"
+    if started and days >= 5 and jobs >= 2 and not phone_on and "day5_come_back" not in dismissed: return "day5_come_back"
+    return None
+
+def tip_now(now=None):
+    """/api/tip: {"tip": key or None, "text": ...}. Counts only: days since the install marker, the person's own conversations on the board, the Phone alerts switch."""
+    try: days = int(((now or time.time()) - INSTALLED.stat().st_mtime) // 86400)
+    except OSError: return {"tip": None}   # not an installed Hive (Hive's own dash): no tips
+    if days < 2: return {"tip": None}
+    jobs = person_jobs(stop=2)
+    try: dismissed = json.loads(TIPS_FILE.read_text())
+    except (OSError, ValueError): dismissed = []
+    k = tip_pick(days, jobs >= 1, jobs, dismissed if isinstance(dismissed, list) else [], bool(PHONE.view().get("on")))
+    return {"tip": k, "text": TIP_TEXT.get(k)}
+
+_THREAD = re.compile(rb'"thread": ?"([^"]*)"')
+def person_threads(stop=None):
+    """Jobs the person started: conversations whose first post is from the person (what the app calls startedByPerson).
+    A run count (log.jsonl "start") is not that: every reply resumes a run, and wardens and timers start runs of their own."""
+    seen, out = set(), set()
+    try:
+        with open(BOARD, "rb") as f:
+            for line in f:
+                m = _THREAD.search(line)
+                if not m or m[1] in seen: continue
+                seen.add(m[1])
+                try: e = json.loads(line)
+                except ValueError: continue
+                if not isinstance(e, dict) or e.get("from") != "person": continue
+                out.add(str(e.get("thread")))
+                if stop and len(out) >= stop: break
+    except OSError: pass
+    return out
+
+def person_jobs(stop=None): return len(person_threads(stop))
+
+def away_dismiss():
+    (STATE / "away-from").unlink(missing_ok=True); return {"ok": True}
+
+def tip_dismiss(d):
+    k = str((d if isinstance(d, dict) else {}).get("tip") or "")
+    if k not in TIP_TEXT: raise ValueError("no such tip")
+    try: cur = json.loads(TIPS_FILE.read_text())
+    except (OSError, ValueError): cur = []
+    cur = [x for x in cur if x in TIP_TEXT] if isinstance(cur, list) else []
+    if k not in cur: cur.append(k)
+    TIPS_FILE.parent.mkdir(parents=True, exist_ok=True); TIPS_FILE.write_text(json.dumps(cur))
     return {"ok": True}
 
 
@@ -3020,13 +3121,17 @@ GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/subagents": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/export": "config", "/api/modules": "modules", "/api/connectors": "modules", "/api/shops": "logins", "/api/mcp-url": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/buy": "logins", "/api/orders": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/shop-signin": "logins", "/api/shop-signin/frame": "logins", "/api/brand/logo": "read",
-           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/kb/wipe": "files", "/api/kb/copies": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files", "/api/docs": "files", "/api/docs/doc": "files", "/api/docs/page": "files"}
+           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/kb/wipe": "files", "/api/kb/copies": "files", "/api/progress": "read", "/api/checklist": "read", "/api/goals": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files", "/api/docs": "files", "/api/docs/doc": "files", "/api/docs/page": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/kb/wipe": "files", "/api/kb/putback": "files", "/api/docs/notes": "files", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/side-ask": "post", "/api/door": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/default-model": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/mcp-url": "modules", "/api/voice": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/kb/save": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/buy": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/shop-signin": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/mcp-url", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
 
+GET_CAP["/api/tip"] = "read"
+POST_CAP["/api/tip-dismiss"] = "post"
+POST_CAP["/api/away-dismiss"] = "post"
+GET_CAP["/api/away-banner"] = "read"
 
 _DOCS = []
 def docs_mod():
@@ -7274,6 +7379,12 @@ def serve(port):
     live_c, proj_c, usage_c, jobs_c = Cached(live, 1), CachedStale(projects, 60), Cached(usage.view, 2), Cached(Jobs().view, 2)
     deliv_c = Cached(delivered_view, 2.5)
     # Both run hundreds of git calls or the ladder's checks: seconds inside this busy process, so a page gets the last answer while a new one is read.
+    def _goals():   # the home page's Goals list (goals_view.py): this machine's file, loaded by path; the release leaves it out, so no list shows there
+        f = Path(__file__).resolve().with_name("goals_view.py")
+        if not f.is_file(): return {"present": False, "goals": []}
+        spec = importlib.util.spec_from_file_location("goals_view", f); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+        return m.goals(BOARD)
+    goals_c = Cached(_goals, 15)
     web_c = Cached(web_stamp, 10)
     agent_costs = AgentCosts()
     subagents_c = Subagents()
@@ -7559,6 +7670,7 @@ def serve(port):
             display = bool(shown) and shown[1] in DISPLAY_PAGES
             page = u.path in ("/", "/index.html", "/login", "/old", "/new", "/new/", "/call", "/call/", MCP_OAUTH_PATH) or display
             if not self.admit(u.path, page=page): return
+            if page and not display and u.path not in ("/login", MCP_OAUTH_PATH): note_visit()   # the person opening the app; not the sign-in page or a wall display
             if u.path == "/api/proof":   # before sign-in on purpose: the asker has not sent the key yet, and learns nothing it could use as one
                 n, w = (q.get("n") or [""])[0], web_cfg()
                 if self.route != "local" or not w or not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", n): return self.send_error(404)
@@ -7655,6 +7767,10 @@ def serve(port):
                 self.send(json.dumps(thread_target(q.get("thread", [""])[0])).encode(), J)
             elif u.path == "/api/inbox":
                 self.send(json.dumps(inbox_view()).encode(), J)
+            elif u.path == "/api/tip":
+                self.send(json.dumps(tip_now()).encode(), J)
+            elif u.path == "/api/away-banner":
+                self.send(json.dumps(away_now()).encode(), J)
             elif u.path == "/api/checklist":
                 self.send(CHECKLIST.read_bytes() if CHECKLIST.exists() else b'{"items": []}', J)
             elif u.path == "/api/ntfy":
@@ -7723,6 +7839,7 @@ def serve(port):
                 num = lambda k: int(v) if (v := (q.get(k) or [""])[0]).isdigit() else None
                 gz = "gzip" in self.headers.get("Accept-Encoding", "")
                 self.send(tail_json(BOARD if u.path == "/api/board" else LOG, off, num("last") or 0, num("upto"), gz), J, gzipped=gz)
+            elif u.path == "/api/goals": self.send(json.dumps(goals_c.get()).encode(), J)
             elif u.path == "/api/approvals":
                 self.send(json.dumps(approvals_list()).encode(), J)
             elif u.path == "/api/feedback-drafts":
@@ -7864,6 +7981,10 @@ def serve(port):
                 try: return self.send(json.dumps(work_tier_change(d)).encode(), J)
                 except ValueError as e: return self.deny(400, str(e))
                 except (OSError, subprocess.SubprocessError) as e: return self.deny(502, str(e))
+            if u.path == "/api/away-dismiss": return self.send(json.dumps(away_dismiss()).encode(), J)
+            if u.path == "/api/tip-dismiss":
+                try: return self.send(json.dumps(tip_dismiss(d)).encode(), J)
+                except ValueError as e: return self.deny(400, str(e))
             if u.path == "/api/share-build":
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)

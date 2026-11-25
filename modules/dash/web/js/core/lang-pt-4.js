@@ -6,6 +6,13 @@ const NAMES = ["Astra", "Fable 5.2", "Alt+Shift+S", "Hive", "Hive", "Claude", "C
 const AGO = a => a === "just now" ? "agora mesmo" : a.replace(/^(\d+(?:,\d)?|\d+\.\d)(s|m|h|d) ago$/, (_, n, u) => `há ${n.replace(".", ",")} ${{ s: "s", m: "min", h: "h", d: "d" }[u]}`);
 const DUR = d => d === "under a minute" ? "menos de um minuto" : d;
 export default {
+  // the day-2 and day-5 tips and the away line on Chat's home (hive-gtm review fixes, 2026-11-25)
+  "A tip": "Uma dica",
+  "While you were away": "Enquanto você estava fora",
+  "Try a second job: start a New conversation and another agent takes it on. You can close this page, they'll carry on.": "Experimente um segundo trabalho: comece uma Nova conversa e outro agente assume. Você pode fechar esta página, eles continuam.",
+  "Want your phone to tell you when an agent needs you? Turn on Phone alerts in Settings.": "Quer que o celular avise quando um agente precisar de você? Ative Avisos no celular em Configurações.",
+  "One question is waiting for you, above.": "Uma pergunta está esperando por você, acima.",
+  "Nothing is waiting for you.": "Nada está esperando por você.",
   ...Object.fromEntries(NAMES.map(n => [n, n])),
   "A key starts nothing on its own: an agent uses it when a post names it, as --model NAME:MODEL. Every run costs money on that key, so set a spending limit with the provider.":
     "Uma chave não inicia nada sozinha: um agente a usa quando uma mensagem a cita, como --model NOME:MODELO. Cada execução custa dinheiro nessa chave, então defina um limite de gastos no provedor.",
@@ -426,6 +433,8 @@ export default {
   "the Hive": "o Hive",
   "Agents can send you links and files here: hive post --thread phone-chat": "Os agentes podem enviar links e arquivos para você aqui: hive post --thread phone-chat",
   __patterns: [
+    [/^(\d+) questions are waiting for you, above\.$/, (_, n) => `${n} perguntas estão esperando por você, acima.`],
+    [/^While you were away \((\d+) days?\): (\d+) jobs? finished, (\d+) without a problem\.$/, (_, d, j, ok) => `Enquanto você estava fora (${d} ${d === "1" ? "dia" : "dias"}): ${j} ${j === "1" ? "trabalho terminou" : "trabalhos terminaram"}, ${ok} sem nenhum problema.`],
     // HTML (see above): the call screens' words with a name or a number in them
     [/^(.+) is calling$/, "$1 está ligando para você"],
     [/^On hold: putting you through to (.*)$/, "Em espera: transferindo você para $1"],

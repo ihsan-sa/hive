@@ -38,6 +38,7 @@ import { callFor, hangUp } from "../ui/phone.js";
 import { brought } from "../ui/brought.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
 import { hiveStopped, TOPX } from "../ui/shell.js";
+import { openApproval, forCard, cardWhy } from "../ui/rootword.js";
 import { composer, interruptButton, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, hasDraft, quoteRef, prefill } from "../ui/composer.js";
 
 const STEP = 500, FIRST = 250, NEAR = 60, GROUP = 10 * MIN, HELPER_AFTER = 3 * MIN;
@@ -1299,6 +1300,24 @@ function finishedItems() {
   for (const d of rest) out.push({ th: d.name, t: d.last, what: "" });
   return out;
 }
+const TIP = { v: null, asked: false };   // the day-2 / day-5 tip from /api/tip, fetched once per page load, shown until closed
+function homeTip() {
+  if (!TIP.asked) { TIP.asked = true; jget("/api/tip").then(v => { TIP.v = v; poll(); }).catch(() => {}); }
+  const t = TIP.v; if (!t || !t.tip || !t.text) return null;
+  return h("section", { class: "cm-tip", "data-key": "tip", "aria-label": "A tip" },
+    h("span", null, t.text, " "),
+    button("Got it", () => { const k = t.tip; TIP.v = null; apiPost("/api/tip-dismiss", { tip: k }).catch(() => {}); poll(); }, { size: "s", cls: "cm-tip-x" }));
+}
+const AWAY = { v: null, asked: false, shut: false };   // /api/away-banner: the gap and job counts after a visit that follows 3+ quiet days, fetched once per page load
+function awayLine() {
+  if (!AWAY.asked) { AWAY.asked = true; jget("/api/away-banner").then(v => { AWAY.v = v; poll(); }).catch(() => {}); }
+  const a = AWAY.v; if (AWAY.shut || !a || !a.jobs) return null;
+  const w = waitingOn().length, n = k => `${k} job${k === 1 ? "" : "s"}`;
+  return h("section", { class: "cm-away", "data-key": "away", "aria-label": "While you were away" },
+    h("span", null, `While you were away (${plural(a.days, "day")}): ${n(a.jobs)} finished, ${a.ok} without a problem.`, " ",
+      w ? (w === 1 ? "One question is waiting for you, above." : `${w} questions are waiting for you, above.`) : "Nothing is waiting for you."),
+    button("Got it", () => { AWAY.shut = true; apiPost("/api/away-dismiss", {}).catch(() => {}); poll(); }, { size: "s", cls: "cm-tip-x" }));
+}
 function homeFinished() {
   const it = finishedItems(); if (!it.length) return null;
   const row = x => h("li", { class: "cm-fin-r", "data-key": "fin:" + x.th }, h("a", { href: threadHref(x.th) }, threadTitle(x.th).replace(/\s*\((?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\)/g, "")), x.what ? h("span", { class: "cm-old-q" }, " \u2014 ", x.what) : null, h("span", { class: "meta" }, " \u00b7 ", when(x.t)), x.more ? h("span", { class: "meta cm-fin-more" }, x.more === "person" ? " \u00b7 another ask here waits on you" : " \u00b7 the Hive is still on another ask here") : null);
@@ -1447,6 +1466,34 @@ function needMore(w) {
     h("button", { type: "button", class: "btn cm-need-more", "data-kind": "icon", "aria-haspopup": "menu", "aria-expanded": String(open), "aria-label": "Later or not needed", title: "Later or not needed",
       onclick: e => { e.stopPropagation(); C.menu = open ? null : k; upd(); } }, icon("more")),
     open ? [scrim(() => { C.menu = null; upd(); }), h("div", { class: "cm-menu menu", role: "menu", "data-side": "bottom-end", "data-key": "ndm" }, item(later), item(moot))] : null);
+}
+/** Goals the person approved (projects/word-shell/GOALS.md): each one lets work inside it go ahead without asking again, until it ends or is withdrawn.
+ *  From root's published list (/api/goals); nothing shows until it has one. Withdraw opens the same approval card as any approval, with the goal's file named. */
+const GOALS = { list: null, err: false, at: 0, open: true };
+function loadGoals(ctx) { if (now() - GOALS.at < MIN) return; GOALS.at = now(); jget("/api/goals").then(v => { const l = (v && v.present && Array.isArray(v.goals)) ? v.goals : [], err = !!(v && v.present && v.error); if (err !== GOALS.err || JSON.stringify(l) !== JSON.stringify(GOALS.list)) { GOALS.list = l; GOALS.err = err; ctx.update(); } }).catch(() => { GOALS.at = 0; }); }
+const goalEnds = e => { const d = new Date(e); return isNaN(d) ? "" : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }); };
+/** The card's withdrawal line for a goal: its file, then a short reminder of its words. The reminder keeps to plain letters (the card refuses others) and
+ *  drops anything shaped like a goal's file name: root withdraws every file the line names, so a goal quoting another's would withdraw both. */
+const WORD_FILE = /\d{8}T\d{6}Z-[A-Za-z0-9-]{1,60}\.txt/g;
+export const withdrawWords = g => {
+  let t = String(g.goal || "").replace(/[^\x20-\x7e]/g, " "), was;
+  do { was = t; t = t.replace(WORD_FILE, " "); } while (t !== was);
+  t = t.replace(/[()]/g, " ").replace(/\s+/g, " ").trim();
+  return `withdraw standing: ${g.file}` + (t ? ` (${t.length > 60 ? t.slice(0, 59).trim() + "\u2026" : t})` : "");
+};
+function homeGoals() {
+  const gs = GOALS.list || []; if (!gs.length && !GOALS.err) return null;
+  const at = g => g.thread && S.threads.has(g.thread) ? g.thread : "goals";   // withdrawn in the thread it was given in, else a thread of its own
+  const row = g => h("li", { class: "cm-goal", "data-key": "goal:" + g.file },
+    h("p", { class: "cm-goal-t" }, g.goal),
+    h("p", { class: "cm-goal-m meta" }, `Until ${goalEnds(g.ends)}`, typeof g.uses === "number" ? ` \u00b7 ${g.uses ? "used " + plural(g.uses, "time") : "not used yet"}` : null,
+      g.thread && S.threads.has(g.thread) ? [" \u00b7 from ", h("a", { href: threadHref(g.thread) }, threadTitle(g.thread))] : null),
+    can("post") && forCard(at(g), withdrawWords(g)) && !cardWhy(withdrawWords(g)) ? button("Withdraw", () => openApproval(at(g), withdrawWords(g)), { kind: "quiet", size: "s", cls: "cm-goal-w", title: "Opens a card to withdraw this goal. After that, work it covered asks you again." }) : null);
+  return h("section", { class: "cm-older cm-goals", "data-key": "goals", "aria-label": "Your goals" },
+    h("details", { class: "cm-older-d", open: GOALS.open ? "" : null, ontoggle: (e, d) => { if (e.target === d) GOALS.open = d.open; } },
+      h("summary", null, h("b", null, "Your goals"), gs.length ? h("span", { class: "meta" }, ` \u00b7 ${plural(gs.length, "goal")} in force`) : null),
+      h("p", { class: "cm-goal-say meta" }, GOALS.err ? "Your goals can't be read right now. They still count; this list will be back shortly." : "Work inside these goes ahead without asking you again. Anything else still asks."),
+      gs.length ? h("ul", { class: "cm-old-l" }, gs.map(row)) : null));
 }
 function homeNeeds(ws) {
   if (!ws.length) return null;
@@ -1661,7 +1708,7 @@ if (typeof window !== "undefined") window.addEventListener("resize", () => reque
 function homePane(ctx) {
   requestAnimationFrame(watchDock);
   const w = can("post"), n = needsN(), local = outFor(null), room = hasRoom(), digest = app();   // n: the one count (core/needs.js), the same as the Chat badge
-  if (digest) { loadFoci(); loadNeedsYou(); loadFinished(ctx); if (can("tier")) loadTiers(ctx.update); }   // work tiers: the chip on each focus card   // the one needs-you load (core/needs.js): the line, the badge and the cards read S.needsYou
+  if (digest) { loadFoci(); loadNeedsYou(); loadFinished(ctx); loadGoals(ctx); if (can("tier")) loadTiers(ctx.update); }   // work tiers: the chip on each focus card   // the one needs-you load (core/needs.js): the line, the badge and the cards read S.needsYou
   // Only on arriving: taking focus on every render pulled the page back to the box after any real click elsewhere on it.
   const arrived = C.arrived; C.arrived = false;
   // The line counts the last three days and names the rest as older, so new things don't hide behind stale ones (the person, 110812234faa); the Chat badge and Yours keep the whole count.
@@ -1688,6 +1735,9 @@ function homePane(ctx) {
     settled && line ? h("p", { class: "cm-hline", "data-key": "line", "data-needs": n ? "" : null }, line) : null,
     settled && n ? homeNeeds(waitingNow()) : null,
     settled && sp.older ? homeOlder(waitingOlder()) : null,
+    digest && settled ? homeGoals() : null,
+    settled ? homeTip() : null,
+    digest && settled ? awayLine() : null,
     digest && settled ? homeFinished() : null,
     digest ? fociGrid(ctx, settled) : null,
     digest ? homeMoved() : null,

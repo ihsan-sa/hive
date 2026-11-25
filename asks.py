@@ -443,10 +443,11 @@ def close_leftovers(a):
     print(f"reconciling {len(ids)} open leftovers against later posts")
     cmd_reconcile(argparse.Namespace(ids=ids, all=False, model=a.model, dry=False, chars=9000))
 
-def login_dir():
+def login_dir(skip=()):
     """The Claude login with the most weekly room, judged the way the starter does (pick_login): ~/.hive/usage.json and usage_5h.json
     (its readings), login_limits.json (the person's stop lines), paused.json, and starter.json's limits (logins held on a hit limit).
-    The first login in config order was wrong half the time: a weekly-limited one answers 429 to every call, silently, 2026-11-04."""
+    The first login in config order was wrong half the time: a weekly-limited one answers 429 to every call, silently, 2026-11-04.
+    skip: login dirs not to pick (the rsi bench asks for another account when its own login is at its limit)."""
     try: cfg = json.loads((CORE / "config.json").read_text())
     except (OSError, ValueError): cfg = {}
     def state(name, default):
@@ -458,7 +459,7 @@ def login_dir():
     ok = []
     for l in cfg.get("logins", []):
         d = str(Path(l).expanduser())
-        if d in paused or held.get(d, 0) > t or not Path(d).is_dir(): continue
+        if d in paused or d in skip or held.get(d, 0) > t or not Path(d).is_dir(): continue
         mine = lines.get(d) if isinstance(lines.get(d), dict) else {}
         w, h, v, f = mine.get("weekly", stop), mine.get("five_hour"), u.get(d), five.get(d)
         if v is not None and w is not None and v >= w: continue

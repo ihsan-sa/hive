@@ -197,7 +197,9 @@ def same_check(items, x):
     return {o["id"] for o in items.values() if o["id"] != x and o.get("check") == e["check"] and o.get("at", "") <= e.get("due_at", "") and e.get("at", "") <= o.get("due_at", "")}
 
 def judged_with(items, e):
-    """Ids judged together with e: its own --also and shares, rows on the same check, entries that named it in theirs, and theirs in turn."""
+    """Ids judged together with e: its own --also and shares, rows on the same check, entries that named it in theirs, and theirs in turn.
+    A --split row's check counts only its own cases, so only a row on the very same command ties it (rsi-lab "Shared-number landings")."""
+    if e.get("split"): return sorted(same_check(items, e["id"]))
     seen, todo = {e["id"]}, [e["id"]]
     while todo:
         x = todo.pop()
@@ -315,8 +317,17 @@ def check_hint(why):
     if f: return f"wc -l < {f.group(1)}" if f.group(1).endswith((".jsonl", ".csv", ".log", ".txt")) else f"grep -c PATTERN {f.group(1)}"
     return None
 
+def linked_record(items, since="2026-11-11"):
+    """(n, m): landings since `since` that were linked at logging (shares or also), have a verdict, and carry no --split;
+    m of them ended inconclusive. 9 of the 12 shared-number inconclusives since 11-11 were linked at landing (rsi-lab REPORT.md)."""
+    done = [e for e in items.values() if e.get("at", "") >= since and links(e) and not e.get("split")
+            and e.get("status") in ("held", "reverted", "reverted-candidate", "inconclusive")]
+    return len(done), sum(e["status"] == "inconclusive" for e in done)
+
 def cmd_log(a):
     items = ledger()
+    if a.split and not a.check: sys.exit("hive improve log: --split says the --check counts only this change's own cases; give the --check.")
+    if a.split and a.also: sys.exit("hive improve log: --also judges it together with those rows and --split judges it apart; give one.")
     if a.expect and not a.check:  # a gain no number reads (the person 11101138a853, 2026-11-10): written down before it lands, read by someone else at the revisit
         a.measure, a.no_check = a.measure or "judged: " + a.expect, a.no_check or "a gain read by eye, not by a number"
     if not a.measure: sys.exit("hive improve log: say how anyone will know it worked. --measure with --check CMD when a command can print the number; when the gain is one a reader sees and no number reads, --expect 'what will be visibly better, who could see it, and what would count as not better', and someone who didn't build it judges that at the revisit.")
@@ -349,6 +360,7 @@ def cmd_log(a):
            "hypothesis": a.hypothesis or "", "measure": a.measure, "baseline": a.baseline or "", "revisit": rev, "status": "landed",
            "commit": a.commit or "", "thread": a.thread or woke_thread(), **fields}
     if also: rec["also"] = also
+    if a.split: rec["split"] = a.split
     if a.no_check and not a.check:
         rec["no_check"] = a.no_check
         hint = None if a.expect else check_hint(a.no_check)
@@ -357,6 +369,15 @@ def cmd_log(a):
     if a.reviewed_by: rec["reviewed_by"] = a.reviewed_by.lstrip("@").lower(); rec["review_model"] = (a.model or "").lower()
     ov = overlaps(items, a.measure, skip=set(also))
     if ov: rec["shares"] = sorted(ov)  # linked, never refused (meta-reflect, reflect-p0.md; rsi-loop rung 133): judged together
+    same = sorted(same_check({**items, rec["id"]: rec}, rec["id"]))
+    if a.split and same: sys.exit(f"hive improve log: --split, but {', '.join(same)} read the very same check command over the same days, so it cannot count only this change's cases. Not logged; give it a check of its own.")
+    if a.split:  # review a97fa: a cosmetic edit (a #comment, a space) must not pass as a check of its own
+        norm = lambda c: " ".join(re.sub(r"\s#.*$", "", c or "").split())
+        for i in sorted(ov):
+            o = items[i]
+            if o.get("check") and norm(o["check"]) == norm(a.check): sys.exit(f"hive improve log: --split, but {i} reads the same command ({o['check']!r}). Not logged; give it a check of its own.")
+            if o.get("check") and fields["before"] != 0 and run_check(o["check"])[0] == fields["before"]:
+                sys.exit(f"hive improve log: --split, but {i}'s check prints the same number now ({fields['before']:g}), so this check reads their shared total, not only this change's cases. Not logged.")
     append(LEDGER, rec)
     print(f"{rec['id']} logged; before {fields['before']:g}; its check judges it at {fields['due_at']}, no agent needed." if a.check else f"{rec['id']} logged; revisit {rev}. Someone else judges it then: hive improve judge {rec['id']} held|reverted|inconclusive --why ...")
     if a.check:
@@ -366,14 +387,18 @@ def cmd_log(a):
         if missing: print("marked unsized (no " + ", ".join("--" + k for k in missing) + "): logged all the same. The verdict will say which way the number went, with nothing written beforehand to hold it against.")
         if "cutoff" in fields.get("unsized", []): print(f"note: the cut-off ({fields['due_at'][:10]}) has already come, so the check reads again within the hour and the change has had no time to show. Marked; give --revisit a later date to let it run.")
     elif a.gain is not None: print("note: --gain is read only with --check (it is a move in the check's number), so it was not kept. Say the size you expect in --expect.")
-    same = sorted(same_check({**items, rec["id"]: rec}, rec["id"]))
     if same: print(f"linked: {', '.join(same)} read the same check over the same days, so a held here is recorded as inconclusive. Give it a number of its own to judge it apart.")
     if unknown: print(f"warning: --also {', '.join(unknown)}: not in the ledger (hive improve list); the overlap is stored as given", file=sys.stderr)
     if ov:
         print(f"linked: {rec['id']}'s measure names a number open landings already name: "
               + "; ".join(f"{i} ({', '.join(n)})" for i, n in sorted(ov.items()))
-              + ". One revisit cannot credit one change, so a held on any of them is recorded as inconclusive."
-              " To judge it apart, give it a number of its own (an A/B arm, a sub-number) in the measure.")
+              + (". Its --split check counts only its own cases, so its verdict stands apart; theirs still read it as shared." if a.split else
+                 ". One revisit cannot credit one change, so a held on any of them is recorded as inconclusive."
+                 " To judge it apart, give it a number of its own (an A/B arm, a sub-number) in the measure."))
+    if (ov or also or same) and not a.split:  # rsi-lab "Shared-number landings": 9 of 12 shared inconclusives since 11-11 were linked here and logged with no own number
+        n, m = linked_record(items)
+        print(f"ask: {rec['id']} is linked, so its verdict will read inconclusive unless its check counts only its own cases." + (f" Of {n} linked landings judged since 11-11, {m} ended inconclusive." if n else "")
+              + " Next time, log a check that counts only this change's cases (its rows, its runs, its path) with --split 'HOW'; a scorer can't be chosen after landing.")
 
 def run_name(me):
     """{"run": name} when the agent run this judge is under was started as another name: HIVE_NAME is the caller's to set, the run's
@@ -396,8 +421,9 @@ def cmd_judge(a):
     if not e: sys.exit(f"hive improve judge: no improvement {a.id}")
     me = os.environ.get("HIVE_NAME", os.environ.get("USER", "?"))
     if me in ("check", "late-check"): sys.exit(f"hive improve judge: {me} is the name the hourly check signs with; a judge by hand can't use it.")
-    w = [i for i in judged_with(items, e) if items.get(i, {}).get("status") == "landed"]
-    mine = [x["id"] for x in [e] + [items[i] for i in w] if x.get("by") == me]
+    w0 = [i for i in judged_with(items, e) if items.get(i, {}).get("status") == "landed"]
+    w = [i for i in w0 if not (items[i].get("split") and e["id"] not in same_check(items, i))]  # a --split row keeps its own verdict
+    mine = [x["id"] for x in [e] + [items[i] for i in w0] if x.get("by") == me]  # but its owner still may not judge the row its change moves
     if mine and not a.self and a.verdict not in CLOSING:  # a closing verdict is recorded for this row alone, so only its own owner is barred (below)
         sys.exit(f"hive improve judge: {', '.join(mine)} was logged by you" + (f" and is judged with {a.id}" if mine != [a.id] else "")
                  + ". The judge is never who proposed (the rule); pass --self only if nobody else can, and say why in --why.")
@@ -1048,6 +1074,7 @@ def main(argv=None):
     p.add_argument("--no-check", metavar="WHY", help="why no command can read this number")
     p.add_argument("--expect", metavar="TEXT", help="for a gain no number reads: what will be visibly better, who could see it, and what would count as not better, written before it lands; a non-builder judges it at the revisit. A wrong or unchecked number is worse than none")
     p.add_argument("--also", action="append", help="ids of open landings on the same number, judged together with this one at the revisit (silences the overlap warning)")
+    p.add_argument("--split", metavar="HOW", help="the --check counts only this change's own cases, though its measure names a number other landings share: say how (its rows, runs, path). Its verdict is then not made inconclusive by the overlap; a check identical to another open row's is refused")
     p.set_defaults(f=cmd_log)
     p = sp.add_parser("judge", help="judge a landed change on its revisit date: ID held|reverted|inconclusive --why 'the number vs baseline'; expired (its case never came up) or unjudgeable (no number exists) close it with no verdict, never by its owner")
     p.add_argument("id"); p.add_argument("verdict", choices=VERDICTS); p.add_argument("--why", default=""); p.add_argument("--self", action="store_true"); p.add_argument("--apart", help="FROM..TO (ISO): the number was read over a window when only this row was live, after it landed and before every row it shares a number with; a held then stays held")

@@ -6,6 +6,13 @@ const NAMES = ["Astra", "Fable 5.2", "Alt+Shift+S", "Hive", "Hive", "Claude", "C
 const AGO = a => a === "just now" ? "baru saja" : a.replace(/^(\d+(?:,\d)?|\d+\.\d)(s|m|h|d) ago$/, (_, n, u) => `${n.replace(".", ",")} ${{ s: "d", m: "mnt", h: "j", d: "hr" }[u]} lalu`);
 const DUR = d => d === "under a minute" ? "kurang dari semenit" : d;
 export default {
+  // the day-2 and day-5 tips and the away line on Chat's home (hive-gtm review fixes, 2026-11-25)
+  "A tip": "Sebuah tips",
+  "While you were away": "Selama Anda pergi",
+  "Try a second job: start a New conversation and another agent takes it on. You can close this page, they'll carry on.": "Coba pekerjaan kedua: mulai Percakapan baru dan agen lain akan mengerjakannya. Anda bisa menutup halaman ini, mereka tetap bekerja.",
+  "Want your phone to tell you when an agent needs you? Turn on Phone alerts in Settings.": "Ingin ponsel Anda memberi tahu saat agen butuh Anda? Nyalakan Peringatan ke ponsel di Pengaturan.",
+  "One question is waiting for you, above.": "Satu pertanyaan menunggu Anda, di atas.",
+  "Nothing is waiting for you.": "Tidak ada yang menunggu Anda.",
   ...Object.fromEntries(NAMES.map(n => [n, n])),
   "A key starts nothing on its own: an agent uses it when a post names it, as --model NAME:MODEL. Every run costs money on that key, so set a spending limit with the provider.":
     "Kunci tidak memulai apa pun sendiri: agen memakainya saat sebuah pesan menyebutnya, sebagai --model NAMA:MODEL. Setiap proses menghabiskan uang pada kunci itu, jadi tetapkan batas pengeluaran di penyedia.",
@@ -426,6 +433,8 @@ export default {
   "the Hive": "Hive",
   "Agents can send you links and files here: hive post --thread phone-chat": "Agen dapat mengirimi Anda tautan dan berkas di sini: hive post --thread phone-chat",
   __patterns: [
+    [/^(\d+) questions are waiting for you, above\.$/, (_, n) => `${n} pertanyaan menunggu Anda, di atas.`],
+    [/^While you were away \((\d+) days?\): (\d+) jobs? finished, (\d+) without a problem\.$/, (_, d, j, ok) => `Selama Anda pergi (${d} hari): ${j} pekerjaan selesai, ${ok} tanpa masalah.`],
     // HTML (see above): the call screens' words with a name or a number in them
     [/^(.+) is calling$/, "$1 menelepon Anda"],
     [/^On hold: putting you through to (.*)$/, "Ditahan: menyambungkan Anda ke $1"],

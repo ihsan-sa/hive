@@ -20,7 +20,8 @@ import { openAside } from "./aside.js";
 import { sixSeven } from "../core/sixseven.js";
 import { startCall, phoneReady, inCall } from "./phone.js";
 import { run as eggRun } from "../core/easter.js";
-import { wordBoxButton, wordBoxPanel, inShell, shellSlot, forCard, cardWhy, openApproval, backFromCard, sawApproval } from "./rootword.js";
+import { wordBoxButton, wordBoxPanel, forCard, replyWord, cardWhy, openApproval, backFromCard, sawApproval } from "./rootword.js";
+import { approveLabel } from "./wordkind.js";
 import { delivery } from "./message.js";   // circular, used only at render time
 
 // menu: which of the bar's menus is open (to | add | aa | model), or false. mode: thread → "interrupt" while armed.
@@ -249,6 +250,12 @@ function send(th) {
     const why = cardWhy(d.text);   // what the card would refuse, said here in the box instead
     if (why) { d.err = why; d.cardErr = true; refresh(); return; }
     d.err = ""; d.cardErr = false; openApproval(th, d.text, true); return;
+  }
+  const covers = replyWord(th, d);
+  if (covers) {   // "i approve this" to a post that asks for a yes: opens the card with that post's exact line (the person, 11250911be84)
+    const why = cardWhy(covers);
+    if (why) { d.err = why; refresh(); return; }
+    d.err = ""; openApproval(th, covers, true, d.text); return;
   }
   const r = recipient(th), int = !!th && CP.mode[th] === "interrupt" && busyWho(th, r) === r.who;
   const it = queue(th, d, r, int);
@@ -1076,13 +1083,14 @@ const waitsHere = (th, who) => { const st = threadState(th); return st.key === "
 export function composer({ thread, update, place = "thread", autofocus, top }) {
   CP.update = update;
   const th = thread || null;
-  if (inShell()) return shellSlot(th, place);   // framed by the word shell: the box there is the only one; app.js tells the shell where this stand-in is
+  // Framed by the word shell, this page keeps its own box (the person, 11250859f162: the shell's separate box lost the focus picker, file chips and
+  // the home's top place). No .cp-shell stand-in is drawn, so tellShell reports col null and the shell hides its box.
   if (CP.th !== th) { CP.th = th; CP.ac = null; CP.menu = false; CP.hist = null; }
   const d = draft(th), r = recipient(th), k = "cp:" + (th || "(new)"), empty = !d.text.trim() && !d.files.length;
   if (CP.focus || autofocus === true) { CP.focus = false; queueMicrotask(() => { const t = field(th); if (t && document.activeElement !== t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }); }
   mdSoon(th);   // after the render lands, so the layer copies the box's font and padding
   sawApproval(letGo);   // words that went out for approval and now show in their thread leave the box (the phone's return brings no ?approved)
-  CP.sig = (named(d.text, th) || "") + "|" + empty + "|" + isBtw(d.text) + "|" + forCard(th, d.text, d.files);
+  CP.sig = (named(d.text, th) || "") + "|" + empty + "|" + isBtw(d.text) + "|" + forCard(th, d.text, d.files) + "|" + !!replyWord(th, d);
   const busy = busyWho(th, r);
   if (th && CP.mode[th] && !busy) delete CP.mode[th];   // the agent stopped (or the To changed): nothing left to interrupt
   const armed = !!(th && CP.mode[th] === "interrupt");
@@ -1091,8 +1099,8 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
   // The names typed in the secret box before full mode ended come back, box open, after the sign-in (store.js keep); values never are kept.
   const back = kept("composer");
   if (Array.isArray(back) && back.length && !SB.back && !SB.open && can("secrets")) { SB.back = true; SB.open = true; SB.rows = back.map(name => ({ name: String(name), value: "" })); SB.say = KEPT_NOTE + " Type each value again, then Save."; SB.tone = null; }
-  const approve = forCard(th, d.text, d.files);   // Send becomes Approve on a yes: line, armed or not: it opens root's confirm card, and send() takes that path first
-  const sendWord = approve ? "Approve" : armed ? "Interrupt" : place === "thread" ? "Send" : "Start";
+  const covers = replyWord(th, d), approve = forCard(th, d.text, d.files) || !!covers;   // Send becomes Approve on a yes: line, armed or not: it opens root's confirm card, and send() takes that path first
+  const sendWord = approve ? approveLabel(covers || d.text) : armed ? "Interrupt" : place === "thread" ? "Send" : "Start";
   return h("div", { class: "cp", "data-key": k, "data-place": place, "data-mode": armed ? "interrupt" : null, "data-fmt": fmtOpen() ? "" : null, ...(th ? {} : dropZone(null)) },  // a thread's composer is inside its conversation's zone
     d.err ? h("p", { class: "cp-err", role: "alert", "data-key": "err" }, d.err) : null,
     wordBoxPanel(th, update),
@@ -1121,7 +1129,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
       h("textarea", { class: "cp-t", "data-key": "t", rows: 1, placeholder: ph, "aria-label": th ? "Message" : "What do you want done?", value: d.text, enterkeyhint: "send",
         oninput: (e, n) => {
           d.text = n.value; keep(d); CP.hist = null; mdSync(n);
-          const moved = acCheck(n, th), sig = (named(d.text, th) || "") + "|" + (!d.text.trim() && !d.files.length) + "|" + isBtw(d.text) + "|" + forCard(th, d.text, d.files);
+          const moved = acCheck(n, th), sig = (named(d.text, th) || "") + "|" + (!d.text.trim() && !d.files.length) + "|" + isBtw(d.text) + "|" + forCard(th, d.text, d.files) + "|" + !!replyWord(th, d);
           if (d.cardErr) { const w = forCard(th, d.text, d.files) ? cardWhy(d.text) : ""; if (w !== d.err) { d.err = w; d.cardErr = !!w; refresh(); return; } }   // the approval's note follows the edit, and goes once it's fixed
           if (moved || sig !== CP.sig) refresh();
         },
@@ -1154,7 +1162,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
           !th && S.app && !simpleOn() ? focusPick(d) : null,
           simpleOn() ? null : modelPick(d, r, th),
           simpleOn() ? null : effortPick(d, r, th),
-          sendButton(sendWord, () => send(th), empty, approve ? "Approve (Enter). Opens a card that shows these words; Confirm there sends them as your approval."
+          sendButton(sendWord, () => send(th), empty, approve ? (covers ? `${sendWord} (Enter). Opens a card that shows "${covers}", what the message you're answering asks. Confirm there sends it as your approval.` : `${sendWord} (Enter). Opens a card that shows these words; Confirm there sends them as your approval.`)
             : armed ? "Enter interrupts and sends · Esc cancels"
             : busy ? `${sendWord} (Enter). ${Said(th, busy)} reads it after its current step` : `${sendWord} (Enter). Shift+Enter for a new line. Edit your last message from its Edit button.`, armed && !approve)))));
 }

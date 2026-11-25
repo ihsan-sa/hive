@@ -21,10 +21,17 @@ const linkOk = u => { try { const x = new URL(u); return x.protocol === "https:"
 const pending = v => v && v.signin && (v.signin.state === "starting" || v.signin.state === "waiting");
 
 /** Reads /api/buy. Settings' enter and back call it; while a sign-in waits, tick() keeps reading it. */
+// Whether Buying was there last time, kept across leaving Settings and across reloads (a yes/no only, never the sign-in phrase or link):
+// while /api/buy is on its way the tab stays put with a "loading" body, instead of appearing late or blinking out on every section switch.
+const KNOWN = "h2.buy.installed";
+export const buyKnown = () => { try { return localStorage.getItem(KNOWN) === "1"; } catch (e) { return false; } };
+const remember = v => { try { if (v && v.installed) localStorage.setItem(KNOWN, "1"); else localStorage.removeItem(KNOWN); } catch (e) { /* none */ } };
+export const buyingWaiting = () => section({ title: "Buying", note: "Stripe Link, for agents' purchases", level: 1, key: "buying" }, empty("Reading…", { kind: "loading" }));
+
 export async function loadBuying(update) {
   if (!can("logins") || B.loading) return;
   B.loading = true;
-  try { B.v = await jget("/api/buy"); B.err = ""; B.t = Date.now(); } catch (e) { B.err = e.message; }
+  try { B.v = await jget("/api/buy"); B.err = ""; B.t = Date.now(); remember(B.v); } catch (e) { B.err = e.message; }
   B.loading = false;
   if (pending(B.v)) tick(update);
   update();
@@ -124,7 +131,7 @@ function buysBlock(v) {
 export function buyingSection(ctx) {
   if (!can("logins")) return null;
   const v = B.v;
-  if (!v) { if (!B.err && !B.loading && !B.t) loadBuying(ctx.update); return B.err ? section({ title: "Buying", note: "Stripe Link, for agents' purchases", level: 1 }, h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, B.err)) : null; }
+  if (!v) { if (!B.err && !B.loading && !B.t) loadBuying(ctx.update); return B.err ? section({ title: "Buying", note: "Stripe Link, for agents' purchases", level: 1 }, h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, B.err)) : buyKnown() ? buyingWaiting() : null; }
   if (!v.installed) return null;
   return section({ title: "Buying", note: "Stripe Link, for agents' purchases; you approve each buy on your phone", level: 1, key: "buying" },
     v.error ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, "The buy module didn't answer: " + v.error) : null,
