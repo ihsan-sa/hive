@@ -97,7 +97,9 @@ function checkNewer() {
       if (process.env.HIVE_APP_TEST === '1') { mark(); return; }
       if (!Notification.isSupported()) return;
       shown = new Notification({ title: 'A newer Hive app is available', body: `Version ${v}. Click to open the download page.` });
-      shown.on('show', mark);
+      // Said in the log either way, so a report (and the Windows runner's toast test) shows whether it really appeared.
+      shown.on('show', () => { log('notification shown ' + v); mark(); });
+      shown.on('failed', (e, err) => log('notification failed: ' + String(err).slice(0, 300)));
       shown.on('click', () => { external(lib.downloadPage('update')); shown = null; });
       shown.on('close', () => { shown = null; });
       shown.show();

@@ -11,6 +11,7 @@
 // With a third (... NEWEST.exe 0.1.2), the update the app's notice leads to: the newest installer runs while the new
 // version is still open, and must close it, leave one entry at the newest version, and a Start menu shortcut that opens
 // it at the Hive. The uninstall then runs on the last one installed.
+// Before it, the update notice's toast: the installed app against a stand-in site with a newer app ('ok toast').
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -201,6 +202,37 @@ const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWin
     const off3 = kept3 && now3 ? Math.max(...['x', 'y', 'width', 'height'].map(k => Math.abs(kept3[k] - now3[k]))) : Infinity;
     console.log(`ok setup-exe upgrade while open: ${from} open at ${reached0.replace(/^the Hive at /, '')}, ${newestVersion} installed over it in ${Math.round((Date.now() - t2) / 1000)} s; the open app was closed by the installer; one Apps & features entry, "${e3[0].DisplayName}" ${e3[0].DisplayVersion}, same folder; ${started.length ? 'the installer started ' + newestVersion + ' itself; ' : ''}window ${off3 <= 2 ? 'kept' : 'not kept (' + JSON.stringify(kept3) + ' then ' + JSON.stringify(now3) + ')'}; ${newestVersion} opens ${reached}`);
     unexe = unexe3;
+  }
+
+  // 3d. The update notice as a Windows person sees it: a toast, which Windows ties to the Start menu shortcut's app ID,
+  // so only the installed app can show one. Started from its shortcut with a stand-in site whose app is newer and
+  // without HIVE_APP_TEST (which skips the toast); newer-seen.txt is written only on the toast's show event. A runner
+  // session that can't show toasts is said in words, not a red build; an app that never noticed the newer one is.
+  {
+    const http = require('http');
+    const body = '{"version":"9.9.9"}\n';
+    const site = http.createServer((q, r) => { r.writeHead(q.url === '/app-version.json' ? 200 : 404, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }); r.end(body); });
+    await new Promise(r => site.listen(0, '127.0.0.1', r));
+    const data = path.join(process.env.APPDATA, 'Hive');
+    const seenFile = path.join(data, 'newer-seen.txt'), logF = path.join(data, 'app.log');
+    fs.rmSync(seenFile, { force: true });
+    const before = fs.existsSync(logF) ? fs.statSync(logF).size : 0;
+    const env = { ...process.env, HIVE_SITE: `http://127.0.0.1:${site.address().port}` }; delete env.HIVE_APP_TEST;
+    const start4 = links().find(x => /Programs\\Hive\.lnk$/i.test(x.Path));
+    spawn(start4.Target, start4.Args ? start4.Args.split(/\s+/) : [], { env, stdio: 'ignore', detached: true }).unref();
+    const said = () => { try { const b = fs.readFileSync(logF); return b.subarray(Math.min(before, b.length)).toString('utf8'); } catch { return ''; } };
+    const t3 = Date.now(); let seen = '';
+    while (Date.now() - t3 < 30000) {
+      try { seen = fs.readFileSync(seenFile, 'utf8').trim(); } catch { }
+      if (seen || /notification failed/.test(said())) break;
+      await sleep(1000);
+    }
+    await sleep(1000);
+    const lines = said().split(/\r?\n/).filter(x => /update notice|notification /.test(x)).map(x => x.replace(/^.*?(update notice|notification )/, '$1'));
+    ps(`Get-Process -Name Hive | Stop-Process`); await sleep(2000); site.close();
+    if (!lines.some(x => x === 'update notice 9.9.9')) throw new Error(`the installed app never noticed the stand-in site's 9.9.9 in 30 s (log: ${lines.join('; ') || 'nothing about it'})`);
+    if (seen === '9.9.9') console.log(`ok toast: the installed app showed "A newer Hive app is available" for 9.9.9 in ${Math.round((Date.now() - t3) / 1000)} s (log: ${lines.join('; ')})`);
+    else console.log(`no toast on this runner: newer-seen.txt ${seen ? 'says ' + seen : 'not written'} after 30 s; log: ${lines.join('; ')}`);
   }
 
   // 4. Uninstall it from Apps & features' own command; the app and its shortcuts go.
