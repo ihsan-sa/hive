@@ -1,12 +1,12 @@
 {
   "name": "hive-app",
   "productName": "Hive",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The Hive as a desktop app: installs it on first launch, then shows the web app in its own window.",
   "homepage": "https://hivelab.ca",
   "author": {
     "name": "Hive",
-    "email": "hive@hive.ihsan.cc"
+    "email": "support@hivelab.ca"
   },
   "license": "MIT",
   "main": "main.js",
