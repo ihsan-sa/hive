@@ -317,6 +317,38 @@ UNIT_IN_TITLE = re.compile(r"\b(?:career|workforce)\s+(?:services|center|centre|
 HIGHER_HEAD = re.compile(r"(?:^[ \t]*|\bis (?:the |an? |our )?|,[ \t]*)((?:executive director|(?:senior |associate |assistant )?vice (?:provost|president|chancellor)|(?:executive )?dean)\b(?!['’]s)(?!\s+of\s+students)[^\n.;]{0,60})", re.I | re.M)  # a rank above a plain director, as a page prints it
 
 
+POST_RANK_WORD = re.compile(r"\b(?:director|dean|vice|president|provost|chancellor|chief|head)\b", re.I)
+def post_tier(title):
+    """0 for a post above a plain director (executive director, vice president, an assistant vice president, dean ...), 2 for one under a director (assistant or associate director), else 1."""
+    if SENIOR_DIRECTOR.search(BELOW_DIRECTOR.sub(" ", title)): return 0
+    return 2 if BELOW_DIRECTOR.search(title) else 1
+
+
+def unit_post_above(title, staff_text):
+    """A careers or workforce post on the person's staff page ranked above theirs, or '': their unit's own AI page speaks for the unit's head, not for each director under them. UF's meet-the-team page lists Glover, Associate Vice President and Executive Director of the Career Connections Center, above Iverson, Director for Industry Relations and Workforce Pathways, whom the reviewer called WEAK on the center's AI page (fnwords133)."""
+    mine, own = post_tier(title), fold(" ".join(title.split()))
+    for line in staff_text.split("\n"):
+        line = " ".join(line.split())
+        if not line or len(line) > 200 or fold(line) == own or not POST_RANK_WORD.search(line) or not any(w in fold(line) for w in CAREER_WORDS): continue
+        if post_tier(line) < mine: return line
+    return ""
+
+
+UNIT_VOICE = re.compile(r"\b(?:we|our|us|career (?:services|center|centre|office|connections))\b")
+UNIT_PROGRAMME = re.compile(r"\b(?:workshops?|coach\w*|programming|events?|fairs?|training|resumes?|pop-ups?)\b")
+def unit_ai_sentence(text, ai):
+    """The sentence on a careers unit's AI page saying what the unit does with AI for careers: the must word and a careers action within 120 characters, six words or more, not a heading or a question; a sentence in the unit's voice ("we", "our", the centre's name) scores 2, one naming a workshop, coach, event or fair 1 more; the first of the best wins. '' when none."""
+    best, top = "", 0
+    for line in text.split("\n"):
+        for sent in re.split(r"(?<=[.!])\s+(?=[A-Z])", line.strip()):
+            low = fold(sent)
+            if len(sent.split()) < 6 or len(sent) > 300 or sent.rstrip().endswith((":", "?")): continue
+            if not any(CAREERS_ACTION.search(low[max(0, x.start() - 120):x.end() + 120]) for r in ai for x in r.finditer(low)): continue
+            score = 1 + 2 * bool(UNIT_VOICE.search(low)) + bool(UNIT_PROGRAMME.search(low))
+            if score > top: best, top = sent.strip(), score
+    return best
+
+
 def function_director(title):
     """True for a plain director of a function inside a unit (operations, data, systems, employer relations, partnerships ...): not an executive or senior director, not a dean or vice anything, and not a title that names the unit it heads."""
     t = title or ""
@@ -1017,6 +1049,7 @@ class Hunt:
                 self.near[k] = dict(r, note="; ".join(x for x in (f"not listed: {why}", r.get("note")) if x))
                 del self.leads[k]
                 self.moved.append(r["name"])
+            elif not self.s.get("allow_org_signal") and r.get("signal_near_person") != "yes": self.shape_noted(r)  # a stored row listed on its unit's page takes the unit's sentence too
 
     def misread(self, r):
         """A stored row whose page, read today, names someone else in its place: a degree an older read took for a first name ("EdD Erin Tipton" for Erin Tipton) or the tail of another person's post ("Training Network" from Patricia Parma's "Associate Vice Chancellor of Workforce Training Network"), fnwords129. A row its page still reads, or one that page reads no one from, stays (None). Else the name the page reads in its place (a degree misread), or "" (no person)."""
@@ -1083,10 +1116,15 @@ class Hunt:
 
     OWN_UNIT_SHAPE = "listed on an organisation signal of a kind reviewers confirmed: their own careers or workforce unit's page"
     NEWS_SHAPE = "listed on an organisation signal of a kind reviewers confirmed: the organisation's news of an AI programme or event for careers or workforce, and they are a workforce or instruction vice president or dean"
+    NOT_UNIT_HEAD = "the unit's page counts only for its head; their staff page lists a more senior careers or workforce post"
     def shape_noted(self, row):
-        """The row's note with the shape that let its organisation signal through, once."""
+        """The row's note with the shape that let its organisation signal through, once. On the unit's own page the signal becomes the page's sentence saying what the unit does with AI for careers (unit_ai_sentence), not the page's first line with the must word: UF's "AI in Careers" page lent Glover a cut-off line on the university's AI curriculum (fnwords133)."""
         ok = self.org_signal_shape(row)[0]
         if ok and ok not in str(row.get("note") or ""): row["note"] = "; ".join(x for x in (row.get("note"), ok) if x)
+        if ok == self.OWN_UNIT_SHAPE:
+            url = re.match(r"\(the organisation's, from (\S+)\) ", row["signal"]).group(1)
+            ai = [people.term_regex(w) for w in (self.must or ["artificial intelligence", "AI"])]
+            if (best := unit_ai_sentence((self.case.page_at(url) or {}).get("text", ""), ai)): row["signal"] = f"(the organisation's, from {url}) {best}"
         return row
 
     def org_signal_shape(self, row):
@@ -1111,8 +1149,9 @@ class Hunt:
         unit_seg = seg(u.path) == seg(s.path) and re.search(r"career|workforce", seg(u.path))
         about_ai = any(r.search(fold(re.sub(r"[-_/.]+", " ", u.path))) or r.search(fold(sp.get("title", ""))) for r in ai)  # a page about AI, not the unit's home page: American's careercenter home page lent Romig a teaser line linking to a generic tip sheet (fnwords132 review, WEAK)
         if "unit" in shapes and any(w in title for w in CAREER_WORDS) and host == sh and (unit_host or unit_seg) and beside(e, CAREERS_ACTION, 120):
-            if about_ai: return self.OWN_UNIT_SHAPE, ""
-            return "", "its unit's page is not a page about AI (AI is in neither its address nor its title)"
+            if not about_ai: return "", "its unit's page is not a page about AI (AI is in neither its address nor its title)"
+            if (above := unit_post_above(row.get("title", ""), (self.case.page_at(src_url) or {}).get("text", ""))): return "", f"{self.NOT_UNIT_HEAD}: {above}"
+            return self.OWN_UNIT_SHAPE, ""
         news = (NEWS_PAGE.search(host + u.path) or re.search(r"/news-and-events/|/news-releases?/", u.path)) and not listing_url(url)
         last = re.sub(r"\.\w+$", "", ([x for x in u.path.lower().split("/") if x] or [""])[-1])
         story = news and (path_year(url) or last.count("-") >= 2)

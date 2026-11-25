@@ -168,7 +168,7 @@ def c_hunt(a):
         if r["status"] != "reached" and r.get("stopped"): print(f"stopped: {r['stopped']}")
         if r.get("out"): print(f"out: {r['out']}")
     else: _out(r)
-    left = sum(1 for o in h.orgs for g in h.angles if (o, g) not in h.tried) + sum(1 for q in (h.s.get("discover") or []) if ("(discover)", q) not in h.tried)
+    left = sum(1 for o in h.orgs if h.wants_more(o) for g in h.angles if (o, g) not in h.tried)  # a full org's angles never run: fnwords133 said "2 searches left" (UF, full) for six passes + sum(1 for q in (h.s.get("discover") or []) if ("(discover)", q) not in h.tried)
     _log(f"hunt: {r['leads']} leads ({r['verified']} verified" + (f": {r['verified_kinds']}" if r.get("verified_kinds") else "") + f") of {r['target']}, {r['status']}" + (f" ({left} searches left)" if r["status"] != "reached" and left else "") + (f", {full0} org{'' if full0 == 1 else 's'} already full at the start" if full0 else "") + f", out {r['out']}" + (f"; no named head: {', '.join(e['org'] for e in r['no_named_head'])}" if r.get("no_named_head") else ""))
     if r["status"] != "reached": sys.exit(3)
 
