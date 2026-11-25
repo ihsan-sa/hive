@@ -8,6 +8,8 @@
 # app died on a missing ALSA symbol; Depends now names libasound2t64 first.
 # IMAGE@gdebi or IMAGE@pkcon installs with what a double-click opens instead of apt: gdebi on Mint, GNOME Software's
 # PackageKit on Debian (the same engines, without a screen).
+# Last, each removes the app again (`apt remove`, or PackageKit's remove as App Center and GNOME Software do) and checks
+# nothing of it is left: no /opt/Hive, menu entry, icon, command link or AppArmor profile.
 set -u
 deb=$1; shift
 [ -f "$deb" ] || { echo "usage: test/cleandeb.sh PATH.deb IMAGE..."; exit 2; }
@@ -38,14 +40,25 @@ xvfb-run -a /opt/Hive/hive-app --no-sandbox > /tmp/app.out 2>&1 &
 i=0; while [ $i -lt 45 ]; do grep -qs '^.*screen ' $HOME/.config/Hive/app.log && break; sleep 1; i=$((i+1)); done
 shown=$(grep -hs 'screen ' $HOME/.config/Hive/app.log | head -1 | sed 's/^.*screen /screen /')
 [ -n "$shown" ] || { echo "FAILED no screen in 45 s: $(grep -v '^$' /tmp/app.out | tail -3 | tr '\n' ' ')"; exit 1; }
-echo "$(dpkg-query -W -f='${Version}' hive-app) installed with ${HOW:-apt}, nothing missing, the app showed its $shown in ${i} s"
+ver=$(dpkg-query -W -f='${Version}' hive-app)
+# Then the README's removal, with the same engine: nothing of the app may stay (the app's own settings in ~/.config/Hive
+# do stay, as the README says; the AppArmor profile is only put in where AppArmor runs, which a container doesn't).
+for p in /proc/[0-9]*; do case "$(tr '\\0' ' ' < $p/cmdline 2>/dev/null)" in /opt/Hive/hive-app*) kill ${p#/proc/} 2>/dev/null;; esac; done; sleep 2
+case "$HOW" in
+  pkcon) if command -v pkgcli > /dev/null; then pkgcli -y remove hive-app; else pkcon -y --noninteractive remove hive-app; fi > /tmp/rm.log 2>&1 ;;
+  *) apt-get remove -y -qq hive-app > /tmp/rm.log 2>&1 ;;
+esac || { echo "FAILED ${HOW:-apt} remove: $(grep -v '^$' /tmp/rm.log | tail -3 | tr '\n' ' ')"; exit 1; }
+dpkg -s hive-app 2>/dev/null | grep -q '^Status: install ok installed' && { echo "FAILED remove left hive-app installed: $(grep -v '^$' /tmp/rm.log | tail -3 | tr '\n' ' ')"; exit 1; }
+left=$(ls -d /opt/Hive /usr/bin/hive-app /etc/alternatives/hive-app /etc/apparmor.d/hive-app /usr/share/applications/hive-app.desktop /usr/share/icons/hicolor/*/apps/hive-app.png 2>/dev/null | tr '\n' ' ')
+[ -z "$left" ] || { echo "FAILED left after remove: $left"; exit 1; }
+echo "$ver installed with ${HOW:-apt}, nothing missing, the app showed its $shown in ${i} s; removed with ${HOW:-apt}, nothing left"
 IN
 fail=0
 for spec in "$@"; do
   img=$spec; how=; case "$spec" in *@gdebi|*@pkcon) img=${spec%@*}; how=${spec##*@};; esac
   out=$($run run --rm --network=host -e HOW="$how" -v "$dir:/w:ro" "$img" sh /w/in.sh 2>&1 | tail -1)
   # Only the script's own last line counts as a pass; anything else (a crash, a log line) is a failure.
-  case "$out" in *" installed with "*", the app showed its screen "*) echo "ok clean deb $spec: $out";;
+  case "$out" in *" installed with "*", the app showed its screen "*"; removed with "*", nothing left") echo "ok clean deb $spec: $out";;
     *) echo "FAILED clean deb $spec: ${out#FAILED }"; fail=1;; esac
 done
 rm -rf "$dir"
