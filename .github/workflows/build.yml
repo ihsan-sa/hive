@@ -52,14 +52,17 @@ jobs:
           export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
           HIVE_APP_REAL=1 xvfb-run -a node test/real.js "$PWD/${{ matrix.app }}"
       # The .deb as a person installs it: apt, then the command in its menu entry. The Hive from the step above is still there.
-      # Then the update a Linux person does: the .deb built again one patch on, installed over it with apt.
+      # Then the update a Linux person does: the .deb built again one patch on, installed over it with apt, then a third,
+      # one more on, installed with apt while that one is still open.
       - if: runner.os == 'Linux'
         run: |
           export XDG_RUNTIME_DIR=/run/user/$(id -u) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus
           sudo apt-get install -y ./dist/Hive-linux-amd64.deb
           NEXT=$(node -p "require('./package.json').version.replace(/[0-9]+$/, n => +n + 1)")
           npx electron-builder --linux deb --x64 --publish never -c.extraMetadata.version=$NEXT -c.directories.output=dist-next
-          xvfb-run -a -s "-screen 0 1280x1024x24" node test/deb.js dist-next/Hive-linux-amd64.deb $NEXT
+          NEXT2=$(node -p "'$NEXT'.replace(/[0-9]+$/, n => +n + 1)")
+          npx electron-builder --linux deb --x64 --publish never -c.extraMetadata.version=$NEXT2 -c.directories.output=dist-next2
+          xvfb-run -a -s "-screen 0 1280x1024x24" node test/deb.js dist-next/Hive-linux-amd64.deb $NEXT dist-next2/Hive-linux-amd64.deb $NEXT2
       # The same on Windows (its WSL 2) and on the Intel Mac (its VM; Apple silicon runners can't start one). These machines
       # differ from a person's computer, so a stop here is read, not a red build.
       # Which Linux systems the Windows runner already has before the install (the installer makes its own, "Hive").
