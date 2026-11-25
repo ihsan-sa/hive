@@ -11,8 +11,9 @@
 // must be the new version, keep the window's place (its data folder is outside the bundle) and reach the Hive.
 // With HIVE_DL_EXPECT=setup (the Apple silicon runner, where no Hive can run) the app must instead open on its setup
 // screen, and never on a Hive page; everything else is the same.
-// Last, the update notice: opened with open -a against a stand-in site with a newer app, the notification must show
-// (ok mac notice), or why it did not is said in words; the app must at least notice the newer version.
+// Last, the update notice: opened with open -a against a stand-in site with a newer app. ok mac notice says macOS took the
+// notification; ok mac banner, only when a screenshot (read by macOS's own text recognition, test/macbanner.swift) shows
+// the banner; otherwise why not in words, with the Hive's notification setting. Red only if the app never noticed the newer one.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -119,14 +120,37 @@ const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWin
       if (seen || /notification (failed|not supported)/.test(said())) break;
       await sleep(1000);
     }
-    await sleep(2000);
-    try { sh('screencapture', ['-x', 'test/shots/macnotice.png']); } catch { }
+    // A screenshot each second for 10 s from here: the banner, if macOS shows one, stays about 5 s.
+    const shots = [];
+    for (let k = 0; k < 10; k++) {
+      const f = `test/shots/macnotice${k ? '-' + k : ''}.png`;
+      try { sh('screencapture', ['-x', f]); shots.push(f); } catch { }
+      await sleep(1000);
+    }
+    // macOS's own word: the Hive's notification setting, and the text its recognizer reads on each shot.
+    let setting = 'not read', banner = '', seenText = [];
+    try {
+      const out = execFileSync('swift', [path.join(__dirname, 'macbanner.swift'), 'cc.ihsan.hive', ...shots], { encoding: 'utf8', timeout: 300000, stdio: ['ignore', 'pipe', 'pipe'] });
+      for (const l of out.split('\n')) {
+        if (l.startsWith('ncprefs: ')) setting = l.slice(9);
+        const m = l.match(/^ocr (\S+): (.*)$/);
+        if (!m) continue;
+        const parts = m[2].split(' | ');
+        if (!banner && parts.some(x => /A newer Hive app is available|Click to open the download page/.test(x))) banner = m[1];
+        for (const x of parts) if (/otification|Hive app|Allow/.test(x) && !seenText.includes(x)) seenText.push(x);
+      }
+    } catch (e) { setting = 'not read: ' + String(e.stderr || e.message).split('\n').filter(Boolean).slice(-2).join(' / ').slice(0, 200); }
     const lines = said().split(/\r?\n/).filter(x => /update notice|notification /.test(x)).map(x => x.replace(/^.*?(update notice|notification )/, '$1'));
     try { sh('pkill', ['-f', dest + '/Contents/MacOS/Hive']); } catch { }
     await sleep(2000); site.close();
     if (!lines.some(x => x === 'update notice 9.9.9')) throw new Error(`the app from ${dest} never noticed the stand-in site's 9.9.9 in 30 s (log: ${lines.join('; ') || 'nothing about it'})`);
-    if (seen === '9.9.9' && lines.includes('notification shown 9.9.9')) console.log(`ok mac notice: the app from ${dest} showed "A newer Hive app is available" for 9.9.9 in ${Math.round((Date.now() - t3) / 1000)} s (log: ${lines.join('; ')}; screen in test/shots/macnotice.png)`);
-    else console.log(`no mac notice on this runner: newer-seen.txt ${seen ? 'says ' + seen : 'not written'} after 30 s; log: ${lines.join('; ')}; screen in test/shots/macnotice.png`);
+    // Electron's show event on a Mac means macOS took the notification, not that a banner appeared: only a screenshot says that.
+    if (seen === '9.9.9' && lines.includes('notification shown 9.9.9')) console.log(`ok mac notice: macOS took the notification "A newer Hive app is available" for 9.9.9 (log: ${lines.join('; ')})`);
+    else console.log(`no mac notice on this runner: newer-seen.txt ${seen ? 'says ' + seen : 'not written'} after 30 s; log: ${lines.join('; ')}`);
+    console.log(`  macOS's notification setting for the Hive: ${setting}`);
+    console.log(`  text read on the screen about it: ${seenText.join(' / ').slice(0, 400) || 'none'}`);
+    if (banner) console.log(`ok mac banner: ${banner} shows the banner "A newer Hive app is available"`);
+    else console.log(`no mac banner: none of ${shots.length} screenshots over 10 s shows it (test/shots/macnotice*.png); setting: ${setting}`);
   }
   fs.rmSync(dest, { recursive: true, force: true });
 })().catch(err => { console.error('FAILED', err.message || err); try { fs.rmSync(dest, { recursive: true, force: true }); } catch { } process.exit(1); });
