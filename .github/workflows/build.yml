@@ -85,16 +85,20 @@ jobs:
       # Anyway (its command-line form), then opened from there: it must go straight to the Hive from the step above.
       # Read, not a red build, like the real install it stands on.
       # Then the update a Mac person does: the zip built again one patch on, dragged over the app in /Applications.
-      - if: matrix.os == 'macos-15-intel'
+      # On Apple silicon (no VM, so no Hive) the same download and update must open on the setup screen instead.
+      - if: runner.os == 'macOS'
         continue-on-error: true
         run: |
           NEXT=$(node -p "require('./package.json').version.replace(/[0-9]+$/, n => +n + 1)")
+          ARCH=$(uname -m | sed s/x86_64/x64/)
           echo "HIVE_NEXT=$NEXT" >> "$GITHUB_ENV"
-          npx electron-builder --mac zip --x64 -c.mac.identity=- --publish never -c.extraMetadata.version=$NEXT -c.directories.output=dist-next
-      - if: matrix.os == 'macos-15-intel'
+          echo "HIVE_ARCH=$ARCH" >> "$GITHUB_ENV"
+          npx electron-builder --mac zip --$ARCH -c.mac.identity=- --publish never -c.extraMetadata.version=$NEXT -c.directories.output=dist-next
+      - if: runner.os == 'macOS'
         continue-on-error: true
         timeout-minutes: 15
-        run: node test/macdl.js dist/Hive-mac-x64.zip ${HIVE_NEXT:+dist-next/Hive-mac-x64.zip $HIVE_NEXT}
+        env: { HIVE_DL_EXPECT: "${{ matrix.os == 'macos-15' && 'setup' || '' }}" }
+        run: node test/macdl.js dist/Hive-mac-$HIVE_ARCH.zip ${HIVE_NEXT:+dist-next/Hive-mac-$HIVE_ARCH.zip $HIVE_NEXT}
       # The README's "Remove it" steps, run after the real install: nothing of the Hive may be left.
       - if: runner.os == 'Linux'
         run: HIVE_APP_REAL=1 node test/remove.js
