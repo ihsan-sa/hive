@@ -902,7 +902,7 @@ def second_read(r, posts, by_id, asks, model="sonnet", draws=REREAD_DRAWS, first
         else: return None, cost
         post = re.sub(r"[^0-9A-Za-z]", "", str(g.get("post") or ""))   # "1118073 6ce75", "[b2]": the model's typing, not another post
         got.append({"landed": g.get("landed") is True and g.get("rest_open") is False and post in ids and quoted(g.get("quote"), by_id.get(post)),
-                    "post": post, "why": clip(g.get("why"), 160)})
+                    "post": post, "why": ("[corrected reply] " if g.get("_two") else "") + clip(g.get("why"), 160)})
         if not got[-1]["landed"]: break   # landed needs every draw: one no settles it
     yes = all(g["landed"] for g in got)
     pick = got[0] if yes else next(g for g in got if not g["landed"])
@@ -918,7 +918,7 @@ def last_json(out, asks):
         try: o, _ = dec.raw_decode(s, i)
         except ValueError: continue
         if isinstance(o, dict) and "landed" in o: g = o
-    return g
+    return {**g, "_two": True} if isinstance(g, dict) else g   # marked: a reply that changed its mind is read by hand on the switch-on passes (a4418)
 
 def _norm(t): return re.sub(r"[^a-z0-9]+", " ", str(t or "").lower()).strip()
 
