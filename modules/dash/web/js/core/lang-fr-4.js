@@ -5,6 +5,13 @@ const pl = (n, one, many) => (n === "1" || n === "0" ? one : many);
 const FST = { "on track": "va bien", "at risk": "à risque", blocked: "bloqué", "needs you": "a besoin de toi", "waiting on others": "attend les autres", paused: "en pause", done: "terminé" };
 const fwas = w => (w === "no longer needs you" ? "n'a plus besoin de toi" : w === "was on track" ? "allait bien avant" : "avant : " + (FST[w.slice(4)] || w.slice(4)));
 export default {
+  // the day-2 and day-5 tips and the away line on Chat's home (hive-gtm review fixes, 2026-11-25)
+  "A tip": "Un conseil",
+  "While you were away": "Pendant ton absence",
+  "Try a second job: start a New conversation and another agent takes it on. You can close this page, they'll carry on.": "Essaie un deuxième travail : lance une Nouvelle conversation et un autre agent s'en charge. Tu peux fermer cette page, ils continueront.",
+  "Want your phone to tell you when an agent needs you? Turn on Phone alerts in Settings.": "Tu veux que ton téléphone te prévienne quand un agent a besoin de toi ? Active Alertes sur le téléphone dans Réglages.",
+  "One question is waiting for you, above.": "Une question t'attend, plus haut.",
+  "Nothing is waiting for you.": "Rien ne t'attend.",
   "to you": "pour toi",
   "Lately learned": "Appris récemment",
   "No other note links here yet": "Aucune autre note ne renvoie ici pour l'instant",
@@ -579,6 +586,8 @@ export default {
   // a timer job named in a pause line (ui/worktiers.js keyName: "the timer improve")
   "the timer": "le minuteur",
   __patterns: [
+    [/^(\d+) questions are waiting for you, above\.$/, (_, n) => `${n} questions t'attendent, plus haut.`],
+    [/^While you were away \((\d+) days?\): (\d+) jobs? finished, (\d+) without a problem\.$/, (_, d, j, ok) => `Pendant ton absence (${d} ${d === "1" ? "jour" : "jours"}) : ${j} ${j === "1" || j === "0" ? "travail terminé" : "travaux terminés"}, ${ok} sans problème.`],
     [/^You asked: (.+)$/, (_, w) => `Vous avez demandé : ${w}`],
     [/^(?:One conversation in it has|(\d+) conversations in it have) a work tier of (?:its|their) own and keeps? going: (.+)\. Pause (?:it|them) from (?:its|their) own menu\.$/, (_, n, w) => (n ? `${n} conversations dedans ont leur propre niveau de travail et continuent : ${w}. Mettez-les en pause depuis leur propre menu.` : `Une conversation dedans a son propre niveau de travail et continue : ${w}. Mettez-la en pause depuis son propre menu.`)],
     [/^It is paused with (?:one other|(\d+) others) that share its work tier; resuming starts them too: (.+)$/, (_, n, w) => (n ? `En pause avec ${n} autres qui partagent son niveau de travail ; la reprendre les relance aussi : ${w}` : `En pause avec une autre qui partage son niveau de travail ; la reprendre les relance aussi : ${w}`)],

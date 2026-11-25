@@ -6,6 +6,13 @@ const NAMES = ["Astra", "Fable 5.2", "Alt+Shift+S", "Hive", "Hive", "Claude", "C
 const AGO = a => a === "just now" ? "अभी-अभी" : a.replace(/^(\d+(?:,\d)?|\d+\.\d)(s|m|h|d) ago$/, (_, n, u) => `${n.replace(",", ".")} ${{ s: "सेकंड", m: "मिनट", h: "घंटे", d: "दिन" }[u]} पहले`);
 const DUR = d => d === "under a minute" ? "1 मिनट से कम" : d;
 export default {
+  // the day-2 and day-5 tips and the away line on Chat's home (hive-gtm review fixes, 2026-11-25)
+  "A tip": "एक सुझाव",
+  "While you were away": "जब आप दूर थे",
+  "Try a second job: start a New conversation and another agent takes it on. You can close this page, they'll carry on.": "दूसरा काम आज़माएँ: नई बातचीत शुरू करें और कोई दूसरा एजेंट उसे संभाल लेगा। आप यह पेज बंद कर सकते हैं, काम चलता रहेगा।",
+  "Want your phone to tell you when an agent needs you? Turn on Phone alerts in Settings.": "क्या आप चाहते हैं कि जब किसी एजेंट को आपकी ज़रूरत हो तो आपका फ़ोन आपको बताए? सेटिंग में फ़ोन अलर्ट चालू करें।",
+  "One question is waiting for you, above.": "ऊपर एक सवाल आपके उत्तर की प्रतीक्षा में है।",
+  "Nothing is waiting for you.": "कुछ भी आपकी प्रतीक्षा में नहीं है।",
   ...Object.fromEntries(NAMES.map(n => [n, n])),
   "A key starts nothing on its own: an agent uses it when a post names it, as --model NAME:MODEL. Every run costs money on that key, so set a spending limit with the provider.":
     "कुंजी अपने आप कुछ शुरू नहीं करती: जब कोई पोस्ट इसे --model NAME:MODEL के रूप में बताती है, तब एजेंट इसका उपयोग करता है। हर रन पर उस कुंजी से पैसे खर्च होते हैं, इसलिए प्रदाता के पास खर्च की सीमा तय करें।",
@@ -426,6 +433,8 @@ export default {
   "the Hive": "Hive",
   "Agents can send you links and files here: hive post --thread phone-chat": "एजेंट आपको यहाँ लिंक और फ़ाइलें भेज सकते हैं: hive post --thread phone-chat",
   __patterns: [
+    [/^(\d+) questions are waiting for you, above\.$/, (_, n) => `ऊपर ${n} सवाल आपके उत्तर की प्रतीक्षा में हैं।`],
+    [/^While you were away \((\d+) days?\): (\d+) jobs? finished, (\d+) without a problem\.$/, (_, d, j, ok) => `जब आप दूर थे (${d} दिन): ${j} ${j === "1" ? "काम पूरा हुआ" : "काम पूरे हुए"}, ${ok} बिना किसी समस्या के।`],
     // HTML (see above): the call screens' words with a name or a number in them
     [/^(.+) is calling$/, "$1 आपको कॉल कर रहे हैं"],
     [/^On hold: putting you through to (.*)$/, "होल्ड पर: आपको $1 से जोड़ा जा रहा है"],

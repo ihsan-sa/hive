@@ -1372,7 +1372,7 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 .cm-tl{overflow-x:hidden}
 .cm-tl .lr-in[style]{padding-left:calc(var(--s2) + var(--d,0)*14px)}   /* a helper conversation under the one it came from */
 .cm-tl .lr[data-key$="~kids"] .lr-t b{font-weight:500;color:var(--ink-2)}
-.cm-tl .lr[data-key$="~kids"] .lr-t b{flex:none}.cm-tl .lr[data-key$="~kids"] .lr-t{flex-wrap:wrap}.cm-tl .lr[data-key$="~kids"] .lr-t .meta{flex:0 0 auto;margin-left:auto}   /* the title stays whole, the counts drop to a line of their own when they do not fit beside it */
+.cm-tl .lr[data-key$="~kids"] .lr-t{flex-wrap:nowrap;min-width:0}.cm-tl .lr[data-key$="~kids"] .lr-t b{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cm-tl .lr[data-key$="~kids"] .lr-t .meta{flex:0 0 auto;margin-left:auto;white-space:nowrap}   /* one line in a narrow list: the title is cut off with "…", the count keeps its place (the person, feedback 2026-11-25) */
 .cm-tl .lr-x{padding-right:52px}   /* clear of the star and pin */
 .cm-tl .lr-in[aria-current]{background:var(--hover);box-shadow:inset 2px 0 0 var(--ink)}
 .cm-tl .lr-t{font-size:var(--fs-body)}
@@ -1469,11 +1469,21 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 /* Stuff to address (the person, 11081245f002): the older needs, folded shut under the list, one line each */
 .cm-older{max-width:720px;margin:var(--s3) auto 0;display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s3);padding:10px 14px;border:1px dashed var(--line);border-radius:var(--r-l)}
 .cm-older-d{flex:1 1 100%}
+.cm-tip,.cm-away{margin:var(--s3) 0 0;display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s3);padding:10px 14px;border:1px solid var(--line);border-radius:var(--r-l)}
+.cm-tip-x{margin-left:auto}
+.cm-away>span{flex:1 1 20em}
 .cm-older-d>summary{cursor:pointer;min-height:44px;display:flex;align-items:center;gap:4px;font-size:var(--fs-body)}
 .cm-older-d>summary b{flex:none;white-space:nowrap}
 .cm-old-l{margin:var(--s2) 0 0;padding:0;list-style:none;display:grid;gap:6px;font-size:var(--fs-small)}
 .cm-old{color:var(--ink-2);overflow-wrap:anywhere}
 .cm-old a{color:var(--accent-ink);font-weight:var(--w-med)}
+/* Your goals (GOALS.md): each goal in force, when it ends, and Withdraw */
+.cm-goal{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s3);align-items:center}
+.cm-goal-t{grid-column:1;margin:0;color:var(--ink);overflow-wrap:anywhere}
+.cm-goal-m{grid-column:1;margin:2px 0 0}
+.cm-goal-m a{color:var(--ink-2)}
+.cm-goal-w{grid-column:2;grid-row:1/span 2}
+.cm-goal-say{margin:0}
 .yr-older{margin:var(--s5) 0 var(--s1)}
 /* --- the focus card, v3 (designs/ui-redesign-v3/V3-HANDOFF.md 3a): needs first, a time-first timeline, compact rows --- */
 .t{font-size:var(--fs-meta);color:var(--ink-3);white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:400}
@@ -1757,6 +1767,7 @@ details.blk[open]>summary .blk-t::after{margin-bottom:-1px;transform:rotate(225d
 .blk-t{grid-column:1;font-size:var(--fs-body);font-weight:var(--w-med)}
 .blk-s{grid-column:1;font-size:var(--fs-meta);color:var(--ink-3);line-height:1.45}
 .blk-a{grid-column:2;grid-row:1 / span 2;display:flex;gap:var(--s2);align-items:center}
+.blk-h:has(>.blk-a>:nth-child(4)){grid-template-columns:minmax(0,1fr)}.blk-h:has(>.blk-a>:nth-child(4))>.blk-a{grid-column:1;grid-row:auto;flex-wrap:wrap;margin-top:var(--s2)}   /* a row of choices (Language) goes under its words, not beside a one-word column of them (the person, feedback 2026-11-25) */
 .blk-a .input,.blk-a select.input{width:200px}   /* one width for both, so a column of settings lines up */
 @media (max-width:640px){.blk-h{grid-template-columns:minmax(0,1fr)}.blk-a{grid-column:1;grid-row:auto;flex-wrap:wrap;margin-top:var(--s2);margin-left:0}.blk-a .input{width:100%!important}}   /* phone: the control goes under the words, not beside a 90 px column of them */
 .blk-b{display:grid;gap:var(--s3);margin-top:var(--s3);font-size:var(--fs-small)}

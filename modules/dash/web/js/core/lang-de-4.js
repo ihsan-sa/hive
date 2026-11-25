@@ -1,6 +1,13 @@
 // German (rung E111, a12fd 2026-11-22): the strings Spanish has in lang-es-5.js.
 // Exact English keys, as in lang-es.js; __patterns for a line with a number or a name. Merged in lang.js.
 export default {
+  // the day-2 and day-5 tips and the away line on Chat's home (hive-gtm review fixes, 2026-11-25)
+  "A tip": "Ein Tipp",
+  "While you were away": "Während du weg warst",
+  "Try a second job: start a New conversation and another agent takes it on. You can close this page, they'll carry on.": "Probier einen zweiten Job: Starte eine Neue Unterhaltung, dann übernimmt ihn ein anderer Agent. Du kannst diese Seite schließen, sie arbeiten weiter.",
+  "Want your phone to tell you when an agent needs you? Turn on Phone alerts in Settings.": "Soll dein Handy dir sagen, wenn ein Agent dich braucht? Schalte Handy-Hinweise in den Einstellungen ein.",
+  "One question is waiting for you, above.": "Oben wartet eine Frage auf dich.",
+  "Nothing is waiting for you.": "Nichts wartet auf dich.",
   "Astra": "Astra",
   "Fable 5.2": "Fable 5.2",
   "Alt+Shift+S": "Alt+Shift+S",
@@ -416,6 +423,8 @@ export default {
   "the Hive": "der Hive",
   "Agents can send you links and files here: hive post --thread phone-chat": "Agenten können dir hier Links und Dateien schicken: hive post --thread phone-chat",
   __patterns: [
+    [/^(\d+) questions are waiting for you, above\.$/, (_, n) => `Oben warten ${n} Fragen auf dich.`],
+    [/^While you were away \((\d+) days?\): (\d+) jobs? finished, (\d+) without a problem\.$/, (_, d, j, ok) => `Während du weg warst (${d} ${d === "1" ? "Tag" : "Tage"}): ${j} ${j === "1" ? "Job" : "Jobs"} erledigt, ${ok} ohne Probleme.`],
     // from lang-es-5.js
 // the call screens' words with a name or a number in them
 [/^(.+) is calling$/, "$1 ruft dich an"],

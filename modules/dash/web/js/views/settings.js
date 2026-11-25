@@ -905,6 +905,7 @@ function navDots(ctx) {
 
 // Buying (ui/buying.js, which brings ui/shop_signin.js) loads when Settings first asks for it, with the logins right: no other page needs it.
 let Buy = null, buyLoad = null, buyTurn = 0;
+const buyKnownHere = () => { try { return localStorage.getItem("h2.buy.installed") === "1"; } catch (e) { return false; } };   // the flag ui/buying.js keeps; read here too so the tab is there before that file arrives
 const importBuying = () => buyLoad ||= import("../ui/buying.js").then(m => { Buy = m; }, e => { buyLoad = null; console.error("Buying didn't load:", e); });
 function readBuying(ctx) {
   if (!can("logins")) return;
@@ -914,7 +915,7 @@ function readBuying(ctx) {
 function buyingPart(ctx) {
   if (Buy) return Buy.buyingSection(ctx);
   if (can("logins") && !buyLoad) readBuying(ctx);   // the right arrived while Settings was open, or an earlier load failed
-  return null;
+  return can("logins") && buyKnownHere() ? section({ title: "Buying", note: "Stripe Link, for agents' purchases", level: 1, key: "buying" }, waiting()) : null;   // Buying was there last time: hold its tab while the file loads
 }
 
 export default {

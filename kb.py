@@ -121,6 +121,11 @@ def walk():
                 if src in ("core", "projects", "moddocs") and not PROJECT_ONLY.search(f): continue
                 if live and stale_copy(p, os.path.join(live, os.path.relpath(p, top))): continue
                 yield src, p, rel
+    # The person's memory (core/memory.py, Settings › Everyday › Memory) is part of the KB too, so `kb find` and recall reach
+    # what they told their chats (the person, thread 11250922a4e4, 2026-11-25: "anything about me should just end up in the KB").
+    # It stays its own file so Settings can list and delete each line and only `hive remember` writes it.
+    p = os.path.join(H, "memory.md")
+    if os.path.isfile(p): yield "kb", p, "memory.md"
 
 def chunks(text):
     """Split at headings, then every CHUNK_LINES lines or CHUNK_CHARS chars. Each passage knows its heading trail and date."""

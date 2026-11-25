@@ -6,6 +6,13 @@ const NAMES = ["Astra", "Fable 5.2", "Alt+Shift+S", "Hive", "Hive", "Claude", "C
 const AGO = a => a === "just now" ? "たった今" : a.replace(/^(\d+(?:,\d)?|\d+\.\d)(s|m|h|d) ago$/, (_, n, u) => `${n.replace(",", ".")}${{ s: "秒", m: "分", h: "時間", d: "日" }[u]}前`);
 const DUR = d => d === "under a minute" ? "1分未満" : d;
 export default {
+  // the day-2 and day-5 tips and the away line on Chat's home (hive-gtm review fixes, 2026-11-25)
+  "A tip": "ヒント",
+  "While you were away": "留守の間",
+  "Try a second job: start a New conversation and another agent takes it on. You can close this page, they'll carry on.": "2つ目の仕事を試してみましょう。新しいスレッドを始めると、別のエージェントが引き受けます。このページを閉じても作業は続きます。",
+  "Want your phone to tell you when an agent needs you? Turn on Phone alerts in Settings.": "エージェントがあなたを必要としたとき、スマホで知らせてほしいですか？設定でスマホ通知をオンにしてください。",
+  "One question is waiting for you, above.": "上で質問が1件あなたの返答を待っています。",
+  "Nothing is waiting for you.": "あなたの対応待ちはありません。",
   ...Object.fromEntries(NAMES.map(n => [n, n])),
   "A key starts nothing on its own: an agent uses it when a post names it, as --model NAME:MODEL. Every run costs money on that key, so set a spending limit with the provider.":
     "キーだけでは何も起動しません。投稿が --model NAME:MODEL の形で指定したときに、エージェントがそのキーを使います。実行のたびにそのキーに料金がかかるので、プロバイダー側で利用上限を設定してください。",
@@ -426,6 +433,8 @@ export default {
   "the Hive": "Hive",
   "Agents can send you links and files here: hive post --thread phone-chat": "エージェントはここにリンクやファイルを送れます: hive post --thread phone-chat",
   __patterns: [
+    [/^(\d+) questions are waiting for you, above\.$/, (_, n) => `上で質問が${n}件あなたの返答を待っています。`],
+    [/^While you were away \((\d+) days?\): (\d+) jobs? finished, (\d+) without a problem\.$/, (_, d, j, ok) => `留守の間（${d}日）に${j}件の仕事が終わり、${ok}件は問題ありませんでした。`],
     // HTML (see above): the call screens' words with a name or a number in them
     [/^(.+) is calling$/, "$1 から着信中です"],
     [/^On hold: putting you through to (.*)$/, "保留中:$1 におつなぎしています"],

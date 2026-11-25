@@ -7,6 +7,12 @@ const fwas = w => (w === "no longer needs you" ? "ya no te necesita" : w === "wa
 // an agent named in a receipt: "the agent", or the app look's label ("Agent A", "Agent A and Agent B")
 const ag = a => a === "the agent" ? "el agente" : a.replace(/\bAgent ([A-Z]{1,2})\b/g, "Agente $1").replace(/ and /g, " y ");
 export default {
+  "A tip": "Un consejo",
+  "While you were away": "Mientras estabas fuera",
+  "Try a second job: start a New conversation and another agent takes it on. You can close this page, they'll carry on.": "Prueba un segundo trabajo: empieza una Nueva conversación y otro agente se encarga. Puedes cerrar esta página, seguirán.",
+  "Want your phone to tell you when an agent needs you? Turn on Phone alerts in Settings.": "¿Quieres que tu celular te avise cuando un agente te necesite? Activa Avisos al celular en Ajustes.",
+  "One question is waiting for you, above.": "Te espera una pregunta, arriba.",
+  "Nothing is waiting for you.": "Nada te espera.",
   "to you": "para ti",
   "Lately learned": "Aprendido últimamente",
   "No other note links here yet": "Ninguna otra nota enlaza aquí todavía",
@@ -580,6 +586,8 @@ export default {
   // a timer job named in a pause line (ui/worktiers.js keyName: "the timer improve")
   "the timer": "el temporizador",
   __patterns: [
+    [/^(\d+) questions are waiting for you, above\.$/, (_, n) => `Te esperan ${n} preguntas, arriba.`],
+    [/^While you were away \((\d+) days?\): (\d+) jobs? finished, (\d+) without a problem\.$/, (_, d, j, ok) => `Mientras estabas fuera (${d} ${pl(d, "día", "días")}): ${pl(j, "terminó", "terminaron")} ${j} ${pl(j, "trabajo", "trabajos")}, ${ok} sin ningún problema.`],
     [/^You asked: (.+)$/, (_, w) => `Preguntaste: ${w}`],
     [/^(?:One conversation in it has|(\d+) conversations in it have) a work tier of (?:its|their) own and keeps? going: (.+)\. Pause (?:it|them) from (?:its|their) own menu\.$/, (_, n, w) => (n ? `${n} conversaciones en él tienen nivel de trabajo propio y siguen: ${w}. Páusalas desde su propio menú.` : `Una conversación en él tiene nivel de trabajo propio y sigue: ${w}. Páusala desde su propio menú.`)],
     [/^It is paused with (?:one other|(\d+) others) that share its work tier; resuming starts them too: (.+)$/, (_, n, w) => (n ? `Está en pausa con otras ${n} que comparten su nivel de trabajo; al reanudarla empiezan también: ${w}` : `Está en pausa con otra que comparte su nivel de trabajo; al reanudarla empiezan también: ${w}`)],

@@ -6,6 +6,13 @@ const NAMES = ["Astra", "Fable 5.2", "Alt+Shift+S", "Hive", "Hive", "Claude", "C
 const AGO = a => a === "just now" ? "방금" : a.replace(/^(\d+(?:,\d)?|\d+\.\d)(s|m|h|d) ago$/, (_, n, u) => `${n.replace(",", ".")}${{ s: "초", m: "분", h: "시간", d: "일" }[u]} 전`);
 const DUR = d => d === "under a minute" ? "1분 미만" : d;
 export default {
+  // the day-2 and day-5 tips and the away line on Chat's home (hive-gtm review fixes, 2026-11-25)
+  "A tip": "팁",
+  "While you were away": "자리를 비운 동안",
+  "Try a second job: start a New conversation and another agent takes it on. You can close this page, they'll carry on.": "두 번째 작업을 해 보세요. 새 대화를 시작하면 다른 에이전트가 맡습니다. 이 페이지를 닫아도 작업은 계속됩니다.",
+  "Want your phone to tell you when an agent needs you? Turn on Phone alerts in Settings.": "에이전트가 사용자를 필요로 할 때 휴대폰으로 알림을 받으시겠어요? 설정에서 휴대폰 알림을 켜세요.",
+  "One question is waiting for you, above.": "위에서 질문 1개가 답변을 기다리고 있습니다.",
+  "Nothing is waiting for you.": "기다리는 것이 없습니다.",
   ...Object.fromEntries(NAMES.map(n => [n, n])),
   "A key starts nothing on its own: an agent uses it when a post names it, as --model NAME:MODEL. Every run costs money on that key, so set a spending limit with the provider.":
     "키만으로는 아무것도 시작되지 않습니다. 게시물이 --model NAME:MODEL 형식으로 지정하면 에이전트가 그 키를 사용합니다. 실행할 때마다 해당 키에 비용이 발생하므로 공급자 쪽에서 지출 한도를 설정하세요.",
@@ -426,6 +433,8 @@ export default {
   "the Hive": "Hive",
   "Agents can send you links and files here: hive post --thread phone-chat": "에이전트가 이곳으로 링크와 파일을 보낼 수 있습니다: hive post --thread phone-chat",
   __patterns: [
+    [/^(\d+) questions are waiting for you, above\.$/, (_, n) => `위에서 질문 ${n}개가 답변을 기다리고 있습니다.`],
+    [/^While you were away \((\d+) days?\): (\d+) jobs? finished, (\d+) without a problem\.$/, (_, d, j, ok) => `자리를 비운 동안(${d}일): 작업 ${j}개 완료, ${ok}개는 문제 없음.`],
     // HTML (see above): the call screens' words with a name or a number in them
     [/^(.+) is calling$/, "$1 님이 전화를 걸고 있습니다"],
     [/^On hold: putting you through to (.*)$/, "대기 중: $1 님에게 연결하는 중입니다"],
