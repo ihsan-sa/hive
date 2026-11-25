@@ -1,7 +1,7 @@
 """Names and roles on a page, and whether a page really backs a claim about someone. Pattern matching: it finds candidates and checks words on a page, and doesn't pretend to understand them."""
 import re
 import unicodedata
-from .extract import fold, registrable, domain_of, url_date
+from .extract import fold, registrable, domain_of, url_date, local_day
 
 ROLE = r"(?:(?:Senior |Associate |Assistant |Deputy |Interim |Acting |Executive |Founding |Vice |Co-?)*(?:President|Vice President|Vice Chancellor|Chancellor|Provost|Dean|Director|Chief [A-Z][a-z]+(?: [A-Z][a-z]+)* Officer|C[EOTFI]O|Chair(?:person|woman|man)?|Professor|Head|Manager|Coordinator|Superintendent|Founder|Partner|Principal|Lead|Secretary|Commissioner|Faculty|Instructor|Lecturer|Fellow|Officer|Editor|Researcher|Scientist|Engineer|Advisor|Adviser|Chief of Staff|General Counsel|Special Assistant|Comptroller|Controller|Registrar|Treasurer|Ombuds(?:person|man)?))"
 _ROLE_RE = re.compile(r"\b" + ROLE + r"\b", re.I)
@@ -337,7 +337,7 @@ def _page_lines(text, starts=False):
     for block in re.split(r"\n\s*\n", _plain(text)):
         lines = [l.strip() for l in block.split("\n") if l.strip()]
         for k, line in enumerate(lines):
-            if len(lines) > 1 and out and out[-1] is not None and (re.match(r"[a-z(]", line) or re.search(r"(?:\b(?:and|or|of|the|for|in|at|to|with|said)|,)$", out[-1])): out[-1] += " " + line
+            if len(lines) > 1 and out and out[-1] is not None and (re.match(r"[a-z(]", line) or re.search(r"(?:\b(?:and|or|of|the|for|in|at|to|with|said)|,)$", out[-1]) or (";" in out[-1] and not re.search(r"[.;:!?\"”)]$", out[-1]))): out[-1] += " " + line  # a caption's "Name, Post; Name, Post" list wrapped mid-post (CCAC, fnwords131)
             else: out.append(line); first.append(k == 0)
         out.append(None); first.append(None)
     kept = [(l, f) for l, f in zip(out, first) if l is not None]
@@ -446,7 +446,7 @@ def title_on(text, name, title, org=""):
 
 
 # A verb right after "Name, Title," says what this person did; a capitalised word there would be another employer (folded text loses case, so only known verbs and -ed words count).
-_VERB_AFTER = re.compile(r",\s*(?:spoke|said|says|leads|runs|opened|told|wrote|added|noted|stated|explained|announced|welcomed|presented|discussed|introduced|praised|launched|led|oversees|joined|was (?:appointed|named|elected|selected|invited|honou?red|recogni[sz]ed)|is (?:a|an|the|responsible|leading)|has (?:led|been|served|worked|overseen|built|helped)|will (?:lead|serve|speak|present|oversee|join)|who (?:leads|oversees|is|has|will|serves|directs)|offers|shares|brings|explains|adds|notes|believes|serves|recalls|recalled)\b|,\s*(?!(?:college|university|school|institute)\b)[a-z]{3,}ed\s+(?!college\b|university\b)")
+_VERB_AFTER = re.compile(r",\s*(?:spoke|said|says|leads|runs|opened|told|wrote|added|noted|stated|explained|announced|welcomed|presented|discussed|introduced|praised|launched|led|oversees|joined|was (?:appointed|named|elected|selected|invited|honou?red|recogni[sz]ed)|is (?:a|an|the|responsible|leading)|responsible for|addresses|speaks|presents|welcomes|greets|accepts|receives|delivers|congratulates|discusses|highlights|has (?:led|been|served|worked|overseen|built|helped)|will (?:lead|serve|speak|present|oversee|join)|who (?:leads|oversees|is|has|will|serves|directs)|offers|shares|brings|explains|adds|notes|believes|serves|recalls|recalled)\b|,\s*(?!(?:college|university|school|institute)\b)[a-z]{3,}ed\s+(?!college\b|university\b)")
 
 
 def _alone_name(line):
@@ -532,6 +532,8 @@ def title_slot(text, name, title, org=""):
             extension = re.sub(r"^(?:of|for|and)\s+", "", tail)
             ws = set(re.findall(r"[\w-]+", extension))
             if tail.startswith(("of ", "for ", "and ")) and ws and ws <= POST_WORDS and not ws & {"emeritus", "emerita", "student", "member", "day"}: return True
+            # "Vice President, Institutional Advancement and Workforce Development." (Middlesex, fnwords131): the unit after a comma, all post words, to the sentence's end.
+            if re.fullmatch(r",\s*[a-z][a-z &-]{2,80}\.?", tail) and len(ws) <= 8 and ws and ws <= POST_WORDS and not ws & {"emeritus", "emerita", "student", "member", "day", "former", "retired"}: return True
         return False
     toks = [t for t in fold(clean_name(name)).split() if len(t.strip(".")) > 1]
     # "She is Dean of Students." or "Doe is Dean of Students." straight after the sentence naming them.
@@ -550,18 +552,26 @@ def title_slot(text, name, title, org=""):
             m = rx.search(sent)
             if not m: continue
             head, tail = sent[:m.start()].strip(), sent[m.end():].strip()
+            # "Pictured: Jane Roe, Dean; Dr. Jane Doe, Vice President; Bob Poe, ...": a semicolon list, each entry its own slot.
+            if ";" in head or re.match(r"(?:(?:Dr|Mr|Ms|Mrs|Prof)\.?\s+)?[A-Z][\w'’-]+(?:\s+[A-Z][\w.'’-]*){1,3},", tail.partition(";")[2].strip()):
+                head = head.rpartition(";")[2].strip()
+                tail = tail.partition(";")[0].strip()
             # '"...," said Dr. Jane Doe, Dean ...': what was quoted is not the slot; what follows "said" is.
             quoted = re.fullmatch(r"(?:.*[\"”’,]\s*)?" + _SAID + r"\s*(.*)", head, flags=re.I | re.S)
             if quoted: head = quoted.group(1).strip()
             head = re.sub(r"^(?:[—–-]+|(?:.*[\s,.])?(?:please\s+)?contact\b)\s*", "", head, flags=re.I | re.S).strip()  # "—Jane Doe, Dean", "contact Jane Doe, Dean, at ...", "visit the website or contact Jane Doe, Dean, at 555-..." (Century, fnwords131)
             head = re.sub(r"^(?:said\s+)?(?:Dr|Prof|Mr|Ms|Mrs)\.?$", "", head, flags=re.I).strip()
             if head.lower() == "said": head = ""
-            tail = re.sub(rf"^{SUFFIX}", "", " " + tail).strip()
+            raw = tail
+            tail = re.sub(rf"^\s*{SUFFIX}", "", " " + tail).strip()  # "Robert Earl, Jr., Director, ..." (BMCC, fnwords131): the comma before Jr. too
+            if tail != raw: tail = re.sub(r"^,\s*(?=(?:is|serves as|has been|was|currently)\b)", "", tail)  # "Sammi Morrill, Ph.D., serves as ..." (Alamo): no comma left before the verb
             tail = re.sub(r"^,?\s*(?:(?:Ph\.?\s?D\.?|Ed\.?\s?D\.?|MBA|M\.?D\.?),?\s*)+", "", tail, flags=re.I)
             if not head:
                 value = re.sub(r"^(?:[,|–—-]\s*|(?:currently\s+)?(?:(?:has been|was|is) (?:appointed|named|promoted|elevated) (?:as |to )?|(?:is|serves as|has been)\s+))", "", tail, count=1, flags=re.I)
                 own = re.match(r"((?:[\w&.-]+\s+){0,4}[\w&.-]+)['’]s\s+", value)
-                if own and _own(org, own.group(1)) and set(re.findall(r"[a-z0-9]+", fold(own.group(1)))) <= set(re.findall(r"[a-z0-9]+", fold(org))) | {"the"}: value = value[own.end():]
+                initials = "".join(w[0] for w in re.findall(r"[a-z0-9]+", fold(org)) if w not in ("of", "the", "and", "for", "at"))
+                # "CCAC's Vice President ..." / "MCC's Vice President ...": the org's own initials own the post too (fnwords131).
+                if own and _own(org, own.group(1)) and (set(re.findall(r"[a-z0-9]+", fold(own.group(1)))) <= set(re.findall(r"[a-z0-9]+", fold(org))) | {"the"} or (len(initials) > 1 and fold(own.group(1)).replace(".", "") == initials)): value = value[own.end():]
                 appt = bool(re.match(r"(?:(?:has been|was|is) (?:appointed|named|promoted|elevated)\b)", tail, re.I))
                 if tail and role(value, appt): return " ".join(sent.split())[:300]
                 # "Jane Doe (Dean of Students)": the whole rest of the sentence in brackets.
@@ -1012,7 +1022,7 @@ def check(page, name, title, org="", domains=None, claim="", today=None):
     verified: on a site that looks like the org's own, the role's words are attached to the name (same sentence or the lines under it, with no other person between). A pattern match, not a reading of the page, and a page saying they held a post doesn't show they hold it today. secondary: the same on another site. partial: the name is there and the role isn't, or the page says they've left.
     not-found: the page was read and has no such name. not-a-person: the name is only part of a named post or building. blocked: unread."""
     import datetime as dt
-    res = {"status": "", "quote": "", "url": page.get("url", ""), "via": page.get("via", ""), "page_date": page.get("date", "") or url_date(page.get("final_url") or page.get("url", "")), "as_of": page.get("snapshot") or (page.get("fetched_at") or "")[:10], "official": False, "title_share": 0.0, "note": "", "claim_share": "", "stale": False}
+    res = {"status": "", "quote": "", "url": page.get("url", ""), "via": page.get("via", ""), "page_date": page.get("date", "") or url_date(page.get("final_url") or page.get("url", "")), "as_of": page.get("snapshot") or local_day(page.get("fetched_at")), "official": False, "title_share": 0.0, "note": "", "claim_share": "", "stale": False}
     if page.get("status") != "ok":
         return dict(res, status="blocked" if page.get("status") != "refused" else "refused", note=page.get("note", ""))
     text = page["text"]

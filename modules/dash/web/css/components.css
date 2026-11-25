@@ -1908,8 +1908,13 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cp-box{position:relative;display:grid;max-width:var(--chat-col);width:100%;margin:0 auto;border:1px solid var(--edge);border-radius:var(--r-xl);background:var(--surface);box-shadow:var(--e1)}
 .cp-box:focus-within{border-color:var(--ink-3);box-shadow:var(--e1),0 0 0 3px var(--accent-bg)}
 /* framed by the word shell: an empty stand-in that keeps the chat column's width so the shell can line its own box up with it (ui/rootword.js) */
-.cp.cp-shell,.cm-home .cp.cp-shell,.stp .cp.cp-shell{height:0;min-height:0;padding-block:0;overflow:hidden;visibility:hidden;pointer-events:none}
+/* The shell's box floats over the bottom of this frame (its page has no band of its own), so a conversation's stand-in keeps the box's height (110 px:
+   98 box + 12 under it; phone 114) and the messages end above it. Home and start have no box in their column: theirs is 0 high and the page keeps the room at its end. */
+.cp.cp-shell{height:110px;min-height:0;padding-block:0;overflow:hidden;visibility:hidden;pointer-events:none;flex:none}
+.cm-home .cp.cp-shell,.stp .cp.cp-shell{height:0}
 .cp-shell .cp-box{height:0;min-height:0;border-width:0 1px;box-shadow:none}
+html[data-shell] .cm-home::after,html[data-shell] .stp::after{content:"";display:block;height:110px}
+@media (max-width:640px){.cp.cp-shell{height:114px}.cm-home .cp.cp-shell,.stp .cp.cp-shell{height:0}html[data-shell] .cm-home::after,html[data-shell] .stp::after{height:114px}}
 .cp-t{min-height:52px;padding:14px 16px 4px;font-size:var(--fs-read);line-height:1.5}
 .cp-bar{display:flex;align-items:center;gap:4px;padding:6px 8px 8px}
 .cp-model{height:28px;margin:0;padding:0 6px;border:0;border-radius:var(--r-s);background:none;color:var(--ink-3);font-size:var(--fs-meta)}

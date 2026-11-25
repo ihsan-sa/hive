@@ -189,6 +189,9 @@ function docCards(p) {
 
 // ---- long posts: the start and the end show, the middle folds, so a report's conclusion is never the hidden part ----
 const LONG = 2400, HEAD = 900, TAIL = 700, OPEN = new Set();
+// A chart, plot, table or drawing fence shows as one picture, so its source doesn't count toward the length that folds a post (E181).
+const DRAWN = /^([ \t]*(`{3,}|~{3,})[ \t]*(?:chart|plot|csv|svg|mermaid)\b[^\n]*\n)[\s\S]*?(^[ \t]*\2[`~]*[ \t]*$)/gim;
+const readLen = t => t.replace(DRAWN, "$1$3").length;
 /** Split into blocks at blank lines outside code fences. */
 function blocks(t) {
   const out = []; let cur = [], fence = false;
@@ -202,8 +205,8 @@ function blocks(t) {
 }
 function fold(t) {
   const b = blocks(t); let i = 0, j = b.length, a = 0, z = 0;
-  while (i < j && a < HEAD) a += b[i++].length;
-  while (j > i && z + b[j - 1].length < TAIL) z += b[--j].length;
+  while (i < j && a < HEAD) a += readLen(b[i++]);
+  while (j > i && z + readLen(b[j - 1]) < TAIL) z += readLen(b[--j]);
   if (j - i < 1 || j >= b.length) return cut(t);   // nothing to fold by blocks, or the last block alone is too long to keep: cut inside it
   const mid = b.slice(i, j).join("\n\n");
   return { head: b.slice(0, i).join("\n\n"), tail: b.slice(j).join("\n\n"), lines: mid.split("\n").filter(l => l.trim()).length, chars: mid.length };
@@ -330,10 +333,10 @@ export function markBody(el, ws) {
 function body(p, ws) {
   if (SOURCE.has(p.id)) return sourceView(p, ws);
   const t = chatText(p);
-  if (t.length > LONG) { const r = report(t, p.id, ws); if (r) return r; }
+  if (readLen(t) > LONG) { const r = report(t, p.id, ws); if (r) return r; }
   if (!t.trim()) return (p.files || []).length ? null : h("div", { class: "msg-b" }, h("p", { class: "meta" }, "No text"));
   // A post with footnotes shows whole: head and tail parse apart, so a note hidden in the middle leaves its mark as literal text and the Sources list renumbers (E59).
-  const f = t.length > LONG && !OPEN.has(p.id) && !/\[\^[^\]\s]+\]/.test(t) ? fold(t) : null;
+  const f = readLen(t) > LONG && !OPEN.has(p.id) && !/\[\^[^\]\s]+\]/.test(t) ? fold(t) : null;
   if (!f) return h("div", { class: "msg-b" }, markBody(mdIn(t, p), ws));
   return h("div", { class: "msg-b", "data-folded": "" },
     markBody(mdIn(f.head, p), ws),
@@ -460,7 +463,7 @@ export function message(p, opts = {}) {
 }
 function appMessage(p, opts) {
   const files = p.files || [], ws = opts.mark, docs = docCards(p);
-  if (ws && ws.length && !OPEN.has(p.id) && displayText(p).length > LONG) {
+  if (ws && ws.length && !OPEN.has(p.id) && readLen(displayText(p)) > LONG) {
     const lc = displayText(p).toLowerCase(), f = fold(displayText(p));
     if (f && ws.some(w => lc.includes(w)) && !ws.some(w => (f.head + f.tail).toLowerCase().includes(w))) OPEN.add(p.id);
   }

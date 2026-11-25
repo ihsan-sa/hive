@@ -45,7 +45,7 @@ def pdf_pages(text, boxes):
 
 def _ok(url, final, via, http, parsed, **more):
     if parsed.get("cut"): more.setdefault("note", "the page took too long to parse: only part of it was read")
-    return dict(url=url, final_url=final, via=via, status="ok", http=http, title=parsed["title"], text=parsed["text"], date=parsed["date"], date_from=parsed["date_from"], links=parsed["links"], people_ld=parsed["people_ld"], **more)
+    return dict(url=url, final_url=final, via=via, status="ok", http=http, title=parsed["title"], text=parsed["text"], date=parsed["date"], date_from=parsed["date_from"], published=parsed.get("published") or "", links=parsed["links"], people_ld=parsed["people_ld"], **more)
 
 
 def _wp_date(parsed, url):
@@ -77,8 +77,11 @@ def _direct(url):
     return _ok(url, r.url, "direct", 200, _wp_date(parsed, r.url)), ""
 
 
+def is_redirector(url): return (urllib.parse.urlsplit(url or "").hostname or "").lower() in REDIRECTORS
+
+
 def _browser(url):
-    html, err = net.chrome_dump(url)
+    html, err = net.chrome_dump(url, budget_ms=12000, timeout=80) if is_redirector(url) else net.chrome_dump(url)   # Google's hop to the article and the article itself: 7 s came back empty for Moore's link, 12 s read it
     if err: return None, err
     parsed = parse_html(html, url)
     if _looks_blocked(parsed): return None, "challenge page in a browser"
@@ -86,6 +89,13 @@ def _browser(url):
     # The browser route can't see a status or a redirect, so a page's own word for where it lives is the best there is. http stays 0: nobody saw one. Only within the site asked for: a page can't talk its way onto someone's official domain.
     m = re.search(r"""<link[^>]+rel=["']canonical["'][^>]+href=["'](https?://[^"']+)|<meta[^>]+property=["']og:url["'][^>]+content=["'](https?://[^"']+)""", html[:200000], re.I)
     said = (m.group(1) or m.group(2)) if m else url
+    if is_redirector(url) and not is_redirector(said) and domain_of(said) != domain_of(url):
+        # A news.google.com link only sends the browser on to the publisher's article, and the article names its own address. That address is read again directly, so the page saved is the publisher's server's word for it and not the page's alone: Moore's quote was kept under an unresolved Google link while the page read was Vegas Inc's (fnwords134 review).
+        try:
+            net.check_url(said, resolve=False)
+            page, why = _direct(said)
+        except net.Refused: page = None
+        if page: return dict(page, url=url), ""
     return _ok(url, said if domain_of(said) == domain_of(url) else url, "browser", 0, _wp_date(parsed, url)), ""
 
 
@@ -112,6 +122,21 @@ def _archive(url):
 
 
 NEEDS_BROWSER = ("news.google.com",)
+REDIRECTORS = ("news.google.com",)   # hosts whose links lead to another site's article: the page is saved under the publisher's address too
+
+
+def resolve(url, case):
+    """The publisher's address a redirector link (news.google.com) leads to, read now and saved under both addresses, or "" when it doesn't resolve. Unlike fetch(refresh=True), a read that fails leaves the saved copy as it was. For a stored row whose link was saved before the browser route followed it."""
+    if not is_redirector(url): return ""
+    try:
+        net.check_url(url, resolve=False)
+        page, _ = _browser(url)
+    except net.Refused: return ""
+    except Exception: return ""   # one bad page never ends a long run
+    if not page or is_redirector(page.get("final_url")): return ""
+    page = case.save_page(dict(page, note=""))
+    case.save_page(dict(page, url=page["final_url"]))
+    return page["final_url"]
 
 
 LAST = threading.local()   # LAST.route: how this thread's last fetch ended: saved (from the case), direct, browser, archive, blocked or refused. A hunt splits its page-read seconds by it
@@ -149,6 +174,7 @@ def fetch(url, case=None, refresh=False, allow_archive=True, allow_browser=True)
     if not page:
         page = dict(url=url, status="blocked", via="", text="", title="", links=[], people_ld=[], date="", fetched_at=now())
     page["note"] = "; ".join(notes)
+    if case and page["status"] == "ok" and is_redirector(url) and not is_redirector(page.get("final_url")): case.save_page(dict(page, url=page["final_url"]))   # a row keeps the publisher's address, and case.page finds the page under it
     return case.save_page(page) if case else page
 
 
