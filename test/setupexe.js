@@ -12,7 +12,13 @@ const { _electron } = require('playwright-core');
 const exe = process.argv[2];
 if (process.platform !== 'win32' || !exe || !fs.existsSync(exe)) { console.error('usage (Windows only): node test/setupexe.js PATH-TO-Hive-Setup.exe'); process.exit(2); }
 const version = require('../package.json').version;
-const ps = cmd => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd], { encoding: 'utf8', timeout: 180000 }).trim();
+// A fresh account may have no Uninstall key at all, and an unreadable subkey makes Get-ItemProperty complain: neither is a
+// failure here, so errors are silenced and the exit is 0; anything PowerShell itself cannot run still shows its stderr.
+const ps = cmd => {
+  try {
+    return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference = 'SilentlyContinue'; ${cmd}; exit 0`], { encoding: 'utf8', timeout: 180000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  } catch (err) { throw new Error(`PowerShell failed (${err.status}): ${(err.stderr || '').toString().trim().slice(0, 800) || err.message.slice(0, 300)}`); }
+};
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const entry = () => {
   const out = ps(`Get-ChildItem HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object { $_.DisplayName -like 'Hive*' -and $_.UninstallString } | Select-Object DisplayName,DisplayVersion,InstallLocation,UninstallString | ConvertTo-Json -Compress`);
@@ -21,7 +27,7 @@ const entry = () => {
   return Array.isArray(e) ? e : [e];
 };
 const links = () => {
-  const out = ps(`$s = New-Object -ComObject WScript.Shell; foreach ($p in @((Join-Path ([Environment]::GetFolderPath('Programs')) 'Hive.lnk'), (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Hive.lnk'))) { if (Test-Path -LiteralPath $p) { $l = $s.CreateShortcut($p); [pscustomobject]@{ Path = $p; Target = $l.TargetPath; Args = $l.Arguments } } } | ConvertTo-Json -Compress`);
+  const out = ps(`$s = New-Object -ComObject WScript.Shell; @(foreach ($p in @((Join-Path ([Environment]::GetFolderPath('Programs')) 'Hive.lnk'), (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Hive.lnk'))) { if (Test-Path -LiteralPath $p) { $l = $s.CreateShortcut($p); [pscustomobject]@{ Path = $p; Target = $l.TargetPath; Args = $l.Arguments } } }) | ConvertTo-Json -Compress`);
   if (!out) return [];
   const l = JSON.parse(out);
   return Array.isArray(l) ? l : [l];
