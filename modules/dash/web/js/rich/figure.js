@@ -8,7 +8,7 @@ import { askButton } from "./ask.js";
 import { cleanSvg, naturalSize } from "./sanitize.js";
 
 const ST = new Map();
-const stateOf = sig => { let s = ST.get(sig); if (!s) { ST.set(sig, s = { zoom: null, src: false, h: 0 }); if (ST.size > 400) ST.delete(ST.keys().next().value); } return s; };
+const stateOf = sig => { let s = ST.get(sig); if (!s) { ST.set(sig, s = { zoom: null, src: false, h: 0, fold: false }); if (ST.size > 400) ST.delete(ST.keys().next().value); } return s; };
 
 // ---- redraw when the theme changes, for drawings whose colours are fixed when drawn. Nothing watches until one such figure exists. ----
 const themed = new Set(); let watching = false, lastInk = "";
@@ -49,6 +49,13 @@ function pannable(stage) {
   stage.addEventListener("pointermove", e => { if (at) { stage.scrollLeft = at.l - e.clientX + at.x; stage.scrollTop = at.t - e.clientY + at.y; } });
   const end = () => { at = null; delete stage.dataset.drag; };
   stage.addEventListener("pointerup", end); stage.addEventListener("pointercancel", end);
+  // The stage doesn't take the wheel up and down (the chat does), so the keys pan a tall drawing.
+  const keys = { ArrowUp: -40, ArrowDown: 40, PageUp: -0.9, PageDown: 0.9 };
+  stage.addEventListener("keydown", e => {
+    const k = keys[e.key]; if (!k || e.altKey || e.ctrlKey || e.metaKey || stage.scrollHeight <= stage.clientHeight) return;
+    const was = stage.scrollTop; stage.scrollTop += Math.abs(k) < 1 ? k * stage.clientHeight : k;
+    if (stage.scrollTop !== was) e.preventDefault();
+  });
 }
 
 // ---- drawing ----
@@ -107,11 +114,19 @@ export function figure(spec) {
   const zb = (txt, label, f) => h("button", { type: "button", class: "rc-t", "data-zoom": "", hidden: true, "aria-label": label, onclick: f }, txt);
   const stageOf = () => lz.querySelector(":scope>.rc-stage");
   const step = k => () => { if (lz._c) setZoom(lz._c, Math.max(0.1, Math.min(8, lz._c.zoom * k))); };
-  return h("div", { class: "rc-block rc-fig", "data-block": spec.kind, "data-own": "", "data-sig": sig, tabindex: "-1" },  // a tap focuses it, which shows its tools on touch
+  // Collapse folds the block to its bar (person, 112514060a2b): a running page keeps running behind it (artifact.js), so it opens as it was.
+  const fold = (b, on) => {
+    const f = b.closest(".rc-fig"); if (on && f.hasAttribute("data-full")) f.querySelector("[data-fs]")?.click();
+    st.fold = on; f.toggleAttribute("data-folded", on);
+    b.textContent = tr(on ? "Show" : "Collapse"); b.setAttribute("aria-expanded", String(!on));
+  };
+  return h("div", { class: "rc-block rc-fig", "data-block": spec.kind, "data-own": "", "data-sig": sig, "data-folded": st.fold ? "" : null, tabindex: "-1" },  // a tap focuses it, which shows its tools on touch
     h("div", { class: "rc-bar" },
       h("span", { class: "rc-lang" }, spec.label || spec.kind),
       spec.title ? h("span", { class: "rc-ttl" }, spec.title) : null,
       h("span", { class: "rc-tools" },
+        h("button", { type: "button", class: "rc-t", "data-fold": "", "aria-expanded": String(!st.fold), title: "Fold this to its title bar, or open it again",
+          onclick: (e, b) => fold(b, b.getAttribute("aria-expanded") === "true") }, st.fold ? "Show" : "Collapse"),
         zb("−", "Zoom out", step(1 / 1.25)),
         h("button", { type: "button", class: "rc-t", "data-zoom": "", "data-pct": "", hidden: true, title: "Fit", "aria-label": "Fit to the frame", onclick: () => { if (lz._c && stageOf()) setZoom(lz._c, fitZoom(lz._c, stageOf(), true)); } }, "Fit"),
         zb("+", "Zoom in", step(1.25)),

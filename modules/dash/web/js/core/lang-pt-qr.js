@@ -1,5 +1,7 @@
 // pt: Settings > This device > Open on your phone (views/settings.js phoneLinkBlock, E122). Exact English keys.
 const SELF = {
+  "Collapse": "Recolher",   // a drawing or page folded to its bar (rich/figure.js)
+  "Fold this to its title bar, or open it again": "Recolha-o à barra de título, ou abra-o de novo",
   "Open on your phone": "Abrir no celular",
   "Your phone can't open this Hive yet: only this computer can. It needs an address the phone can reach, either a name on the internet set up under Access from outside, or this computer on your tailnet (Tailscale).": "Seu celular ainda não consegue abrir este Hive: só este computador consegue. Ele precisa de um endereço que o celular alcance, seja um nome na internet configurado em Acesso de fora, seja este computador na sua tailnet (Tailscale).",
   "Point your phone's camera at the code. It opens your Hive at its internet address, where you sign in as set up under Access from outside.": "Aponte a câmera do celular para o código. Ele abre seu Hive no endereço de internet, onde você entra como foi configurado em Acesso de fora.",

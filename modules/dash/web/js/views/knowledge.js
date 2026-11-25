@@ -6,14 +6,14 @@ import { S, can, fullEnded, unreached, getPref, jget, post, setPref, kept, keep,
 import { ago, plural, stamp, fix, int } from "../core/format.js";
 import { href, threadHref } from "../core/router.js";
 import { labelCodes, threadTitle } from "../core/model.js";
-import { button, empty, skeleton, waiting, field, fieldErr, input, invalid, list, needFull, copyPress } from "../ui/kit.js";
+import { button, empty, skeleton, waiting, field, fieldErr, input, invalid, list, needFull, copyPress, seg } from "../ui/kit.js";
 import { icon } from "../ui/icons.js";
 import { markdown } from "../ui/markdown.js";
 import { markWords } from "../ui/message.js";
 import { kbChat } from "./kbchat.js";
 import { oneKeyOn } from "../core/onekey.js";
 
-const K = { map: null, mapAt: 0, topics: new Set(), allTopics: false, home: null, seen: new Map(), failed: new Map(), q: "", res: null, timer: 0, worktrees: false, limit: 300, source: false, edit: null, shown: null, memo: {}, mentions: { key: "", v: [] } };
+const K = { map: null, mapAt: 0, topics: new Set(), allTopics: false, home: null, seen: new Map(), failed: new Map(), q: "", res: null, timer: 0, worktrees: false, limit: 300, view: { path: "", v: "" }, edit: null, shown: null, memo: {}, mentions: { key: "", v: [] } };
 const open = (path, line) => href("knowledge", line ? `${path}::${line}` : path);
 const parse = arg => { const m = /^(.*)::(\d+)$/.exec(arg || ""); return m ? { path: m[1], line: +m[2] } : { path: arg || "", line: 0 }; };
 const parent = p => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
@@ -115,8 +115,40 @@ function codeBody(text, line) {
     h("pre", { class: "kb-src" }, text));
 }
 const mdBody = (text, from) => linkPaths(markdown(text, null, null, { anchors: true }), from);
-function docBody(d, line) {
-  const asCode = line || K.source || d.kind === "text" || d.type === "text";
+// A file's ways to show, as in the side panel (ui/preview.js header): a note as pages (paged.js), as flowing text, as its source,
+// and in the editor (preview/edit.js) when the server says it may be edited; a text file as itself, and editable the same way.
+const viewsOf = d => d.type === "md" ? [["", "Page"], ["text", "Text"], ["src", "Source"], ...(d.editable ? [["edit", "Edit"]] : [])]
+  : d.type === "text" ? [["", "Text"], ...(d.editable ? [["edit", "Edit"]] : [])] : [];
+const viewOf = d => { const v = K.view.path === d.path ? K.view.v : ""; return viewsOf(d).some(([k]) => k === v) ? v : ""; };
+const edOf = () => { const n = K.memo.node; return n && n._kbed ? n._kbed._ed : null; };
+const leaveEd = () => { const ed = edOf(); return !ed || !ed.dirty() || confirm("Your edits aren't saved. Leave them?"); };
+// Built later (a module to load): an empty holder now, filled when it's ready.
+function later(load) { const box = h("div", { class: "kb-later" }); load().then(n => { box.replaceChildren(n); box._kbed = n._ed ? n : null; }); return box; }
+function viewBody(d, line) {
+  const v = line ? "src" : viewOf(d);
+  if (d.type === "md" && v === "") return own("kb-pages", `${d.path}|${d.t}|page`, () => later(() => import("../preview/paged.js").then(m => m.paged(d.text, { cut: d.truncated }))));
+  if (v === "edit") {   // keyed without the time: your own save, or the 30 s refresh, mustn't wipe what's being typed
+    return own("kb-edwrap", `${d.path}|edit`, () => later(() => import("../preview/edit.js").then(m => m.editor({ kb: d.path, name: d.name }, d.text, d.version))));
+  }
+  return docBody(d, line, v === "src");
+}
+// The text as it is now: the editor's, when it's open, else the file's.
+const textNow = d => { const ed = viewOf(d) === "edit" && edOf(); return ed ? ed.text() : d.text; };
+const SAVE = { open: false };
+function saveMenu(d) {
+  const doc = async () => { const { markdown: md } = await import("../ui/markdown.js"); return h("div", { class: "pv-md" }, md(textNow(d))); };
+  const go = f => (e, b) => { SAVE.open = false; b.closest("details").open = false; import("../preview/docexport.js").then(async m => f(m, d.type === "md" ? await doc() : null)); };
+  const item = (label, f) => h("button", { type: "button", class: "pv-mi", onclick: go(f) }, label);
+  return h("details", { class: "pv-save kb-save", open: SAVE.open ? "" : null, ontoggle: (e, n) => { if (e.target === n) SAVE.open = n.open; } },
+    h("summary", { class: "btn", "data-size": "s", "data-kind": "quiet", title: "Save this document" }, icon("download"), h("span", null, "Save as")),
+    h("div", { class: "pv-menu pv-sv", role: "group" },
+      d.type === "md" ? item("PDF", (m, n) => m.savePdf(d.name, n)) : null,
+      d.type === "md" ? item("Word (.doc)", (m, n) => m.saveWord(d.name, n)) : null,
+      item(d.type === "md" ? "Markdown (.md)" : "Text file", m => d.type === "md" ? m.saveMarkdown(d.name, textNow(d)) : dl(d.name, textNow(d)))));
+}
+function dl(name, text) { const a = h("a", { href: URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" })), download: name }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); }
+function docBody(d, line, src) {
+  const asCode = line || src || d.kind === "text" || d.type === "text";
   const sig = `${d.path}|${d.t}|${asCode ? "code" + line : "md"}`;
   return own(asCode ? "kb-codewrap" : "kb-body", sig, () => (asCode ? codeBody(d.text, line) : mdBody(d.text, d.path)));
 }
@@ -358,7 +390,7 @@ function sideBody(path, ctx) {
 }
 
 function fileHead(d, ctx) {
-  const name = projectOf(d.path), isMd = d.type === "md";
+  const name = projectOf(d.path), isMd = d.type === "md", views = viewsOf(d), txt = isMd || d.type === "text", raw = "/api/kb/raw?path=" + encodeURIComponent(d.path);
   return h("header", { class: "kb-h" },
     h("a", { class: "btn kb-back", href: open(parent(d.path)), "data-kind": "quiet", "data-size": "s" }, icon("chevron-left"), parent(d.path).split("/").pop() || "Knowledge"),
     h("div", { class: "kb-hcrumbs" }, crumbs(d.path)),
@@ -368,15 +400,20 @@ function fileHead(d, ctx) {
       button("All notes", null, { kind: "quiet", size: "s", icon: "chevron-left", href: href("knowledge"), cls: "kb-all" }),
       button("Copy path", (e, b) => copyPress(b, "~/" + d.path), { kind: "quiet", size: "s" }),
       d.path.startsWith("kb/") && isMd ? button("History", null, { kind: "quiet", size: "s", href: href("kbtime", d.path), title: "How this note changed, from the backup history" }) : null,
-      isMd ? button(K.source ? "Formatted" : "Source", () => { K.source = !K.source; ctx.update(); }, { kind: "quiet", size: "s" }) : null,
-      name && can("plans") ? button("Edit plan", () => startEdit(name, ctx), { size: "s" }) : null));
+      name && can("plans") ? button("Edit plan", () => startEdit(name, ctx), { size: "s" }) : null),
+    views.length > 1 || d.type === "pdf" || txt ? h("div", { class: "frow kb-views", "data-key": "views" },
+      views.length > 1 ? seg(views, viewOf(d), v => { if (v === viewOf(d) || (viewOf(d) === "edit" && !leaveEd())) return; K.view = { path: d.path, v }; ctx.update(); }, { label: "Show" }) : null,
+      d.type === "pdf" ? button("Download", null, { kind: "quiet", size: "s", icon: "download", href: raw }) : null,
+      txt ? button("Copy", (e, b) => copyPress(b, textNow(d)), { kind: "quiet", size: "s", icon: "copy", title: "Copy the text" }) : null,
+      txt ? saveMenu(d) : null,
+      h("a", { class: "btn", "data-kind": "icon", "data-size": "s", href: d.type === "pdf" ? raw + "&view=1" : href("knowledge", d.path), target: "_blank", rel: "noopener", title: "Open in a new tab", "aria-label": "Open in a new tab" }, icon("open"))) : null);
 }
 function fileView(d, line, ctx) {
   const box = h("article", { class: "kb-note kb-file", "data-key": "file:" + d.path }, fileHead(d, ctx),
     d.truncated ? h("p", { class: "meta", "data-key": "cut" }, `Showing the first ${bytes(d.text.length)} of ${bytes(d.size)}.`) : null,
-    d.type === "md" || d.type === "text" ? docBody(d, line) : null,
+    d.type === "md" || d.type === "text" ? viewBody(d, line) : null,
     d.type === "image" ? h("img", { class: "kb-img", src: "/api/kb/raw?path=" + encodeURIComponent(d.path), alt: d.name }) : null,
-    d.type === "pdf" ? h("p", { "data-key": "pdf" }, button("Download PDF", null, { href: "/api/kb/raw?path=" + encodeURIComponent(d.path) })) : null,
+    d.type === "pdf" ? h("iframe", { class: "kb-pdf", "data-key": "pdf", src: "/api/kb/raw?view=1&path=" + encodeURIComponent(d.path), title: d.name }) : null,
     d.type === "binary" ? empty("This is a binary file, so it stays on the machine and isn't shown here.") : null,
     related(d));
   return box;

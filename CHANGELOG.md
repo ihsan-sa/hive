@@ -4,9 +4,18 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Scrolling past pages and drawings in a chat
+
+The mouse wheel now scrolls the chat when the pointer is over an interactive page, a drawing or a picture, instead of getting stuck or doing nothing. Scrolling up over a page no longer snaps you back to the end of the chat. A page that fills its window no longer grows itself taller step by step. An open page that goes off screen and comes back keeps its place and height, so the chat no longer jumps around it. Every page and drawing has a Collapse button that folds it to its title bar. A collapsed page keeps running and opens again as you left it. In a tall drawing, drag or use the arrow keys to move up and down.
+
+## Side chats on a chat
+
+Select words in a reply, or right-click a reply and draw a box over part of it, and ask about just that in a side chat. It opens in the side panel with the part you picked quoted at the top, and the main chat stays where it was. The helper reads the quote, the reply it came from and the chat around it. A numbered pin marks each spot you asked about, and clicking it opens that side chat again, so you can work down a long answer a question at a time. Right-click a reply for **Ask about this message** or **New side chat**, or use the side chat button at the top of the chat, which lists them all. The menu key or Shift+F10 opens the same menu from the keyboard, Esc closes the panel, and /btw still works. On a phone, select text, or pick **Draw a box** from the list and drag with a finger.
+
 ## Smaller fixes, 2026-11-25
 
 - Settings › Set once › Model now works when you're signed in from outside, and on a Hive with no settings file. It says where the choice is saved and when it takes effect. The power, sandbox and sharing choices still change only on this machine.
+- A web page opened in the preview panel now has **Box and ask**. Draw a box on it, write a question, and the post quotes the words under the box when the page sends them, or says where the box is when it doesn't. The page stays sandboxed.
 
 ## Smaller fixes, 2026-11-24
 

@@ -8,14 +8,32 @@ import { sigOf } from "./math.js";
 import { post as apiPost, can } from "../core/store.js";
 
 const MAX = 1000000, MAX_H = 1200, MIN_H = 80, MSG_MAX = 4000, ST = new Map();
-const stateOf = k => { let s = ST.get(k); if (!s) { ST.set(k, s = { open: false, px: 0, values: null }); if (ST.size > 200) ST.delete(ST.keys().next().value); } return s; };
+const stateOf = k => { let s = ST.get(k); if (!s) { ST.set(k, s = { open: false, px: 0, values: null, vb: null }); if (ST.size > 200) ST.delete(ST.keys().next().value); } return s; };
+const clampH = px => Math.max(MIN_H, Math.min(MAX_H, Math.ceil(px)));
+// A page sized to its window (height:100vh with the body's margin) asks for its window plus that margin each time the frame grows,
+// so it climbed to the cap in steps and the chat jumped at each one (person, 112514060a2b). Each report carries the page's own window
+// height (reports arrive a step late, so the frame's height now won't do): one that is its window plus the same amount at two window
+// heights follows the window. It gets a window-like height (st.vb holds the amount) and keeps it until it asks for something else.
+const windowH = () => Math.max(320, Math.min(800, Math.round(innerHeight * 0.7)));
+function nextHeight(st, f, px, vh) {
+  const cur = st.px || 240, want = Math.ceil(px);
+  if (want === cur) return null;   // the same report again (load and the resize watcher both send)
+  if (typeof vh === "number" && vh > 0 && isFinite(vh)) {
+    const k = want - vh;
+    if (st.vb != null) { if (Math.abs(k - st.vb) <= 2) return null; st.vb = null; }
+    if (f.vh != null && Math.abs(vh - f.vh) > 2 && Math.abs(k - f.k) <= 2 && Math.abs(k) <= 200) { st.vb = k; f.vh = null; return clampH(Math.max(cur, windowH())); }
+    f.vh = vh; f.k = k;
+  }
+  return clampH(want);
+}
 
 const CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; form-action 'none'; base-uri 'none'";
 const HELPER = `<script>(()=>{const up=m=>parent.postMessage(Object.assign({hive:1},m),"*");`
   + `const fit=()=>{const d=document.documentElement,s=d.style;s.zoom="";const w=d.scrollWidth,v=d.clientWidth;`
   + `if(v>0&&w>v+1)s.zoom=Math.max(.4,v/w).toFixed(3)};`
-  + `const size=()=>{fit();const d=document.documentElement,h=Math.ceil(d.getBoundingClientRect().height);d.style.overflowX="hidden";d.style.overflowY=h>1200?"auto":"hidden";up({type:"height",px:h})};`
+  + `const size=()=>{fit();const d=document.documentElement,h=Math.ceil(d.getBoundingClientRect().height);d.style.overflowX="hidden";d.style.overflowY=h>1200?"auto":"hidden";up({type:"height",px:h,vh:innerHeight})};`
   + `addEventListener("load",size);addEventListener("resize",size);new ResizeObserver(size).observe(document.documentElement);`
+  + `let ht=0;for(const t of ["wheel","touchstart","pointerdown","keydown"])addEventListener(t,()=>{const n=Date.now();if(n-ht>200){ht=n;up({type:"hand"})}},{passive:true,capture:true});`
   + `window.hive={params:values=>up({type:"params",values})};})();<\/script>`;
 const isDark = () => {
   const c = getComputedStyle(document.documentElement).colorScheme;
@@ -65,8 +83,9 @@ function onMessage(e) {
   if (!f || e.origin !== "null" || !d || typeof d !== "object" || d.hive !== 1) return;
   try { if (JSON.stringify(d).length > MSG_MAX) return; } catch { return; }
   const now = performance.now(); if (now - f.t > 1000) { f.t = now; f.n = 0; } if (++f.n > 30) return;
-  if (d.type === "height" && typeof d.px === "number" && isFinite(d.px)) f.height(d.px);
+  if (d.type === "height" && typeof d.px === "number" && isFinite(d.px)) f.height(d.px, d.vh);
   else if (d.type === "params") { const v = cleanValues(d.values); if (v) f.params(v); }
+  else if (d.type === "hand") f.hand();
 }
 
 // ---- versions: an agent changing a page it posted posts the whole page again, with the same title in the same chat.
@@ -152,19 +171,24 @@ function drawArtifact(code, title, st, box, ver) {
     frame.srcdoc = docOf(code, dark);
     wrap.prepend(frame);
     if (!listening) { listening = true; addEventListener("message", onMessage); }
-    FRAMES.set(frame.contentWindow, {
-      t: 0, n: 0,
-      height: px => { st.px = Math.max(MIN_H, Math.min(MAX_H, Math.ceil(px))); if (frame) frame.style.height = st.px + "px"; },
+    wrap.style.minHeight = "";
+    const me = frame, f = {
+      t: 0, n: 0, vh: null, k: 0,
+      height: (px, vh) => { if (frame !== me || box.hasAttribute("data-folded")) return; const v = nextHeight(st, f, px, vh); if (v == null) return; st.px = v; me.style.height = v + "px"; },
+      // the reader's wheel or touch in the page: the chat can't hear it, and needs to, or it pulls a reader who scrolled up back to the end
+      hand: () => { if (me.isConnected) me.dispatchEvent(new Event("rc-hand", { bubbles: true })); },
       params: v => { st.values = v; vals.textContent = valuesText(v); vals.hidden = false; },
-    });
+    };
+    FRAMES.set(frame.contentWindow, f);
   }
-  const destroy = () => { frame?.remove(); frame = null; };
+  // A page taken down keeps its room while it's open, so the chat above or below it doesn't move.
+  const destroy = () => { if (!frame) return; if (st.open && frame.offsetHeight) wrap.style.minHeight = frame.offsetHeight + "px"; frame.remove(); frame = null; };
   // A frame well off screen is taken down and comes back when it's near again, so a long thread doesn't keep pages running.
   function watch() {
     seen ||= new IntersectionObserver(es => {
-      if (!st.open) return;
+      if (!st.open || box.hasAttribute("data-folded")) return;   // a folded page keeps running behind its bar, so it opens as it was left
       if (es[es.length - 1].isIntersecting) build(); else destroy();
-    }, { rootMargin: "1500px" });
+    }, { rootMargin: "1500px", scrollMargin: "1500px" });   // scrollMargin: inside the chat's scroll box rootMargin alone does nothing, so a page went down and reloaded the moment it left the view
     seen.observe(wrap);
   }
   function open() {
@@ -173,7 +197,7 @@ function drawArtifact(code, title, st, box, ver) {
     build(); watch();
   }
   function shut() {
-    st.open = false; st.px = 0; destroy(); seen?.disconnect();
+    st.open = false; st.px = 0; st.vb = null; destroy(); wrap.style.minHeight = ""; seen?.disconnect();
     card.hidden = false; close.hidden = true; tab.hidden = true;
     const f = fsB(); if (f) { if (box.hasAttribute("data-full")) f.click(); f.hidden = true; }
   }

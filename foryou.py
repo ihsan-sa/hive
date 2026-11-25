@@ -37,7 +37,7 @@ CHAIN = re.compile(r"\bthen\b|\bafter that\b|\bonce you\b|(?:^|\s)1[.)]\s.*(?:^|
 OURS = re.compile(r"\b(?<![-\w])(?:reload|refresh(?![- ]tokens?)|test (?:it|this|that|the|on|whether|if)|try it|confirm (?:that )?it works)\b|\bsay (?:if|whether) it looks right\b"
                   r"|\breview (?:the |this |that |our |a |an )?(?:open )?(?:pr|pull request)\b"
                   r"|\bopen (?:the |your |a )?(?:\w+ )?(?:dashboard|app|page|card)\b.*\b(?:say|check|see)\b", re.S)
-DEVICE = re.compile(r"\b(?:plug(?:s|ged)? (?:\w+ ){0,4}in(?:to)?\b|unplug|usb|cable|power[- ]cycle|press (?:the )?(?:reset|boot) button)", re.I)  # a hands-on step with hardware only they can reach is theirs, not a check on our work (2026-11-23: a Lite plug-in line read as ours)
+DEVICE = re.compile(r"\b(?:plug(?:s|ged)? (?:\w+ ){0,4}in(?:to)?\b|unplug|usb|cable|power[- ]cycle|press (?:the )?(?:reset|boot) button|sudo|root word|at the machine|press (?:approve|confirm))", re.I)  # a root step at the machine, then a reload to see it, is theirs too (2026-11-25: the Approve card line read as ours); a hands-on step with hardware only they can reach is theirs, not a check on our work (2026-11-23: a Lite plug-in line read as ours)
 WHY = {"long": "It is over 30 words.",
        "many": "It says more than one thing: one sentence, one ask.",
        "command": "It holds a command, flag or path: say what you need in plain words, or run it yourself.",
@@ -60,8 +60,8 @@ ORDER = ["command", "ids", "many", "long", "chain", "vague", "ours", "offer"]  #
 THEIRS = re.compile(r"\$|\b(?:pay|buy|purchase|order|checkout|check out|invoice|budget|price|cost|bill|subscription|funds?|spend|quote"  # money
                     r"|account|github|waterlooworks|sign(?:ing)?[ -]?(?:in|up)|log[ -]?in|token|password|credentials?|api key|keys?|cookies?|secret|permission|invite|2fa"  # an account
                     r"|your (?:own )?(?:voice|name|word|number|career|cv|resume|interview|site|website|domain|form|application)|in your name|submit(?:s|ting|ted)?|submissions?|upload(?:s|ing|ed)?|e-?mail|dm|slack|message|reply(?: yes| no)? to|(?:h\d|another hive)'s board|linkedin|show hn|publish(?:ing|ed)?|post on|send|own words|dictat(?:e|ion)|(?:your|their) (?:own )?predictions?"  # their voice (own words, dictation, a prediction: 2026-11-23)
-                    r"|phone|iphone|laptop|mac|windows|pc|powershell|print|printer|device|call|usb|browser|bench|solder|hardware|scope|tell me (?:what (?:it|each|they) shows?|if it (?:works|loads))"  # a device
-                    r"|root|rootwarden|sudo|warden"  # root
+                    r"|phone|iphone|laptop|mac|windows|pc|powershell|print|printer|device|call|usb|browser|bench|solder|hardware|scope|tell me (?:what (?:it|each|they) shows?|if it (?:works|loads))|feels? (?:off|wrong|right|odd)"  # a device
+                    r"|root|rootwarden|sudo|warden|at the machine|yes: line|press (?:approve|confirm)\w*"  # root (the machine's root word and the app's Approve card: 2026-11-25 pm)
                     r"|hard limits?|delete|history|to the outside|outside world|public)\b", re.I)  # a hard limit (opening the machine to the outside: 2026-11-23; your site, in your name, submit, public: the 5 false decidables of 11-24, thread improve-survey)
 DECIDE = ("Test before a For you line: is it money, an account, their voice, a device, root or a hard limit? "
           "This one names none of them, so decide it yourself, write `Decided: <what>` and carry on; keep the For you line only if it really is one of the six.")

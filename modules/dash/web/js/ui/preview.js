@@ -47,7 +47,9 @@ const kbRaw = it => "/api/kb/raw?path=" + encodeURIComponent(it.kb) + (/\.html?$
 export const kbRawOk = it => /\.(png|jpe?g|gif|webp|pdf)$/i.test(it.name);
 export const fileHref = it => (it.kb ? kbRaw(it) : `/files/${String(it.id).split("/").map(encodeURIComponent).join("/")}/${encodeURIComponent(it.name)}`);   // id groups/<focus>: a group's file
 export const viewHref = it => (it.kb ? kbRaw(it) + (/\.pdf$/i.test(it.name) ? "&view=1" : "") : fileHref(it) + (VIEW.has(kindOf(it.name)) ? "?view=1" : ""));
-export const keyOf = it => (it.doc ? "doc:" + it.doc : it.kb ? "kb:" + it.kb + (it.box ? "#box=" + it.box : "") : it.id + "/" + it.name);   // a Python box pinned from the chat (pybox.js) is its own item
+// A page full screen in the app (views/page.js), with the conversation it was opened from so its notes go there.
+const pageHref = it => href("page", viewHref(it) + (hashThread() ? "#thread=" + encodeURIComponent(hashThread()) : ""));
+export const keyOf = it => (it.chat ? "chat:" + it.chat : it.doc ? "doc:" + it.doc : it.kb ? "kb:" + it.kb + (it.box ? "#box=" + it.box : "") : it.id + "/" + it.name);   // a Python box pinned from the chat (pybox.js) is its own item
 // Every file chip drawn in a message, by key, so the Files list can show this conversation's files with their size and sender.
 const KNOWN = new Map();
 export const remember = it => { KNOWN.set(keyOf(it), it); return it; };
@@ -100,7 +102,7 @@ addEventListener("beforeunload", e => { if (editing()) { e.preventDefault(); e.r
 
 /** Open items[i] in the panel. Opening while it's open just switches the file. */
 export function openPreview(items, i = 0) {
-  items = (items || []).filter(x => x && (x.id || x.kb || x.doc) && x.name);
+  items = (items || []).filter(x => x && (x.id || x.kb || x.doc || x.chat) && x.name);
   if (!items.length || !leaveOk()) return;
   shell();
   P.items = items; P.list = false;
@@ -244,14 +246,18 @@ function header(it, r) {
       }, { kind: "icon", icon: "link", size: "s", cls: "pv-link" }),
       fullBtn(),
       button("Close (Esc)", closePreview, { kind: "icon", icon: "close", size: "s", cls: "pv-x" })),
-    h("div", { class: "pv-a" }, tabs, it.kb ? h("span", { class: "meta pv-live", title: "This panel shows the file's newest version and updates itself" }, "") : null, h("span", { class: "pv-sp" }), copy, saveAs(it, r),
-      dl ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: dl, download: it.name, title: "Download " + it.name, onclick: e => {   // after an edit, the text as it stands now
+    h("div", { class: "pv-a" }, tabs, it.kb ? h("span", { class: "meta pv-live", title: "This panel shows the file's newest version and updates itself" }, "") : null,
+      r && r.node && r.node._reload ? button("Reload page", () => { const pg = P.body.querySelector(".pv-page"); if (pg && pg._reload) pg._reload(); }, { kind: "icon", icon: "retry", size: "s", cls: "pv-reload" }) : null,   // a web page: start it again (render.js page())
+      h("span", { class: "pv-sp" }), copy, saveAs(it, r),
+      dl ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: dl, download: it.name, title: "Download " + it.name, onclick: (e, a) => {   // after an edit, the text as it stands now
         const ed = P.body.querySelector(".pv-ed"); if (!ed || !ed._ed || !P.blob) return;
-        URL.revokeObjectURL(P.blob); P.blob = e.currentTarget.href = URL.createObjectURL(new Blob([ed._ed.text()], { type: "text/plain" }));
+        URL.revokeObjectURL(P.blob); P.blob = a.href = URL.createObjectURL(new Blob([ed._ed.text()], { type: "text/plain" }));
       } }, "Download") : null,
       it.kb && kindOf(it.name) !== "html" ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: "#knowledge/" + encodeURIComponent(it.kb), title: "Open in Knowledge" }, "Open")   // a page opens running, like an attached one; Knowledge would show its code
-        : kindOf(it.name) === "html" && matchMedia("(max-width:699px)").matches ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: href("page", viewHref(it)), title: "Open full screen" }, "Open")   // a phone: full screen inside the app, with a way back (views/page.js); a new tab there has none
-        : h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: viewHref(it), target: "_blank", rel: "noopener noreferrer", title: "Open in a new tab" }, "Open")));
+        : null,
+      it.kb && kindOf(it.name) !== "html" ? h("a", { class: "btn", "data-size": "s", "data-kind": "icon", href: location.pathname + "#knowledge/" + encodeURIComponent(it.kb), target: "_blank", rel: "noopener", title: "Open in a new tab", "aria-label": "Open in a new tab" }, icon("open"))   // the person asked for it (feedback 2026-11-25): Open above leaves the chat
+        : kindOf(it.name) === "html" && matchMedia("(max-width:699px)").matches ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: pageHref(it), title: "Open full screen" }, "Open")   // a phone: full screen inside the app, with a way back (views/page.js); a new tab there has none
+        : h("a", { class: "btn pv-newtab", "data-size": "s", href: kindOf(it.name) === "html" ? location.pathname + pageHref(it) : viewHref(it), target: "_blank", rel: kindOf(it.name) === "html" ? "noopener" : "noopener noreferrer", title: "Open in a new browser tab" }, icon("open"), "Open in new tab")));   // a page opens in the dashboard's full page (views/page.js), where comment mode and notes to this conversation work too (the person, 112514142c42: "an obvious open in other tab button")
 }
 
 // The file's text as it stands: the editor's when the Edit tab shows, so Copy, Download and Save as take your edits.
@@ -262,7 +268,7 @@ function saveAs(it, r) {
   if (!r || r.text == null || !["md", "text"].includes(kindOf(it.name)) && !/\.(md|markdown|txt)$/i.test(it.name)) return null;
   let md = null;   // a note exports from its text, whichever view shows (pages, text or the editor)
   const doc = () => md ? md(textNow(r)) : P.body.querySelector(".pv-md") || P.body.querySelector(".pv-doc") || P.body;
-  const go = f => e => { e.currentTarget.closest("details").open = false; Promise.all([import("../preview/docexport.js"), r.md ? import("./markdown.js") : null]).then(([m, x]) => { md = x && x.markdown; f(m); }); };
+  const go = f => (e, b) => { b.closest("details").open = false;   /* b: the button (h()'s handlers are delegated, so e.currentTarget is not it) */ Promise.all([import("../preview/docexport.js"), r.md ? import("./markdown.js") : null]).then(([m, x]) => { md = x && x.markdown; f(m); }); };
   const item = (label, f) => h("button", { type: "button", class: "pv-mi", role: "button", onclick: go(f) }, label);
   return h("details", { class: "pv-save" },
     h("summary", { class: "btn", "data-size": "s", "data-kind": "quiet", title: "Save this document" }, icon("download"), h("span", null, "Save as")),
@@ -307,7 +313,7 @@ function live(it, my, known) {
 }
 
 // Expand gives the file the whole width, like Claude's expanded artifact; pressed again it goes back beside the chat.
-function fullBtn() {
+export function fullBtn() {
   const on = () => document.body.hasAttribute("data-pv-full");
   const b = button(on() ? "Back to the side" : "Expand", () => {
     document.body.toggleAttribute("data-pv-full", !on());
@@ -351,6 +357,12 @@ async function show(k, sure) {
   const it = P.items[P.i], my = ++P.seq;
   P.ctl && P.ctl.abort(); P.ctl = new AbortController(); clearTimeout(P.live);
   if (it.doc) { unmark(); return showDoc(it); }
+  if (it.chat) {   // a side chat about this conversation (ui/sidechat.js): the person, 11251257161d
+    sideLeave(); unmark();
+    P.root.dataset.kind = "chat"; P.foot.hidden = false;
+    mark();
+    return import("./sidechat.js").then(m => { if (my === P.seq && P.root && !P.list) m.showChat(it, { head: P.head, body: P.body, foot: P.foot, root: P.root, alive: () => my === P.seq && !!P.root && !P.list, go: d => show(P.i + d), items: P.items, i: P.i, mark }); });
+  }
   sideLeave();
   if (P.mk && P.mk.k !== keyOf(it)) unmark();
   P.root.setAttribute("aria-label", tr("Preview of " + it.name));
@@ -375,9 +387,10 @@ async function show(k, sure) {
   live(it, my, { t: 0, size: 0 });
 }
 
-// Text a file shows in the panel can be marked up, the notes sent to this conversation (preview/markup.js). Pictures, sound, video
-// and pages in a frame can't be selected here; a library document has its own viewer (showDoc).
-const NOMARK = new Set(["image", "video", "audio", "html", "pdf"]);
+// Text a file shows in the panel can be marked up, the notes sent to this conversation (preview/markup.js), and a web page in its
+// frame can be boxed (markup.js asks the page what is under the box). Pictures, sound, video and PDFs can't be selected here; a
+// library document has its own viewer (showDoc).
+const NOMARK = new Set(["image", "video", "audio", "pdf"]);
 function marks(it, r) {
   const th = hashThread(), k = keyOf(it);
   if (P.mk && P.mk.k === k && P.mk.th === th) return;
@@ -427,6 +440,7 @@ addEventListener("keydown", e => {
   if (document.fullscreenElement) return;
   if (e.target.closest && e.target.closest(".pv-ed")) return;   // in the editor: Escape is the editor's (it never closes the panel over your text)
   if (P.root.querySelector("[data-boxing]")) return;   // a box being drawn: markup.js's Escape stops drawing first
+  if (document.body.hasAttribute("data-sc-box") || document.querySelector(".sc-menu")) return;   // a side chat's box being drawn, or its menu open (sidechat.js): those close first
   if (P.root.querySelector(".dv-card,.dv[data-boxing],.dv[data-side] .dv-count[aria-expanded=true]")) return;   // a note being written or a box being drawn: the viewer's Escape cancels that first
   const mc = P.root.querySelector(".pv-mk-card:not([hidden])"), mg = P.root.querySelector(".pv-mk-go:not([hidden])");
   if (mc || mg) { e.stopPropagation(); if (mc) { if (mc._shut) mc._shut(); else mc.hidden = true; } else { mg.hidden = true; getSelection().removeAllRanges(); } return; }   // a file note being written, or the Note button up: Escape drops that first
@@ -438,6 +452,7 @@ addEventListener("hashchange", () => {
   if (P.root && P.list && !/^#comms\/./.test(location.hash)) { closePreview(); return; }
   const it = P.root && !P.list && P.items[P.i];
   if (it && it.doc && hashThread() !== it.thread) { closePreview(); return; }   // its notes are for the conversation it was opened from
+  if (it && it.chat && hashThread() !== it.main) { closePreview(); return; }   // a side chat belongs to the conversation it is about
   if (P.root) mark();
 });
 

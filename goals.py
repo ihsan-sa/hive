@@ -290,10 +290,13 @@ def goals(t=None):
         built = [d for d in (days(st.get(k, {}).get("build_at"), t) for k in cands) if d is not None]
         # "no ladder" has to be checked, not assumed: a ladder a focus row carries, one of its own with rungs left, or topic ladders all count (ae49e, 2026-11-18:
         # five projects with a ladder were listed to the keeper as needing one, and hive-app's six open rungs dropped off its row for a day after every build post)
-        has_ladder = g["project"] in taken or (g["ladder"] and g["ladder"]["left"]) or g.get("ladders")
+        # a ladder with every rung ticked and a live `Parked until` (or a person's `Finished:`) has one too: it fell through to needs_ladder, so the
+        # park line was never read and the keeper's --post guard let a "write the next rungs" round in an hour after the park (pocket-console-review, ad9a3, 2026-11-25)
+        held = g["ladder"] and (g["ladder"]["parked"] or g["ladder"].get("finished"))
+        has_ladder = g["project"] in taken or (g["ladder"] and g["ladder"]["left"]) or g.get("ladders") or held
         if not row["running"] and built and min(built) <= BUILD_D and not has_ladder:   # built within a day and no ladder: idle now, and the round writes it a ladder
             row.update(idle=True, needs_ladder=True, ladder=False, goals_path=g["path"], rung=None, last_agent_d=min(built))
-        if g["ladder"] and g["ladder"]["left"] and g["project"] not in taken and not row.get("needs_ladder"):
+        if g["ladder"] and (g["ladder"]["left"] or held) and g["project"] not in taken and not row.get("needs_ladder"):
             # a `## Ladder` whose heading names no thread lives in the project's own thread: without this the row had no ladder, so the floor
             # never started it (the voice board and its film sat unstarted after the person's resume, 2026-11-12, post 11121012cbf5)
             with_ladder(row, g, t)
