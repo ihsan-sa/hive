@@ -14,7 +14,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync, execFile } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 const { _electron } = require('playwright-core');
 const exe = process.argv[2];
 if (process.platform !== 'win32' || !exe || !fs.existsSync(exe)) { console.error('usage (Windows only): node test/setupexe.js PATH-TO-Hive-Setup.exe'); process.exit(2); }
@@ -30,7 +30,30 @@ const ps = cmd => {
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // The installer run without blocking this process, so the open app's connection keeps being served while it works.
-const runInstaller = (file, args) => new Promise((resolve, reject) => execFile(file, args, { timeout: 5 * 60000 }, err => err ? reject(new Error(`${path.basename(file)} ${args.join(' ')} failed: ${err.killed ? 'still running after 5 min (a dialog waiting on nobody?)' : err.message}`)) : resolve()));
+const runInstaller = (file, args, label) => new Promise((resolve, reject) => {
+  // No pipes: a process the installer starts must not keep this waiting after the installer itself has ended. While it
+  // runs, every 30 s says which installer-side processes and windows are up; if it is still running after 6 min, it
+  // saves a picture of the screen (a dialog waiting on nobody?) and the process list, ends the tree and fails.
+  const t0 = Date.now();
+  const child = spawn(file, args, { stdio: 'ignore', windowsHide: false });
+  const look = () => {
+    try {
+      return ps(`Get-CimInstance Win32_Process | Where-Object { $_.Name -notmatch '^(node|bash|powershell|pwsh|conhost|svchost)\\.exe$' -and ($_.Name -match '^(Hive|Au_|Un_A|Uninstall|taskkill|tasklist|find|cmd|ns)' -or $_.CommandLine -match 'hive') } | ForEach-Object { "$($_.ProcessId)<$($_.ParentProcessId) $($_.Name) $($_.CommandLine)" }; Get-Process | Where-Object { $_.MainWindowTitle } | ForEach-Object { "window: $($_.Name) [$($_.Id)] '$($_.MainWindowTitle)'" }`).split(/\r?\n/).map(l => l.slice(0, 260)).join('\n    ');
+    } catch (err) { return String(err.message || err); }
+  };
+  const beat = setInterval(() => console.log(`  ${label}: still running after ${Math.round((Date.now() - t0) / 1000)} s:\n    ${look()}`), 30000);
+  const stuck = setTimeout(() => {
+    clearInterval(beat);
+    const shot = path.resolve(`test/shots/${label}-stuck.png`);
+    fs.mkdirSync(path.dirname(shot), { recursive: true });
+    try { ps(`Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $p=New-Object System.Drawing.Bitmap $b.Width,$b.Height; [System.Drawing.Graphics]::FromImage($p).CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size); $p.Save('${shot}')`); } catch { }
+    const seen = look();
+    try { execFileSync('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', timeout: 30000 }); } catch { }
+    reject(new Error(`${label}: ${path.basename(file)} ${args.join(' ')} still running after 6 min (screen saved to ${shot}); processes then:\n    ${seen}`));
+  }, 6 * 60000);
+  child.on('error', err => { clearInterval(beat); clearTimeout(stuck); reject(err); });
+  child.on('exit', code => { clearInterval(beat); clearTimeout(stuck); console.log(`  ${label}: the installer ended (exit ${code}) after ${Math.round((Date.now() - t0) / 1000)} s`); code === 0 ? resolve() : reject(new Error(`${label}: ${path.basename(file)} ${args.join(' ')} ended with exit ${code}`)); });
+});
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const hiveProcs = () => { const out = ps(`Get-Process -Name Hive | Select-Object Id,Path | ConvertTo-Json -Compress`); if (!out) return []; const p = JSON.parse(out); return Array.isArray(p) ? p : [p]; };
 const entry = () => {
@@ -155,7 +178,8 @@ const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWin
     const kept3 = await bounds(app);
     const copy3 = marked(newest);
     const t2 = Date.now();
-    await runInstaller(copy3, ['/S']);
+    console.log(`  with ${from} open (pid ${pid}), running the ${newestVersion} installer`);
+    await runInstaller(copy3, ['/S'], 'setupexe-update-open');
     let e3 = null;
     for (let i = 0; i < 60; i++) { e3 = entry(); if (e3 && e3.some(x => x.DisplayVersion === newestVersion)) break; await sleep(2000); }
     await Promise.race([app.close().catch(() => { }), sleep(10000)]); // its process is gone, so this only tidies up
