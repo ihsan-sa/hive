@@ -64,6 +64,7 @@ console.log('ok page: Windows, Mac (Apple chip or Intel) and Linux each get thei
   assert(/sudo apt install \.\/Hive-linux-amd64\.deb/.test(l) && /keeps working/.test(l), 'Linux: apt install over the old one');
   const main = require('fs').readFileSync(require('path').join(__dirname, '../main.js'), 'utf8');
   assert(/on\('click', \(\) => \{ external\(lib\.downloadPage\('update'\)\)/.test(main), 'the update notice opens #update');
+  assert(/ipcMain\.on\('download'[^\n]*downloadPage\('update'\)/.test(main), "the setup screen's newer-app link opens #update");
   console.log('ok page update lines');
 }
 
