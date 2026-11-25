@@ -5,7 +5,7 @@ here touches your own files: the Hive runs in its own Linux system (Windows: WSL
 Please use the download you were handed, not the terminal install line.
 
 ## Steps
-1. Download the file for your system (`Hive-Setup.exe`, or the Mac `.dmg`/`.zip` for your chip: Apple menu, About This Mac shows "Apple M…" or "Intel").
+1. Download the file for your system (`Hive-Setup.exe`; on a Mac, `Hive-mac-arm64.zip` if Apple menu, About This Mac shows "Chip Apple M…", or `Hive-mac-x64.zip` if it shows an Intel processor).
 2. Double-click it.
    - **Windows:** "Windows protected your PC" is expected (the app is not signed yet). Press **More info**, then **Run anyway**.
    - **Mac:** "Hive" Not Opened is expected. Press **Done**, open System Settings, Privacy & Security, scroll to Security, press **Open Anyway**, then confirm with your password. Drag Hive to Applications first if it came as a .dmg.
