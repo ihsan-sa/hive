@@ -13,7 +13,8 @@
 // screen, and never on a Hive page; everything else is the same.
 // Last, the update notice: opened with open -a against a stand-in site with a newer app. ok mac notice says macOS took the
 // notification, with the Hive's notification setting in words; if that is off, a second round with it turned on. ok mac
-// banner only when a screenshot (read by macOS's own text recognition, test/macbanner.swift) shows the banner.
+// banner only when a screenshot (read by macOS's own text recognition, test/macbanner.swift) shows the banner. Then a control
+// notification from osascript: ok mac control banner if the runner draws one at all.
 // Red only if the app never noticed the newer one.
 const fs = require('fs');
 const os = require('os');
@@ -170,6 +171,40 @@ const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWin
     site.close();
     if (r.banner) console.log(`ok mac banner: ${r.banner} shows the banner "A newer Hive app is available", ${how}`);
     else console.log(`no mac banner: none of the screenshots over 10 s shows it, ${how} (test/shots/macnotice*.png, ${r.shots.length} in the last round); setting: ${r.setting}`);
+    // The control: a notification from macOS's own osascript (sent as Script Editor), the same 10 s of screenshots. A banner
+    // here and none for the Hive means the app needs a fix; none here either means this runner draws no banners at all.
+    const ctlId = 'com.apple.ScriptEditor2';
+    const control = async (tag) => {
+      let sent = 'sent';
+      try { sh('osascript', ['-e', 'display notification "probe" with title "Hive control"']); } catch (e) { sent = 'not sent: ' + String(e.stderr || e.message).split('\n').filter(Boolean).slice(-1)[0]; }
+      const shots = [];
+      for (let k = 0; k < 10; k++) {
+        const f = `test/shots/macctl${tag}${k ? '-' + k : ''}.png`;
+        try { sh('screencapture', ['-x', f]); shots.push(f); } catch { }
+        await sleep(1000);
+      }
+      let setting = 'not read', banner = '';
+      try {
+        for (const l of helper(ctlId, ...shots).split('\n')) {
+          if (l.startsWith('ncprefs: ')) setting = l.slice(9);
+          const m = l.match(/^ocr (\S+): (.*)$/);
+          if (m && !banner && m[2].split(' | ').some(x => /Hive control/.test(x))) banner = m[1];
+        }
+      } catch (e) { setting = 'not read: ' + String(e.stderr || e.message).split('\n').filter(Boolean).slice(-2).join(' / ').slice(0, 200); }
+      return { sent, shots, setting, banner };
+    };
+    let c = await control(''), chow = 'as the runner is set up';
+    console.log(`  control notification from osascript: ${c.sent}; Script Editor's notification setting: ${c.setting}`);
+    if (!c.banner && /allow notifications OFF/.test(c.setting)) {
+      let turned = '';
+      try { turned = helper('--allow', ctlId).trim(); } catch (e) { turned = 'failed: ' + String(e.stderr || e.message).split('\n').filter(Boolean).slice(-1)[0]; }
+      for (const p of ['usernoted', 'NotificationCenter']) { try { sh('killall', [p]); } catch { } }
+      await sleep(3000);
+      c = await control('-on'); chow = 'after notifications were turned on for Script Editor';
+      console.log(`  control again: ${turned}; ${c.sent}; setting now: ${c.setting}`);
+    }
+    if (c.banner) console.log(`ok mac control banner: ${c.banner} shows "Hive control", ${chow}; so this runner draws banners and the Hive's is missing`);
+    else console.log(`no mac control banner: none of the screenshots over 10 s shows "Hive control", ${chow} (test/shots/macctl*.png); so this runner draws no banners, and the Hive's banner needs a real Mac`);
   }
   fs.rmSync(dest, { recursive: true, force: true });
 })().catch(err => { console.error('FAILED', err.message || err); try { fs.rmSync(dest, { recursive: true, force: true }); } catch { } process.exit(1); });
