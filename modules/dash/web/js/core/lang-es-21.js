@@ -23,5 +23,19 @@ const SELF = {
   "Its conversations, page and summary stay as they are.": "Sus conversaciones, su página y su resumen se quedan como están.",
   "Agents still know it as": "Los agentes todavía lo conocen como",
   "Couldn't bring it back:": "No se pudo recuperar:",
+  // E203h: making and uploading a skill (settings.js)
+  "1. Ask where, when and the budget.\n2. …": "1. Pregunta adónde, cuándo y el presupuesto.\n2. …",
+  "Add skill": "Añadir habilidad",
+  "Added by you": "Añadida por ti",
+  "Adding the skill…": "Añadiendo la habilidad…",
+  "Agents read this to decide when to use it.": "Los agentes leen esto para decidir cuándo usarla.",
+  "New skill": "Nueva habilidad",
+  "No skills yet.": "Todavía no hay habilidades.",
+  "Plan a trip: dates, budget and who's going": "Planear un viaje: fechas, presupuesto y quién va",
+  "Short and lowercase, with hyphens between words, like trip-planner.": "Corto y en minúsculas, con guiones entre palabras, como trip-planner.",
+  "What it's for": "Para qué sirve",
+  "What the agent should do, in order.": "Lo que el agente debe hacer, en orden.",
+  "You added it on this Hive, so this deletes its file too. Agents stop using it from their next run.": "La añadiste en este Hive, así que esto también borra su archivo. Los agentes dejan de usarla desde su próxima ejecución.",
+  "your skills are under Skills": "tus habilidades están en Habilidades",
 };
 export default SELF;
