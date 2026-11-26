@@ -136,6 +136,14 @@ jobs:
         continue-on-error: true
         timeout-minutes: 5
         run: bash test/downloaded.sh dist/*.zip
+      # Apple silicon: its runner can't start a VM, so the real install can't finish there, but everything before the
+      # VM boot runs on real Apple silicon (the arm64 Lima download and checksum, the VM config) and the app must end on
+      # a failure screen with the installer's words, not hang. Last in the job: the steps above expect no Hive here.
+      - if: matrix.os == 'macos-15'
+        continue-on-error: true
+        timeout-minutes: 25
+        env: { HIVE_APP_REAL: "1", HIVE_REAL_MINUTES: "20" }
+        run: node test/real.js "${{ matrix.app }}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
