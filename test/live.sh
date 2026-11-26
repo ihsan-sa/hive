@@ -22,10 +22,13 @@ want=$(echo $FILES | tr ' ' '\n' | sort | tr '\n' ' ')
 loc() { curl -sS -o /dev/null -w '%{redirect_url}' "$SITE/downloads/$1"; }
 case "$(loc SHA256SUMS)" in */releases/download/$TAG/SHA256SUMS) ;; *) fail "SHA256SUMS does not point at $TAG: $(loc SHA256SUMS)";; esac
 curl -fsSL "$SITE/downloads/SHA256SUMS" > "$W/SHA256SUMS" || { echo "FAILED live: no SHA256SUMS"; exit 1; }
+OWN="$(dirname "$0")/own-download"   # each fetch below reaches GitHub: log it so test/downloads.sh does not count it
+"$OWN" "$TAG" SHA256SUMS live.sh
 
 for f in $FILES; do
   to=$(loc "$f")
   case "$to" in */releases/download/$TAG/$f) ;; *) fail "$f points at '$to', not release $TAG"; continue;; esac
+  "$OWN" "$TAG" "$f" live.sh
   curl -fsSL -A 'Mozilla/5.0' -o "$W/$f" "$SITE/downloads/$f" || { fail "$f: download failed"; continue; }
   want=$(awk -v f="$f" '$2==f || $2=="*"f {print $1}' "$W/SHA256SUMS")
   got=$(sha256sum "$W/$f" | cut -d' ' -f1)

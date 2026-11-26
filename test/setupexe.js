@@ -19,7 +19,8 @@ const { execFileSync, spawn } = require('child_process');
 const { _electron } = require('playwright-core');
 const exe = process.argv[2];
 if (process.platform !== 'win32' || !exe || !fs.existsSync(exe)) { console.error('usage (Windows only): node test/setupexe.js PATH-TO-Hive-Setup.exe'); process.exit(2); }
-const version = require('../package.json').version;
+// HIVE_EXPECT_VERSION: the version the installer must put in (test/livewin.sh: the one the live site names).
+const version = process.env.HIVE_EXPECT_VERSION || require('../package.json').version;
 const [newer, newVersion, newest, newestVersion] = process.argv.slice(3, 7);
 if ((newer && (!fs.existsSync(newer) || !newVersion)) || (newest && (!newer || !fs.existsSync(newest) || !newestVersion))) { console.error('usage: node test/setupexe.js OLD.exe [NEW.exe NEW-VERSION [NEWEST.exe NEWEST-VERSION]]'); process.exit(2); }
 // A fresh account may have no Uninstall key at all, and an unreadable subkey makes Get-ItemProperty complain: neither is a

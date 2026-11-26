@@ -1,0 +1,4 @@
+#!/bin/sh
+# own-download TAG NAME WHY: log one fetch of a release file by our own tests, so test/downloads.sh does not count it
+# as a person. Call it right after each fetch that reaches GitHub (a redirect we do not follow is not a fetch).
+printf '%s %s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "${3:-}" >> "$(dirname "$0")/own-downloads.log"

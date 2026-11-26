@@ -105,6 +105,15 @@ jobs:
         timeout-minutes: 30
         shell: bash
         run: node test/setupexe.js dist/Hive-Setup.exe ${HIVE_NEXT:+dist-next/Hive-Setup.exe $HIVE_NEXT} ${HIVE_NEXT2:+dist-next2/Hive-Setup.exe $HIVE_NEXT2}
+      # The public link a Windows person clicks, end to end: the live download page's Hive-Setup.exe link, fetched
+      # through hivelab.ca/downloads/ (the site's redirect to the app's release, not this run's build), checked against
+      # the site's SHA256SUMS, then download-marked, installed, opened and uninstalled as above. test/downloads.sh counts
+      # this step's two fetches as ours by its name: rename both together.
+      - name: the public download link, as a Windows person clicks it
+        if: matrix.os == 'windows-latest'
+        timeout-minutes: 20
+        shell: bash
+        run: sh test/livewin.sh
       # The zip a Mac person downloads: unpacked with the download mark, moved into /Applications, the README's Open
       # Anyway (its command-line form), then opened from there: it must go straight to the Hive from the step above.
       # Read, not a red build, like the real install it stands on.
