@@ -23,11 +23,15 @@ LEDGER, SNAPS, LOG, BOARD = HOME / "improvements.jsonl", HOME / "progress.jsonl"
 CORE, STATE, PROJECTS = HOME / "core", HOME / ".hive", HOME / "projects"
 Hive = next((CORE / n for n in ("hive", "hive") if (CORE / n).exists()), CORE / "hive")  # an installed Hive's CLI is called hive
 RSI_LEDGER = PROJECTS / "rsi-loop" / "ledger.jsonl"
-VERDICTS = ("held", "reverted", "inconclusive", "reverted-candidate", "unjudgeable", "expired")  # reverted-candidate is the script's
+VERDICTS = ("held", "reverted", "inconclusive", "reverted-candidate", "unjudgeable", "expired", "inseparable")  # reverted-candidate is the script's
 # R47c: the closing verdicts end a row that can have no verdict, never by its owner, and the lab's index counts them apart:
 # unjudgeable: no number for this change exists (a still-landed row with no check); expired: its case came up too few times by the
 # revisit to read (a count and where it was counted). Neither replaces a held or reverted reading, and unjudgeable not an inconclusive one.
-CLOSING = ("unjudgeable", "expired")
+# inseparable (rsi-lab goals.md rung 198, 11-26): a row whose number is shared and can never be read apart from the rows it shares
+# it with: one of them landed within INSEPARABLE_H of it (no window holds it alone), or one of them read reverted (the move is theirs
+# too). Never credited, counted apart with the closings, the fresh reading in --why.
+CLOSING = ("unjudgeable", "expired", "inseparable")
+INSEPARABLE_H = 6
 REAL = ("held", "reverted", "reverted-candidate")
 # R47e: a row that reads a number and changes nothing (a daily reading: i0233, i0240, i0292, i0296; no where, no commit) is no change
 # to judge. A non-owner marks it with hive improve reading, a later row giving it kind "reading", and it is no longer owed a verdict;
@@ -275,12 +279,119 @@ def autojudge(post=True, t=None):
             append(LEDGER, {"judge": e["id"], "at": iso(t), "by": "late-check" if e.get("late") else "check", "verdict": v, "reading": reading, "why": why, "before": e.get("before"), "after": after,
                             **({"gain_expected": e["gain"], "gain_seen": round(seen, 6)} if sized else {}), **({"with": w} if w else {}), **({"paused": [round(pb, 3), round(pa, 3)]} if max(pb, pa) > 0 else {})})
             out.append((e, v, why))
+        if joint_on(): out += joint_verdicts(t)  # off until rsi-lab-challenge rules on it (rsi-lab goals.md, joint verdicts)
     bad = [(e, why) for e, v, why in out if v == "reverted-candidate"]
     if bad and post:
         owner = lambda e: "@" + e["by"] if re.fullmatch(r"[a-z][0-9a-f]{4}", str(e.get("by"))) else str(e.get("by"))
         body = "A check says these changes made their number worse. Nothing was reverted; each owner decides, then records it with `hive improve judge ID reverted|held --why ...`.\n" + "\n".join(f"- {e['id']} {owner(e)}: {why}. {e.get('what', '')[:100]}" for e, why in bad)
         subprocess.run([sys.executable, "-I", str(Hive), "post", "--thread", "improve"], input=body, text=True, capture_output=True, env={**os.environ, "HIVE_NAME": "improve-judge"})
     return out
+
+JOINT_FLAG = "joint_verdicts"  # core/config.json; off by default
+
+def joint_on():
+    try: return bool(json.loads((CORE / "config.json").read_text()).get(JOINT_FLAG))
+    except (OSError, ValueError, AttributeError): return False
+
+def joint_groups(items=None):
+    """[(verdict, ids)]: rows the script left inconclusive only because they share one number, where every row in the
+    judged_with group read the same real verdict on its own check. One move of one number cannot credit one change, but it
+    can credit the group: rsi-lab 11-26, 12 of the 20 rows due in a week and not known were shared-number rows. A row
+    whose window read the pause (as autojudge decides it), a late check, a hand verdict, or a member not yet read keeps
+    the whole group out, and so does a group whose readings differ."""
+    items = items if items is not None else ledger()
+    last = {}
+    for r in jsonl(LEDGER):
+        if r.get("judge"): last[r["judge"]] = r
+    def clean(i):
+        e, r = items.get(i, {}), last.get(i, {})
+        if e.get("status") != "inconclusive" or r.get("by") != "check" or r.get("verdict") != "inconclusive" or not r.get("with") or r.get("reading") not in REAL: return None
+        p = r.get("paused") or [0, 0]
+        zero_clean = r["reading"] == "held" and r.get("before") == r.get("after") == 0 and e.get("want") == "down" and p[-1] <= PAUSED_MAX
+        if max(p) > PAUSED_MAX and not e.get("rate") and not zero_clean: return None
+        return r["reading"]
+    out, seen = [], set()
+    for i in sorted(items):
+        if i in seen or clean(i) is None: continue
+        g = sorted({i} | set(judged_with(items, items[i])))
+        seen |= set(g)
+        rs = {clean(x) for x in g}
+        if len(g) > 1 and len(rs) == 1 and None not in rs: out.append((rs.pop(), g))
+    return out
+
+def joint_verdicts(t=None, write=True):
+    """Write each joint group's verdict on every row in it, by "joint", with the group in "joint": a held here says the
+    changes held together, and credits none of them alone."""
+    t, items, out = t or now(), ledger(), []
+    for v, g in joint_groups(items):
+        for i in g:
+            why = f"{v} jointly with {', '.join(x for x in g if x != i)}: every row sharing this number read {v} on its own check, so this credits the group, not one change"
+            if write: append(LEDGER, {"judge": i, "at": iso(t), "by": "joint", "verdict": v, "reading": v, "why": why, "joint": g})
+            out.append((items[i], v, why))
+    return out
+
+def inseparable_why_not(items, e):
+    """None when e shares its number with a row that landed within INSEPARABLE_H of it or that read reverted, else why not."""
+    w = judged_with(items, e)
+    if not w: return "it shares its number with no row"
+    def t(x):
+        d = dt.datetime.fromisoformat(str(x).replace("Z", "+00:00")); return d if d.tzinfo else d.replace(tzinfo=dt.timezone.utc)
+    rev = {r["judge"] for r in jsonl(LEDGER) if r.get("judge") in w and "reverted" in (str(r.get("verdict")) + str(r.get("reading")))}
+    for i in w:
+        o = items[i]
+        if o.get("status") in ("reverted", "reverted-candidate") or i in rev: return None
+        try:
+            if abs(t(o["at"]) - t(e["at"])) <= dt.timedelta(hours=INSEPARABLE_H): return None
+        except (KeyError, ValueError): pass
+    return f"none of {', '.join(w)} landed within {INSEPARABLE_H} h of it or read reverted, so a window apart may exist (hive improve judge --apart)"
+
+def joint_read(i, t=None, write=True):
+    """hive improve joint --read ID (rung 198 a): a non-owner of every row in ID's group reruns each row's own check now. The
+    group is held jointly, once in held_share, only when every row has a check, every one moved its wanted way past its
+    before, no row's window is more than PAUSED_MAX paused, and every row is inconclusive now. [(row, verdict, why)], or exits why not."""
+    t, items = t or now(), ledger()
+    me = os.environ.get("HIVE_NAME", os.environ.get("USER", "?"))
+    e = items.get(i)
+    if not e: sys.exit(f"hive improve joint: no improvement {i}")
+    g = sorted({i} | set(judged_with(items, e)))
+    if len(g) < 2: sys.exit(f"hive improve joint: {i} shares its number with no row, so it has its own verdict (hive improve judge).")
+    if me in ("check", "late-check", "joint"): sys.exit(f"hive improve joint: {me} is a script's name; a read by hand signs with yours.")
+    mine = [x for x in g if items[x].get("by") == me]
+    if mine: sys.exit(f"hive improve joint: {', '.join(mine)} was logged by you; the joint read is by a non-owner of every row in {', '.join(g)}.")
+    reads, bad = {}, []
+    for x in g:
+        o = items[x]
+        if not o.get("check"): bad.append(f"{x} has no check"); continue
+        if o.get("status") != "inconclusive": bad.append(f"{x} reads {o.get('status')}, not inconclusive"); continue  # a landed row is the script's to read first; a held, reverted or closed one has its verdict
+        if o.get("before") is None or o.get("want") not in ("up", "down"): bad.append(f"{x} has no before or want"); continue
+        n, err = read_check(o)
+        if n is None: bad.append(f"{x}'s check did not read: {err}"); continue
+        base = o["before"] * n[1] / o["control_before"] if o.get("control") and o.get("control_before") else o["before"]
+        v = score(base, n[0], o["want"], o.get("band"))
+        pb, pa = paused_windows(o, t)
+        if v != "held": bad.append(f"{x} {o['want']}: {o['before']:g} -> {n[0]:g} reads {v}")
+        elif max(pb, pa) > PAUSED_MAX: bad.append(f"{x}'s window is {round(100 * max(pb, pa))}% paused")
+        reads[x] = (n[0], pb, pa)
+    if bad: sys.exit(f"hive improve joint: no joint verdict for {', '.join(g)}: " + "; ".join(bad))
+    out = []
+    for x in g:
+        n, pb, pa = reads[x]; o = items[x]
+        why = (f"held jointly with {', '.join(y for y in g if y != x)}, read by {me} at {iso(t)}: {o['want']}: {o['before']:g} -> {n:g} on its own check now, every row in the group moved its wanted way"
+               f" (paused {round(100 * pb)}%/{round(100 * pa)}%), so this credits the group, not one change")
+        if write: append(LEDGER, {"judge": x, "at": iso(t), "by": me, "verdict": "held", "reading": "held", "why": why, "before": o["before"], "after": n, "joint": g, "joint_read": True})
+        out.append((o, "held", why))
+    return out
+
+def cmd_joint(a):
+    if a.read:
+        if not joint_on(): sys.exit(f"hive improve joint: off ({JOINT_FLAG} in core/config.json)")
+        out = joint_read(a.read, write=not a.dry)
+        for e, v, why in out: print(e["id"], v, why)
+        return
+    if not a.dry and not joint_on(): sys.exit(f"hive improve joint: off ({JOINT_FLAG} in core/config.json); --dry lists what it would write")
+    out = joint_verdicts(write=not a.dry)
+    for e, v, why in out: print(e["id"], v, why)
+    if not out: print("no joint verdicts")
 
 def cmd_autojudge(a):
     out = autojudge(post=not a.no_post)
@@ -448,6 +559,12 @@ def cmd_judge(a):
             sys.exit("hive improve judge: expired needs --why to say 'cases N' (N the cases that came up by the revisit, 0 to 2) and where you counted them (a file path or a post id).")
         if a.verdict == "unjudgeable" and not src:
             sys.exit("hive improve judge: unjudgeable needs --why to say where you looked for its number (a file path or a post id).")
+        if a.verdict == "inseparable":
+            why_not = inseparable_why_not(items, e)
+            if why_not: sys.exit(f"hive improve judge: {a.id} is not inseparable: {why_not}")
+            if not (re.search(r"\d", a.why) and src): sys.exit("hive improve judge: inseparable needs --why to give the fresh reading of the shared number (a number) and where you read it (a file path or a post id).")
+            if e.get("check"):  # the reading is the row's own check, now, on the record beside the judge's
+                n, err = read_check(e); a.why += f"; its check reads {n[0]:g} now" if n else f"; its check did not read now: {err}"
         day = (now() - dt.timedelta(hours=24)).isoformat()
         mine24 = [r["judge"] for r in jsonl(LEDGER) if r.get("judge") and r.get("by") == me and r.get("verdict") in CLOSING and str(r.get("at", "")) >= day]
         if len(mine24) >= 3: sys.exit(f"hive improve judge: you closed {', '.join(mine24)} in the last 24 h; three a day is the most one judge closes. Ask another agent.")
@@ -1091,6 +1208,7 @@ def main(argv=None):
     p = sp.add_parser("attach", help="give a logged change a check after the fact, on or after its revisit date; the number is kept but never counts as held (late-check): ID --check CMD --want up|down [--band N] [--before N: the number from before the change; without it, measured now and read in 48 h]")
     p.add_argument("id"); p.add_argument("--check", required=True); p.add_argument("--want"); p.add_argument("--band", type=float); p.add_argument("--before", type=float); p.set_defaults(f=cmd_attach)
     p = sp.add_parser("autojudge", help="run the checks that are due and write verdicts, no model (hourly, after hive outcomes grade)"); p.add_argument("--no-post", action="store_true"); p.set_defaults(f=cmd_autojudge)
+    p = sp.add_parser("joint", help="credit a group of rows that share one number when every row read the same verdict (behind joint_verdicts in core/config.json)"); p.add_argument("--dry", action="store_true"); p.add_argument("--read", metavar="ID", help="rerun every check in ID's group now, by a non-owner of all of them; held jointly only if each moved its wanted way past its before with no window over 25%% paused"); p.set_defaults(f=cmd_joint)
     p = sp.add_parser("num", help="one scoreboard number for a --check: FIELD, the latest snapshot's, or the mean over --from ISO --to ISO")
     p.add_argument("field"); p.add_argument("--from", dest="frm"); p.add_argument("--to"); p.set_defaults(f=cmd_num)
     p = sp.add_parser("show", help="one entry in full"); p.add_argument("id"); p.set_defaults(f=cmd_show)

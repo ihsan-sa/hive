@@ -115,6 +115,10 @@ const SELF = {
   "What the agent should do, in order.": "Ce que l'agent doit faire, dans l'ordre.",
   "You added it on this Hive, so this deletes its file too. Agents stop using it from their next run.": "Vous l'avez ajoutée sur ce Hive, donc cela supprime aussi son fichier. Les agents cessent de l'utiliser dès leur prochaine exécution.",
   "your skills are under Skills": "vos compétences sont dans Compétences",
-  __patterns: [],
+  "Stop and send": "Arrêter et envoyer",
+  "Stopped and sent": "Arrêté et envoyé",
+  "Send waits for the current step to end. Stop and send tries to cut that step short.": "Envoyer attend la fin de l’étape en cours. « Arrêter et envoyer » tente d’écourter cette étape.",
+  __patterns: [
+    [/^Stop .+ now and send this, without waiting for its step to end$/, () => "L'arrêter maintenant et envoyer ceci, sans attendre la fin de son étape"],],
 };
 export default SELF;

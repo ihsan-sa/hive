@@ -4,8 +4,7 @@ import { h } from "../core/dom.js";
 import { confirm } from "./dialog.js";
 import { S, can, jget, post, loadApp } from "../core/store.js";
 import { ago } from "../core/format.js";
-import { button, empty, field, input, seg, statusLabel } from "./kit.js";
-import { copyButton } from "./refs.js";
+import { button, empty, field, input, seg, statusLabel, copyPress } from "./kit.js";
 import { act, begin, finish, isBusy } from "./activity.js";
 
 // What's being typed lives here, so a poll never loses it. A key is held only until it's sent.
@@ -146,8 +145,9 @@ export function codexPart(update) {
         c.state === "starting" ? sayMsg("Starting Codex's sign-in…") : null,
         c.state === "waiting" ? [
           h("ol", { class: "steps" },
-            h("li", null, /^https:\/\//.test(c.url) ? h("a", { href: c.url, target: "_blank", rel: "noreferrer noopener" }, "Open the sign-in page") : "Codex didn't give a usable link.", " in any browser, and sign in", l.name === "codex" ? "." : " with the ChatGPT account for this login."),
-            h("li", null, "Enter this code: ", h("b", { class: "mono", "data-key": "code" }, c.code), " ", copyButton(c.code), h("span", { class: "field-h" }, "It lasts 15 minutes."))),
+            h("li", null, /^https:\/\//.test(c.url) ? h("a", { href: c.url, target: "_blank", rel: "noreferrer noopener" }, "Open the sign-in page") : "Codex didn't give a usable link.", " in any browser, and sign in", l.name === "codex" ? "." : " with the ChatGPT account for this login.",
+              /^https:\/\//.test(c.url) ? [" ", button("Copy link", (e, b) => copyPress(b, c.url), { kind: "quiet", size: "s", icon: "copy", title: "Copy the link, to open it in another browser" })] : null),
+            h("li", null, "Enter this code: ", h("b", { class: "mono", "data-key": "code" }, c.code), " ", button("Copy", (e, b) => copyPress(b, c.code), { kind: "quiet", size: "s", icon: "copy", title: "Copy the code" }), " ", h("span", { class: "field-h" }, "It lasts 15 minutes."))),
           h("div", { class: "frow" }, button("Cancel", stop, { kind: "quiet", size: "s", busy: isBusy("codex-stop") }), h("span", { class: "meta" }, "Waiting for you to finish…"))] : null,
         c.state === "failed" ? sayMsg(c.error || "That didn't work.", "bad") : null,
         c.state === "done" ? sayMsg("Signed in to Codex.", "good") : null]);
@@ -218,7 +218,7 @@ const GH_INSTALL = [["Linux (Debian, Ubuntu)", "sudo apt install gh"], ["Mac", "
 const ghInstall = () => h("div", { class: "field-h", "data-key": "gh-install" },
   h("p", null, "To install it, run one of these in a terminal on the computer the Hive runs on, then run gh auth login there and reload this page. Other systems: ",
     h("a", { href: "https://cli.github.com", target: "_blank", rel: "noopener" }, "cli.github.com"), "."),
-  h("ul", { class: "list" }, GH_INSTALL.map(([os, cmd]) => h("li", null, os + ": ", h("code", null, cmd), " ", copyButton(cmd)))));
+  h("ul", { class: "list" }, GH_INSTALL.map(([os, cmd]) => h("li", null, os + ": ", h("code", null, cmd), " ", button("Copy", (e, b) => copyPress(b, cmd), { kind: "quiet", size: "s", icon: "copy", title: "Copy the command" })))));
 /** Where GitHub issues stand here: no gh, not signed in, or ready. Null when the report module can't say. */
 function ghLine(g) {
   if (!g) return null;

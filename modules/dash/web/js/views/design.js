@@ -4,7 +4,7 @@ import { S, can, jget, post } from "../core/store.js";
 import { ago, LOC } from "../core/format.js";
 import { confirm } from "../ui/dialog.js";
 import { table } from "../ui/table.js";
-import { pageHeader, section, button, input, empty, waiting, meter, note } from "../ui/kit.js";
+import { pageHeader, section, button, input, empty, waiting, meter, note, copyPress } from "../ui/kit.js";
 
 const D = { v: null, text: "", code: "", err: "", busy: false, full: false };
 const SAVE = "Save the full source of the design you just made into a new folder here, named after it, and tell me the path.";
@@ -73,6 +73,7 @@ function stepPart(v, ctx) {
     h("p", null, /^https:\/\//.test(st.link || "") ? "Open the sign-in page and approve it. If it gives you a code, paste it here. This page carries on by itself once it has worked." : "The sign-in link appears on the session's screen below in a moment. Approve it there. If it gives you a code, paste it here."),
     h("form", { class: "frow dcode", onsubmit: e => { e.preventDefault(); sendCode(); } },
       /^https:\/\//.test(st.link || "") ? h("a", { class: "btn", "data-kind": "primary", href: st.link, target: "_blank", rel: "noreferrer noopener" }, "Open the sign-in page") : null,
+      /^https:\/\//.test(st.link || "") ? button("Copy link", (e, b) => copyPress(b, st.link), { kind: "quiet", icon: "copy", title: "Copy the link, to open it in another browser" }) : null,
       h("div", { style: "flex:1;min-width:12rem" }, input({ "aria-label": "Sign-in code", placeholder: "Paste the code", autocomplete: "off", spellcheck: "false", value: D.code, oninput: (e, n) => { D.code = n.value; } })),
       button("Send code", null, { type: "submit" })));
 }

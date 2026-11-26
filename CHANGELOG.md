@@ -10,6 +10,7 @@ Web pages and documents in the side panel have a Comment mode: press **Comment**
 
 ## Smaller fixes, 2026-11-26
 
+- The README's top links now include the Download page and the Hard questions page.
 - Spend notice: with the cost module added, when one agent uses an unusually large amount in a day, counted at API prices, one post says so while its run is still going. Nothing is stopped.
 - An agent held at extra high or max effort is now told who picked it and when each time it wakes, and after two days it is asked once to keep it or step down.
 - hivelab.ca's search snippets now say it is open-source Claude Code agents on your own machine.

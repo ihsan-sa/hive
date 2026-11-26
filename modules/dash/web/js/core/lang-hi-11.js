@@ -25,7 +25,11 @@ export default {
   "Waiting for Link": "Link की प्रतीक्षा",
   "Waiting in Link": "Link में प्रतीक्षा",
   "test mode": "टेस्ट मोड",
+  "Stop and send": "रोकें और भेजें",
+  "Stopped and sent": "रोककर भेजा गया",
+  "Send waits for the current step to end. Stop and send tries to cut that step short.": "भेजें मौजूदा चरण के खत्म होने तक रुकता है। “रोकें और भेजें” उस चरण को बीच में रोकने की कोशिश करता है।",
   __patterns: [
+    [/^Stop .+ now and send this, without waiting for its step to end$/, () => "इसका चरण पूरा होने का इंतज़ार किए बिना अभी रोकें और यह भेजें"],
     [/^Still open from rev (.+)$/, (_, r) => "अब भी खुला, इस संशोधन से: rev" + " " + r],   // ui/docviewer.js: a carried item, the text is joined before h()
   ],
 };

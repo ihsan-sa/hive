@@ -12,7 +12,7 @@ Ladders (2026-11-06, thread focus-ladders): a `## Ladder` section in a goals.md 
 with a thin brief re-read "nothing left" and repeated it. `hive goals --brief THREAD` hands a round its rung, and `hive goals --rounds` counts how
 many rounds did work rather than report a wait.
 """
-import argparse, datetime as dt, importlib.util, json, re, subprocess, sys, time, zlib
+import argparse, datetime as dt, importlib.util, json, os, re, subprocess, sys, time, zlib
 from collections import Counter
 from pathlib import Path
 
@@ -34,6 +34,8 @@ AFTER = re.compile(r"\bafter:\s*(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?)Z?\b")   # a
 GATE = re.compile(r"\b(?:on or after|not before|after|on|from|until|revisits?|re-?recheck|re-?check|recheck|read(?:ing)?|judge)\b[^.;:()]{0,24}?\b(\d{4}-\d{2}-\d{2})\b", re.I)   # the same wait in words: 38 of 47 floor rounds that did nothing (2026-11-09/10) woke on a reading written with a date but no after:
 CHECK_ON = re.compile(r"check:\s*(?:on or after|not before|on|after|from)\s+(\d{4}-\d{2}-\d{2})\b", re.I)   # a check that opens with its date ("check: on 2026-11-18 ...") can't pass before it; other dates in a check don't gate (rsi-lab 11-11: 3 such rungs woke the keeper every 2 h)
 ON_POST = re.compile(r"\bon-post:([\w-]+)")   # a standing watch (`on-post:THREAD`): due only when the person has posted in THREAD since the last brief that handed this rung (hive-meta R76: an "Each round, log every send the person confirms" rung, re-dated by hand, woke a313b 3 times in 11 h with nothing to log)
+WHEN = re.compile(r"\bwhen:`([^`]+)`")   # a gate on a file row or another agent's post (`when:`CHECK``): handed out only when CHECK (sh, from ~, 20 s) exits 0 (hive-meta R88: ae428's and a9323's rungs waited on such a row with a date guessed by hand)
+WHEN_S = 20
 PARKED = re.compile(r"^Parked until (\d{4}-\d{2}-\d{2}):\s*(.+)$", re.M)
 FINISHED = re.compile(r"^Finished:\s*(.+)$", re.M)   # `Finished: <the person's post id>: why`; the keeper and the floor skip the ladder for good (friction D1)
 POST_ID = re.compile(r"\b[0-9a-f]{12}\b")
@@ -50,7 +52,7 @@ ASK_EVERY_H = 24   # one ask a day for a ladder: a round that weighed it and fou
 def now(): return dt.datetime.now(dt.timezone.utc)
 
 def ladder(txt, t=None):
-    """The `## Ladder` section of a goals.md, or None. Rungs are `- [ ] what. check: how to tell`; `[x]` done, `[!]` blocked, `after:YYYY-MM-DD` not before that day (`after:YYYY-MM-DDTHH:MMZ`, not before that UTC minute); `on-post:THREAD` not before the person posts in THREAD after the last brief that handed it (watch_fresh)."""
+    """The `## Ladder` section of a goals.md, or None. Rungs are `- [ ] what. check: how to tell`; `[x]` done, `[!]` blocked, `after:YYYY-MM-DD` not before that day (`after:YYYY-MM-DDTHH:MMZ`, not before that UTC minute); `on-post:THREAD` not before the person posts in THREAD after the last brief that handed it (watch_fresh); `` when:`CHECK` `` not before CHECK exits 0 (when_ok)."""
     m = LADDER.search(txt)
     return section(txt, m, m.group(1), t) if m else None
 
@@ -76,6 +78,9 @@ def section(txt, m, heading, t=None):
     for r in rungs:
         w = ON_POST.search(r["text"])
         if w and r["state"] == " ": r["watch"] = w.group(1); r["waiting"] = not watch_fresh(w.group(1), r["text"])
+        c = WHEN.search(r["text"])
+        if c and r["state"] == " " and not r.get("waiting") and not (r["after"] and r["after"] > (today if len(r["after"]) == 10 else t.strftime("%Y-%m-%dT%H:%M"))):
+            if not when_ok(c.group(1)): r["watch"] = "when"; r["waiting"] = True
     due = [r for r in rungs if r["state"] == " " and r["checked"] and not r.get("waiting") and (not r["after"] or r["after"] <= (today if len(r["after"]) == 10 else t.strftime("%Y-%m-%dT%H:%M")))]
     nxt = due[0] if due else None
     # every park line counts, not just the first: a lapsed line above a fresh one left fellows-prep unparked and woke a1f59 three times in 90 min on 11-22 (ad388)
@@ -86,7 +91,21 @@ def section(txt, m, heading, t=None):
             "due_more": [r["text"] for r in due[1:]], "blocked": [r["text"] for r in rungs if r["state"] == "!"][:5], "left": sum(r["state"] == " " for r in rungs), "no_check": sum(r["state"] == " " and not r["checked"] for r in rungs)}
 
 _WATCH_BOARD = {}
-def _rkey(text): return re.sub(r"\s+", " ", re.sub(r"\b(?:after:\s*|on-post:)\S+\s*", "", text)).strip()   # the tags come and go as rounds re-date or retag a rung
+_WHEN = {}
+def when_ok(cmd):
+    """A `when:` gate: CHECK run once per process with sh from ~ as the Hive user; exit 0 opens the rung, non-zero, a timeout or an error keeps it shut."""
+    if cmd not in _WHEN:
+        p = None
+        try:
+            p = subprocess.Popen(["sh", "-c", cmd], cwd=str(Path.home()), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            _WHEN[cmd] = p.wait(timeout=WHEN_S) == 0
+        except Exception:
+            _WHEN[cmd] = False
+            if p and p.poll() is None:   # the whole group, so a hung check's children don't outlive the keeper
+                try: os.killpg(p.pid, 9); p.wait(2)
+                except Exception: pass
+    return _WHEN[cmd]
+def _rkey(text): return re.sub(r"\s+", " ", re.sub(r"\bwhen:`[^`]*`\s*|\b(?:after:\s*|on-post:)\S+\s*", "", text)).strip()   # the tags come and go as rounds re-date or retag a rung
 def watch_fresh(watched, rung_text, board=None):
     """An `on-post:THREAD` rung is due when the person has posted in THREAD after the last keeper brief that handed this rung
     ("**Your rung:** ..."); when no brief has handed it yet, after the newest board post its text cites, or at any person post if it cites none. The board is read once per process."""
@@ -587,7 +606,7 @@ Rules for the round:
 - Check passes: post your result, then `hive goals --tick POST_ID --rung "words from the rung"` (it checks the id is on the board and writes `[x]` and the id). Too big for one run: split it into rungs, land the first, tick that.
 - Rung truly needs the person or is blocked: change it to `- [!]` with why (add a `For you:` line in your post if they must act), then take the next rung in this same run. A `[!]` costs you nothing and is not your result.
 - Keep the focus's to-do list, which the person sees and ticks on its page: the next two or three steps in plain words (`hive focus check add FOCUS "text"`), ticked as each lands (`hive focus check done ID`; `hive focus check list FOCUS` shows them).
-- A rung that cannot pass before a date or time (a full day's reading, a window that ends later) carries `after:YYYY-MM-DD` or `after:YYYY-MM-DDTHH:MMZ` in its text: the keeper skips it until then. Without the tag it wakes an agent every hour to find nothing to do. A standing watch (log each new send the person confirms in a thread) is not re-dated by hand: it carries `on-post:THREAD`, and the keeper hands it out only after the person posts there.
+- A rung that cannot pass before a date or time (a full day's reading, a window that ends later) carries `after:YYYY-MM-DD` or `after:YYYY-MM-DDTHH:MMZ` in its text: the keeper skips it until then. Without the tag it wakes an agent every hour to find nothing to do. A standing watch (log each new send the person confirms in a thread) is not re-dated by hand: it carries `on-post:THREAD`, and the keeper hands it out only after the person posts there. A rung waiting on a file row or another agent's post carries `` when:`CHECK` `` (a shell line run from ~, 20 s): the keeper hands it out only when CHECK exits 0, so no date is guessed.
 - You landed a fix but its check needs time to show (a later count, a second daily reading): add the fix as its own `- [x]` rung with your post id, and turn the open rung into the reading with an `after:` tag. Left open with "waiting", it wakes a round every hour that can only re-read the same number.
 - When what is left waits on the person or a date, ask whether the goal or its Measure is still right; then either write a step that moves the Measure, with a `check:`, or end with the wait.
 - Park only when the measure is at target, or every way left to move it needs the person (name which): add a line `Parked until YYYY-MM-DD: why` to the section (at most 3 days out, later dates are ignored) and say so. The keeper skips it until then. Waiting on a date or a later reading is no reason to park: write a rung that moves the measure today, or if the measure has stopped saying anything, rewrite it and keep the old one and the reason beside it.

@@ -85,6 +85,8 @@ def _ld_items(raw):
             todo += [v for v in x.values() if isinstance(v, (list, dict))]
 
 
+MODIFIED_META = ("article:modified_time", "datemodified")   # a last edit's date, read only when no published date is given before it: page_date's date_from "meta-modified"
+META_FROM = ("meta", "meta-modified", "time")   # page_date's date_from values for a date read from a page's metadata or a <time> tag
 DATE_META = ("article:published_time", "article:modified_time", "datepublished", "datemodified", "date", "dc.date", "dc.date.issued", "pubdate", "publish-date", "sailthru.date", "time")
 MONTHS = "jan feb mar apr may jun jul aug sep oct nov dec".split()
 _TEXT_DATE = re.compile(r"\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(\d{1,2}),?\s+(20\d\d)\b")
@@ -139,7 +141,7 @@ def url_date(url):
 PEOPLE_PAGE = re.compile(r"/(?:profiles?|directory|staff(?:-directory)?|people|our-team|meet-the-team|meet-our-staff|leadership)(?:/|\.html?|$|[?#])", re.I)  # a page that lists people by name
 
 
-META_DATES_SINCE = "2026-11-26T14:30:00Z"   # (moved 2026-11-26: a WordPress REST record's date is now date_from "rest", not "meta", fnwords147 review) pages saved before this read their metadata dates under older rules (a template's node first, ISO basic form unread, a last edit before the first publication): Hunt.stored_dates reads a stored row's page again once. Move it forward when page_date's metadata rules change.
+META_DATES_SINCE = "2026-11-26T16:12:00Z"   # (moved 2026-11-26: a modified-only date is now date_from "meta-modified" and a <time> tag's "time", not "meta", fnwords148 review; before that, a WordPress REST record's became "rest") pages saved before this read their metadata dates under older rules (a template's node first, ISO basic form unread, a last edit before the first publication): Hunt.stored_dates reads a stored row's page again once. Move it forward when page_date's metadata rules change.
 ARTICLE_LD = re.compile(r"Article|BlogPosting|Posting|PressRelease|Report\b|NewsItem")
 
 
@@ -156,11 +158,11 @@ def page_date(url, meta, ld_items, text, title=""):
     for k in DATE_META:
         if k == "time" and meta.get("time_many"): continue   # the first of several <time> tags is the first item of a list: uConnect's episode page took 2026-11-03 from its "Latest episodes" sidebar for an episode of 2026-02-03 (fnwords119 review)
         d = parse_date(meta.get(k, ""))
-        if d: return d, "meta"
+        if d: return d, ("time" if k == "time" else "meta-modified" if k in MODIFIED_META else "meta")   # said apart: Arminio's Cedarville date came from one <time> tag, and leads.csv called it "its page's metadata" (fnwords148 review)
     for it in sorted(ld_items, key=lambda it: not ARTICLE_LD.search(str(it.get("@type", "")))):   # the story's own node before the page's or site's: Cedarville's template WebPage (dateModified 2026-02-05) came before Arminio's NewsArticle of 2026-09-28 (fnwords127-128 reviews)
         for k in ("datePublished", "dateModified"):
             d = parse_date(str(it.get(k, "")))
-            if d: return d, "meta"
+            if d: return d, ("meta-modified" if k == "dateModified" else "meta")
     d = url_date(url)
     if d: return d, "url"
     d = body_date(text, title)
@@ -200,10 +202,13 @@ def _heads(title):
     return sorted(out, key=len, reverse=True)   # a site name is shorter than a story's headline
 
 
+NOTICE = re.compile(r"[^.\n]*\b(?:will (?:be )?(?:close|closed|closing)|(?:are|is|remain|be) closed|closures?|reopens?|delayed opening|cancell?ed|(?:weather|campus|emergency) alerts?)\b[^.\n]*", re.I)   # a site-wide notice: its date is the closure's, not the page's
+
+
 def body_date(text, title="", today=None):
-    """The date a page's text gives: the first date in its opening, else text_date. Never one after the day it was read: GTCC's pages opened with a closure notice ("campuses will close at noon on Wednesday, November 25, 2026") and were dated by it on 2026-11-24 (fnwords134 reload)."""
+    """The date a page's text gives: the first date in its opening, else text_date. Never one after the day it was read, and never a site-wide notice's: GTCC's pages opened with a closure notice ("campuses will close at noon on Wednesday, November 25, 2026") and were dated by it on 2026-11-24 (fnwords134 reload); read on the 26th, its story "Published on: March 25, 2026" was dated 2026-11-25 by it (fnwords149 review, Pitonzo)."""
     today = today or dt.date.today()
-    d = parse_date((text or "")[:1500])
+    d = parse_date(NOTICE.sub(" ", (text or "")[:1500]))
     return d if d and d <= today.isoformat() else text_date(text, title, today)
 
 

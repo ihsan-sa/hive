@@ -19,6 +19,7 @@ import goals as G
 
 HOME = Path.home()
 DIR, BOARD, STATUS, PROJECTS, CONFIG, OUTCOMES = HOME / ".hive" / "continue", HOME / "board.jsonl", HOME / ".hive" / "thread-status.jsonl", HOME / "projects", Path(__file__).resolve().parent / "config.json", HOME / "outcomes.jsonl"
+REMINDERS = HOME / ".hive" / "remind" / "reminders.json"   # hive remind's store (remind.py STATE)
 JUDGE_TRIAL, JUDGE_DIR = HOME / ".hive" / "judge-trial.json", HOME / ".hive" / "judge"   # the stop judge's trial (judge.py)
 AGENT = re.compile(r"^[a-z][0-9a-f]{4,}$")
 # A step is the person's only when its line says so: it is for them, asks them, or waits on their word. Naming the person is not that: 48 of the 49
@@ -173,7 +174,8 @@ def carry_on(r):
     return {"line": f"Next: {rung[:400]}", "post": posts[-1]["id"], "since": epoch(posts[-1].get("at")) or 0} if rung else None
 
 WAIT_CLOCK = re.compile(r"\b(\d{1,2}):(\d{2})\s*(UTC|Z\b)?", re.I)
-WAIT_IN = re.compile(r"(?:\bin\s+|~\s*|\babout\s+)(\d+)\s*(h|hr|hrs|hours?|m|mins?|minutes?)\b", re.I)
+# a range ("about 35 to 70 minutes", "in 20-40 min") holds to its far end: a22ea 11-26 18:00, the floor read it as no time and started af28b on the rung a22ea's reminder was about to wake it for
+WAIT_IN = re.compile(r"(?:\bin\s+|~\s*|\babout\s+)(\d+)(?:\s*(?:to|-|–)\s*(\d+))?\s*(h|hr|hrs|hours?|m|mins?|minutes?)\b", re.I)
 WAIT_DATE = re.compile(r"\b(20\d\d)-(\d\d)-(\d\d)(?:[T ](\d{2}):(\d{2}))?")
 WAIT_MD = re.compile(r"(?<![\d:-])(?:(\d{1,2})-(\d{2})|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* (\d{1,2}))(?![\d:-])(?:[T ](\d{2}):(\d{2}))?")
 MD_MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
@@ -196,7 +198,7 @@ def wait_date(line, base):
 def wait_until(line, base):
     """The time a `Waiting:` line names, as seconds, or None. A calendar date wins; a clock time is the next one after base (the host clock unless it says UTC)."""
     if (d := wait_date(line, base)): return d
-    if (m := WAIT_IN.search(line)): return base + int(m[1]) * (3600 if m[2][0].lower() == "h" else 60)
+    if (m := WAIT_IN.search(line)): return base + int(m[2] or m[1]) * (3600 if m[3][0].lower() == "h" else 60)
     if not (m := WAIT_CLOCK.search(line)) or int(m[1]) > 23 or int(m[2]) > 59: return None
     zone = dt.timezone.utc if m[3] else None
     when = dt.datetime.fromtimestamp(base, zone).replace(hour=int(m[1]), minute=int(m[2]), second=0, microsecond=0)
@@ -230,8 +232,27 @@ def waits(threads, running, t, cap=7200):
         lines = waiting(bar["text"] if bar_says else p.get("text", "") if p else "")
         if not lines: continue
         base = at or bar["at"]
-        if (until := wait_holds(lines[-1], base, running, cap)): out[th] = until
+        until = wait_holds(lines[-1], base, running, cap) or 0
+        if (r := reminded(th, {str(x.get("from", "")).lower() for x in (p, bar if bar_says else None) if x}, base)): until = max(until, min(r, base + cap))
+        if until: out[th] = until
     return out
+
+REMIND_GRACE_S = 600       # the reminder's post wakes its agent within a minute or two; the floor waits this much past it
+REMIND_NEAR_S = 6 * 3600   # a reminder first due this soon after the Waiting line is the wake for it; a later one is for another rung (a884d's weekly re-proof)
+def reminded(th, who, base):
+    """When the reminder that wakes a waiting agent fires, as seconds plus REMIND_GRACE_S, or None: a one-shot reminder in thread th to one of who (the agents that wrote
+    the Waiting line in force), first due within REMIND_NEAR_S of base, the line's time. An `--if` one holds to its `until`, the latest it posts; it leaves the store when it fires.
+    19 of 523 floor starts 11-19..26 came while the line named a reminder and read as no time; one put af28b on the rung a22ea's `hive remind --if` on its CI run woke it for 90 s later (hive-app, 11-26 18:34)."""
+    try: items = json.loads(REMINDERS.read_text())
+    except (OSError, ValueError): return None
+    best = None
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict) or it.get("thread") != th or it.get("cron") or str(it.get("to", "")).lower() not in who: continue
+        try: first, last = (dt.datetime.fromisoformat(it.get(k) or it["due"]).timestamp() for k in ("first_due", "until"))
+        except (KeyError, TypeError, ValueError): continue
+        if first - base > REMIND_NEAR_S: continue
+        best = max(best or 0, last + REMIND_GRACE_S)
+    return best
 
 WAIT_PERSON = re.compile(r"^waiting:.*\b(?:person|person's)\b", re.I)
 def person_waiter(p, running=()):

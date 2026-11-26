@@ -118,6 +118,7 @@
   .cm-strip{padding:4px var(--s4) 6px}
   /* press and hold a message: its tools (mobilenav.js sets data-held) */
   .msg[data-held]>.msg-tools{display:flex;opacity:1;pointer-events:auto}
+  .msg[data-held][data-who=me]>.msg-tools .btn{min-width:36px;--h:28px}
   .msg[data-held]{background:var(--tint)}
   .msg{-webkit-touch-callout:none}
   .msg-h .msg-time{opacity:1}   /* no hover on a phone: the time always shows (HANDOFF, A conversation) */

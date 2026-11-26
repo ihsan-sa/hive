@@ -20,7 +20,7 @@ const placed = (said, n) => inScope() && !!said && said !== n;
 export function agentRef(n, { copy, state, href, dot = true, pill, cap } = {}) {
   if (!n) return "?";
   const s = agentStatus(n), agent = isAgent(n), warden = isWarden(n);
-  const a = h("a", { class: pill ? "ref pill" : "ref", "data-kind": "agent", "data-name": n, "aria-label": ["an agent", "the warden"].includes(agentLabel(n)) ? `${agentLabel(n)}, ${n}` : null, href: href || (agent ? agentHref(n) : threadHref("@" + n)), title: `${placed(agentLabel(n), n) ? capFirst(agentLabel(n)) : n}${warden ? tr(", a warden") : ""}${s.label ? `: ${tr(s.label)}` : ""}`, onclick: !href && agent ? e => openRef(e, "agent", n) : null },
+  const a = h("a", { class: pill ? "ref pill" : "ref", "data-kind": "agent", "data-name": n, "aria-label": ["an agent", "the warden"].includes(agentLabel(n)) ? `${agentLabel(n)}, ${n}` : null, href: href || (agent ? agentHref(n) : threadHref("@" + n)), title: `${placed(agentLabel(n), n) ? tr(capFirst(agentLabel(n))) : n}${warden ? tr(", a warden") : ""}${s.label ? `: ${tr(s.label)}` : ""}`, onclick: !href && agent ? e => openRef(e, "agent", n) : null },
     dot ? statusDot(s.key, { live: isRunning(n) }) : null, h("span", { class: "ref-n" }, cap ? capFirst(agentLabel(n)) : agentLabel(n)), warden ? wardenMark() : null,
     state && s.label && s.key !== "none" ? h("span", { class: "sw", "data-tone": null, style: "font-weight:400" }, status(s.key).label) : null);
   if (!copy || !agent) return a;

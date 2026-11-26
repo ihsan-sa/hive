@@ -25,7 +25,11 @@ export default {
   "Waiting for Link": "Menunggu Link",
   "Waiting in Link": "Menunggu di Link",
   "test mode": "mode uji",
+  "Stop and send": "Hentikan dan kirim",
+  "Stopped and sent": "Dihentikan dan dikirim",
+  "Send waits for the current step to end. Stop and send tries to cut that step short.": "Kirim menunggu langkah saat ini selesai. “Hentikan dan kirim” mencoba memotong langkah itu.",
   __patterns: [
+    [/^Stop .+ now and send this, without waiting for its step to end$/, () => "Hentikan sekarang dan kirim ini, tanpa menunggu langkahnya selesai"],
     [/^Still open from rev (.+)$/, (_, r) => "Masih terbuka sejak rev." + " " + r],   // ui/docviewer.js: a carried item, the text is joined before h()
   ],
 };

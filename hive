@@ -306,6 +306,15 @@ def first_reply_say(p):
         return promises.on_post(p)
     except Exception: return None
 
+def pasteback_say(p):
+    """For a running agent: a post that has the person run something and paste or send back what it prints gets a warning to run it
+    itself (pasteback.on_post; friction-chase D17: six such rounds in 112008283ab6 on 11-26). Only a warning: the post is on the board already."""
+    if not HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")): return None
+    try:
+        import pasteback
+        return pasteback.on_post(p)
+    except Exception: return None
+
 def remind_asks(pid, thread):
     """The asks this agent owns in the thread it just posted in, up to 3, at the moment it can act on them (hive-meta P1: the Stop block comes after it has delivered). Runs after --done, so an ask just closed is gone. Never holds up a post."""
     me = os.environ.get("HIVE_NAME", "")
@@ -661,6 +670,7 @@ def cmd_post(a):
     if not a.as_ and (w := waits_say("on_repeat", text, p["thread"], pid)): print(w, file=sys.stderr, flush=True)
     if not a.as_ and (w := served_say(p)): print(w, file=sys.stderr, flush=True)
     if not a.as_ and (w := first_reply_say(p)): print(w, file=sys.stderr, flush=True)
+    if not a.as_ and (w := pasteback_say(p)): print(w, file=sys.stderr, flush=True)
     if HASH_NAME.fullmatch(me or "") and not a.as_ and (w := order_hint(p)): print(w, file=sys.stderr, flush=True)
     for k in getattr(a, "done", None) or []:  # the result post closes the ask it delivers: no separate `hive asks done` turn
         subprocess.run([sys.executable, "-I", str(CORE / "asks.py"), "done", k, "--evidence", pid])
@@ -1924,7 +1934,7 @@ sp.add_parser("remind", help="hive remind at +1h|09:00|\"2026-11-20 09:00\" TEXT
 if sys.argv[1:2] == ["remind"]: cmd_remind(argparse.Namespace(rest=sys.argv[2:]))
 sp.add_parser("focus", help="hive focus list | tag THREAD FOCUS [--off] | new ID \"name\" | link A B | set FOCUS <<'X' | lead FOCUS \"On track: ...\" | show FOCUS | keeper FOCUS | aim FOCUS \"text\" | check add|list|done|untick | lint | order ID ID...: foci, the person's view of the work. A thread carries a focus label; each focus has a hand-written summary (## Now, ## Lately bullets, plain words, no ids or paths) that the home shows as a card, under its In short (lead: one or two sentences that open with the state, On track, At risk, Blocked, Needs you, Waiting, Paused or Done, and say the one thing that matters now; the person reads it first and often alone). The agent posting a result in a focus's thread updates its summary in the same run, and the In short when the result changes it. The card and the page mark what was written since the person last looked, so change a line only when it says something new (core/focus.py)")
 if sys.argv[1:2] == ["focus"]: cmd_focus(argparse.Namespace(rest=sys.argv[2:]))
-sp.add_parser("tier", help="hive tier [list|set X N|unset X|stop N PCT|pause N... --until WHEN|resume N...|new|rename|drop|default|jobs|why X|install]: work tiers, the person's settings for which work runs: each focus, thread and timer sits in a tier with a usage stop point and an optional pause that lifts by itself; the starter and a gate before each placed timer hold a tier's new work (core/tiers.py). An agent changes them only with --post (the person's post asking)")
+sp.add_parser("tier", help="hive tier [list|set X N|unset X|stop N PCT|pause N...|all [--except X...] --until WHEN|resume N...|all|new|rename|drop|default|jobs|why X|install]: work tiers, the person's settings for which work runs: each focus, thread and timer sits in a tier with a usage stop point and an optional pause that lifts by itself; the starter and a gate before each placed timer hold a tier's new work (core/tiers.py). An agent changes them only with --post (the person's post asking). When the person asks to pause everything (or everything but X), it is one command, `hive tier pause all --except X --until WHEN --post ID`, not a post to each agent; `hive tier resume all` undoes exactly that (friction D8)")
 if sys.argv[1:2] == ["tier"]: cmd_tier(argparse.Namespace(rest=sys.argv[2:]))
 sp.add_parser("away", help="hive away [--since 12h] [--full] [--json]: while you were away: a 15-line brief of what was made, decided, needs you and broke; --full for all of it")
 if sys.argv[1:2] == ["away"]: cmd_away(argparse.Namespace(rest=sys.argv[2:]))

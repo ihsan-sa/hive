@@ -4,10 +4,9 @@
 // each one is approved in the Link app on the person's phone, and only there.
 import { h } from "../core/dom.js";
 import { can, jget, post } from "../core/store.js";
-import { section, block, blocks, button, field, input, statusLabel, empty } from "./kit.js";
+import { section, block, blocks, button, field, input, statusLabel, empty, copyPress } from "./kit.js";
 import { act, isBusy } from "./activity.js";
 import { confirm } from "./dialog.js";
-import { copyButton } from "./refs.js";
 import { ago } from "../core/format.js";
 import { shopsBlock, forgetShops, sitesBlock } from "./shop_signin.js";
 
@@ -79,8 +78,8 @@ function signinBlock(v, update) {
     !here ? h("p", { class: "field-h", "data-key": "buy-where" }, "Signing in and the delivery details work only from your own app opened through Cloudflare (full mode) or a Tailscale device, not from this connection. Agents on this machine can reach it, so it can't start a sign-in.") : null,
     st.state === "starting" ? h("p", { class: "fmsg", role: "status" }, "Asking Link for a sign-in link…") : null,
     ready ? h("ol", { class: "steps", "data-key": "buy-steps" },
-      h("li", null, h("a", { href: st.url, target: "_blank", rel: "noreferrer noopener" }, "Open Link's sign-in page"), " and sign in with your Link account."),
-      h("li", null, "Check the page shows this phrase: ", h("span", { class: "frow fsplit" }, h("b", { class: "mono", "data-key": "phrase" }, st.phrase), copyButton(st.phrase))),
+      h("li", null, h("a", { href: st.url, target: "_blank", rel: "noreferrer noopener" }, "Open Link's sign-in page"), " and sign in with your Link account. ", button("Copy link", (e, b) => copyPress(b, st.url), { kind: "quiet", size: "s", icon: "copy", title: "Copy the link, to open it in another browser" })),
+      h("li", null, "Check the page shows this phrase: ", h("span", { class: "frow fsplit" }, h("b", { class: "mono", "data-key": "phrase" }, st.phrase), button("Copy", (e, b) => copyPress(b, st.phrase), { kind: "quiet", size: "s", icon: "copy", title: "Copy the phrase" }))),
       h("li", null, "Approve the connection named Hive in the Link app on your phone. ", h("span", { class: "field-h" }, "This lasts 15 minutes; the page notices by itself."))) : null,
     st.state === "waiting" && !ready && here ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, "Link's sign-in link wasn't on link.com, so it isn't shown. Cancel and try again.") : null);
 }

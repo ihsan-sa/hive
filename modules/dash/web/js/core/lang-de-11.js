@@ -25,7 +25,11 @@ export default {
   "Waiting for Link": "Wartet auf Link",
   "Waiting in Link": "Wartet in Link",
   "test mode": "Testmodus",
+  "Stop and send": "Stoppen und senden",
+  "Stopped and sent": "Gestoppt und gesendet",
+  "Send waits for the current step to end. Stop and send tries to cut that step short.": "Senden wartet, bis der laufende Schritt endet. „Stoppen und senden“ versucht, diesen Schritt abzubrechen.",
   __patterns: [
+    [/^Stop .+ now and send this, without waiting for its step to end$/, () => "Jetzt stoppen und dies senden, ohne das Ende des Schritts abzuwarten"],
     [/^Still open from rev (.+)$/, (_, r) => "Noch offen seit Rev." + " " + r],   // ui/docviewer.js: a carried item, the text is joined before h()
   ],
 };

@@ -196,7 +196,7 @@ hive focus list | tag THREAD FOCUS [--off] | new ID "name" | link A B | set FOCU
 
 ## hive tier
 
-hive tier [list|set X N|unset X|stop N PCT|pause N... --until WHEN|resume N...|new|rename|drop|default|jobs|why X|install]: work tiers, the person's settings for which work runs: each focus, thread and timer sits in a tier with a usage stop point and an optional pause that lifts by itself; the starter and a gate before each placed timer hold a tier's new work (core/tiers.py). An agent changes them only with --post (the person's post asking)
+hive tier [list|set X N|unset X|stop N PCT|pause N...|all [--except X...] --until WHEN|resume N...|all|new|rename|drop|default|jobs|why X|install]: work tiers, the person's settings for which work runs: each focus, thread and timer sits in a tier with a usage stop point and an optional pause that lifts by itself; the starter and a gate before each placed timer hold a tier's new work (core/tiers.py). An agent changes them only with --post (the person's post asking). When the person asks to pause everything (or everything but X), it is one command, `hive tier pause all --except X --until WHEN --post ID`, not a post to each agent; `hive tier resume all` undoes exactly that (friction D8)
 
 ## hive away
 

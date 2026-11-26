@@ -296,9 +296,62 @@ def cmd_stop(a, d):
     print(f"Tier {t['id']} {t['name']}: {stop_text(t)}; {state_text(d, t)}")
 
 
+KEPT = "Kept running"
+
+
+def pause_all(d, keep=(), until=None, why="", by="person", now=None):
+    """One pause for everything (friction register D8: ten times the person paused work one post per agent). Every tier that runs is
+    paused, except the work in `keep` (placement keys: focus:pll-defense, thread:11251115c116): it moves to the tier "Kept running"
+    (made if missing, no stop point), so what shares its old tier is paused too, and where it stood is kept in d["kept"]. Tiers
+    already paused or Off are left as they are. Returns (paused tier ids, kept keys). resume_all undoes exactly this."""
+    now = time.time() if now is None else now
+    kt = None
+    if keep:
+        kt = tier(d, KEPT)
+        if not kt:
+            ids = [int(t["id"]) for t in d["tiers"] if str(t["id"]).isdigit()]
+            kt = {"id": str(max(ids, default=0) + 1), "name": KEPT, "stop": None}
+            d["tiers"].insert(len([x for x in d["tiers"] if str(x["id"]) != OFF]), kt)
+        kt.pop("paused", None)
+        for k in keep:
+            if d["place"].get(k) != str(kt["id"]): d.setdefault("kept", {})[k] = d["place"].get(k)
+            d["place"][k] = str(kt["id"])
+    done = []
+    for t in d["tiers"]:
+        q = t.get("paused")
+        if str(t["id"]) == OFF or t is kt or (q and (q.get("until") is None or now < q["until"])): continue   # already paused: leave its own end
+        t["paused"] = {"until": until, "why": why, "by": by, "at": now, "all": True}; done.append(str(t["id"]))
+    return done, list(keep)
+
+
+def resume_all(d):
+    """Undo pause_all: lift the pauses it set (not ones set tier by tier) and put the kept work back where it stood."""
+    done = []
+    for t in d["tiers"]:
+        if (t.get("paused") or {}).get("all"): t.pop("paused"); done.append(str(t["id"]))
+    back = d.pop("kept", {}) or {}
+    for k, was in back.items():
+        if was is None: d["place"].pop(k, None)
+        else: d["place"][k] = was
+    kt = tier(d, KEPT)
+    if kt and not any(v == str(kt["id"]) for v in d["place"].values()):
+        d["tiers"].remove(kt)
+        if d["default"] == str(kt["id"]): d["default"] = DEFAULT["default"]
+    return done, list(back)
+
+
 def cmd_pause(a, d):
     by = who(a)
     until = when_arg(a.until) if a.until else None
+    if [x.lower() for x in a.tiers] == ["all"]:
+        keep = [placement_key(x) for x in a.except_ or []]
+        done, kept = pause_all(d, keep, until, a.why, by)
+        end = f"until {when(until)}; it all starts again by itself then" if until else "until `hive tier resume all`"
+        print(f"Paused tiers {', '.join(done) or '(none were running)'} {end}. Agents at work finish the step they are on; nothing new starts.")
+        if kept: print(f"Kept running, in tier {tier(d, KEPT)['id']} {KEPT}: {', '.join(k.replace(':', ' ', 1) for k in kept)}")
+        save(d, by, f"pause all except {kept} until {until} ({a.why}): {done}", a.post)
+        return
+    if a.except_: sys.exit("hive tier: --except goes with `hive tier pause all`")
     for x in a.tiers:
         t = tier(d, x)
         if not t: sys.exit(f"hive tier: no tier {x!r}")
@@ -310,6 +363,11 @@ def cmd_pause(a, d):
 
 def cmd_resume(a, d):
     by = who(a)
+    if [x.lower() for x in a.tiers] == ["all"]:
+        done, back = resume_all(d)
+        print(f"Resumed tiers {', '.join(done) or '(none were paused by `pause all`)'}" + (f"; back where they stood: {', '.join(back)}" if back else ""))
+        save(d, by, f"resume all: {done}, back {back}", a.post)
+        return
     for x in a.tiers:
         t = tier(d, x)
         if not t: sys.exit(f"hive tier: no tier {x!r}")
@@ -441,9 +499,11 @@ def main(argv=None):
     p = chg(sp.add_parser("set", help="hive tier set X N: put a focus, thread (or glob like hwlab-bldc*) or timer job in tier N")); p.add_argument("what"); p.add_argument("tier")
     p = chg(sp.add_parser("unset", help="hive tier unset X: take a placement off (a thread then follows its focus; a job is no longer gated)")); p.add_argument("what")
     p = chg(sp.add_parser("stop", help="hive tier stop N PCT|none: the tier starts no new work past PCT%% of the week")); p.add_argument("tier"); p.add_argument("pct")
-    p = chg(sp.add_parser("pause", help="hive tier pause N... [--until WHEN] [--why ...]: no new work in these tiers; lifts by itself at WHEN"))
+    p = chg(sp.add_parser("pause", help="hive tier pause N... [--until WHEN] [--why ...]: no new work in these tiers; lifts by itself at WHEN. "
+                          "hive tier pause all [--except FOCUS|THREAD ...]: everything at once, the person's \"pause everything (but X)\""))
     p.add_argument("tiers", nargs="+"); p.add_argument("--until"); p.add_argument("--why", default="")
-    p = chg(sp.add_parser("resume", help="hive tier resume N...")); p.add_argument("tiers", nargs="+")
+    p.add_argument("--except", dest="except_", nargs="+", metavar="WHAT", help="with `all`: work that keeps running (a focus or thread)")
+    p = chg(sp.add_parser("resume", help="hive tier resume N... | all (undoes `pause all`, kept work goes back to its tier)")); p.add_argument("tiers", nargs="+")
     p = chg(sp.add_parser("new", help="hive tier new NAME [--stop PCT]")); p.add_argument("name"); p.add_argument("--stop")
     p = chg(sp.add_parser("rename", help="hive tier rename N NAME")); p.add_argument("tier"); p.add_argument("name")
     p = chg(sp.add_parser("drop", help="hive tier drop N: its work moves to the default tier")); p.add_argument("tier")

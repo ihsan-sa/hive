@@ -486,21 +486,28 @@ function phoneCall(p) {
 }
 // E203e (GAPS row 22, the E203c reader): the person's Stop leaves one quiet line under the reply, as Claude.ai's "Stopped" does, not a
 // message from "Your Hive" with an avatar and a head. Its steps fold under it as a run's do; the conversation's header says it too.
-function stoppedMark(p) {
-  const said = stoppedSaidText(p);
-  const line = h("p", { class: "msg-stop-l meta" }, icon("stop"), h("span", null, displayText(p)), h("time", { class: "num", datetime: p.at, title: stamp(p.t) }, " · " + clock(p.t)));
+function stoppedMark(p, opts = {}) {
+  // E203k: the same row under it as under any reply: the versions' arrows, and while it is the last reply, Retry
+  STOP_OPTS.set(p.id, opts);
+  const said = stoppedSaidText(p), kept = said ? { ...p, text: said, disp: said } : null;   // Copy takes what it had written, not the notice
+  const acts = versionBar(p, opts, kept);
+  // the line says the time only where no head above it does (nothing was written yet)
+  const line = h("p", { class: "msg-stop-l meta" }, icon("stop"), h("span", null, displayText(p)), said ? null : h("time", { class: "num", datetime: p.at, title: stamp(p.t) }, " · " + clock(p.t)));
   if (!said) return h("article", { class: "msg msg-stopped", tabindex: "-1", "data-key": p.id, "data-who": "sys", "aria-label": `You stopped it, ${stamp(p.t)}` },
-    h("div", { class: "msg-c" }, line, ranFold(p)));
+    h("div", { class: "msg-c" }, line, ranFold(p), acts));
   // E203i (the E203g reader): what it had started writing stays in place as the agent's answer, in its own type, with the stopped line
   // under it, as Claude.ai and ChatGPT keep a half-written reply; not a grey quote after the line.
   const name = typeof p.stopped === "string" && p.stopped ? p.stopped : null;
   return h("article", { class: "msg msg-stopped msg-stopped-said", tabindex: "-1", "data-key": p.id, "data-who": "agent", "data-name": name || "", "aria-label": `Stopped reply, ${stamp(p.t)}` },
     name ? agentAvatar(name) : msgAvatar(p, "sys"),
     h("div", { class: "msg-c" },
-      h("div", { class: "msg-h" }, simpleOn() || !name ? h("b", null, hiveName()) : agentRef(name, { dot: false, cap: true })),
+      h("div", { class: "msg-h" }, simpleOn() || !name ? h("b", null, hiveName()) : agentRef(name, { dot: false, cap: true }),
+        h("time", { class: "meta num msg-time", datetime: p.at, title: stamp(p.t) }, clock(p.t))),
       h("div", { class: "msg-b msg-stop-said" }, markBody(mdIn(said, p))),
-      line, ranFold(p)));
+      line, ranFold(p), acts),
+    simpleOn() || opts.canRetry ? null : h("div", { class: "msg-tools", role: "toolbar", "aria-label": "Message actions" }, copyBtn(kept)));   // the last reply's Copy is in the row under it
 }
+const STOP_OPTS = new Map();   // how each stop was last drawn (Retry, versions), for the redraw when its kept reply arrives
 // E203g: what it had started writing when you stopped it (kill_run keeps it with the steps, /api/ran returns it as said).
 function stoppedSaidText(p) { const e = RAN.get(p.id), t = e && e.v && e.v.said; return typeof t === "string" && t.trim() ? t : ""; }
 export { approvalLine };
@@ -516,7 +523,7 @@ function appMessage(p, opts) {
   }
   if (btwOpener(p)) return btwMessage(p, ws);
   const call = phoneCall(p); if (call) return call;
-  if (p.stopped && p.from === "dash" && EDIT.id !== p.id) return stoppedMark(p);
+  if (p.stopped && p.from === "dash" && EDIT.id !== p.id) return stoppedMark(p, opts);
   if (EDIT.id !== p.id) { const ap = approvalLine(p); if (ap) return ap; }   // the person's yes:, yes, standing: or withdraw standing: as one line saying whether it counts
   const kind = SYS.has(p.from) || isScript(p.from) ? "sys" : p.from === "person" ? "me" : OUTSIDE.has(p.from) ? "out" : "agent";
   const asks = kind === "agent" && !simpleOn() && asksYou(p), split = kind === "agent" && !SOURCE.has(p.id) ? didSplit(p) : null;
@@ -528,7 +535,7 @@ function appMessage(p, opts) {
     "data-state": kind === "me" && p.interrupt ? "interrupt" : null, "data-asks": asks ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
     msgAvatar(p, kind),
     h("div", { class: "msg-c" },
-      kind === "me" && p.interrupt ? h("span", { class: "msg-mark" }, icon("stop"), "Interrupt") : null,
+      kind === "me" && p.interrupt ? h("span", { class: "msg-mark" }, icon("stop"), "Stopped and sent") : null,
       messageHead(p, { ...opts, asks }),
       relayLine(p),
       p.reply_to ? quote(p) : null,
@@ -543,23 +550,31 @@ function appMessage(p, opts) {
       messageReceipt(p),
       versionBar(p, opts),
       kind === "agent" && (asks || picked(p) === true || choiceOpen(p)) ? askActions(p) : null),
-    simpleOn() ? null : msgTools(p, ws));
+    simpleOn() ? null : msgTools(p, ws, opts));
 }
 
 // ---- E12: edit a sent message, ask for another reply; the older versions stay behind the arrows ----
 // comms.js works out which version is drawn and passes opts.ver ({root, i, n}), opts.canEdit, opts.canRetry, opts.pick and opts.redraw.
 const EDIT = { id: null, text: "", err: "", busy: false };
-function versionBar(p, opts) {
-  const v = opts.ver, ed = opts.canEdit && can("post") && EDIT.id !== p.id, re = opts.canRetry && can("post");
-  if (!v && !ed && !re) return null;
+function versionBar(p, opts, copyOf = p) {
+  // E203k: in the full look Edit sits in the message's one action bar (msgTools); a second row under it held a blank line before the reply
+  const v = opts.ver, ed = simpleOn() ? editButton(p, opts) : null, re = opts.canRetry && can("post");
+  // E203l (the E203k reader): the last reply shows Copy beside Retry without a pointer over it, as the chat apps do
+  const cp = opts.canRetry && copyOf ? copyBtn(copyOf) : null;
+  if (!v && !ed && !re && !cp) return null;
   const root = v ? v.root : p.id, what = p.from === "person" ? "message" : "reply";
   return h("div", { class: "msg-ver" },
     v ? h("span", { class: "msg-ver-n", role: "group", "aria-label": `Version ${v.i + 1} of ${v.n} of this ${what}` },
       h("button", { type: "button", class: "msg-ver-b", disabled: v.i === 0 ? "" : null, title: `Older version`, "aria-label": `Older version of this ${what}`, onclick: () => opts.pick && opts.pick(root, v.i - 1, v.n) }, "‹"),
       h("span", { class: "meta", "aria-live": "polite" }, `${v.i + 1} / ${v.n}`),
       h("button", { type: "button", class: "msg-ver-b", disabled: v.i === v.n - 1 ? "" : null, title: `Newer version`, "aria-label": `Newer version of this ${what}`, onclick: () => opts.pick && opts.pick(root, v.i + 1, v.n) }, "›")) : null,
-    ed ? button("Edit", () => { Object.assign(EDIT, { id: p.id, text: typedText(p).replace(/^@new\s+/, ""), err: "", busy: false, focused: false }); opts.redraw && opts.redraw(); }, { size: "s", kind: "quiet", icon: "edit", cls: "msg-vact msg-edit", title: "Change this message and get a new answer; the old one stays behind the arrows" }) : null,
+    ed,
+    cp,
     re ? button("Retry", e => retry(p, opts.retryRoot || root, e), { size: "s", kind: "quiet", icon: "retry", cls: "msg-vact msg-retry", title: "Ask for another answer; this one stays behind the arrows" }) : null);
+}
+function editButton(p, opts, kind = "quiet") {
+  if (!opts.canEdit || !can("post") || EDIT.id === p.id) return null;
+  return button("Edit", () => { Object.assign(EDIT, { id: p.id, text: typedText(p).replace(/^@new\s+/, ""), err: "", busy: false, focused: false }); opts.redraw && opts.redraw(); }, { size: "s", kind, icon: "edit", cls: "msg-vact msg-edit", title: "Change this message and get a new answer; the old one stays behind the arrows" });
 }
 async function retry(p, root, e) {
   const b = e && e.currentTarget; if (b) { b.disabled = true; b.textContent = tr("Asking…"); }
@@ -664,7 +679,7 @@ async function ranFetch() {
       RAN.set(id, { v: r, at: now() });
       const p0 = S.byId[id];
       // E203i: a stopped run's kept reply comes with its steps, after the first draw: draw the stop again whole, reply and all
-      if (p0 && p0.stopped && p0.from === "dash" && r.said) { for (const el of document.querySelectorAll(`.msg.msg-stopped[data-key="${CSS.escape(id)}"]:not(.msg-stopped-said)`)) el.replaceWith(inConversation(p0.th, () => stoppedMark(p0))); continue; }   // named as in its conversation, not "Your Hive" (the E203i reader)
+      if (p0 && p0.stopped && p0.from === "dash" && r.said) { for (const el of document.querySelectorAll(`.msg.msg-stopped[data-key="${CSS.escape(id)}"]:not(.msg-stopped-said)`)) el.replaceWith(inConversation(p0.th, () => stoppedMark(p0, STOP_OPTS.get(p0.id)))); continue; }   // named as in its conversation, not "Your Hive" (the E203i reader)
       // E42b: the post lands on the board a moment before its command's result reaches the run's log, so a fresh reply's first ask often finds nothing. Ask again on a timer, not on the next redraw, which may not come.
       if (!r.steps.length) { if (p0 && now() - p0.t < 3 * MIN) setTimeout(() => { for (const slot of document.querySelectorAll(`.msg[data-key="${CSS.escape(id)}"] .msg-ran-slot`)) slot.replaceWith(ranFold(S.byId[id] || p0)); }, ranWait(p0) + 100); continue; }
       for (const slot of document.querySelectorAll(`.msg[data-key="${CSS.escape(id)}"] .msg-ran-slot`)) { const p = S.byId[id]; if (p) slot.replaceWith(ranFold(p)); }
@@ -756,11 +771,12 @@ function quoteText(p) {
   if (sel && el && !sel.isCollapsed && el.contains(sel.anchorNode)) return String(sel).trim();
   return mdPlain(displayText(p)).split("\n").filter(l => l.trim()).slice(0, 4).join("\n");
 }
-function msgTools(p, ws) {
+function msgTools(p, ws, opts = {}) {
   const mine = p.from === "person", tos = p.men.filter(m => m !== "new" && m !== p.from), open = menuFor === p.id;
   return h("div", { class: "msg-tools", role: "toolbar", "aria-label": "Message actions" },
-    can("post") ? button("Reply", () => replyTo(p), { kind: "icon", size: "s", icon: "reply", cls: "msg-reply", title: mine && tos.length ? `Reply · this went to ${tos.join(", ")}` : "Reply to this message; it goes to its author" }) : null,
-    copyBtn(p),
+    can("post") ? button("Reply", () => replyTo(p), { kind: "icon", size: "s", icon: "reply", cls: "msg-reply", title: mine && tos.length ? `Reply · this went to ${tos.map(agentLabel).join(", ")}` : "Reply to this message; it goes to its author" }) : null,
+    opts.canRetry ? null : copyBtn(p),   // the last reply's Copy shows in the row under it (versionBar)
+    mine ? editButton(p, opts, "icon") : null,
     h("span", { class: "rc-more pop" },
       h("button", { type: "button", class: "btn msg-moreb", "data-kind": "icon", "data-size": "s", "aria-haspopup": "menu", "aria-expanded": String(open), "aria-label": "More actions", title: "More actions", onclick: (e, b) => {
         const was = menuFor === p.id; closeMenu();
