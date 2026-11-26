@@ -168,6 +168,32 @@ function attachment(p, f) {
     ...body, h("span", { class: "msg-open" }, OPEN_VERB[k] || "Open"));
 }
 
+// Ink the person sent (ink/snap.js): ink-<sheet>.json (the strokes the page redraws) and ink-<sheet>.png (the picture the agent got)
+// show as one quiet line under the message, however many sheets the send touched: "Ink on 2 messages · Show 1 2", each number going
+// to the ink where it lies and the small picture beside it opening what the agent saw. The "✎ …" lines the post carries for the
+// agent don't show in the bubble (inkText), so a send of ink alone is that line and nothing else (person, thread 112515205dbf).
+const INKF = /^ink-(.+)\.(json|png)$/, INKL = /^✎ .*$\n?/gm;
+const inkFiles = (p, files) => p.from === "person" && files.some(f => INKF.test(f.name));
+const inkText = t => t.replace(INKL, "").replace(/\s+$/, "");
+function inkLine(p, ink) {
+  const kinds = [...ink.keys()].map(sid => /^m-/.test(sid) ? "m" : sid === "board" ? "b" : "s");
+  const n = k => kinds.filter(x => x === k).length;
+  const what = [n("m") && (n("m") > 1 ? `${n("m")} messages` : "a message"), n("b") && "the whiteboard", n("s") && (n("s") > 1 ? `${n("s")} writing spaces` : "a writing space")].filter(Boolean);
+  const one = ink.size === 1;
+  const go = sid => import("../ink/sheet.js").then(m => m.goSheet(p.th, sid, p.id)).catch(() => {});
+  return h("div", { class: "ink-line", "data-sent": "", "data-key": "ink" }, icon("pen"),
+    h("span", { class: "ink-what", title: "Ink on " + (what.length > 1 ? what.slice(0, -1).join(", ") + " and " + what.at(-1) : what[0]) }, one ? "Ink on " + what[0] : `Ink in ${ink.size} places`),
+    one ? null : h("span", { class: "ink-sep", "aria-hidden": "true" }, "·", h("span", null, " Show")),
+    [...ink].map(([sid, o], i) => h("span", { class: "ink-one" },
+      h("button", { type: "button", class: "ink-go", title: "Show it where it was drawn", onclick: () => go(sid) }, one ? "Show where" : String(i + 1)),
+      o.png ? h("button", { type: "button", class: "ink-pic", title: "The picture the agent got", "aria-label": `The picture the agent got${one ? "" : " (" + (i + 1) + ")"}`, onclick: () => viewFile(p, o.png) }, icon("file")) : null)));
+}
+function fileRow(p, files) {
+  const ink = new Map(), rest = [];
+  for (const f of files) { const m = INKF.exec(f.name); if (m && p.from === "person") { const o = ink.get(m[1]) || {}; o[m[2]] = f; ink.set(m[1], o); } else rest.push(f); }
+  return [ink.size ? inkLine(p, ink) : null, ...rest.map(f => attachment(p, f))];
+}
+
 // A library document linked in a post ([title](#docs/<id>)) also gets a card under it, like an attached file: its revision and
 // how many notes wait, and a click opens it beside the conversation to mark up (ui/preview.js openDoc; design ~/designs/doc-side).
 const DOCRX = /\[([^\]\n]+)\]\(#docs\/([\w.-]+)\)/g;
@@ -477,7 +503,8 @@ function appMessage(p, opts) {
   let q = split ? { ...p, disp: split.text } : p;
   const boxes = boxesOn() && EDIT.id !== p.id ? boxIds(p.text) : [];   // a Python box inline (ui/pybox.js): the frame stands in for its line
   if (boxes.length) q = { ...q, disp: dropBoxLines(displayText(q)) };
-  return h("article", { class: "msg", tabindex: "-1", "data-key": p.id, "data-who": kind, "data-cont": opts.cont ? "" : null, "data-report": displayText(p).length > LONG ? "" : null,
+  const inkOnly = inkFiles(p, files) && EDIT.id !== p.id && (q = { ...q, disp: inkText(displayText(q)) }, !q.disp.trim() && !docs.length && files.every(f => INKF.test(f.name)));
+  return h("article", { class: "msg", "data-ink-only": inkOnly ? "" : null, tabindex: "-1", "data-key": p.id, "data-who": kind, "data-cont": opts.cont ? "" : null, "data-report": displayText(p).length > LONG ? "" : null,
     "data-state": kind === "me" && p.interrupt ? "interrupt" : null, "data-asks": asks ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
     msgAvatar(p, kind),
     h("div", { class: "msg-c" },
@@ -487,7 +514,7 @@ function appMessage(p, opts) {
       p.reply_to ? quote(p) : null,
       EDIT.id === p.id ? editBox(p, opts) : boxes.length && !q.disp ? null : body(q, ws),
       boxes.length ? h("div", { class: "msg-boxes", "data-key": "boxes" }, boxes.map(id => boxEmbed(p.id, id))) : null,
-      files.length || docs.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f)), docs) : null,
+      files.length || docs.length ? h("div", { class: "msg-files" }, fileRow(p, files), docs) : null,
       kind === "agent" ? savedNote(p) : null,
       tagChips(p),
       split ? didFold(p, split) : null,
@@ -783,7 +810,7 @@ function devMessage(p, opts) {
     devHead(p, opts.showThread !== false),
     devTools(p, ws),
     cut(devBodyEl(p, ws)),
-    files.length || docs.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f)), docs) : null,
+    files.length || docs.length ? h("div", { class: "msg-files" }, fileRow(p, files), docs) : null,
     tagChips(p),
     long ? button(moreLabel(p), (e, b) => {
       if (OPEN.has(p.id)) OPEN.delete(p.id); else OPEN.add(p.id);

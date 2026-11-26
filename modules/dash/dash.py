@@ -3673,6 +3673,12 @@ PAGE_CSP = "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'
 SIMPLE_NOTE = ("simple mode: this person isn't technical. Plain words, no agent names or jargon, speak as one assistant, one question at a time with your recommendation, "
                "show results as links or files, a draft website as one .html file holding its own styles and pictures. For anything they must approve, say what it does, what it costs and whether it can be undone")
 
+# Ink from the pen (web/js/ink, thread 112515205dbf): the web app attaches ink-<sheet>.json and ink-<sheet>.png and a "✎ Wrote on ..." line.
+# The head then tells the agent what the picture is and how to answer on it; added only when such files come. No ")", newline or "@" (see SIMPLE_NOTE).
+INK_FILE = re.compile(r"ink-[A-Za-z0-9_-]{1,64}\.(?:json|png)")
+INK_NOTE = ("ink: the person wrote or drew in the chat, each ink-*.png shows their strokes on what they drew on, with rulers in an 800-unit-wide space. "
+            "To answer on top of it, post an ```ink fence with on=<the sheet id named on the picture> and marks like circle, arrow, text, check, as `hive help board` lists; plain words work too")
+
 # /btw QUESTION in a conversation: a side question. It goes to a new thread btw-<parent>-<4 hex>, so the parent's agent never gets it
 # (its inbox hook hands over only its own thread and its name), and starts a fresh agent there with the brief below in the head.
 # No ")", newline or "@" in the brief (see SIMPLE_NOTE). Follow-ups in the side thread wake that same agent, as in any thread.
@@ -3899,7 +3905,8 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     pairing = not limited and not paths and bool(PAIR_WORD.fullmatch(text.strip()))
     word = pairing or (not limited and not paths and bool(STEP_WORD.fullmatch(text.strip())))
     if word: text, reply_to, signer, simple = text.strip(), None, None, False
-    if signer or simple or btw: text = "(" + (f"from {signer}, " if signer else "") + "web app" + (f", {SIMPLE_NOTE}" if simple else "") + (", " + BTW_NOTE.format(p=parent) if btw else "") + f") {text}"
+    ink = any(INK_FILE.fullmatch(p.name) for p in paths)
+    if signer or simple or btw or ink: text = "(" + (f"from {signer}, " if signer else "") + "web app" + (f", {SIMPLE_NOTE}" if simple else "") + (", " + BTW_NOTE.format(p=parent) if btw else "") + (f", {INK_NOTE}" if ink else "") + f") {text}"
     INDEX.refresh()
     who = None
     if reply_to:
@@ -7084,7 +7091,8 @@ class LinkSignIn:
         if r.returncode != 0: raise ValueError(((r.stderr or r.stdout).strip().splitlines() or ["couldn't ask Link again"])[-1].removeprefix("hive buy: ")[:300])
         self.buys = None
         m = re.match(r"(lsrq_\w+)\s+(\w+)", r.stdout.strip())
-        return {"ok": True, "id": m.group(1) if m else None, "status": m.group(2) if m else None}
+        u = re.search(r"^approve: (https://(?:[a-z0-9-]+\.)*link\.com/\S*)$", r.stdout, re.M)   # Link's page for the new prompt: the card opens it
+        return {"ok": True, "id": m.group(1) if m else None, "status": m.group(2) if m else None, "approval_url": u.group(1) if u else None}
 
 
 LINKIN = LinkSignIn()

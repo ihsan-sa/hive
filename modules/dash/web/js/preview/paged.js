@@ -86,11 +86,12 @@ function fit(root, wrap) {
   return ro;
 }
 
-export function paged(text, { cut } = {}) {
+// md: the document already rendered (Knowledge passes its own, whose note links open within the page); else markdown(text).
+export function paged(text, { cut, md: given } = {}) {
   const wrap = h("div", { class: "pg-sheets" });
   const root = h("div", { class: "pv-pg", "data-paging": "" }, wrap,
     cut ? h("p", { class: "pv-cut meta" }, "Cut here: the file is longer. Download it for the rest.") : null);
-  const md = markdown(text);
+  const md = given || markdown(text);
   let ro = null, tries = 0;
   const lay = () => {
     if (!root.isConnected) { if (++tries < 600) requestAnimationFrame(lay); return; }   // measured only once it is on screen (given up after ~10 s off it)

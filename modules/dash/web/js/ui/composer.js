@@ -22,6 +22,8 @@ import { run as eggRun } from "../core/easter.js";
 import { wordBoxButton, wordBoxPanel, forCard, replyWord, cardWhy, openApproval, backFromCard, sawApproval } from "./rootword.js";
 import { approveLabel, kindOf } from "./wordkind.js";
 import { delivery } from "./message.js";   // circular, used only at render time
+import { inkPending, clearPending, clearSent, pend as inkPend, fold as inkSheets } from "../ink/store.js";
+import { thumb as inkThumb, sheetTitle } from "../ink/sheet.js";
 
 // menu: which of the bar's menus is open (to | add | aa | model), or false. mode: thread → "interrupt" while armed.
 // sent: thread → the interrupt just sent there ({who, it, at, seen}), for the live line's stopping → reading → normal.
@@ -241,8 +243,9 @@ function queue(th, d, r, interrupt = false) {
 /** Send. It interrupts (dash.py person_post, hive post --interrupt) only when the box is armed and the agent it goes to still works:
  *  Enter or Send in an ordinary box never does. */
 function send(th) {
-  const d = draft(th);
-  if (!d.text.trim() && !d.files.length) return;
+  const d = draft(th), ink = th && !d.inking ? inkPending(th) : null;
+  if (!d.text.trim() && !d.files.length && !ink) return;
+  if (ink) { packInk(th, d); return; }
   if (d.text.trim() === "/67" && !d.files.length) { d.text = ""; keep(d); const el = field(th); if (el) el.value = ""; refresh(); sixSeven(); return; }
   if (!d.files.length && /^\/(party|bees|matrix|rave)$/.test(d.text.trim())) { const t = d.text.trim(); d.text = ""; keep(d); const el = field(th); if (el) el.value = ""; refresh(); eggRun(t); return; }   // easter egg, not sent
   if (forCard(th, d.text, d.files)) {   // a yes: line: root's card shows it and Confirm there sends it (k2992); the draft stays until it did
@@ -265,6 +268,56 @@ function send(th) {
   const el = field(th); if (el) { el.value = ""; el.focus(); }   // morph leaves a focused field alone, so clear it here
   refresh(); window.dispatchEvent(new CustomEvent("cp:sent", { detail: { th } }));
 }
+// Ink not sent yet (ink/store.js) goes with the message (thread 112515205dbf): per sheet a .json of the strokes and a .png of what
+// they were drawn on, and one line in the text ("✎ Wrote on sheet X ..."), so an agent that never heard of ink reads the line and
+// opens the picture. Send carries it with or without words.
+function packInk(th, d) {
+  d.inking = true; d.err = ""; refresh();
+  import("../ink/snap.js").then(m => m.inkPack(th)).then(({ files, lines, packed }) => {
+    for (const f of files) d.files.push({ file: f, name: f.name, size: f.size, url: null, ink: true });
+    if (lines.length) d.text = (d.text.trim() ? d.text.replace(/\s+$/, "") + "\n\n" : "") + lines.join("\n");
+    clearSent(th, packed);
+    send(th); d.inking = false; refresh();
+  }).catch(e => { d.inking = false; d.err = "The ink couldn't be packed: " + (e && e.message || e); refresh(); });
+}
+/** The chip over the box while ink waits: what it is on, a thumbnail, and × (gone after a 10 s undo). */
+const INKX = new Map();   // th -> {sheets, t}: discarded ink, put back by Undo within 10 s
+function inkLabel(th, sids) {
+  const msgs = sids.filter(k => k.startsWith("m-")), rest = sids.filter(k => !k.startsWith("m-"));
+  if (sids.length === 1 && sids[0] === "board") return "Ink on the whiteboard";
+  if (!msgs.length && rest.length === 1) return "Your work on " + sheetTitle(inkFold(th, rest[0]), rest[0]);
+  if (msgs.length === 1 && !rest.length) { const p = S.byId[msgs[0].slice(2)]; return p && isAgent(p.from) ? `Ink on ${agentLabel(p.from)}'s message` : p && p.from === "person" ? "Ink on your message" : "Ink on a message"; }
+  if (!rest.length) return `Ink on ${msgs.length} messages`;
+  return `Ink in ${sids.length} places`;
+}
+const inkFold = (th, sid) => inkSheets(th).sheets.get(sid) || inkPend(th).sheets[sid] || null;
+function inkChip(th, d, ink) {
+  const n = ink.strokes;
+  return h("div", { class: "ink-chip", "data-key": "ink", role: "status" },
+    inkThumb(th, ink.sheets[0], { w: 44, hgt: 32 }),
+    h("span", {}, h("b", {}, inkLabel(th, ink.sheets)), h("small", {}, d.inking ? "Packing the ink…" : n ? `${n} stroke${n === 1 ? "" : "s"}, not sent yet` : "Erasing, not sent yet")),
+    h("button", { type: "button", class: "ink-x", "aria-label": "Discard this ink", title: "Discard this ink", disabled: d.inking ? "" : null, onclick: () => {
+      const v = inkPend(th); INKX.set(th, { sheets: JSON.parse(JSON.stringify(v.sheets)), t: Date.now() });
+      clearPending(th); refresh(); setTimeout(() => { const x = INKX.get(th); if (x && Date.now() - x.t >= 9900) { INKX.delete(th); refresh(); } }, 10000);
+    } }, icon("close")));
+}
+function inkUndoChip(th) {
+  return h("div", { class: "ink-chip", "data-key": "inkx", role: "status" },
+    h("span", {}, h("b", {}, "Ink discarded"), h("small", {}, "Undo puts it back")),
+    h("button", { type: "button", class: "btn", "data-size": "s", onclick: () => {
+      const x = INKX.get(th); if (!x) return; INKX.delete(th);
+      const v = inkPend(th); Object.assign(v.sheets, x.sheets);
+      try { localStorage.setItem("ink:" + th, JSON.stringify(v)); } catch (e) {}
+      window.dispatchEvent(new CustomEvent("ink:change", { detail: { th } })); refresh();
+    } }, "Undo"));
+}
+addEventListener("ink:change", e => { const th = e.detail && e.detail.th; if (CP.update && document.querySelector(`.cp[data-key="${CSS.escape("cp:" + (th || ""))}"]`)) refresh(); });
+// Send work on a writing space (ink/sheet.js).
+addEventListener("ink:send", e => {
+  const { th } = e.detail || {}; if (!th) return;
+  if (!draft(th).text.trim()) { send(th); return; }   // Send work on a sheet: straight out, unless words wait in the box to go with it
+  CP.focus = true; refresh(); requestAnimationFrame(() => { const t = field(th); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } });
+});
 // Lists carry on (the person, 11040216f6f2): Enter at the end of "1. x" or "- x" starts the next item,
 // Enter on an empty item ends the list, and Enter anywhere else sends as before.
 const ITEM = /^([ \t]*)(?:([-*•])|(\d{1,3})([.)]))[ \t]+(.*)$/;
@@ -1085,7 +1138,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
   // Framed by the word shell, this page keeps its own box (the person, 11250859f162: the shell's separate box lost the focus picker, file chips and
   // the home's top place). No .cp-shell stand-in is drawn, so tellShell reports col null and the shell hides its box.
   if (CP.th !== th) { CP.th = th; CP.ac = null; CP.menu = false; CP.hist = null; }
-  const d = draft(th), r = recipient(th), k = "cp:" + (th || "(new)"), empty = !d.text.trim() && !d.files.length;
+  const d = draft(th), r = recipient(th), k = "cp:" + (th || "(new)"), ink = th ? inkPending(th) : null, inkx = th && INKX.has(th), empty = !d.text.trim() && !d.files.length && !ink;
   if (CP.focus || autofocus === true) { CP.focus = false; queueMicrotask(() => { const t = field(th); if (t && document.activeElement !== t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }); }
   mdSoon(th);   // after the render lands, so the layer copies the box's font and padding
   sawApproval(letGo);   // words that went out for approval and now show in their thread leave the box (the phone's return brings no ?approved)
@@ -1108,10 +1161,11 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
     // An agent waiting on the person's answer isn't working: the question above already says so, and there is nothing to interrupt.
     phase || (busy && !(top && top.querySelector(`[data-key="run:${busy}"]`)) && !waitsHere(th, busy)) ? liveLine(th, lw, phase, armed) : null,
     h("div", { class: "cp-box", "data-key": "box" },
-      armed || d.reply || d.quote || d.files.length || (SB.open && (can("secrets") || SB.lost)) || SB.say || (!th && d.naming) ? h("div", { class: "cp-top", "data-key": "top" },
+      armed || d.reply || d.quote || d.files.length || ink || inkx || (SB.open && (can("secrets") || SB.lost)) || SB.say || (!th && d.naming) ? h("div", { class: "cp-top", "data-key": "top" },
         armed ? intNote(th, busy) : null,
         d.reply ? replyChip(d) : null,
         d.quote ? quoteChip(d) : null,
+        ink || inkx ? h("div", { class: "ink-chips", "data-key": "inks" }, ink ? inkChip(th, d, ink) : inkUndoChip(th)) : null,
         d.files.length ? filesRow(th, d) : null,
         SB.open && (can("secrets") || SB.lost) ? secretRow() : null,
         SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,

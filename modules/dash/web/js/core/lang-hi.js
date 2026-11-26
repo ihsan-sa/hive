@@ -137,6 +137,7 @@ export default {
   "Download my chats": "मेरी चैट डाउनलोड करें",
   "Every chat as plain text with its files, in one zip. A big Hive takes a minute.": "हर चैट सादे टेक्स्ट और उसकी फ़ाइलों के साथ, एक zip में। बड़े Hive में एक मिनट लगता है।",
   "Download": "डाउनलोड करें",
+  "Built from": "इससे बनाया गया",
   "How you want answers fits in 2000 characters.": "आप उत्तर कैसे चाहते हैं, यह 2000 अक्षरों में समाना चाहिए।",
   "Empty means no limit. Saves when you leave the box.": "खाली का मतलब कोई सीमा नहीं। बॉक्स छोड़ते ही सहेजा जाता है।",
   "no limit": "कोई सीमा नहीं",

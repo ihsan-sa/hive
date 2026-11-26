@@ -64,7 +64,7 @@ async function load(v) {
     v.latest = last;
     if (newer) v.banner = arrived(d, was);
     // Repaint only on a change: a repaint rebuilds the open card, and a poll mustn't take away what is being typed in it.
-    const sg = JSON.stringify([d.sha, d.rev, d.revs, d.notes]), same = was && sg === v.dataSig && !v.err;
+    const sg = JSON.stringify([d.sha, d.rev, d.revs, d.notes, d.source]), same = was && sg === v.dataSig && !v.err;
     v.d = d; v.err = null; v.dataSig = sg;
     if (!was || d.sha !== was.sha || d.rev !== was.rev) v.drawPages();
     if (!same || newer) v.paint();
@@ -503,7 +503,8 @@ function make(base, side = null) {
         onkeydown: e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); const t = e.target.value.trim(); if (t) reply(t, e.target); } } }) : null);
     return h("div", { class: "dv-pn" },
       side ? null : h("div", { class: "dv-head", "data-key": "head" }, h("h1", { class: "dv-title" }, d.title),
-        h("div", { class: "dv-meta" }, h("span", null, d.id), revPicker(d), d.pages ? h("span", null, d.pages.length + (d.pages.length > 1 ? " pages" : " page")) : null, dlLink(d, false))),
+        h("div", { class: "dv-meta" }, h("span", null, d.id), revPicker(d), d.pages ? h("span", null, d.pages.length + (d.pages.length > 1 ? " pages" : " page")) : null, dlLink(d, false)),
+        d.source ? h("div", { class: "dv-src" }, "Built from ", h("code", null, d.source)) : null),
       h("div", { class: "dv-drawer", id: did, "data-key": "drawer", hidden: !open || null, role: side ? "region" : null, "aria-label": side ? "Notes" : null },
         drafts.length ? section("To send", drafts, item) : null,
         sent.length ? section("With the agent", sent, item) : null,

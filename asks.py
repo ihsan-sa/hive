@@ -292,6 +292,7 @@ def noting_bar(f):
         if before and (note := remind("bar_note", before)): print(note)
     return run
 
+NOT_DONE = re.compile(r"\bnot counted\b|\bso (this|it) is not (done|counted)\b|\bpartial(ly)?\b|\bnot the implementation\b|\b(is|are) not shown\b|\bdoes not (clearly )?show\b|\bnot shown as delivered\b", re.I)
 NAMES_PERSON = re.compile(r"\bthe person\b|\bfor you\b", re.I)
 @noting_bar
 def cmd_own(a): r = set_status(a.id, "owned", owner=a.owner or me(), evidence=a.evidence, why=a.why); print(f"{a.id}: owned by {r['owner']}")
@@ -728,6 +729,9 @@ def cmd_reconcile(a):
                 e = items.get(d.get("id"))
                 if not e or e["id"] not in ids or e.get("status") in CLOSED: continue
                 if key == "done" and not d.get("evidence"): continue
+                # A done whose own why says the delivery isn't shown ("Not counted", "partial", "filing, not the implementation") is the model
+                # contradicting itself: leave the ask as it was, for a later read. 10 such rows since 11-04; k2129 and k2579 were still undone at the audit (2026-11-26, thread meta-person).
+                if key == "done" and NOT_DONE.search(d.get("why") or ""): print(f"~ {e['id']} not marked done: its why says it isn't: {(d.get('why') or '')[:120]}"); continue
                 # Owned and still owned by the same agent is no change. Written anyway (about 100 a day), each row refreshed `updated`, so moving()'s
                 # own-grace held the ask as moving forever and the orphan checks never saw it (k1731, k2077, k2146, 2026-11-17, thread meta-moving).
                 if key == "owned" and e.get("status") == "owned" and (not d.get("owner") or d.get("owner") == e.get("owner")): continue

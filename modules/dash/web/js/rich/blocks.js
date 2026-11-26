@@ -11,6 +11,7 @@ import { touchstoneFigure } from "./touchstone.js";
 import { spiceFigure } from "./spice.js";
 import { artifactFigure } from "./artifact.js";
 import { buyCard } from "./buy.js";
+import { inkFigure } from "../ink/sheet.js";
 
 const KINDS = {
   math: code => mathFence(code),
@@ -25,6 +26,7 @@ const KINDS = {
   spice: spiceFigure, cir: spiceFigure, sp: spiceFigure,
   touchstone: touchstoneFigure,
   buy: buyCard,
+  ink: inkFigure,   // a writing space, or an agent's marks on one (grammar: ~/designs/ink-chat/INK-FENCE.md)
   s1p: touchstoneFigure, s2p: touchstoneFigure, s3p: touchstoneFigure, s4p: touchstoneFigure,
 };
 
@@ -37,5 +39,5 @@ function info(s) {
 
 export function fenceBlock(infoStr, code) {
   const { lang, title } = info(infoStr), k = KINDS[lang];
-  return k ? k(code, { lang, title }) : codeBlock(lang, title, code);
+  return k ? k(code, { lang, title, info: infoStr }) : codeBlock(lang, title, code);
 }

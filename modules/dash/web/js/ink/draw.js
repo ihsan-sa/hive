@@ -151,14 +151,15 @@ export function wrapNote(s, n = 60) {
   return out;
 }
 export const NOTE = 22;   // a note's size in sheet units
-const noteW = s => s.length * NOTE * .5;
+const noteW = (s, n = NOTE) => s.length * n * .5;
 
 /** An agent mark as drawable parts: {k, paths:[d], note?:{x,y,lines}, box:{x,y,w,h}, hl?: band height}.
  *  own: the person's stroke boxes on this sheet (rough aim snaps to them within 24 units unless `exact`);
- *  find(words): the rect of printed words in sheet units, or null. h: the sheet's height (marks are pulled inside). */
-export function markParts(m, seed, own = [], find = null, h = 4000) {
-  const r = rnd(seed), k = m.k;
-  let pts = (m.pts || []).map(p => [Math.max(0, Math.min(W, p[0])), Math.max(0, Math.min(h + 400, p[1]))]);
+ *  find(words): the rect of printed words in sheet units, or null. h: the sheet's height (marks may reach 400 below it, or y 4000, so they can follow the person's ink past the text). */
+/** z: notes drawn that much bigger (ink over a narrow message, snap.js zoomOf), so they are placed at that size. */
+export function markParts(m, seed, own = [], find = null, h = 4000, z = 1) {
+  const r = rnd(seed), k = m.k, N = NOTE * z;
+  let pts = (m.pts || []).map(p => [Math.max(0, Math.min(W, p[0])), Math.max(-400, Math.min(Math.max(h + 400, 4000), p[1]))]);
   let rect = null;
   if (m.anchor && find) rect = find(m.anchor);
   if (m.anchor && !rect) return null;
@@ -186,21 +187,28 @@ export function markParts(m, seed, own = [], find = null, h = 4000) {
     case "underline": { const y = rect.y + rect.h + 4; paths = underP(rect.x, y, rect.x + rect.w, r); box = { x: rect.x, y: y - 4, w: rect.w, h: 8 }; break; }
     case "strike": { const y = rect.y + rect.h / 2; paths = underP(rect.x - 4, y, rect.x + rect.w + 4, r, .8); box = { x: rect.x, y: y - 4, w: rect.w, h: 8 }; break; }
     case "arrow": case "line": {
+      if (!rect && pts.length < 2) return null;
       if (m.anchor && rect) { const to = [rect.x - 6, rect.y + rect.h / 2]; pts = pts.length ? [pts[0], to] : [[rect.x - 90, rect.y + rect.h / 2 + 40], to]; }
       paths = k === "arrow" ? arrowP(pts) : [pts.length > 2 ? smooth(pts) : `M${P(...pts[0])} L${P(...pts[1])}`]; box = bbox(pts); break;
     }
-    case "check": case "cross": { const [x, y] = rect ? [rect.x + rect.w + 16, rect.y + rect.h / 2] : pts[0]; paths = (k === "check" ? checkP : crossP)(x, y); box = { x: x - 12, y: y - 20, w: 34, h: 32 }; break; }
-    case "path": { paths = [smooth(pts)]; box = bbox(pts); break; }
-    case "text": { const [x, y] = pts[0]; const lines = wrapNote(m.label); note = { x, y, lines }; box = { x, y: y - NOTE, w: Math.max(...lines.map(noteW)), h: lines.length * NOTE * 1.15 }; break; }
+    case "check": case "cross": { const [x, y] = rect ? [rect.x + rect.w + 16, rect.y + rect.h / 2] : pts[0] || [0, 0]; paths = (k === "check" ? checkP : crossP)(x, y); box = { x: x - 12, y: y - 20, w: 34, h: 32 }; break; }
+    case "path": { if (pts.length < 2) return null; paths = [smooth(pts)]; box = bbox(pts); break; }
+    case "text": {   // wrapped to the room right of x (notes grow on a narrow sheet); still too wide, moved left to fit
+      let [x, y] = pts[0] || (rect ? [rect.x, rect.y + rect.h + N] : [0, 0]); const lines = wrapNote(m.label, Math.min(60, Math.max(12, Math.floor((W - 4 - x) / (N * .5)))));
+      const w = Math.max(...lines.map(l => noteW(l, N))); if (x + w > W - 4) x = Math.max(4, W - 4 - w);
+      note = { x, y, lines }; box = { x, y: y - N, w, h: lines.length * N * 1.15 }; break;
+    }
     default: return null;
   }
   if (m.label && k !== "text") {
-    const lines = wrapNote(m.label), lw = Math.max(...lines.map(noteW));
+    const lines = wrapNote(m.label), lw = Math.max(...lines.map(l => noteW(l, N)));
     let x = box.x + box.w + 10, y = box.y + Math.min(box.h, 40) / 2 + 7;
+    if (m.anchor && k !== "arrow" && k !== "line") { x = box.x; y = box.y + box.h + N; }   // on printed words: under them, not over the words after
     if (k === "arrow" || k === "line") { const s = pts[0]; x = s[0] + (pts.at(-1)[0] >= s[0] ? -lw - 8 : 8); y = s[1] + 7; if (x < 4) { x = s[0] - 4; y = s[1] + 26; } }
-    if (x + lw > W - 4) { x = Math.max(4, box.x + box.w - lw); y = box.y + box.h + NOTE + 2; }
+    if (x + lw > W - 4) { x = Math.max(4, box.x + box.w - lw); y = box.y + box.h + N + 2; }
     note = { x, y, lines };
   }
+  if (note) note.n = N;
   return { k, paths, note, box, hl };
 }
 

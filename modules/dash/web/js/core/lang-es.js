@@ -137,6 +137,7 @@ export default {
   "Download my chats": "Descargar mis chats",
   "Every chat as plain text with its files, in one zip. A big Hive takes a minute.": "Cada chat como texto plano con sus archivos, en un zip. Un Hive grande tarda un minuto.",
   "Download": "Descargar",
+  "Built from": "Generado a partir de",
   "How you want answers fits in 2000 characters.": "Cómo quieres las respuestas cabe en 2000 caracteres.",
   "Empty means no limit. Saves when you leave the box.": "Vacío significa sin límite. Se guarda al salir del campo.",
   "no limit": "sin límite",

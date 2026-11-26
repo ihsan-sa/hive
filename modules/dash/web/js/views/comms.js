@@ -13,7 +13,7 @@ import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitO
 import { workBar, workBarHeld } from "../ui/workbar.js";
 import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, yoursN, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci, workingIn, leadOf, cardSince, newSince, hiddenAsks, markSeen as lookAt, seenLeave } from "../core/foci.js";
 import { newIn } from "./focus.js";
-import { SIDE_THREAD, agentLabel, capFirst, ownStep, plainStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadStand, jobsFor, heldForYou, carryOn, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, retryWords, fresh7, asksQuestion, fileInfo } from "../core/model.js";
+import { SIDE_THREAD, agentLabel, capFirst, ownStep, plainStep, inConversation, labelCodes, chatText, inkSaid, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadStand, jobsFor, heldForYou, carryOn, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, retryWords, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, bareLinks, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
 import { href, threadHref, go, parse } from "../core/router.js";
 import { yoursSearch, yoursText } from "../core/yours.js";
@@ -27,6 +27,9 @@ import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
 import { message, messageHead, messageReceipt, localMessage, draftMessage, markWords, pollDelivered, marksSig, approvalLine, delivery, onJump, helperFolds, chatPages, pageEdit } from "../ui/message.js";
 import { chatView } from "../rich/artifact.js";
 import { openSideList, sideChats, sync as scSync } from "../ui/sidechat.js";
+import { sync as inkSync } from "../ink/over.js";
+import { penButton, penStrip } from "../ink/toolbar.js";
+import { TOOL as INK } from "../ink/store.js";
 import { openQuick, quickOpen, closeQuick, quickPanel, laterButtons, setLater } from "../ui/quick.js";
 import { pickBar, onPick } from "../ui/pick.js";
 import { when } from "../ui/when.js";
@@ -96,6 +99,7 @@ let qTimer = 0;
 onInbox(() => L.ctx && L.ctx.update());
 onMail(() => L.ctx && L.ctx.update());
 // Sending clears a search, so what was just sent shows (the person, 11040214d468).
+if (typeof window !== "undefined") window.addEventListener("ink:tool", () => { if (L.inkPen !== INK.pen) { L.inkPen = INK.pen; L.ctx && L.ctx.update(); } });   // the pen-on strip
 if (typeof window !== "undefined") window.addEventListener("cp:sent", () => { if (C.q.trim() || C.find) { C.q = ""; C.find = false; L.ctx && L.ctx.update(); } });
 
 /** What the address says to show. */
@@ -638,7 +642,7 @@ function threadRows(c, ctx) {
     // Waiting on others, Asked earlier, Needs you, Stopped or Blocked). A conversation nothing was written about stands on who wrote last (HA-21: Quiet, or
     // Not picked up when the person wrote last and no agent read it), so only one with no message at all has a plain mark and no word.
     const s = stand(d.name), par = flat && threadParent(d.name), sLine = standLine(s);
-    const say = inConversation(d.name, () => railSay(mdPlain(chatText(lp)))), fd = inConversation(d.name, () => fadeTag(d.name));
+    const say = inConversation(d.name, () => railSay(mdPlain(inkSaid(lp) ?? chatText(lp)))), fd = inConversation(d.name, () => fadeTag(d.name));
     const tag = standWord(s, sLine);
     const from = par ? [h("span", { class: "tm-from", title: "A helper conversation, started from " + threadTitle(par) }, "from " + short(threadTitle(par), 28)), " · "] : null;
     return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: railTitle(d.name), meta: ago(d.last).replace(" ago", ""),
@@ -1168,6 +1172,7 @@ function head(c, ctx) {
       h("button", { type: "button", class: "btn", "data-kind": "icon", "aria-label": "Search here", title: "Search here", "aria-pressed": String(find),
         onclick: () => { C.find = !find; if (!C.find) C.q = ""; ctx.update(); if (C.find) queueMicrotask(() => document.querySelector(".cm-find")?.focus()); } }, icon("search")),
       c.thread && SH.get(c.thread)?.map && Object.values(SH.get(c.thread).map).some(x => x.show !== "full") ? h("button", { type: "button", class: "btn cm-showall", "data-size": "s", "aria-pressed": String(showAll(c.thread)), title: "Show every message in full, not shortened to one line", "aria-label": "All: show every message", onclick: () => { setShowAll(c.thread, !showAll(c.thread)); L.rebuild = true; L.keep = true; ctx.update(); } }, h("span", { class: "cm-sa-l" }, "Show every message"), h("span", { class: "cm-sa-s", "aria-hidden": "true" }, "All")) : null,
+      c.thread && app() && can("post") ? penButton() : null,   // ink: draw on the messages (ink/toolbar.js)
       c.thread ? button("Files", () => import("../ui/preview.js").then(m => m.openFiles()), { kind: "icon", icon: "folder", cls: "cm-files", title: "Files: this conversation's and the projects'" }) : null,
       c.thread ? asideBtn(c.thread) : null,
       c.thread ? h("button", { type: "button", class: "btn cm-more-b", "data-kind": "icon", "aria-label": "More tools", title: "More tools", "aria-expanded": String(more),
@@ -1687,7 +1692,7 @@ function archivedPane(c, ctx) {
   const mask = showMask(), back = th => tryMeta(th, { archived: false }, ctx);
   const ds = [...S.threads.values()].filter(d => archived(d.name) && (threadKinds(d) & mask) && theirs(d)).sort((a, b) => b.last - a.last);
   // a row here says where its conversation stands as the top of its chat does, like every other list of conversations (HA-11)
-  const rows = ds.map(d => { const lp = d.posts.at(-1), s = stand(d.name), tag = standWord(s, standLine(s)), say = inConversation(d.name, () => railSay(mdPlain(chatText(lp))));
+  const rows = ds.map(d => { const lp = d.posts.at(-1), s = stand(d.name), tag = standWord(s, standLine(s)), say = inConversation(d.name, () => railSay(mdPlain(inkSaid(lp) ?? chatText(lp))));
     return { key: d.name, href: threadHref(d.name), title: railTitle(d.name), meta: ago(d.last).replace(" ago", ""), lead: standMark(s), text: [tag, tag ? " · " : null, lp.from === "person" ? ["You: ", ...say] : say],
       acts: can("post") ? button("Bring back", () => back(d.name), { size: "s", kind: "quiet", icon: "archive", title: "Back in the list", cls: "cm-arch-back" }) : null }; });
   return h("div", { class: "cm-home cm-arch", "data-key": "archived" },
@@ -1824,7 +1829,7 @@ function frame(ctx, c, pane) {
     L.here = here; L.place = c.place || null;
     L.opts = { showThread: !c.thread, mark: words(C.q) };
     refresh(c);
-    queueMicrotask(() => { sync(c, ctx); scSync(); });
+    queueMicrotask(() => { sync(c, ctx); scSync(); inkSync(); });
     if (c.thread && app()) { const un = unreadIn(c.thread), sig = c.thread + un.map(x => x.id).join(); if (un.length && sig !== L.marked && !document.hidden) { L.marked = sig; markRead({ ids: un.map(x => x.id) }); } }
     const post = S.app.app && can("post");
     const convo = pane || (c.archived ? archivedPane(c, ctx) : c.home ? homePane(ctx)
@@ -1832,7 +1837,9 @@ function frame(ctx, c, pane) {
         // Keyed by conversation: another one is a new element, so it opens at its end. Wrapped so that swap doesn't move the composer, which would drop focus.
         h("div", { class: "cm-mw", "data-key": "mw" },
           h("div", { class: "cm-msgs", "data-key": "m:" + (c.arg || ""), "data-own": "", "data-sig": "own", role: "log", "aria-live": "off", "aria-label": "Messages", tabindex: "0" }),
-          h("div", { class: "sc-layer", "data-key": "sc", "data-own": "", "data-sig": "sc" })),   // side chats' marks over the messages (ui/sidechat.js)
+          h("div", { class: "sc-layer", "data-key": "sc", "data-own": "", "data-sig": "sc" }),   // side chats' marks over the messages (ui/sidechat.js)
+          h("div", { class: "ink-over", "data-key": "ink", "data-own": "", "data-sig": "ink", "aria-hidden": "true" }),   // ink on the messages (ink/over.js)
+          c.thread && INK.pen && can("post") ? penStrip(c.thread) : null),
         c.thread && app() && !(post && c.thread) ? strip(c.thread) : null,
         c.thread && app() ? openCard(c.thread, { jump: jumpTo, answer: p => replyTo(p), update: ctx.update, atEnd: !L.box || L.box.dataset.key !== "m:" + (c.arg || "") || L.stuck }) : null,   // what's open for the person, so they needn't read back (110401090fd2)
         c.thread && !can("post") ? readOnly(c.thread) : null,   // §5b: where this address can't post, say so in the composer's place

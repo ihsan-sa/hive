@@ -137,6 +137,7 @@ export default {
   "Download my chats": "내 채팅 다운로드",
   "Every chat as plain text with its files, in one zip. A big Hive takes a minute.": "모든 채팅을 파일과 함께 일반 텍스트로 묶어 zip 하나로 받습니다. 큰 Hive는 1분 정도 걸립니다.",
   "Download": "다운로드",
+  "Built from": "원본 파일",
   "How you want answers fits in 2000 characters.": "원하는 답변 방식은 2000자 이내로 적어야 합니다.",
   "Empty means no limit. Saves when you leave the box.": "비워 두면 제한이 없습니다. 입력란을 벗어나면 저장됩니다.",
   "no limit": "제한 없음",
