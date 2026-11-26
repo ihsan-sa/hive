@@ -32,6 +32,7 @@ POST_ID = re.compile(r"(?<![\w/.-])(?=[0-9a-f]{0,11}\d)(?=[0-9a-f]{0,11}[a-f])[0
 FENCE, SPAN = re.compile(r"```.*?```", re.S), re.compile(r"`[^`\n]*`")
 URL = re.compile(r"^(?:https?://|www\.|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:ca|com|org|net|io|dev|ai|app|cc|co|uk|de)/)", re.I)
 PATH = re.compile(r"(?<!\S)[\w.~-]*/[\w.~/-]*(?=[\s,;:!?)]|$)")
+OPENS = re.compile(r"^(?:~/|/home/[\w.-]+/)?(?:projects|kb|modules|core|tools|investigations)/[\w.-]+(?:/[\w.-]+)*\.(?:md|markdown|txt|csv|json|ya?ml|py|sh|html|pdf|png|jpe?g|gif|webp)[.,;:!?)]*$")  # as KBREF in modules/dash/web/js/ui/markdown.js: the chat opens it in a preview
 REPORT_BACK = re.compile(r"\bthen (?:tell me|say so|say which|let me know|reply|post)\b|\b(?:until|till|by|since|and|or) then\b", re.I)  # one step plus a report back is one ask, not a chain (2026-11-19: 2 of 8 flagged lines); 'until then' isn't a step (2026-11-21)
 CHAIN = re.compile(r"\bthen\b|\bafter that\b|\bonce you\b|(?:^|\s)1[.)]\s.*(?:^|\s)2[.)]\s", re.I | re.S)
 OURS = re.compile(r"\b(?<![-\w])(?:reload|refresh(?![- ]tokens?)|test (?:it|this|that|the|on|whether|if)|try it|confirm (?:that )?it works)\b|\bsay (?:if|whether) it looks right\b"
@@ -119,7 +120,9 @@ def flags(line):
     out = []
     if len(line.split()) > LONG_WORDS: out.append("long")
     if len(re.findall(r"[.!?]\s+[A-Z]", bare)) >= 2 or ";" in bare: out.append("many")
-    if SPAN.search(line) or re.search(r"(?<!\S)--[a-z]", bare) or any(is_path(m[0]) for m in PATH.finditer(bare)): out.append("command")
+    # a file the app opens (projects/x/REPORT.md, bare or in backticks) is a link to read, not a command: 6 of the week's 14 command lines, 2026-11-26
+    plain = SPAN.sub(lambda m: m[0].strip("`") if OPENS.match(m[0].strip("`")) else " ", line)
+    if any(not OPENS.match(m[0].strip("`")) for m in SPAN.finditer(line)) or re.search(r"(?<!\S)--[a-z]", bare) or any(is_path(m[0]) and not OPENS.match(m[0]) for m in PATH.finditer(plain)): out.append("command")
     if CHAIN.search(REPORT_BACK.sub(" ", bare)): out.append("chain")
     if OURS.search(bare.lower()) and not DEVICE.search(bare): out.append("ours")
     if OFFER.match(bare): out.append("offer")

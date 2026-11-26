@@ -398,19 +398,25 @@ def _die_with_us():
     return [tool, "--pdeathsig", "KILL", "--"] if tool else []
 
 
+CHROME_RETRY_PAUSE = 2   # seconds before an empty Chrome answer is tried once more; the tests set 0
+
+
 def _run_chrome(cmd, timeout):
     """(html, error). A hostile page can reach a browser, so it keeps its sandbox unless the owner of this machine said otherwise."""
     extras = [[], ["--no-sandbox"]] if os.environ.get("RESEARCH_CHROME_NO_SANDBOX") else [[]]
     for extra in extras:
-        try:
-            p = subprocess.run(_die_with_us() + cmd[:1] + extra + cmd[1:], capture_output=True, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            return "", "Chrome timed out"
-        except OSError as e:
-            return "", f"Chrome: {e}"
-        html = p.stdout.decode("utf-8", "replace")
-        if html.strip(): return html, ""
-        if b"sandbox" not in p.stderr.lower(): return "", "Chrome returned no page"
+        for again in (1, 0):
+            try:
+                p = subprocess.run(_die_with_us() + cmd[:1] + extra + cmd[1:], capture_output=True, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                return "", "Chrome timed out"
+            except OSError as e:
+                return "", f"Chrome: {e}"
+            html = p.stdout.decode("utf-8", "replace")
+            if html.strip(): return html, ""
+            if b"sandbox" in p.stderr.lower(): break
+            if not again: return "", "Chrome returned no page"
+            time.sleep(CHROME_RETRY_PAUSE)   # an empty answer is often Chrome failing at start: 38 of fnwords145's 46 unread Google News links said so, Bentley's among them, and of three tried again, one failed in 1 s and read on the next try
     return "", "Chrome's sandbox doesn't work on this machine; RESEARCH_CHROME_NO_SANDBOX=1 runs pages without it, if you accept that"
 
 
