@@ -568,11 +568,11 @@ a.cm-job-w{max-width:30%;overflow:hidden;text-overflow:ellipsis;color:inherit}
 .msg-saved-l::after{content:":"}
 /* E203e: the person's Stop as one quiet line under the reply (ui/message.js stoppedMark) */
 .msg-stopped{padding-top:2px;padding-bottom:2px}
-.msg.msg-stopped:has(>.msg-c){grid-template-columns:minmax(0,1fr);padding-left:calc(28px + var(--s3,12px) + var(--s2,8px))}
+.msg.msg-stopped:not(.msg-stopped-said):has(>.msg-c){grid-template-columns:minmax(0,1fr);padding-left:calc(28px + var(--s3,12px) + var(--s2,8px))}
 .msg-stop-l{display:flex;align-items:center;gap:6px;margin:0;color:var(--ink-3,var(--muted))}
 .msg-stop-l .ic{width:12px;height:12px;flex:none}
 .cm-msgs .msg+.msg.msg-stopped{margin-top:var(--s2)}
-@container chat (max-width:640px){ .msg.msg-stopped:has(>.msg-c){padding-left:4px} }
-/* E203g: what it had started writing, kept under the stopped line */
-.msg-stop-said{margin:var(--s1,4px) 0}
-.msg-stop-said blockquote{margin:2px 0 0;padding:var(--s1,4px) var(--s3,12px);border-left:2px solid var(--line,#ddd);color:var(--ink-2,inherit);white-space:pre-wrap;max-height:16em;overflow:auto}
+@container chat (max-width:640px){ .msg.msg-stopped:not(.msg-stopped-said):has(>.msg-c){padding-left:4px} }
+/* E203i: what it had started writing, in place as the agent's answer, the stopped line under it */
+.msg-stopped-said{padding-top:var(--s2,8px);padding-bottom:var(--s2,8px)}
+.msg-stopped-said .msg-stop-l{margin-top:var(--s1,4px)}

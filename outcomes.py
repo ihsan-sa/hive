@@ -291,10 +291,19 @@ WORK_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 COMMIT = re.compile(r"\bgit\b[^\n|;&]*\b(commit|push)\b|\bgh pr (create|merge)\b")
 TRANSCRIPTS = str(HOME / ".claude*" / "projects" / "*" / "{session}.jsonl")   # one session can sit under several login dirs
 
+def distinct(files):
+    """The files, one name per file: a session moved between logins is a hard link (starter.link_or_copy), read once."""
+    seen, out = set(), []
+    for f in files:
+        try: st = os.stat(f)
+        except OSError: continue
+        if (st.st_dev, st.st_ino) not in seen: seen.add((st.st_dev, st.st_ino)); out.append(f)
+    return out
+
 def worked_after(session, t0, t1):
     """Did the session edit a file, commit or push between t0 and t1 (transcript tool calls)? None when no transcript is found."""
     import glob
-    files = glob.glob(TRANSCRIPTS.format(session=session)) if session else []
+    files = distinct(glob.glob(TRANSCRIPTS.format(session=session))) if session else []
     if not files: return None
     a, b = dt.datetime.fromisoformat(t0), dt.datetime.fromisoformat(t1)
     for f in files:

@@ -706,7 +706,7 @@ function connectorsSection(ctx) {
 function modulesSection(ctx) {
   if (!can("modules")) return null;
   const act = async (what, name) => {
-    F.busy[name] = true; say("mods", (what === "add" ? "Adding " : "Removing ") + name + "…"); ctx.update();
+    F.busy[name] = true; say("skills", null); say("mods", (what === "add" ? "Adding " : "Removing ") + name + "…"); ctx.update();
     try { await post("/api/module", { do: what, name }); const sk = ((F.mods || []).find(x => x.name === name) || {}).skills || [];
       say("mods", what === "add" ? `Added ${name}.` + (sk.length ? ` ${sk.length === 1 ? "Its skill" : "Its skills"} ${sk.map(k => k.name).join(", ")} ${sk.length === 1 ? "is" : "are"} ready for your agents from their next run.` : " Agents can use it from their next run.") : `Removed ${name}.`, "good"); /* never the reply's own text: it is the install's output, with this machine's paths (E203) */ } catch (e) { say("mods", e.message, "bad"); }
     delete F.busy[name]; await loadMods(ctx);
@@ -716,6 +716,7 @@ function modulesSection(ctx) {
   const slackBtn = () => button(F.slack ? "Close" : "Set up", () => { F.slack = F.slack ? null : { step: 1, bot: "", app: "", channel: "" }; ctx.update(); }, { size: "s", kind: F.slack ? "quiet" : null });
   const end = (x, inBrowse) => {
     if (x.name === "dash") return h("span", { class: "meta" }, "this app");
+    if (x.name === "my-skills") return h("span", { class: "meta" }, "your skills are under Skills"); // removing it whole would delete every skill you added
     if (x.name === "slack-door" && built("slack-door") && !(S.app.slack_door || {}).connected) return slackBtn();
     if (x.name === "slack-door" && built("slack-door")) return h("span", { class: "mod-end" }, // connected: say where it answers, so a reload shows Slack is on
       h("span", { class: "meta" }, "Connected to " + (S.app.slack_door.channel || "Slack")), " ",
@@ -743,20 +744,51 @@ function modulesSection(ctx) {
   // E203f: every skill in one place, the way the chat apps list skills: what it is for, which module brings it, and a switch for an
   // installed one (off takes it out of the agents' skills folder and keeps the module; /api/module skill-off|skill-on, dash.py skill_switch).
   const flip = async (x, k, on) => {
-    const key = x.name + "/" + k.name; F.busy[key] = true; ctx.update();
-    try { await post("/api/module", { do: on ? "skill-on" : "skill-off", name: x.name, skill: k.name }); say("mods", on ? `The ${k.name} skill is on: agents can use it from their next run.` : `The ${k.name} skill is off: agents won't use it from their next run. The ${x.name} module stays added.`, "good"); }
-    catch (e) { say("mods", e.message, "bad"); }
+    const key = x.name + "/" + k.name; F.busy[key] = true; say("mods", null); ctx.update();
+    try { await post("/api/module", { do: on ? "skill-on" : "skill-off", name: x.name, skill: k.name }); say("skills", on ? `The ${k.name} skill is on: agents can use it from their next run.` : `The ${k.name} skill is off: agents won't use it from their next run. The ${x.name} module stays added.`, "good"); }
+    catch (e) { say("skills", e.message, "bad"); }
     delete F.busy[key]; await loadMods(ctx);
   };
+  // E203h (GAPS row 16): a skill of the person's own, the way the chat apps let you make one: a short form (name, what it's for, the
+  // steps) or an uploaded SKILL.md. dash.py skill_new writes it into the my-skills module and links it for every login.
+  const cap = t => t ? t[0].toUpperCase() + t.slice(1) : t;
+  const mkSkill = async body => {
+    F.busy.newSkill = true; say("mods", null); say("skills", "Adding the skill…"); ctx.update();
+    try { const r = await post("/api/module", { do: "skill-new", ...body }); say("skills", r.said + ".", "good"); F.newSkill = null; }
+    catch (e) { say("skills", cap(e.message) + (/[.!?]$/.test(e.message) ? "" : "."), "bad"); }
+    delete F.busy.newSkill; await loadMods(ctx);
+  };
+  const upload = async file => {
+    if (!file) return;
+    if (file.size > 100000) { say("skills", "That file is over 100 KB; a SKILL.md is a page of steps.", "bad"); ctx.update(); return; }
+    await mkSkill({ text: await file.text() });
+  };
+  const NS = F.newSkill;
+  const newSkillForm = () => h("form", { class: "mod-newskill", "data-key": "new-skill", onsubmit: e => { e.preventDefault(); mkSkill({ skill_name: NS.name.trim(), about: NS.about.trim(), steps: NS.steps }); } },
+    h("h4", { class: "mod-gt" }, "New skill"),
+    field("Name", input({ placeholder: "trip-planner", maxlength: 64, autocomplete: "off", spellcheck: false, value: NS.name, oninput: (e, n) => { NS.name = n.value; } }), "Short and lowercase, with hyphens between words, like trip-planner."),
+    field("What it's for", input({ placeholder: "Plan a trip: dates, budget and who's going", maxlength: 1024, value: NS.about, oninput: (e, n) => { NS.about = n.value; } }), "Agents read this to decide when to use it."),
+    field("Steps", h("textarea", { class: "input", rows: 6, maxlength: 100000, placeholder: "1. Ask where, when and the budget.\n2. …", value: NS.steps, oninput: (e, n) => { NS.steps = n.value; } }), "What the agent should do, in order."),
+    h("div", { class: "frow" }, button(F.busy.newSkill ? "Adding…" : "Add skill", null, { type: "submit", kind: "primary", size: "s", busy: F.busy.newSkill, cls: "btn-says" }),
+      button("Cancel", () => { F.newSkill = null; ctx.update(); }, { size: "s", kind: "quiet" })));
+  const skillTools = () => NS ? newSkillForm() : h("div", { class: "lr-more mod-skill-tools" },
+    button("New skill", () => { F.newSkill = { name: "", about: "", steps: "" }; say("skills", null); ctx.update(); }, { size: "s" }),
+    h("input", { type: "file", accept: ".md,text/markdown,text/plain", hidden: true, class: "skill-pick", onchange: (e, n) => { upload(n.files[0]); n.value = ""; } }),
+    button("Upload a skill (SKILL.md)", (e, n) => n.parentNode.querySelector(".skill-pick").click(), { size: "s", kind: "quiet", busy: F.busy.newSkill }));
+  const delSkill = k => confirm({ title: `Delete the ${k.name} skill?`, body: ["You added it on this Hive, so this deletes its file too. Agents stop using it from their next run."], ok: "Delete", kind: "danger", onOk: async () => {
+    F.busy["my-skills/" + k.name] = true; say("mods", null); ctx.update();
+    try { const r = await post("/api/module", { do: "skill-delete", skill: k.name }); say("skills", r.said + ".", "good"); } catch (e) { say("skills", cap(e.message), "bad"); }
+    delete F.busy["my-skills/" + k.name]; await loadMods(ctx); } });
   const skillRow = (x, k) => h("li", { class: "lr", "data-key": "skill:" + k.name, "data-off": k.off ? "" : null },
     h("div", { class: "lr-in mod-row" },
       h("b", { class: "mod-name" }, k.name),
       h("span", { class: "muted mod-about" },
         h("span", { class: "mod-line" }, h("span", { class: "mod-one" }, k.about || "A skill your agents can use.")),
-        h("span", { class: "mod-where" }, (x.state === "installed" ? "From the " : "Comes with the ") + x.name + " module" + (x.state === "installed" ? "" : ", not added yet"))),
+        h("span", { class: "mod-where" }, x.name === "my-skills" ? "Added by you" : (x.state === "installed" ? "From the " : "Comes with the ") + x.name + " module" + (x.state === "installed" ? "" : ", not added yet"))),
+      h("span", { class: "mod-acts" }, x.name === "my-skills" ? button("Delete", () => delSkill(k), { size: "s", busy: F.busy["my-skills/" + k.name] }) : null,
       x.state === "installed"
         ? h("label", { class: "mod-sw" }, h("input", { type: "checkbox", role: "switch", class: "switch", checked: !k.off, disabled: !!F.busy[x.name + "/" + k.name], "aria-label": (k.off ? "Turn on " : "Turn off ") + k.name, onchange: (e, n) => flip(x, k, n.checked) }), k.off ? "Off" : "On")
-        : button(F.busy[x.name] ? "Adding…" : "Add", () => act("add", x.name), { size: "s", busy: F.busy[x.name], cls: "btn-says" })));
+        : button(F.busy[x.name] ? "Adding…" : "Add", () => act("add", x.name), { size: "s", busy: F.busy[x.name], cls: "btn-says" }))));
   const group = (key, title, note, ...body) => h("div", { class: "mod-group", "data-group": key }, h("h3", { class: "mod-gt" }, title, note ? h("span", { class: "mod-gn" }, note) : null), body);
   // A link to one module's row (#settings/modules/<name>, F.goRow from render): once the list is read, open the full list if the row
   // is only there, and scroll the row into view, so a link to the Slack row shows its "Set up" with no press.
@@ -772,7 +804,8 @@ function modulesSection(ctx) {
     const skills = F.mods.flatMap(x => (x.skills || []).map(k => [x, k])).sort((a, b) => (b[0].state === "installed") - (a[0].state === "installed") || a[1].name.localeCompare(b[1].name));
     return [
       group("installed", "Installed", null, have.length || own.length ? [have.length ? list(have) : null, own.length ? list(own) : null] : empty("None installed yet.")),
-      skills.length ? group("skills", "Skills", "what your agents know how to do; turn one off to keep agents from using it", h("ul", { class: "list" }, skills.map(([x, k]) => skillRow(x, k)))) : null,
+      group("skills", "Skills", "what your agents know how to do; turn one off to keep agents from using it, or write your own",
+        skills.length ? h("ul", { class: "list" }, skills.map(([x, k]) => skillRow(x, k))) : h("p", { class: "muted mod-none" }, "No skills yet."), msg("skills"), skillTools()),
       group("available", "Available", null,
         rec.length ? list(rec) : h("p", { class: "muted mod-none" }, "You have everything we recommend."),
         h("div", { class: "lr-more" }, button(F.browse ? "Hide the full list" : `Browse all ${pub.length} public modules`, () => { F.browse = !F.browse; ctx.update(); }, { size: "s", kind: "quiet" })),

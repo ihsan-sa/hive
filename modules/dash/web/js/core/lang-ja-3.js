@@ -453,7 +453,7 @@ export default {
   "Answers land here": "回答はここに届きます",
   "Agents write back in this conversation as they go. You can close the app: the work carries on, and it's all here when you come back.": "エージェントは作業しながらこのスレッドに返信します。アプリを閉じても作業は続き、戻ってくればすべてここにあります。",
   "Who's on it": "担当者",
-  "This line says who is working and what they're doing. If an agent is running, the round stop button is here too. It asks you to type the agent's name before anything ends, so you don't need to try it now.": "この行には、誰が何を作業しているかが表示されます。エージェントが実行中なら、丸い停止ボタンもここにあります。何かが終了する前にエージェント名の入力を求められるので、今は試さなくて大丈夫です。",
+  "This line says who is working and what they're doing. While an agent runs and the box is empty, the Send button turns into Stop: one click ends the run at once, so press it only when you mean it.": "この行には、誰が何を作業しているかが表示されます。エージェントの実行中に入力欄が空なら、送信ボタンが停止ボタンに変わります。1回のクリックですぐに止まるので、止めたいときだけ押してください。",
   "When an agent asks you something": "エージェントから質問されたとき",
   "This line says an agent here is waiting for you. The box below is already addressed to it: write your answer there.": "この行は、ここのエージェントがあなたを待っていることを示します。下の入力欄はすでにそのエージェント宛てになっているので、そこに回答を書いてください。",
   "A line appears here saying which agent waits for your answer, and the Chat tab shows a number. The box below is then addressed to that agent, and the Chat page lists everything waiting for you.": "回答を待っているエージェントを示す行がここに表示され、チャットタブに数字が出ます。下の入力欄はそのエージェント宛てになり、チャットページにはあなたを待っているものがすべて並びます。",

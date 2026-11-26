@@ -969,8 +969,17 @@ def marketplace(listed):
     except OSError: pass  # no state folder to keep it in: the catalog goes without
     try: index = json.loads(f.read_text())
     except (OSError, ValueError): return {}
-    return {n: {k: e[k] for k in ("repo", "about", "needs", "recommended") if k in e} for n, e in index.items()
+    return {n: {**{k: e[k] for k in ("repo", "about", "needs", "recommended") if k in e}, **({"skills": e["skills"]} if catalog_skills(e) else {})} for n, e in index.items()
             if MODULE_NAME.fullmatch(n) and isinstance(e, dict) and str(e.get("repo", "")).startswith("https://")}
+
+def catalog_skills(e):
+    """E203h: the skills a catalog entry says its module brings, [{name, about}], so the app can list a public module's skills before it is cloned.
+    Only names that could be a skills folder, and short plain text: the index is outside data."""
+    out = []
+    for k in (e.get("skills") if isinstance(e, dict) and isinstance(e.get("skills"), list) else [])[:20]:
+        if isinstance(k, dict) and MODULE_NAME.fullmatch(str(k.get("name", ""))) and len(str(k["name"])) <= 64:
+            out.append({"name": str(k["name"]), "about": str(k.get("about") or "")[:300]})
+    return out
 
 def catalog():
     """What can be added: core's modules.json (name -> repo, about, needs, recommended), what ships in core/modules (default: put in place at install), then the public
@@ -1002,7 +1011,7 @@ def module_rows():
     cat, rows = catalog(), []
     for n, c in cat.items():
         d = module_dir(n, c)
-        rows.append({"name": n, "state": "installed" if d.is_dir() else "available", "source": "included" if c.get("bundled") else "public", "about": module_blurb(manifest(d).get("description") or c.get("about")), "needs": c.get("needs"), "default": bool(c.get("default")), "recommended": bool(c.get("recommended"))})
+        rows.append({"name": n, "state": "installed" if d.is_dir() else "available", "source": "included" if c.get("bundled") else "public", "about": module_blurb(manifest(d).get("description") or c.get("about")), "needs": c.get("needs"), "default": bool(c.get("default")), "recommended": bool(c.get("recommended")), "skills": catalog_skills(c)})
     for d in module_dirs(cat):
         if d.name not in cat:
             rows.append({"name": d.name, "state": "installed", "source": "own", "about": module_blurb(manifest(d).get("description")), "needs": None, "default": False, "recommended": False})

@@ -847,6 +847,15 @@ def wait_note(name, rec, payload, ps):
     return ("\n\nThese waited behind your foreground wait loop: posts reach you only when a tool call ends. Wait with "
             "`hive wait --until 'CMD' --timeout 590` instead: it returns as soon as CMD succeeds or a post for you arrives (exit 2).")
 
+def stopped_note(payload, ps):
+    """A foreground wait loop that ended as a failure with the person's post waiting: the starter stopped it so the post could
+    get through (starter.WAIT_LOOP, D16). Say so, so the run doesn't read it as its own command failing."""
+    ti = payload.get("tool_input") or {}
+    if payload.get("hook_event_name") != "PostToolUseFailure" or payload.get("tool_name") != "Bash" or ti.get("run_in_background"): return ""
+    if not re.search(r"\b(until|while)\b[\s\S]*?\bsleep\b", str(ti.get("command", ""))) or not any(p.get("from") == "person" for p in ps): return ""
+    return ("\n\nYour wait loop was stopped so the person's post could reach you: it did not fail. Read the post first; if you still "
+            "need the wait, use `hive wait --until 'CMD' --timeout 590`, which returns as soon as a post arrives.")
+
 def main():
     name = os.environ.get("HIVE_NAME", "").lower()
     if not name: return
@@ -929,6 +938,8 @@ def main():
         if event == "PostToolUse":
             try: msg += wait_note(name, rec, payload, ps)
             except Exception: pass  # a note never holds up a post
+        try: msg += stopped_note(payload, ps)
+        except Exception: pass
         print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": msg}}))
 
 if __name__ == "__main__":

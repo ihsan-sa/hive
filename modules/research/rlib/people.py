@@ -449,6 +449,20 @@ def title_on(text, name, title, org=""):
 _VERB_AFTER = re.compile(r",\s*(?:spoke|said|says|leads|runs|opened|told|wrote|added|noted|stated|explained|announced|welcomed|presented|discussed|introduced|praised|launched|led|oversees|joined|was (?:appointed|named|elected|selected|invited|honou?red|recogni[sz]ed)|is (?:a|an|the|responsible|leading)|responsible for|addresses|speaks|presents|welcomes|greets|accepts|receives|delivers|congratulates|discusses|highlights|has (?:led|been|served|worked|overseen|built|helped)|will (?:lead|serve|speak|present|oversee|join)|who (?:leads|oversees|is|has|will|serves|directs)|offers|shares|brings|explains|adds|notes|believes|serves|recalls|recalled)\b|,\s*(?!(?:college|university|school|institute)\b)[a-z]{3,}ed\s+(?!college\b|university\b)")
 
 
+_GIVEN_END = re.compile(r"\s+(?:at|with|from)\s+(?:the\s+)?[A-Z]|[,;.:()\n|–—]|\s-\s")
+def title_given(text, name):
+    """The post a page prints right after the person's name ("Cheryl Rotyliano, Senior Associate Director of Market Readiness and Employment at the Wake Forest ..."), up to an employer, a comma or a stop; the first such with a role word, or ''."""
+    rx = re.compile(name_regex(name).pattern, re.I)
+    for m in rx.finditer(str(text or "")):
+        rest = re.match(r"\s*,\s*(?:the\s+|our\s+)?", text[m.end():m.end() + 4])
+        if not rest: continue
+        seg = text[m.end() + rest.end():m.end() + rest.end() + 160]
+        e = _GIVEN_END.search(seg)
+        seg = " ".join((seg[:e.start()] if e else seg).split())
+        if 2 < len(seg) <= 120 and _ROLE_RE.search(seg) and not _VERB_AFTER.match("," + seg): return seg
+    return ""
+
+
 def _alone_name(line):
     """A line that is just someone's name, as on a staff card."""
     m = re.fullmatch(rf"\s*{HONOR}({LINE_NAME}){SUFFIX}\s*", line)
@@ -1022,18 +1036,49 @@ def departed(text, name):
     return ""
 
 
+def _span(text, quote):
+    """Where the quote stands on the page as (start, end), or None: its words in order with any space between, a straight apostrophe matching a curly one, and an accent the plain text dropped matching its letter. A slot quote is read from _plain's text, which straightens apostrophes and drops accents (Willigan's "Costello's", fnwords146 review)."""
+    words = str(quote or "").split()
+    if not words: return None
+    m = re.search(r"\s+".join(re.escape(w).replace("'", "['\u2019]") for w in words), text)
+    if m: return m.start(), m.end()
+    norm, at = [], []
+    for i, c in enumerate(text):
+        for d in unicodedata.normalize("NFKD", c):
+            if unicodedata.combining(d): continue
+            if d.isspace():
+                if norm and norm[-1] == " ": continue
+                d = " "
+            norm.append("'" if d == "\u2019" else d); at.append(i)
+    want = "".join("'" if d == "\u2019" else d for d in unicodedata.normalize("NFKD", " ".join(words)) if not unicodedata.combining(d))
+    k = "".join(norm).find(want)
+    if k < 0: return None
+    return at[k], at[k + len(want) - 1] + 1
+
+
+def verbatim(text, quote):
+    """The quote in the page's own characters (its curly marks and accents, as the page prints them), cut back to a word's end and marked " …" when it stops inside a word: a quote cut at 300 characters ended "... and more all u" (Mitchell, fnwords146 review). The quote unchanged when it isn't found on the page."""
+    sp = _span(text, quote)
+    if not sp: return quote
+    s, e = sp
+    if e < len(text) and text[e - 1].isalnum() and text[e].isalnum():
+        k = max(text.rfind(" ", s, e), text.rfind("\n", s, e))
+        if k > s: return " ".join(text[s:k].split()).rstrip(",;:") + " \u2026"
+    return " ".join(text[s:e].split())
+
+
 def quote_from_open(text, quote):
     """The quote widened back to its opening mark when it closes a quote it doesn't open: a name's sentence that ends a two-sentence quote ('We must move beyond ...," said Daniel Newell') starts at the quote's first sentence. The nearest opening mark before it, with no closing mark between and at most 1200 characters back; the quote unchanged when it isn't found on the page as written. Newell's check_quote started mid-quote (fnwords144 review)."""
     q = str(quote or "")
     curly = q.count("\u201d") > q.count("\u201c")
     straight = not curly and q.count('"') % 2 == 1 and bool(re.search(r'[,.!?]"', q))
     if not (curly or straight): return quote
-    m = re.search(r"\s+".join(re.escape(w) for w in q.split()), text)
-    if not m: return quote
+    sp = _span(text, q)
+    if not sp: return quote
     mark = "\u201c" if curly else '"'
-    j = text.rfind(mark, max(0, m.start() - 1200), m.start())
-    if j < 0 or (curly and "\u201d" in text[j:m.start()]): return quote
-    return " ".join(text[j:m.end()].split())
+    j = text.rfind(mark, max(0, sp[0] - 1200), sp[0])
+    if j < 0 or (curly and "\u201d" in text[j:sp[0]]): return quote
+    return " ".join(text[j:sp[1]].split())
 
 
 def check(page, name, title, org="", domains=None, claim="", today=None):
@@ -1050,7 +1095,7 @@ def check(page, name, title, org="", domains=None, claim="", today=None):
     if not name_regex(name).search(fold(text)): return dict(res, status="not-found", note="the page has no such name")
     if named_not_person(text, name): return dict(res, status="not-a-person", note="the name appears only as part of a named post or place")
     share, quote, other_rank = title_on(text, name, title, org)
-    res.update(title_share=round(share, 2), quote=quote_from_open(text, quote))
+    res.update(title_share=round(share, 2), quote=verbatim(text, quote_from_open(text, quote)))
     notes = []
     if org and not names_org(org, text) and not res["official"]: notes.append("the page doesn't name the organisation")
     if res["via"] == "archive": notes.append(f"read from an archive copy dated {page.get('snapshot')}: confirm it still holds")
@@ -1082,7 +1127,7 @@ def check(page, name, title, org="", domains=None, claim="", today=None):
     if not slot: return dict(res, status="partial", note="; ".join(["no unambiguous name/title slot; read the quoted text"] + notes))
     # A page that is old, an archive copy, or silent on a claim can't stand as a held post today.
     if res["stale"] or res["via"] == "archive" or (claim and (res["claim_share"] == "" or res["claim_share"] < 0.5)): return dict(res, status="partial", note="; ".join(notes))
-    res["quote"] = quote_from_open(text, slot)
+    res["quote"] = verbatim(text, quote_from_open(text, slot))
     if org and not names_org(org, text) and not res["official"]: return dict(res, status="partial")
     if org and not res["official"] and not org_near(text, name, org): return dict(res, status="partial", note="; ".join(["the page names the organisation, but not near this person"] + notes))
     return dict(res, status="verified" if res["official"] else "secondary")

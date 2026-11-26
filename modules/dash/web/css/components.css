@@ -338,10 +338,15 @@ a.lr-in:hover{background:var(--hover);color:inherit}
 .mod-group+.mod-group{margin-top:var(--s4)}
 .mod-gt{font-size:var(--fs-small);font-weight:600;margin:0 0 var(--s2);display:flex;flex-wrap:wrap;gap:var(--s2);align-items:baseline}
 .mod-gn{font-weight:400;color:var(--ink-2)}
+.mod-acts{display:inline-flex;align-items:center;gap:var(--s2);justify-self:end}
 .mod-sw{display:inline-flex;align-items:center;gap:var(--s2);min-height:24px;cursor:pointer;color:var(--ink-2);font-size:var(--fs-small);white-space:nowrap}
 li[data-off] .mod-name{color:var(--ink-2)}
 .mod-none{font-size:var(--fs-small);margin:var(--s1) 0}
 .mod-browse{margin-top:var(--s2)}
+.mod-newskill{display:grid;gap:var(--s3);margin-top:var(--s3);padding:var(--s3);border:1px solid var(--line);border-radius:var(--r-m);max-width:40rem}
+.mod-newskill textarea{min-height:8rem;resize:vertical;font:inherit}
+.mod-newskill .frow{display:flex;gap:var(--s2);flex-wrap:wrap}
+.mod-skill-tools{display:flex;gap:var(--s2);flex-wrap:wrap}
 /* Settings > Connectors (E55): name, kind and state on one line; the line, what it needs, then the README link and a paste box */
 .conn-in{display:block}
 .conn-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px var(--s2)}

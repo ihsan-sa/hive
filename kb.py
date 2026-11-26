@@ -855,6 +855,7 @@ RECALL_WORDS, RECALL_STALE, RECALL_ONCE, RECALL_CTX = 40, 600, 6 * 3600, 0.5
 RECALL_KNN, RECALL_KCTX, RECALL_FILES = 8, 0.3, 40  # neighbours that vote, weight of a thread word in matching messages, files weighed
 RECALL_QUIET = {"status-timer"}  # senders whose briefs are a list of thread names to refresh: their words match whatever those threads are about, so nothing recall shows them bears on the job (0 of 9 opened, 11-13..15, continuity.md R42)
 RECALL_BAR = 1.6  # score an agent's post must reach to be shown (word match + past readers, 2 is top on both); 30% opened above it against 2-6% below, 7 days to 2026-11-10
+AGENT_BAR = 2.0  # a post an agent wrote (sender aXXXX) needs this: 2 of 29 such recalls opened in 7 d to 11-26 against 50 of 96 for everything else; at 2.0 the 7 d share goes 42 -> 50 (n 103) for 1 opened pointer lost, and of the unopened ones read blind (ans26) it cuts 3 wrong and 1 thin and keeps 2 thin (projects/kb-search/audit-recall/NOTES.md, agent-sender bar). KB_AGENT_BAR=0 turns it off.
 PERSON_BAR = 0.8  # a person's post needs this much: 0 of 21 pointers under it were opened, 18 of 83 from 0.8 to 1.2 (59 recalls with logged scores, 11-18..21; rsi-lab kb2)
 PERSON_DUDS = {"kb/hive-install.md", "kb/rsi.md"}  # shown to a person's post and never opened: 0 of 7 pointers, 11-21..24 (rsi-lab REPORT.md, recall pointers by kind and sender)
 FILLER = set("""ive idk like just really thing things stuff something anything everything want wants wanted need needs needed make makes made making
@@ -996,13 +997,14 @@ def recall_posts(ids, before=3, cap=1500):
         ctx += th[:1] + th[1:][-before:]
     return " ".join(str(p.get("text") or "") for p in mine), " ".join(str(p.get("text") or "")[:cap] for p in ctx)
 
-def recall_gate(hits, bad, person, midrun, n, quiet=False):
+def recall_gate(hits, bad, person, midrun, n, quiet=False, agent=False):
     """What of a ranked recall gets shown: say nothing unless it is probably right. A wrong pointer costs attention on every message, so a list
     of known duds stays silent rather than falling back on them, a run already at work does not get pointers (3% opened against 10% at a fresh start),
     and an agent's post needs RECALL_BAR, a person's post PERSON_BAR. Measured in projects/rsi-lab/kb_rules.py."""
     if midrun or quiet: return []
     if person: bad = bad | PERSON_DUDS
-    return [h for h in hits if fmt_path(h["path"]) not in bad and h["s"] >= (PERSON_BAR if person else RECALL_BAR)][:n]
+    bar = PERSON_BAR if person else (AGENT_BAR if agent and os.environ.get("KB_AGENT_BAR", "1") != "0" else RECALL_BAR)
+    return [h for h in hits if fmt_path(h["path"]) not in bad and h["s"] >= bar][:n]
 
 def recall_wall(c, hits, first):
     """The hits without posts from a group (a focus with the person's instructions or files) that the asking chat isn't in, so a chat
@@ -1047,7 +1049,7 @@ def cmd_recall(a):
         try: bad = bad | kbuse.stale().get(sender, set()) if sender else bad
         except Exception: pass
     bad |= {h["path"] for h in hits if h["path"].startswith(("core/", "modules/"))}   # 7 days to 2026-11-18: 45 such pointers shown, 0 opened (projects/kb-search/recall-opened.md); only the injection drops them, the sweep still sees them
-    ranked = hits[:a.n]; hits = recall_gate(hits, bad, person, a.midrun, a.n, quiet); held = [h for h in ranked if h not in hits]
+    ranked = hits[:a.n]; hits = recall_gate(hits, bad, person, a.midrun, a.n, quiet, agent=bool(re.fullmatch(r"a[0-9a-f]{4}", sender))); held = [h for h in ranked if h not in hits]
     if a.who: seen = recall_shown(a.who); hits = [h for h in hits if h["path"] not in seen]
     if hits:
         print("Notes that may bear on this (matched on its words, not checked; `kb open PATH:LINE` reads one):")

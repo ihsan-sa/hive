@@ -1225,7 +1225,7 @@ def kill_run(r):
     except Exception: said = ""
     try:   # E203g reader: the reply it was writing in an hive post call, streamed live as a draft, is the main thing to keep
         dr = ((activity(r.get("out")) or {}).get("draft") or {}).get("text", "").strip()
-        if dr: said = "\n\n".join(x for x in (said, dr[-4000:]) if x)
+        if dr: said = dr[-4000:]   # E203i: the reply it was writing is its answer; its working notes before the call ("Reading the catalogues.") are not
     except Exception: pass
     d = STATE / "killed"; d.mkdir(parents=True, exist_ok=True)
     t = d / f".{name}.{os.getpid()}"
@@ -5495,7 +5495,8 @@ def modules_view():
     for m in rows:
         m["repo"] = module_repo(m["name"])
         m["where"] = module_where(m["name"]) if m["state"] == "installed" else None
-        m["skills"] = module_skills(m["name"], m["state"])
+        listed = [k for k in (m.get("skills") or []) if isinstance(k, dict) and k.get("name")]   # E203h: the catalog's word for one not cloned yet
+        m["skills"] = module_skills(m["name"], m["state"]) or ([{"name": str(k["name"]), "about": str(k.get("about") or "")} for k in listed] if m["state"] != "installed" else [])
     return rows
 
 
@@ -5503,10 +5504,9 @@ def skill_about(f):
     """A SKILL.md's description: line (its frontmatter), cut to one sentence, or ""."""
     try: t = Path(f).read_text(errors="replace")[:4000]
     except OSError: return ""
-    m = re.match(r"---\n(.*?)\n---", t, re.S)
-    d = re.search(r"^description:\s*(.+)$", m[1], re.M) if m else None
+    d = skill_front(t)[1]   # E203h: block (>, |) and quoted descriptions read as their words, not ">" or \"escapes\"
     if not d: return ""
-    d = d[1].strip().strip("'\"")
+    d = re.sub(r"\s+", " ", d).strip()
     d = re.sub(r"^Use (?:this )?(?:when|for|after|before)\s+", "", d)   # "Use when someone ..." reads as an instruction to the model; the page says what it is for
     d = d[:1].upper() + d[1:]
     return d if len(d) <= 160 else d[:159].rsplit(" ", 1)[0].rstrip(" -,;:") + "…"   # cut between words, not "or a on…"
@@ -5520,7 +5520,8 @@ def skills_dir():
 
 def module_skills(name, state):
     """E203d: the skills a module brings, [{name, about}], from its module.json provides.skills: the installed copy, or for one not yet
-    added, the copy that ships with this release (core/modules). A public module not yet cloned has no manifest here, so it shows none."""
+    added, the copy that ships with this release (core/modules). A public module not yet cloned has no manifest here: modules_view then
+    takes the skills its catalog entry lists (core/hive catalog_skills, E203h)."""
     for d in ([HOME / "modules" / name] if state == "installed" else [HOME / "core" / "modules" / name]):
         m = jload(d / "module.json", {}) or {}
         out = []
@@ -5644,12 +5645,134 @@ def skill_switch(module, skill, on):
     return f"The {skill} skill is {'on' if on else 'off'}" + ("" if on else f"; the {module} module stays added")
 
 
-def module_do(what, name, skill=None):
+MY_SKILLS = "my-skills"   # E203h: the person's own skills, written from Settings > Modules > New skill, live in this module of their own
+SKILL_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")   # the chat apps' rule for a skill's name: lowercase letters, digits and hyphens, at most 64
+SKILL_MAX = 100_000
+
+
+def _front_val(block, k):
+    """One key's value from YAML frontmatter, as hand-written SKILL.md files put it: plain, 'single' or "double" quoted (escapes
+    undone), or a folded/literal block (description: > or |, then indented lines), joined into one line. None if the key isn't there."""
+    lines = block.split("\n")
+    for i, l in enumerate(lines):
+        x = re.match(rf"{k}:[ \t]*(.*)$", l)
+        if not x: continue
+        v = x[1].strip()
+        if re.fullmatch(r"[>|][+-]?\d*", v):
+            more = []
+            for n in lines[i + 1:]:
+                if n.strip() and not n[:1].isspace(): break
+                more.append(n.strip())
+            return " ".join(w for w in more if w).strip()
+        if v[:1] == '"':
+            try: return str(json.loads(v))
+            except ValueError: return v.strip('"').strip()
+        if v[:1] == "'" and v[-1:] == "'" and len(v) > 1: return v[1:-1].replace("''", "'").strip()
+        return v
+    return None
+
+
+def skill_front(text):
+    """(name, description) from a SKILL.md's frontmatter, or (None, None)."""
+    m = re.match(r"---\r?\n(.*?)\r?\n---\s*(?:\n|$)", str(text).lstrip("\ufeff").replace("\r\n", "\n"), re.S)
+    if not m: return None, None
+    return _front_val(m[1], "name"), _front_val(m[1], "description")
+
+
+def skill_taken(name):
+    """Whether a skill of this name is already here: in a login's skills folder (on or another's) or brought by any installed module."""
+    ls = (jload(HOME / "core" / "config.json", {}) or {}).get("logins") or ["~/.claude"]
+    for l in ls:
+        f = Path(str(l).replace("~", str(HOME), 1)) / "skills" / name
+        if f.is_symlink() or f.exists(): return True
+    for d in [*(HOME / "modules").glob("*/module.json"), *(HOME / "core" / "modules").glob("*/module.json")]:
+        if any(Path(str(sp)).parent.name == name for sp in ((jload(d, {}) or {}).get("provides") or {}).get("skills") or []): return True
+    # a public module's skill from the catalog (not cloned yet): adding that module later would find the name taken and skip its skill
+    for c in (HOME / "core" / "dist" / "modules.json", HOME / "core" / "modules.json", STATE / "marketplace.json"):
+        cat = jload(c, {}) or {}
+        for e in (cat.values() if isinstance(cat, dict) else cat if isinstance(cat, list) else []):
+            if isinstance(e, dict) and any(isinstance(k, dict) and k.get("name") == name for k in e.get("skills") or []): return True
+    return False
+
+
+def skill_new(name=None, about=None, steps=None, text=None):
+    """E203h (GAPS row 16): write a new skill the way the chat apps let a person make one, from a short form (name, what it is for,
+    the steps) or an uploaded SKILL.md, into ~/modules/my-skills/skills/NAME/SKILL.md; list it in that module's provides.skills and
+    link it into every login's skills folder, so agents can use it from their next run. Never overwrites a skill already here."""
+    if text is not None:
+        text = str(text).replace("\r\n", "\n")
+        if len(text.encode()) > SKILL_MAX: raise ValueError("that SKILL.md is over 100 KB; a skill is a page of steps, so cut it down")
+        name, about = skill_front(text)
+        if not name or not about: raise ValueError("that file isn't a skill: a skill file starts with its name and what it's for, between two --- lines")
+    else: name = str(name or "").strip().lower()
     name = str(name or "").strip()
+    about = re.sub(r"\s+", " ", str(about or "")).strip()
+    if not SKILL_NAME.fullmatch(name): raise ValueError("a skill's name is one short word or words joined by hyphens, in small letters, like trip-planner")
+    if not about: raise ValueError("say what the skill is for, so agents know when to use it")
+    if len(about) > 1024: raise ValueError("keep what it's for under 1024 characters; the steps can hold the rest")
+    if text is None:
+        steps = str(steps or "").replace("\r\n", "\n").strip()
+        if not steps: raise ValueError("write the steps the agent should follow")
+        text = f"---\nname: {name}\ndescription: {json.dumps(about, ensure_ascii=False)}\n---\n\n# {name}\n\n{steps}\n"
+        if len(text.encode()) > SKILL_MAX: raise ValueError("the steps are over 100 KB; a skill is a page of steps, so cut them down")
+    if skill_taken(name): raise ValueError(f"there's already a skill called {name}; pick another name")
+    d = HOME / "modules" / MY_SKILLS
+    mf = d / "module.json"
+    m = jload(mf, None) if mf.exists() else {"name": MY_SKILLS, "description": "The skills you added yourself. Each one is listed under Skills.", "provides": {"skills": []}}
+    if not isinstance(m, dict): raise ValueError(f"modules/{MY_SKILLS}/module.json can't be read, so no skill was added")
+    f = d / "skills" / name / "SKILL.md"
+    if f.parent.exists() or f.parent.is_symlink(): raise ValueError(f"there's already a folder for {name} in modules/{MY_SKILLS}; pick another name")
+    before = mf.read_text() if mf.exists() else None
+    made = []
+    try:
+        (d / "skills").mkdir(parents=True, exist_ok=True)
+        f.parent.mkdir(); f.write_text(text)
+        sk = m.setdefault("provides", {}).setdefault("skills", [])
+        if f"skills/{name}/SKILL.md" not in sk: sk.append(f"skills/{name}/SKILL.md")
+        tmp = mf.with_name(".module.json.tmp"); tmp.write_text(json.dumps(m, indent=1) + "\n"); tmp.replace(mf)
+        for l in (jload(HOME / "core" / "config.json", {}) or {}).get("logins") or ["~/.claude"]:
+            link = Path(str(l).replace("~", str(HOME), 1)) / "skills" / name
+            link.parent.mkdir(parents=True, exist_ok=True); link.symlink_to(f.parent); made.append(link)
+    except OSError as e:   # half a skill helps nobody and blocks a retry ("already a skill"): take back what this call made
+        for link in made: link.unlink(missing_ok=True)
+        shutil.rmtree(f.parent, ignore_errors=True)
+        if before is None: mf.unlink(missing_ok=True)
+        else: mf.write_text(before)
+        raise ValueError(f"the skill couldn't be saved ({e.strerror or e}), so nothing was added")
+    if name in skills_off(): _write_off(skills_off() - {name})   # a name turned off once, long ago, for another module's skill
+    return f"The {name} skill is added; agents can use it from their next run"
+
+
+def skill_delete(name):
+    """E203h: take away a skill the person wrote (only my-skills ones): its links, its folder and its line in the module's list."""
+    name = str(name or "").strip()
+    d = HOME / "modules" / MY_SKILLS
+    if not SKILL_NAME.fullmatch(name) or name not in {s["name"] for s in module_skills(MY_SKILLS, "installed")}: raise ValueError(f"{name} isn't a skill you wrote here")
+    for l in (jload(HOME / "core" / "config.json", {}) or {}).get("logins") or ["~/.claude"]:
+        link = Path(str(l).replace("~", str(HOME), 1)) / "skills" / name
+        if link.is_symlink() and link.resolve().is_relative_to(d.resolve()): link.unlink()
+    shutil.rmtree(d / "skills" / name, ignore_errors=True)
+    mf = d / "module.json"; m = jload(mf, {}) or {}
+    m.setdefault("provides", {})["skills"] = [s for s in m["provides"].get("skills") or [] if Path(str(s)).parent.name != name]
+    tmp = mf.with_name(".module.json.tmp"); tmp.write_text(json.dumps(m, indent=1) + "\n"); tmp.replace(mf)
+    if name in skills_off(): _write_off(skills_off() - {name})
+    return f"The {name} skill is deleted"
+
+
+def _write_off(off):
+    STATE.mkdir(parents=True, exist_ok=True)
+    tmp = STATE / "skills-off.json.tmp"; tmp.write_text(json.dumps(sorted(off))); tmp.replace(STATE / "skills-off.json")
+
+
+def module_do(what, name, skill=None, d=None):
+    name = str(name or "").strip()
+    if what == "skill-new": d = d or {}; return skill_new(d.get("skill_name"), d.get("about"), d.get("steps"), d.get("text") if isinstance(d.get("text"), str) else None)
+    if what == "skill-delete": return skill_delete(skill)
     if what in ("skill-on", "skill-off"): return skill_switch(name, skill, what == "skill-on")
     if what not in ("add", "remove"): raise ValueError("add or remove")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*|(https://|ssh://|git@)[A-Za-z0-9_.@:/~+-]+", name): raise ValueError("give a module's name, or a git URL")
     if what == "remove" and name == "dash": raise ValueError("dash is this app, so it can't be removed from here")
+    if what == "remove" and name == MY_SKILLS: raise ValueError("my-skills holds the skills you added; delete them one by one under Skills, so none goes by accident")
     r = subprocess.run([str(HIVE_BIN), "module", what, name], capture_output=True, text=True, env=child_env(), cwd=str(HOME), timeout=900)
     if r.returncode: raise ValueError(short(r.stderr or r.stdout, 500) or f"module {what} failed")
     return r.stdout[-2000:]
@@ -8278,7 +8401,7 @@ def serve(port):
                     elif u.path == "/api/default-model": res = set_default_model(d.get("model"), self.signer)
                     elif u.path == "/api/brand": res = set_brand(d)
                     elif u.path == "/api/starter": starter_do(d.get("do")); SETUP.t = 0; res = {"ok": True}
-                    elif u.path == "/api/module": res = {"said": module_do(d.get("do"), d.get("name"), d.get("skill"))}
+                    elif u.path == "/api/module": res = {"said": module_do(d.get("do"), d.get("name"), d.get("skill"), d)}
                     elif u.path == "/api/voice":
                         if d.get("do") != "retry": raise ValueError("do: retry")
                         res = voice_retry()

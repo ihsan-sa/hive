@@ -43,7 +43,7 @@ import { brought } from "../ui/brought.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
 import { hiveStopped, TOPX } from "../ui/shell.js";
 import { openApproval, forCard, cardWhy, pollCard } from "../ui/rootword.js";
-import { composer, interruptButton, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, hasDraft, quoteRef, prefill } from "../ui/composer.js";
+import { composer, interruptButton, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, hasDraft, quoteRef, prefill, sendStopsWho } from "../ui/composer.js";
 
 const STEP = 500, FIRST = 250, NEAR = 60, GROUP = 10 * MIN, HELPER_AFTER = 3 * MIN;
 const NONE = [];
@@ -173,6 +173,18 @@ function threadEvents(th) {
     if (s.limited) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${s.name} stopped at a usage limit`, sub: (u => (u ? `It carries on by itself after ${stamp(u)}.` : "It carries on by itself once there's room."))(s === S.lastSess[s.name] && S.limitedNow.has(s.session) && carryOn(S.limitedUntil[s.session], limitStop(), now(), !!S.limitedScope[s.session]).at) });   // when it carries on while it still holds, as the strip says (carryOn, HA-15); an older stop of a session that has carried on since names no new time
     else if (s.retry) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${(w => w[0].toUpperCase() + w.slice(1))(agentLabel(s.name))} stopped (${retryWords(s.retry)})`, sub: "It carries on by itself." });
     else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "failed", text: simpleOn() ? "Your Hive ran into a problem" : `${(w => w[0].toUpperCase() + w.slice(1))(agentLabel(s.name))} stopped with an error (exit ${s.exit})`, sub: simpleOn() ? "Send a message and it tries again." : "Its last message above is where it got to." });
+  }
+  return sameInARow(out, (S.threads.get(th) || { posts: NONE }).posts);
+}
+
+// The same trouble twice with no message between says nothing new: one line stays, the later one, and says how many times (E203i).
+export function sameInARow(evs, posts) {
+  evs.sort((a, b) => a.t - b.t);
+  const out = [];
+  for (const e of evs) {
+    const prev = out[out.length - 1];
+    if (prev && prev.text === e.text && prev.tone === e.tone && !posts.some(p => p.t > prev.t && p.t < e.t)) { const n = (prev.times || 1) + 1; out[out.length - 1] = { ...e, key: prev.key, times: n, sub: `${e.sub} (${n} times in a row)` }; }
+    else out.push(e);
   }
   return out;
 }
@@ -970,6 +982,7 @@ function stripLines(th) {
       room && post && !held ? button("Carry on", () => say(th, "Please carry on where you stopped.", st.who), { size: "s" }) : null, { key: "limited" }));
   }
   if (st.key === "failed") out.push(line("failed", [who(st.who), simpleOn() ? " ran into a problem. Send a message and it tries again." : ` stopped with an error ${ago(st.t)}. A message wakes it to try again.`], null, { key: "failed" }));
+  const sendStops = th ? sendStopsWho(th) : null;   // E203i: one Stop: while Send is Stop for an agent, its line in the strip doesn't carry a second one
   for (const a of run) {
     if (st.key === "asks" && a.name === st.who) continue;
     const s = agentState(a);
@@ -978,7 +991,7 @@ function stripLines(th) {
     const step = a.doing && app() ? plainStep(a.doing) : a.doing;   // a bare command reads as plain words in the app look (a0ad9's re-check)
     const doing = step && !(app() && ownStep(a.doing)) ? step.charAt(0).toUpperCase() + step.slice(1) : AGENT_WORDS[s.key] || s.text;   // E10: its own board commands are not a step to read
     out.push(line(s.key, [who(a.name), " ", doing, h("span", { class: "meta cm-line-m" }, " · " + (s.key === "working" ? ago(a.last * 1e3) : s.text))],
-      [post && th ? interruptButton(th, a.name) : null, can("stop") ? stripStop(a.name) : null], { key: "run:" + a.name, live: true }));
+      [post && th ? interruptButton(th, a.name) : null, can("stop") && a.name !== sendStops ? stripStop(a.name) : null], { key: "run:" + a.name, live: true }));
   }
   // after the working agents (11081336a82e: folded, the strip shows who works and its Interrupt, not where the conversation sits)
   // Where it sits (the person, 110601450d55): a helper's conversation names the one it came from, and that one lists its helpers.

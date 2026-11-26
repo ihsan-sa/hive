@@ -1132,6 +1132,8 @@ function filesRow(th, d) {
     h("button", { type: "button", class: "cp-x", title: "Remove " + f.name, "aria-label": "Remove " + f.name, onclick: () => { const [x] = d.files.splice(i, 1); if (x.url) URL.revokeObjectURL(x.url); refresh(); } }, "×"))));
 }
 /** Who the message would reach while it works (the agent it goes to, running now), or null. Only then can it interrupt. */
+/** E203i (the E203g reader: two Stops): the agent whose Stop the Send button is now (the box is empty), or null. The strip leaves its Stop off for it. */
+export function sendStopsWho(th) { const w = busyWho(th, recipient(th)); return w && !hasDraft(th) && can("stop") && S.app && S.app.app ? w : null; }   // with words in the box Send sends, and the strip keeps its Stop
 function busyWho(th, r) { return th && !simpleOn() && r.who && r.who !== "new" && r.why !== "btw" && isAgent(r.who) && isRunning(r.who) ? r.who : null; }
 
 const waitsHere = (th, who) => { const st = threadState(th); return st.key === "asks" && st.who === who; };

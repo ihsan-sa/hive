@@ -17,6 +17,8 @@ MEMINFO, PSI_MEM = "/proc/meminfo", "/proc/pressure/memory"
 last_start = [0.0]  # when this process last started a run, for under_pressure
 recent_starts = []  # when, for under_pressure: runs too young to show in MemAvailable
 efforts = [{}]  # st["efforts"], {agent: level}: what start() reads, it has no st of its own
+effort_picks = [{}]  # st["effort_picks"], {agent: {"effort", "at", "post", "by", "asked"}}: when a held xhigh or max was picked
+HIGH_EFFORTS, HOLD_ASK_S = ("xhigh", "max"), 2 * 86400
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 ended_clean = []  # runs that just ended with nothing owed by the starter: the continuation pilot looks at them once `alive` is complete
 children = {}  # name -> Popen, for sessions this process started (others are tracked by pid file only)
@@ -654,7 +656,32 @@ def open_steps(out):
 
 INTERRUPT_MIN_S = 5  # a command younger than this ends on its own about as soon: let it
 
-def interrupt_step(name, post_id=None):
+# A foreground loop that only waits: `until …; sleep`, `while …; do sleep`. Posts reach a run only when a tool call ends, so the
+# person's "stop the print asap" sat 200 s behind aca94's `until … sleep 20` (112600330ff4, D16): the starter ends such a loop for
+# any post from the person, as Interrupt does. Other commands, a lease's `--wait` included, are left to end on their own.
+WAIT_LOOP = re.compile(r"\b(until|while)\b[\s\S]*?\bsleep\b")
+WAIT_LOOP_MIN_S = 15  # a younger loop is most likely about to end anyway
+# A heredoc body is text, not commands: a test file written with `cat <<'EOF'` that mentions until and sleep is no wait loop
+# (78 of 745 matches in afba3's 4-day replay, 11260550182a).
+HEREDOC = re.compile(r"<<-?[ \t]*(['\"]?)([A-Za-z_][\w-]*)\1[^\n]*\n[\s\S]*?\n[ \t]*\2[ \t]*(?=\n|$)")
+
+def strip_heredocs(cmd):
+    return HEREDOC.sub(lambda m: m.group(0).split("\n", 1)[0], cmd)
+
+def only_sleeping(pid):
+    """Is the shell `pid` waiting right now: every process at the bottom of its tree is `sleep`? A loop after a build or flash
+    (`make flash; until …; sleep`) is doing work while the build runs, and a probe in the loop runs between sleeps: either is
+    left, and the next tick finds the sleep."""
+    tree = tree_of(pid)
+    par = {}
+    for q in tree:
+        try: par[q] = int(Path(f"/proc/{q}/stat").read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError): return False
+    leaves = [q for q in tree if q not in par.values()]
+    try: return bool(leaves) and all(Path(f"/proc/{q}/comm").read_text().strip() == "sleep" for q in leaves)
+    except OSError: return False
+
+def interrupt_step(name, post_id=None, only=None, min_s=None):
     """The person's Interrupt (hive post --interrupt): end the command a running Claude Code agent is waiting on, the way Esc
     does, so the hook hands the post over now (the call ends as a failure, and PostToolUseFailure runs inbox.py) instead of
     after it. Only when it can be done cleanly: one open step, and it is a Bash call in the foreground, with exactly one shell
@@ -669,6 +696,7 @@ def interrupt_step(name, post_id=None):
     if len(steps) != 1: return f"{len(steps)} open steps"
     sid, tool, inp = steps[0]
     if tool != "Bash" or inp.get("run_in_background"): return f"the open step is {tool}" + (" in the background" if tool == "Bash" else "")
+    if only is not None and not only.search(strip_heredocs(str(inp.get("command") or ""))): return "the open step is no wait loop"
     try: stream = Path(rec["out"]).read_bytes()
     except (OSError, KeyError): return "no output to read"
     # Claude Code now names a foreground command's shell too, in a task_started line under its own call: that shell is the
@@ -694,11 +722,26 @@ def interrupt_step(name, post_id=None):
         shells.append((q, up - int(st_[19]) / tick))
     if len(shells) != 1: return f"{len(shells)} foreground shells"
     q, age = shells[0]
-    if age < INTERRUPT_MIN_S: return "the command just started"
+    if age < (INTERRUPT_MIN_S if min_s is None else min_s): return "the command just started"
+    if only is not None and not only_sleeping(q): return "the loop is not sleeping now"
     for k in reversed(tree_of(q)):
         try: os.kill(k, signal.SIGTERM)
         except OSError: pass
     return "stopped the running command"
+
+def stop_wait_loops(st):
+    """Each tick: a running agent with a post from the person not yet handed over, sitting in a foreground wait loop
+    (WAIT_LOOP, heredoc text aside) 15 s or more and sleeping at that moment, has that loop ended so the hook hands the post over now. Checked every tick, not only when the
+    post lands, so a loop started just before or after the post is caught too. Returns {name: what was done}."""
+    did = {}
+    for n, ps in list(st.get("pending", {}).items()):
+        person = [p for p in not_handed(n, ps) if p.get("from") == "person" and not p.get("continue")]
+        if not person or n in st.get("resume", {}) or not runs_now(n): continue
+        try: d = interrupt_step(n, person[0].get("id"), only=WAIT_LOOP, min_s=WAIT_LOOP_MIN_S)
+        except Exception as e: d = f"{type(e).__name__}: {e}"[:200]
+        did[n] = d
+        if d == "stopped the running command": log(event="wait_loop_stopped", name=n, post=person[0].get("id"))
+    return did
 
 def waiting_posts(st, r):
     """Posts queued for a run that has ended its turn and sits parked on a background shell. The inbox hook fires only on a
@@ -1318,24 +1361,75 @@ def apply_model_sets(st, c):
         log(event="model_set" if model_ok(c, m) else "model_set_refused", name=n, model=m, **({"why": str(why)[:200]} if why else {}))
         f.unlink(missing_ok=True)
 
-def hold_effort(st, n, e):
-    """Hold effort `e` on agent `n`, and on its heir if it has one: wake() sends a replaced agent's posts to the heir, whose own held effort start() reads."""
-    efforts[0][n] = e
-    if (heir := st.get("heirs", {}).get(n)): efforts[0][heir] = e
+def hold_effort(st, n, e, post=None, by=None):
+    """Hold effort `e` on agent `n`, and on its heir if it has one: wake() sends a replaced agent's posts to the heir, whose own held effort start() reads.
+    A pick of xhigh or max is dated (hive-meta L154): effort_note names it to the agent at each wake. A new pick starts its age again."""
+    for who in (n, st.get("heirs", {}).get(n)):
+        if not who: continue
+        efforts[0][who] = e
+        if e not in HIGH_EFFORTS: effort_picks[0].pop(who, None)
+        elif post or by:
+            old = effort_picks[0].get(who, {})  # the panel writes its file twice, seconds apart: that is one pick
+            if not (old.get("effort") == e and (old.get("post") == post if post else time.time() - old.get("at", 0) < 60)):
+                effort_picks[0][who] = {"effort": e, "at": time.time(), "post": post, "by": by}
+
+def old_pick(n, e):
+    """A hold from before picks were dated: its age from log.jsonl, the first start of the latest unbroken stretch of starts at `e`;
+    the post that started that run is named as the pick only if it carries that effort."""
+    first = None
+    try:
+        with LOG.open(errors="replace") as f:
+            for line in f:
+                if f'"name": "{n}"' not in line or '"event": "start"' not in line: continue
+                r = json.loads(line)
+                first = (first or r) if r.get("effort") == e else None
+    except (OSError, ValueError): pass
+    pick = {"effort": e, "at": (epoch(first.get("at", "")) if first else None) or time.time(), "post": None, "by": None}
+    if first and first.get("post"):
+        try:
+            with BOARD.open(errors="replace") as f:
+                for line in f:
+                    if first["post"] not in line: continue
+                    p = json.loads(line)
+                    if p.get("id") == first["post"] and p.get("effort") == e: pick.update(post=p["id"], by=p.get("from")); break
+        except (OSError, ValueError): pass
+    return pick
+
+def effort_note(n):
+    """For the waking brief of an agent held at xhigh or max: who picked it, when, on which post. Once the pick is HOLD_ASK_S old, the
+    first wake after that also asks the agent to keep it or step down. No cap: the agent decides (k2555)."""
+    e = efforts[0].get(n)
+    if e not in HIGH_EFFORTS: return ""
+    pick = effort_picks[0].get(n)
+    if not pick or pick.get("effort") != e: pick = effort_picks[0][n] = old_pick(n, e)
+    age = max(0, time.time() - pick["at"])
+    by = pick.get("by")
+    who = ("picked by " + ("you" if by == n else "the person" if by in ("person", "phone") else "the person in the agent panel" if by == "panel" else f"agent {by}" if by else "someone")
+           + (f" on post {pick['post']}" if pick.get("post") else ""))
+    when = dt.datetime.fromtimestamp(pick["at"], dt.timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+    note = (f"\n\nEffort: your runs are held at {e}, {who}, {when} ({int(age // 86400)} d {int(age % 86400 // 3600)} h ago). "
+            "It holds on every later run of yours until changed, your helpers inherit it, and it costs several times a medium or high run.")
+    if age >= HOLD_ASK_S and not pick.get("asked"):
+        pick["asked"] = time.time()
+        note += (" That pick is over 2 days old. Decide now, once: was it for work you are still doing? If yes, keep it and say why in one line of your next post. "
+                 "If not, step down (it applies from your next run): "
+                 f"""`echo '{{"effort":"high","by":"{n}"}}' > ~/.hive/effort-set/{n}.json`""")
+        log(event="effort_hold_asked", name=n, effort=e, picked=when, post=pick.get("post"))
+    return note
 
 def apply_effort_sets(st):
     """The person picked an effort in the agent panel: ~/.hive/effort-set/<name>.json (set_agent_effort in the dash), {"effort": level},
     or "" for Claude's default. Held in st["efforts"], so the agent's next run starts on it and later ones stay on it."""
     for f in (STATE / "effort-set").glob("*.json"):
         n = f.stem
-        try: e = json.loads(f.read_text()).get("effort")
-        except (OSError, ValueError, AttributeError): e = None
+        try: d = json.loads(f.read_text()); e, by = d.get("effort"), d.get("by")  # "by": an agent stepping its own hold down
+        except (OSError, ValueError, AttributeError): e, by = None, None
         ok = re.fullmatch(r"[a-z][0-9a-f]{4,}", n) and (e == "" or e in EFFORTS)
-        if ok and e: hold_effort(st, n, e)
+        if ok and e: hold_effort(st, n, e, by=str(by)[:20] if by else "panel")
         elif ok:
-            efforts[0].pop(n, None)
+            efforts[0].pop(n, None); effort_picks[0].pop(n, None)
             for q in st["pending"].get(n, []): q.pop("effort", None)  # or the next run would still take one off a queued post
-        log(event="effort_set" if ok else "effort_set_refused", name=n, effort=e)
+        log(event="effort_set" if ok else "effort_set_refused", name=n, effort=e, **({"by": str(by)[:20]} if by else {}))
         f.unlink(missing_ok=True)
 
 def usage(c, u):
@@ -1651,9 +1745,23 @@ def move_session(sid, src, dst):
     src, dst = Path(src), Path(dst)
     found = list(src.glob(f"projects/*/{sid}.jsonl"))
     for f in found:
-        to = dst / f.relative_to(src); to.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(f, to)
-        if f.with_suffix("").is_dir(): shutil.copytree(f.with_suffix(""), to.with_suffix(""), dirs_exist_ok=True)
+        to = dst / f.relative_to(src); to.parent.mkdir(parents=True, exist_ok=True); link_or_copy(f, to)
+        if f.with_suffix("").is_dir(): shutil.copytree(f.with_suffix(""), to.with_suffix(""), dirs_exist_ok=True, copy_function=link_or_copy)
     return bool(found)
+
+def link_or_copy(f, to):
+    """A second name for the transcript, not a copy: a session's file reached 1.2 GB and each move between logins left a dead
+    copy behind (22 GB of them on 2026-11-26, thread improve). Both names then see what the resumed run appends. A copy where a
+    link can't be made (another filesystem)."""
+    f, to = Path(f), Path(to)
+    try:
+        if to.exists() and os.path.samefile(f, to): return to
+    except OSError: pass
+    tmp = to.with_name(f".{to.name}.{os.getpid()}.link")
+    try: tmp.unlink(missing_ok=True); os.link(f, tmp); os.replace(tmp, to)
+    except OSError:
+        tmp.unlink(missing_ok=True); shutil.copy2(f, to)
+    return to
 
 # Asleep or dead (the person, 2026-11-02, thread 110216375cac; kb/hive.md): a name means one context. An agent that stopped is asleep:
 # the next post resumes its session. A dead one isn't brought back by default: the post goes to an heir, a new agent with a new name.
@@ -1781,6 +1889,8 @@ def wake(c, st, n, posts, to, room):
     st.setdefault("heirs", {})[n] = new
     if n in st.get("chosen", {}): st["chosen"][new] = st["chosen"][n]
     if n in efforts[0]: efforts[0][new] = efforts[0][n]
+    if n in effort_picks[0]: effort_picks[0][new] = {k: v for k, v in effort_picks[0][n].items() if k != "asked"}  # the heir has not been asked
+    elif efforts[0].get(n) in HIGH_EFFORTS: effort_picks[0][new] = old_pick(n, efforts[0][n])  # the heir's own log holds no earlier start
     log(event="heir", name=n, heir=new, why=why)
     start(c, new, posts, to, heir_of={"name": n, "why": why, "out": run.get("out")})
     return new
@@ -2375,6 +2485,9 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     if fb: prompt += "\n\n" + FALLBACK_NOTE["codex" if fb == "fallback" and tier_of(model).startswith("codex") else fb].format(model=model, tier=tier_of(model))
     # Said once per session (a5234, 2026-11-13, load P4): a woken sleeper got it at its start; inbox.model_check asks again at call 40.
     elif kind != "warden" and not prov and not asked and not resume: prompt += step_clause(model)
+    if not prov:
+        try: prompt += effort_note(name)
+        except Exception as e: log(event="effort_note_error", name=name, why=f"{type(e).__name__}: {e}"[:200])  # a note never stops a start
     path = HOME / "sessions" / f"{name}-{dt.datetime.now():%m%d-%H%M%S}.jsonl"
     last_start[0] = time.time(); recent_starts.append(last_start[0])
     def record():
@@ -3168,6 +3281,7 @@ def main():
     wire_cite(cfg())
     st = first_state()
     efforts[0] = st.setdefault("efforts", {})
+    effort_picks[0] = st.setdefault("effort_picks", {})
     u, paused, pcache = {}, False, {}
     while True:
         c = cfg()
@@ -3238,7 +3352,7 @@ def main():
                     if is_warden(n):  # the warden rules on the hard limits and may come to hold root: Claude only, like @claude
                         q["claude"] = True
                         if provider_of(c, q.get("model")): q["model"] = None
-                    if q.get("effort") in EFFORTS: hold_effort(st, n, q["effort"])  # a run's effort is fixed when it starts: this holds from the next one on
+                    if q.get("effort") in EFFORTS: hold_effort(st, n, q["effort"], post=p.get("id"), by=str(p.get("from", "")).lower())  # a run's effort is fixed when it starts: this holds from the next one on
                     if not fresh: stays_on(st, c, n, q)
                     elif (keep := {k: q[k] for k in ("model", "free", "claude") if q.get(k) and (k != "model" or model_ok(c, q[k]))}):
                         st.setdefault("chosen", {})[n] = keep
@@ -3254,6 +3368,7 @@ def main():
                         q["supersede"] = True   # its reply in this chat is overtaken: waiting_posts stops the run at once and resumes it with this post (everyday E12d)
                     st["pending"].setdefault(n, []).append(q)
         alive = running(st, by_hand)
+        stop_wait_loops(st)
         by_hand = False
         drop_killed(st)
         auth_watch(c, st)

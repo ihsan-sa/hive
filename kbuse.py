@@ -165,7 +165,8 @@ def observe(who, p):
         if e["kind"] == "find" and 1 <= e["calls"] <= OTHER_CALLS and not e["touched"] and not e.get("other") and ok:   # an unread find, then within 3 calls a grep/gh/hive search, or a read of a path it didn't show
             cmd = inp.get("command") if tool == "Bash" and isinstance(inp.get("command"), str) else ""
             if "kb find" not in cmd and "kb open" not in cmd and (OTHER_WAY.search(cmd) or any(not shows(e, rp, lo, hi) for rp, lo, hi in reads)):
-                e["other"] = True; log({"other": tool, "find": e["id"], "calls": e["calls"], "session": sid})
+                said = (cmd + " " + " ".join(rp for rp, _, _ in reads)).lower()   # K94 (hive-meta): how many of the find's query words the lookup names; 0 is likely the agent's next, unrelated step
+                e["other"] = True; log({"other": tool, "find": e["id"], "calls": e["calls"], "session": sid, "qhit": sum(1 for w in qwords(e.get("q")) if w in said)})
     for path, lo, hi in reads:
         m = [e for e in reversed(st["live"]) if e["calls"] >= 1 and now - e["t"] <= WINDOW and shows(e, path, lo, hi)]
         r = rel(path)
@@ -385,10 +386,15 @@ def numbers(t0, t1, rs=None):
     oth = sum(1 for r in logged if r["id"] in others and r["id"] not in followed)   # unread, then looked up another way within 3 calls
     hook0 = min((r.get("at", "")[:10] for r in rs if "other" in r), default="9")   # the hook logs from 2026-11-20: finds before it can't show an other-way lookup, so they stay out of this share's base (2026-11-23: 7 d read 25% with three days of no hook, 94% since)
     unread_hooked = sum(1 for r in logged if r["id"] not in followed and r.get("at", "") >= hook0)
+    topical = {r.get("find") for r in rs if "other" in r and r.get("qhit", 0) >= 1}   # other-way lookups that name a query word (K94, logged from 2026-11-26)
+    qfirst = {r.get("find") for r in rs if "qhit" in r}
+    qhook0 = min((r.get("at", "") for r in logged if r["id"] in qfirst), default="9")   # base starts at the first find that got a qhit record, so finds from before the field stay out
+    oth_topic = sum(1 for r in logged if r["id"] in topical and r["id"] not in followed)
+    unread_qhooked = sum(1 for r in logged if r["id"] not in followed and r.get("at", "") >= qhook0)
     nb = [r for r in logged if any(not p.startswith("board:") for p, _ in r["shown"])]   # finds that showed a note or file; board snippets answer in place (find-follow-by-source.md)
     nbr = sum(1 for r in nb if r["id"] in followed)
     return {"finds": len(finds), "finds_logged": len(logged), "finds_bulk": sum(1 for r in finds if r.get("id") in burst), "finds_read": fr, "find_read_pct": pct(fr, len(logged)), "finds_dead": dead, "find_dead_pct": pct(dead, len(logged)),
-            "finds_unread": len(logged) - fr, "finds_other_way": oth, "finds_unread_hooked": unread_hooked, "find_other_way_pct": pct(oth, unread_hooked),
+            "finds_unread": len(logged) - fr, "finds_other_way": oth, "finds_unread_hooked": unread_hooked, "find_other_way_pct": pct(oth, unread_hooked), "finds_other_topic": oth_topic, "finds_unread_qhooked": unread_qhooked, "find_other_topic_pct": pct(oth_topic, unread_qhooked),
             "finds_nb": len(nb), "finds_nb_read": nbr, "find_nb_read_pct": pct(nbr, len(nb)),
             "finds_read_8": sum(1 for r in logged if r["id"] in near), "find_read_8_pct": pct(sum(1 for r in logged if r["id"] in near), len(logged)),
             "recalls": len(recalls), "recalls_opened": sum(1 for r in recalls if r["id"] in followed), "recall_opened_pct": pct(sum(1 for r in recalls if r["id"] in followed), len(recalls)),
@@ -442,6 +448,7 @@ def report():
         x = numbers(iso(now - secs), end, rs)
         out += [f"{name}: {x['finds']} finds; of {x['finds_logged']} logged with results, {x['finds_read']} ({p(x['find_read_pct'])}) with an observed read of a shown result in 10 min, {x['finds_read_8']} ({p(x['find_read_8_pct'])}) in 8 tool calls",
                 f"  {x['finds_other_way']} of {x['finds_unread_hooked']} unread finds since the hook ({p(x['find_other_way_pct'])}) followed within {OTHER_CALLS} calls by a grep, gh, hive search or a read outside the shown paths (hand-read 2026-11-19: 6 of 13, 46%)",
+                f"  {x['finds_other_topic']} of {x['finds_unread_qhooked']} unread finds since the topic hook ({p(x['find_other_topic_pct'])}) followed that way by a lookup naming a query word (hand-read 2026-11-23: 7 of 10 replaced the find)",
                 f"  without board-only finds: {x['finds_nb_read']} of {x['finds_nb']} ({p(x['find_nb_read_pct'])}) read",
                 f"  {x['recalls']} recall injections, {x['recalls_opened']} ({p(x['recall_opened_pct'])}) with a pointer read or opened; {x['pointers_opened']} of {x['pointers']} pointers ({p(x['pointer_opened_pct'])})",
                 f"  {x['neighbour_pointers']} live-neighbour pointers, {x['neighbour_pointers_read']} ({p(x['neighbour_read_pct'])}) with the thread read",

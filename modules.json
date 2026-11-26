@@ -13,7 +13,21 @@
  "chip-flow": {
   "repo": "https://github.com/Hive-RSI-Lab/hive-chip-flow.git",
   "about": "Chip design with open tools: /vde, /ade and /msde skills down to a GF180 tile.",
-  "needs": "the IIC-OSIC-TOOLS image for simulation and hardening"
+  "needs": "the IIC-OSIC-TOOLS image for simulation and hardening",
+  "skills": [
+   {
+    "name": "vde",
+    "about": "AI digital design engineer for open-tool ASIC flows (GF180MCU, IIC-OSIC-TOOLS). Takes a TASK in any project state - full design from a spec, add a test, prove…"
+   },
+   {
+    "name": "ade",
+    "about": "AI analog design engineer for open-tool flows (GF180MCU, IIC-OSIC-TOOLS, ngspice, gdsfactory, klayout, magic, netgen). Takes a TASK in any project state…"
+   },
+   {
+    "name": "msde",
+    "about": "AI mixed-signal design engineer for open-tool ASIC flows (GF180MCU, IIC-OSIC-TOOLS). Takes a mixed-signal TASK in any project state - full design from a spec…"
+   }
+  ]
  },
  "fw": {
   "repo": "https://github.com/Hive-RSI-Lab/hive-fw.git",
