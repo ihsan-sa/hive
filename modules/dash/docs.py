@@ -15,6 +15,8 @@ The agent that edits the document uses the command line (projects/doc-review-vie
     docs.py source 006-0002                    the files under projects/ the newest PDF was likely built from, best first
     docs.py source --all                       how many documents have a source found (exit 1 names those with none)
     docs.py md-pdf SRC.md OUT.pdf              print a markdown source as the library does; file that PDF, not the .md
+    docs.py verify 006-0002                    each addressed note against the revision it names: exit 1 when a note names the
+                                               revision it was made on; lists notes whose words are unchanged there, to look at
 """
 import bisect, fcntl, hashlib, json, os, re, subprocess, sys, threading, time
 from pathlib import Path
@@ -438,7 +440,20 @@ def cli_addressed(base, nums, rev, sha=None):
     if not BASE.match(base or ""): sys.exit("bad document id: " + str(base))
     if rev is not None and not REV.match(rev): sys.exit("bad --rev (a revision letter like CM): " + rev)
     with _Lock(base) as nd:
-        pend = None if rev and rev != "next" else _pending(base, _revisions().get(base) or {}, nd)
+        revs = _revisions().get(base) or {}
+        pend = None if rev and rev != "next" else _pending(base, revs, nd)
+        build = sha or (pend or {}).get("sha") if not rev or rev == "next" else None
+        made = {x["n"]: x for x in _resolve_next(nd["notes"], revs, _pending(base, revs, nd))}
+        own = []   # the real round: #47, #48 got `--rev DT` on notes made on DT; #28 kept the pending sha of the build it was made on
+        for k in nums:
+            n, m = next((x for x in nd["notes"] if x.get("n") == k), None), made.get(k)
+            if not n or n.get("status") == "draft": continue
+            on = {n.get("revSha"), (revs.get(m["rev"]) or {}).get("sha"), (revs.get(n.get("rev")) or {}).get("sha")} - {None}
+            if (rev and rev != "next" and rev in (n.get("rev"), m["rev"])) or (build and build in on):
+                own.append(k)
+        if own:
+            sys.exit(f"{base}: notes {own} were made on that revision, so it can't be the one that addressed them: pass the new build"
+                     f" (--pdf path/to/new.pdf, rebuilt with the edit) or the later letter (--rev); nothing was marked")
         done, missing, unsent = [], [], []
         for k in nums:
             n = next((x for x in nd["notes"] if x.get("n") == k), None)
@@ -578,6 +593,67 @@ def cli_md_pdf(md, out):
     print(out)
 
 
+def _norm(t):
+    return re.sub(r"\W+", " ", t).lower().strip()
+
+
+def _note_words(r, n):
+    """The words a note points at on revision r: inside its box (or its rects), or its quote."""
+    if n.get("quote"): return n["quote"]
+    try: pg = (_cached_words(r) or [])[int(n.get("p") or 0) - 1] if n.get("p") else None
+    except (IndexError, OSError, ValueError): return ""
+    if not pg or not n.get("rects"): return ""
+    out = []
+    for w in pg["words"]:
+        cx, cy = (w[0] + w[2]) / 2, (w[1] + w[3]) / 2
+        if any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b in n["rects"]): out.append(w[4])
+    return " ".join(out)
+
+
+def verify(base):
+    """Each addressed note against the revision it says addressed it: {same: [(n, rev)], unchanged: [(n, rev, from, words)],
+    changed: [n], unknown: [(n, why)]}. "same" is a wrong letter (a note can't be addressed in the revision it was made on);
+    "unchanged" means the words the note points at are still there word for word, which a link, logo, spacing or a question can
+    rightly leave, so those are for a look, not an error."""
+    if not BASE.match(base or ""): raise ValueError("bad document id")
+    revs = _revisions().get(base) or {}
+    nd = load_notes(base)
+    pend = _pending(base, revs, nd)
+    allr = dict(revs, **({"next": pend} if pend else {}))
+    res = {"same": [], "unchanged": [], "changed": [], "unknown": []}
+    text = {}
+    for n in _resolve_next(nd["notes"], revs, pend):
+        if n.get("status") != "addressed": continue
+        a, o = n.get("addressedIn"), n.get("rev")
+        if a and a == o and a != "next":
+            res["same"].append((n["n"], a)); continue
+        if a not in allr or o not in allr:
+            res["unknown"].append((n["n"], f"rev {o} -> {a}")); continue
+        t = _norm(_note_words(allr[o], n))
+        if len(t) < 3:
+            res["unknown"].append((n["n"], "no words under the note")); continue
+        if a not in text: text[a] = _norm(" ".join(w[4] for pg in (_cached_words(allr[a]) or []) for w in pg["words"]))
+        if t in text[a]: res["unchanged"].append((n["n"], a, o, t))
+        else: res["changed"].append(n["n"])
+    return res
+
+
+def cli_verify(base):
+    if not BASE.match(base or ""): sys.exit("bad document id: " + str(base))
+    r = verify(base)
+    tot = sum(len(v) for v in r.values())
+    print(f"{base}: {tot} addressed notes: {len(r['changed'])} changed, {len(r['unchanged'])} words unchanged, "
+          f"{len(r['same'])} name the revision they were made on, {len(r['unknown'])} can't tell")
+    for k, a in r["same"]:
+        print(f"  #{k}: addressed in rev {a}, the revision it was made on: the fix went into a later build; set it with"
+              f" `docs.py addressed {base} {k} --rev <that letter>`")
+    for k, a, o, t in r["unchanged"]:
+        print(f'  #{k}: "{t[:70]}" reads the same in rev {a} as in rev {o}: fine for a link, logo, spacing or a question; else reopen it')
+    for k, why in r["unknown"]:
+        print(f"  #{k}: can't tell ({why})")
+    if r["same"]: sys.exit(1)
+
+
 def main(a):
     if len(a) >= 2 and a[0] == "show": return cli_show(a[1])
     if len(a) == 3 and a[0] == "pending": return cli_pending(a[1], a[2])
@@ -600,6 +676,7 @@ def main(a):
     if a == ["check"]: return cli_check()
     if len(a) == 2 and a[0] == "source": return cli_source(a[1])
     if len(a) == 3 and a[0] == "md-pdf": return cli_md_pdf(a[1], a[2])
+    if len(a) == 2 and a[0] == "verify": return cli_verify(a[1])
     if a and a[0] == "list":
         for r in documents()["docs"]: print(r["id"], r["rev"], r["title"], f"drafts={r['drafts']} open={r['open']}")
         return

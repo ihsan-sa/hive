@@ -259,7 +259,7 @@ def autojudge(post=True, t=None):
             reading = "inconclusive" if after is None or base is None else score(base, after, e.get("want"), e.get("band"))
             why = (f"check failed: {err}" if after is None else "no baseline" if base is None else f"{e.get('want')}: {e.get('before'):g} -> {after:g}" + (f" (expected {base:g} from control {e['control_before']:g} -> {control:g})" if e.get("control") else "") + (f" (noise band {e['band']:g})" if e.get("band") is not None else ""))
             seen = None if after is None or base is None else (after - base if e.get("want") == "up" else base - after)
-            sized = seen is not None and e.get("gain") is not None and not e.get("late")  # a check attached later is not the number the size was written for
+            sized = seen is not None and isinstance(e.get("gain"), (int, float)) and not e.get("late")  # a check attached later is not the number the size was written for
             if sized: why += f"; sized at {e['gain']:g} before landing, came to {seen:g}" + (" net of the control" if e.get("control") else "")
             if not e.get("late"): why += "".join(f"; {label}: {str(e[k])[:100]}" for k, label in (("needs", "rests on"), ("beats", "to beat")) if e.get(k))
             w, v = judged_with(items, e), reading

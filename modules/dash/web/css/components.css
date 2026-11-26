@@ -4289,6 +4289,16 @@ body:has(.ink-bubble) .msg-tools{visibility:hidden}
 /* the pen-on strip over the top of the messages: the tool row, then what the pointer does now */
 .ink-on{position:absolute;left:0;right:0;top:0;z-index:4;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px 12px;padding:6px 10px;background:color-mix(in oklab,var(--accent-bg) 92%,transparent);backdrop-filter:blur(6px);color:var(--accent-ink);font-size:var(--fs-meta);border-bottom:1px solid color-mix(in oklab,var(--accent) 25%,transparent)}
 .ink-on .ink-tb{background:var(--surface)}
+/* touch (R-1125-s): every pen control is a 44 px target; a phone can't fit nine in a row, so Undo and Redo wrap to a second row */
+@media (pointer:coarse){
+  .ink-on .ink-tb[data-dock=head]{flex-wrap:wrap;justify-content:center;height:auto}
+  .ink-on .ink-tb[data-dock=head] .ink-t,.ink-on .ink-tb[data-dock=head] .ink-sw{width:44px;height:44px}
+  .ink-on .ink-tb[data-dock=head] .ink-sw::before{width:20px;height:20px}
+}
+@media (pointer:coarse) and (max-width:640px){
+  .ink-on{padding:4px 6px;gap:4px 12px}
+  .ink-on .ink-tb[data-dock=head] hr:last-of-type{flex:0 0 100%;width:auto;height:1px;margin:0}
+}
 .ink-on kbd{padding:0 5px;border:1px solid color-mix(in oklab,var(--accent) 45%,transparent);border-radius:4px;font:10px/16px var(--font)}
 
 /* 3. sending: the chip in the composer */
@@ -4344,3 +4354,8 @@ body:has(.ink-bubble) .msg-tools{visibility:hidden}
 .ink-chip[data-sent]>.ic{flex:none;width:32px;color:var(--ink-3)}
 .ink-chip .ink-go{display:grid;min-width:0;padding:0 4px;border:0;background:none;color:inherit;font:inherit;line-height:1.2;text-align:left;cursor:pointer}
 .ink-chip .ink-go:hover small{color:var(--ink);text-decoration:underline}
+/* k3014: root's own box, framed in the composer's place (ui/rootbox.js). The frame draws its own field and border. */
+.cp-root .rb{max-width:var(--chat-col);width:100%;margin:0 auto}
+.cp-root .rb-f{display:block;width:100%;border:0;background:transparent;color-scheme:normal}
+.cp-root .rb-note{margin-top:var(--s-2,8px);padding:var(--s-2,8px) var(--s-3,12px);border:1px solid var(--edge);border-radius:var(--r-l);background:var(--surface)}
+.cp-root .rb-acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}

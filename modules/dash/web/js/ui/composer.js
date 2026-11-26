@@ -21,6 +21,7 @@ import { startCall, phoneReady, inCall } from "./phone.js";
 import { run as eggRun } from "../core/easter.js";
 import { wordBoxButton, wordBoxPanel, forCard, replyWord, cardWhy, openApproval, backFromCard, sawApproval } from "./rootword.js";
 import { approveLabel, kindOf } from "./wordkind.js";
+import { rootBox, boxOrigin } from "./rootbox.js";
 import { delivery } from "./message.js";   // circular, used only at render time
 import { inkPending, clearPending, clearSent, pend as inkPend, fold as inkSheets } from "../ink/store.js";
 import { thumb as inkThumb, sheetTitle } from "../ink/sheet.js";
@@ -1138,6 +1139,12 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
   // Framed by the word shell, this page keeps its own box (the person, 11250859f162: the shell's separate box lost the focus picker, file chips and
   // the home's top place). No .cp-shell stand-in is drawn, so tellShell reports col null and the shell hides its box.
   if (CP.th !== th) { CP.th = th; CP.ac = null; CP.menu = false; CP.hist = null; }
+  // k3014: with word_composer set, root's own box (framed, cross-origin) takes this place, so every message is signed as the person.
+  if (boxOrigin()) {
+    const d = draft(th);
+    return rootBox({ thread: th, reply: d.reply ? d.reply.id : d.replyId, hints: shellHints(th), top, place,
+      cb: { refresh, dropReply: () => { const x = draft(th); if (x.reply || x.replyId) { x.reply = null; x.replyId = null; keep(x); refresh(); } } } });
+  }
   const d = draft(th), r = recipient(th), k = "cp:" + (th || "(new)"), ink = th ? inkPending(th) : null, inkx = th && INKX.has(th), empty = !d.text.trim() && !d.files.length && !ink;
   if (CP.focus || autofocus === true) { CP.focus = false; queueMicrotask(() => { const t = field(th); if (t && document.activeElement !== t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }); }
   mdSoon(th);   // after the render lands, so the layer copies the box's font and padding
