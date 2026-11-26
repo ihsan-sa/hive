@@ -853,6 +853,25 @@ def focus_do(d, full=True, driven=False):
             if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
         foci_c.t = 0
         return {"ok": True, "focus": fid, "name": name, "thread": th or None}
+    if "rename" in d or "retire" in d:   # {rename: {focus, name}} or {retire: id} from the sidebar's focus menu (E201e, GAPS row 28: a group is renamed or let go where it shows)
+        if not full: raise ValueError("only a full sign-in can rename or retire a focus")
+        x = d.get("rename") if isinstance(d.get("rename"), dict) else {}
+        fid = str(x.get("focus") if "rename" in d else d.get("retire") or "").strip().lower()
+        if not FOCUS_ID.fullmatch(fid) or fid == "misc": raise ValueError("bad focus")
+        try: now = {str(f.get("id")): f for f in json.loads(subprocess.run([sys.executable, "-I", str(HOME / "core" / "focus.py"), "list", "--json"], capture_output=True, text=True, timeout=30).stdout or "[]")}
+        except (ValueError, subprocess.SubprocessError, AttributeError): now = {}
+        if fid not in now: raise ValueError("that focus is gone; reload the page")   # focus.py new on a missing id would make one
+        if "rename" in d:
+            name = " ".join(str(x.get("name") or "").split())[:80]
+            if not name or not name.isprintable(): raise ValueError("give the focus a name")
+            args = ["new", fid, name]
+        else:
+            if now[fid].get("own"): raise ValueError("this focus is one of your priorities; it goes when kb/priorities.md changes")
+            args = ["new", fid, "--off"]
+        r = subprocess.run(["nice", "-n", "15", sys.executable, "-I", str(HOME / "core" / "focus.py")] + args, capture_output=True, text=True, timeout=30, env={**os.environ, "HIVE_NAME": "person"})
+        if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
+        foci_c.t = 0
+        return {"ok": True, "focus": fid, "name": args[2] if "rename" in d else None, "retired": "retire" in d}
     th = str(d.get("thread") or "").strip(); f = str(d.get("focus") or "").strip().lower(); off = bool(d.get("off"))
     if not THREAD_NAME.fullmatch(th): raise ValueError("bad thread")
     if not off and not FOCUS_ID.fullmatch(f): raise ValueError("bad focus")

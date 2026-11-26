@@ -4,6 +4,15 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Comment mode in the side panel
+
+Web pages and documents in the side panel have a Comment mode: press **Comment**, then click a spot or drag a box to leave a note, and it stays on until Esc. On a document you can also select words. **Send** posts the notes together to the conversation's agent. Comments work in a page opened in a new tab too, with **Open in new tab**, and the round arrow on a web page starts it again.
+
+## Smaller fixes, 2026-11-26
+
+- The website's Download page now links the Hive's GitHub repo and shows a picture when its link is shared.
+- The website build now checks that every page links the Hive's GitHub repo.
+
 ## Scrolling past pages and drawings in a chat
 
 The mouse wheel now scrolls the chat when the pointer is over an interactive page, a drawing or a picture, instead of getting stuck or doing nothing. Scrolling up over a page no longer snaps you back to the end of the chat. A page that fills its window no longer grows itself taller step by step. An open page that goes off screen and comes back keeps its place and height, so the chat no longer jumps around it. Every page and drawing has a Collapse button that folds it to its title bar. A collapsed page keeps running and opens again as you left it. In a tall drawing, drag or use the arrow keys to move up and down.

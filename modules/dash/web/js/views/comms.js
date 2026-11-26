@@ -527,10 +527,14 @@ function snippet(p, ws) {
   const text = mdPlain(displayText(p)).replace(/\s+/g, " ").trim(), lc = text.toLowerCase();
   const at = Math.min(...ws.map(w => lc.indexOf(w)).filter(i => i >= 0));
   if (at === Infinity) return short(text, 70);
-  const from = Math.max(0, at - 16);
+  // one short word before the match, not 16 letters: the rail cuts the row at about 30 letters, name included, so "…it costs about $3,70…" hid the match (E202 outside read, E201d drive)
+  let from = Math.max(0, at - 8); const sp = text.indexOf(" ", from);
+  if (from && sp >= 0 && sp < at) from = sp + 1;
   return markWords((from ? "…" : "") + text.slice(from, from + 90), ws);
 }
 const authorName = n => (n === "person" ? "You" : plainName(n));
+// who wrote a found line, as the conversation itself names them ("You", "Agent", "Agent B"), not the code id "ab12c" (E201d, GAPS row 27)
+const whoSaid = (th, n) => (n === "person" ? "You" : app() ? inConversation(th, () => capFirst(agentLabel(n))) : authorName(n));
 const tierLead = th => (app() ? null : h("span", { class: "ref-sw", "data-tone": tier(tierOf(th)).tone, title: tier(tierOf(th)).label }));
 
 /** Threads with a post holding every word (a word in the thread's own name counts for all its posts). Looks through all of them. */
@@ -550,7 +554,7 @@ function searchRows(c, ctx, ws) {
     simpleOn() ? null : { key: "(everything)", href: href("comms", "~all"), title: "All messages", text: found.length ? `${plural(total, "match", "matches")} in ${plural(found.length, app() ? "conversation" : "thread")}` : "Nothing matches", current: c.all, onClick: () => { if (c.all) C.q = all; else C.next = all; ctx.update(); } },
     ...found.map(({ d, hits, rest }) => ({ key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: railTitle(d.name), meta: ago(hits.at(-1).t).replace(" ago", ""),
       lead: tierLead(d.name), onClick: open(d.name, rest.join(" ")),
-      text: rest.length ? [`${hits.length} · ${authorName(hits.at(-1).from)}: `, snippet(hits.at(-1), rest)] : `${d.posts.length} · name matches` })),
+      text: rest.length ? [`${hits.length > 1 ? hits.length + " · " : ""}${whoSaid(d.name, hits.at(-1).from)}: `, snippet(hits.at(-1), rest)] : `${d.posts.length} · name matches` })),
   ];
 }
 
@@ -777,12 +781,16 @@ function sections(rs, ctx, opts) {
             onclick: e => { if (e.button || e.metaKey || e.ctrlKey || e.shiftKey) return; if (here) { e.preventDefault(); toggle(); } else if (FOLD.has(k)) { FOLD.delete(k); saveFold(); } } }, h("span", { class: "tm-sec-nm" }, label)), count] :
         h("button", { type: "button", class: "tm-sec-h tm-fold", "aria-expanded": String(!shut), title: shut ? "Show this section" : "Fold this section", onclick: toggle },
           icon(shut ? "chevron-right" : "chevron-down"), h("span", { class: "tm-sec-nm" }, label), count),
-        fid && can("post") ? h("button", { type: "button", class: "tm-sec-add", title: `New conversation in ${label}`, "aria-label": `New conversation in ${label}`, onclick: () => newIn(fid) }, icon("plus")) : null),
+        fid && can("post") ? h("button", { type: "button", class: "tm-sec-add", title: `New conversation in ${label}`, "aria-label": `New conversation in ${label}`, onclick: () => newIn(fid) }, icon("plus")) : null,
+        fid && can("config") && focusById(fid) ? focusMore(focusById(fid), label, ctx) : null),
       shut ? null : rows.length ? [list(capImp(k, rows), { ...opts, empty: "" }), moreImp(k, rows, ctx)] : h("p", { class: "meta tm-sec-none" }, "Nothing this week."));
   };
   return h("div", { class: "tm-secs" },
     parts.length ? parts.map(([k, l]) => sec(k, l || (app() ? "Recent" : "Threads"), by[k])) : by.arch.length ? null : list([], opts),
     // Archived is a page of its own, where a conversation can be brought back (the person, 11081454b6bd); the list ends with the way there.
+    // New focus at the foot of the Focus view: an empty group to move chats into, as both chat apps' New project (E201e, GAPS row 28).
+    byFocus && can("post") && S.foci ? h("button", { type: "button", class: "tm-new-focus", "data-key": "new-focus", title: "Make an empty focus; move conversations into it from a row's ⋯ menu", onclick: () => newFocusDialog(null, ctx) },
+      icon("plus"), h("span", null, "New focus")) : null,
     by.arch.length ? h("div", { class: "tm-sec", "data-key": "sec:arch", "data-sec": "arch" },
       h("a", { class: "tm-sec-h tm-arch-b", href: href("comms", "~archived"), "aria-current": C.conv === "~archived" ? "page" : null, title: "Conversations out of the list; bring one back from there" },
         icon("archive"), `Archived (${by.arch.length})`)) : null);
@@ -1013,7 +1021,7 @@ let rowM = null;
 function closeRowMenu() { if (!rowM) return; rowM.nodes.forEach(n => n.remove()); for (const x of new Set([rowM.btn, ...document.querySelectorAll(".lr-more-b[data-open]")])) { x.setAttribute("aria-expanded", "false"); x.removeAttribute("data-open"); } document.removeEventListener("keydown", rowM.key, true); window.removeEventListener("scroll", rowM.scroll, true); rowM = null; }
 function rowMore(th, ctx) {
   const open = !!rowM && rowM.th === th;   // drawn from the open menu, so a poll's re-render of the row while it is open doesn't reset the button (churn walk, 390, 2026-11-21)
-  return h("button", { type: "button", class: "lr-more-b", "aria-haspopup": "true", "aria-expanded": open ? "true" : "false", "data-open": open ? "" : null, title: "Pin, mark important, archive", "aria-label": "Actions for this conversation",
+  return h("button", { type: "button", class: "lr-more-b", "aria-haspopup": "true", "aria-expanded": open ? "true" : "false", "data-open": open ? "" : null, title: "Pin, mark important, move, archive", "aria-label": "Actions for this conversation",
     onclick: e => { e.preventDefault(); e.stopPropagation(); const b = e.target.closest(".lr-more-b"), was = rowM && rowM.btn === b; closeRowMenu(); if (!was) openRowMenu(b, th, ctx); } }, icon("more"));
 }
 // "New focus…" in both move lists (E201c, GAPS row 28): a newcomer has no focus to move a chat into, and both chat apps make a project from the move.
@@ -1021,15 +1029,62 @@ function rowMore(th, ctx) {
 function newFocusDialog(th, ctx) {
   const field = h("input", { class: "input", maxlength: "80", "aria-label": "Name", autocomplete: "off", placeholder: "Home, Work, Trip to Lisbon…",
     oninput: e => { const er = e.target.closest("dialog")?.querySelector(".dlg-err"); if (er) er.textContent = ""; } });   // a typed name clears "give it a name first" (E201c outside read)
-  const dlg = askDialog({ title: "New focus", ok: "Make it and move", failText: "Not made",
+  const dlg = askDialog({ title: "New focus", ok: th ? "Make it and move" : "Make it", failText: "Not made",
     body: [h("label", { class: "field" }, h("span", { class: "field-l" }, "Name"), field),
-      h("p", { class: "meta" }, "A focus groups conversations under one heading in the list and on the home, with its own page. This conversation moves into it.")],
+      h("p", { class: "meta" }, th ? "A focus groups conversations under one heading in the list and on the home, with its own page. This conversation moves into it."
+        : "A focus groups conversations under one heading in the list and on the home, with its own page. Move conversations into it from a row's ⋯ menu, or start one with its +.")],
     onOk: async () => {
       const name = field.value.trim(); if (!name) { field.focus(); throw new Error("give it a name first"); }
-      await apiPost("/api/focus", { new: { name, thread: th } }); await loadFoci(true); ctx.update();
+      const r = await apiPost("/api/focus", th ? { new: { name, thread: th } } : { new: { name } }); await loadFoci(true);
+      if (r && r.focus) { FOLD.delete("f:" + r.focus); saveFold(); }   // the new section shows open, so its "Nothing this week" says it is there
+      ctx.update();
     } });
   queueMicrotask(() => field.focus());
   return dlg;
+}
+
+// A focus heading's ⋯ (E201e, GAPS row 28): rename it or retire it where it shows, as a chat app's project menu does. Only a full sign-in
+// (the server says the same); retiring isn't offered for the person's priorities, which come from kb/priorities.md.
+function focusMore(f, label, ctx) {
+  const key = "f:" + f.id, open = !!rowM && rowM.th === key;
+  return h("button", { type: "button", class: "tm-sec-add tm-sec-menu", "aria-haspopup": "true", "aria-expanded": open ? "true" : "false", "data-open": open ? "" : null,
+    title: f.own ? `Rename ${label}` : `Rename or retire ${label}`, "aria-label": `Actions for ${label}`,
+    onclick: e => { e.preventDefault(); e.stopPropagation(); const b = e.target.closest("button"), was = rowM && rowM.btn === b; closeRowMenu(); if (!was) openFocusMenu(b, f, ctx); } }, icon("more"));
+}
+function renameFocusDialog(f, ctx) {
+  const field = h("input", { class: "input", value: focusName(f), maxlength: "80", "aria-label": "Name", autocomplete: "off" });
+  const dlg = askDialog({ title: "Rename this focus", ok: "Rename", failText: "Not renamed",
+    body: [h("label", { class: "field" }, h("span", { class: "field-l" }, "Name"), field),
+      h("p", { class: "meta" }, "Its conversations, page and summary stay as they are. Agents still know it as ", h("code", null, f.id), ".")],
+    onOk: async () => {
+      const name = field.value.trim(); if (!name) { field.focus(); throw new Error("give it a name first"); }
+      if (name !== focusName(f)) { await apiPost("/api/focus", { rename: { focus: f.id, name } }); await loadFoci(true); }
+      ctx.update();
+    } });
+  queueMicrotask(() => { field.focus(); field.select(); });
+  return dlg;
+}
+function retireFocusDialog(f, n, ctx) {
+  return askDialog({ title: `Retire ${focusName(f)}?`, ok: "Retire it", kind: "danger", failText: "Not retired",
+    body: [n === 1 ? "Its one conversation goes back to Other in the list. Nothing is deleted: the conversation stays as it is." : n ? `Its ${n} conversations go back to Other in the list. Nothing is deleted: the conversations stay as they are.` : "It has no conversations. Nothing is deleted.",
+      "Its page, summary and to-do list leave the home. Making a focus with the same name later starts a new one."],
+    onOk: async () => { await apiPost("/api/focus", { retire: f.id }); FOLD.delete("f:" + f.id); saveFold(); await loadFoci(true); ctx.update(); } });
+}
+function openFocusMenu(b, f, ctx) {
+  const n = [...S.threads.keys()].filter(th => focusOf(th) === f.id).length;
+  const it = (label, ic, go, key, tip) => h("button", { type: "button", class: "menu-i", role: "menuitem", "data-key": key, title: tip || null, onclick: e => { e.stopPropagation(); closeRowMenu(); go(); } }, icon(ic), h("span", { class: "menu-i-t" }, label));
+  const m = h("div", { class: "menu lr-menu", role: "menu", "aria-label": "Focus actions" },
+    it("Rename…", "edit", () => renameFocusDialog(f, ctx), "rename"),
+    f.own ? null : it("Retire focus…", "archive", () => retireFocusDialog(f, n, ctx), "retire", "Its conversations go back to Other"));
+  const sc = h("button", { type: "button", class: "scrim", "aria-label": "Close the menu", tabindex: "-1", onclick: e => { e.stopPropagation(); closeRowMenu(); } });
+  document.body.append(sc, m);
+  const r = b.getBoundingClientRect(), mh = m.offsetHeight, mw = m.offsetWidth;
+  const top = r.bottom + 4 + mh > innerHeight - 8 ? Math.max(8, r.top - 4 - mh) : r.bottom + 4;
+  Object.assign(m.style, { position: "fixed", top: top + "px", left: Math.max(8, Math.min(r.right - mw, innerWidth - mw - 8)) + "px" });
+  b.setAttribute("aria-expanded", "true"); b.dataset.open = "";
+  rowM = { btn: b, th: "f:" + f.id, nodes: [sc, m], key: e => { if (e.key === "Escape") { e.stopPropagation(); closeRowMenu(); b.focus(); } }, scroll: e => { if (!m.contains(e.target)) closeRowMenu(); } };
+  document.addEventListener("keydown", rowM.key, true); window.addEventListener("scroll", rowM.scroll, true);
+  m.querySelector(".menu-i")?.focus();
 }
 
 function openRowMenu(b, th, ctx) {

@@ -37,7 +37,7 @@ export default {
   "Only the last 7 days are listed. Show every conversation.": "Hanya 7 hari terakhir yang ditampilkan. Tampilkan semua percakapan.",
   "Drag to resize, or click to widen a step (from the widest it goes back to the narrowest); double-click resets": "Seret untuk mengubah ukuran, atau klik untuk melebarkan satu langkah (dari yang terlebar kembali ke yang tersempit); klik dua kali untuk mengatur ulang",
   "Resize the conversation list": "Ubah ukuran daftar percakapan",
-  "Pin, mark important, archive": "Sematkan, tandai penting, arsipkan",
+  "Pin, mark important, move, archive": "Sematkan, tandai penting, pindahkan, arsipkan",
   "Actions for this conversation": "Tindakan untuk percakapan ini",
   "done": "selesai",
   "not picked up": "belum diambil",

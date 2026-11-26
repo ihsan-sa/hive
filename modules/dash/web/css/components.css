@@ -4359,3 +4359,12 @@ body:has(.ink-bubble) .msg-tools{visibility:hidden}
 .cp-root .rb-f{display:block;width:100%;border:0;background:transparent;color-scheme:normal}
 .cp-root .rb-note{margin-top:var(--s-2,8px);padding:var(--s-2,8px) var(--s-3,12px);border:1px solid var(--edge);border-radius:var(--r-l);background:var(--surface)}
 .cp-root .rb-acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+
+/* E201e: a focus head's ⋯ (tm-sec-menu: rename, retire; tm-sec-more is a section's Show more) stays shown while its menu is open; New focus at the foot of the Focus view */
+.tm-sec-menu[data-open]{opacity:1}
+@media (hover:hover){.tm-sec-menu[data-open]{width:24px;margin-right:6px}}
+.tm-sec-hw:has(.tm-sec-menu[data-open]) .tm-sec-n{display:none}
+.tm-new-focus{display:flex;align-items:center;gap:6px;width:100%;margin:6px 0 2px;padding:6px 8px;border:0;background:none;font:inherit;font-size:var(--fs-meta);color:var(--ink-3);text-align:left;cursor:pointer;border-radius:var(--r-s)}
+.tm-new-focus:hover{background:var(--hover);color:var(--ink)}
+.tm-new-focus .ic{width:14px;height:14px}
+@media (hover:none){.tm-new-focus{min-height:40px}}

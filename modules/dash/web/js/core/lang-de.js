@@ -25,7 +25,7 @@ export default {
   "Only the last 7 days are listed. Show every conversation.": "Es werden nur die letzten 7 Tage aufgelistet. Alle Unterhaltungen anzeigen.",
   "Drag to resize, or click to widen a step (from the widest it goes back to the narrowest); double-click resets": "Zum Ändern der Größe ziehen, oder klicken, um eine Stufe breiter zu werden (von der breitesten geht es zurück zur schmalsten); Doppelklick setzt zurück",
   "Resize the conversation list": "Größe der Unterhaltungsliste ändern",
-  "Pin, mark important, archive": "Anheften, als wichtig markieren, archivieren",
+  "Pin, mark important, move, archive": "Anheften, als wichtig markieren, verschieben, archivieren",
   "Actions for this conversation": "Aktionen für diese Unterhaltung",
   "done": "erledigt",
   "not picked up": "nicht aufgenommen",

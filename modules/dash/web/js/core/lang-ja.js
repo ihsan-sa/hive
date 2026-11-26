@@ -37,7 +37,7 @@ export default {
   "Only the last 7 days are listed. Show every conversation.": "直近7日間のみ表示しています。すべてのスレッドを表示します。",
   "Drag to resize, or click to widen a step (from the widest it goes back to the narrowest); double-click resets": "ドラッグでサイズ変更、クリックで1段階広がります（最大から最小に戻ります）。ダブルクリックでリセットします。",
   "Resize the conversation list": "スレッド一覧のサイズを変更",
-  "Pin, mark important, archive": "固定、重要マーク、アーカイブ",
+  "Pin, mark important, move, archive": "ピン留め、重要にする、移動、アーカイブ",
   "Actions for this conversation": "このスレッドの操作",
   "done": "完了",
   "not picked up": "未着手",

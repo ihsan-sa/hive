@@ -14,4 +14,4 @@
   10. [What to ask it: ten jobs to hand over](tutorials/10-what-to-ask-it.md)
   11. [Put a Hive on a small server in 10 minutes](tutorials/11-small-server.md)
 
-The app's top bar is Chat, Knowledge, Agents, Usage and Settings; the Agents tab holds the timeline, map, history and the rest of that group as a row of pages. Chat's own pages (Inbox, Files, Documents and Mail) are links at the foot of its conversation list. Settings gains a Buying page once the buy module is added. The [guide](guide.md#the-app) walks through each.
+The app's top bar is Chat, Knowledge, Agents, Usage and Settings; the Agents tab holds the timeline, map, history and the rest of that group as a row of pages. Chat's own pages (Inbox, Files, Documents and Mail) are links at the foot of its conversation list. Settings gains a Buying page once the buy module is added. In a conversation you can open a [side chat](guide.md#the-app) to ask about part of an answer, and the tour the app offers on a new Hive shows how. The [guide](guide.md#the-app) walks through each.
