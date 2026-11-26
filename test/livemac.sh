@@ -28,8 +28,16 @@ inside=$(plutil -extract CFBundleShortVersionString raw "$W/x/Hive.app/Contents/
 [ "$inside" = "$V" ] || fail "the zip holds $inside, /app-version.json says $V"
 size=$(wc -c < "$D/$F" | tr -d ' ')
 [ -f test/shots/macdl.png ] && mv test/shots/macdl.png "$W/macdl.png"
+# Where the Hive should answer, the Hive's VM in words before and (on a failure) after the open, with Lima's last lines.
+LH="$HOME/.hive/lima"; LC="$HOME/.hive/lima-dist/bin/limactl"
+vm() { [ -x "$LC" ] && LIMA_HOME="$LH" "$LC" list hive --format '{{.Status}}' 2>&1 || echo "no limactl at $LC"; }
+[ "$EXPECT" = hive ] && echo "the Hive's VM before the open: $(vm)"
 HIVE_DL_EXPECT=$([ "$EXPECT" = hive ] || echo setup) node test/macdl.js "$D/$F" > "$W/out" 2>&1; rc=$?; cat "$W/out"
 [ -f test/shots/macdl.png ] && mv test/shots/macdl.png test/shots/livemac.png; [ -f "$W/macdl.png" ] && mv "$W/macdl.png" test/shots/macdl.png
+if [ $rc != 0 ] && [ "$EXPECT" = hive ]; then
+  echo "the Hive's VM after the open: $(vm)"
+  for f in "$LH/hive/ha.stderr.log" "$LH/hive/serial.log" "$LH/hive/serialv.log"; do [ -f "$f" ] && { echo "--- last of $f"; tail -n 25 "$f"; }; done
+fi
 [ $rc = 0 ] && grep -q '^ok mac download launch' "$W/out" || fail "test/macdl.js on the live file ended $rc (above)"
 [ -e /Applications/Hive.app ] && fail "/Applications/Hive.app is still there after the test"
 echo "ok live download darwin app-v$V: $size bytes from $SITE/downloads/$F, quarantine mark ${mark%%;*}, sum matches, holds $V, opened from /Applications to $([ "$EXPECT" = hive ] && echo the Hive || echo its setup screen), removed"
