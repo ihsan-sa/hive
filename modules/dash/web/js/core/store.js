@@ -13,7 +13,7 @@ export const S = {
   live: null, usage: null, projects: null, agentCosts: null, helpers: null, helpersLive: null, threadNames: {}, threadMeta: {}, shown: [], threadStatus: {}, waitsIn: {}, agentStatus: {},
   posts: [], byId: {}, threads: new Map(), off: 0, boardStart: null,
   sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0, logStart: null, history: false,
-  agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(), limitedUntil: {}, limitedScope: {}, diedNow: new Set(),
+  agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(), limitedUntil: {}, limitedScope: {}, diedNow: new Set(), cut: {},
   ledger: [],                 // {t, kind, parts:[string | {a:name} | {th:thread}], lc}
   running: new Map(), pending: {},
   stCache: new Map(),
@@ -133,6 +133,8 @@ function ingestLog(items) {
       ledgerAdd({ t, kind: bad ? "trouble" : "agent", parts: [{ a: e.name }, bad ? ` failed (exit ${exit})` : " ended", th ? " in " : "", th ? { th } : ""] }, [bad ? "failed" : "ended", e.name, th || ""]);
     } else if (e.event === "woken" || e.event === "reaped") { const s = S.open[e.name + e.session]; if (s) s.byStarter = true; }
     else if (e.event === "killed") S.killed[e.name] = t;
+    // what the starter did about a Stop and send, by its post (core/starter.py): the message's receipt says no more than this
+    else if (e.event === "interrupt" && e.post) S.cut[e.post] = { did: e.did, t };
     else if (e.event === "heir") { const s = S.lastSess[e.name]; if (s) { s.replacedBy = e.heir; S.limitedNow.delete(s.session); S.diedNow.delete(s.session); } } // a new agent took over: the old name isn't "stopped" any more
     else if (e.event === "died") {
       // the starter queued the run that just ended to resume by itself (lost connection, restart, ...): not a failure the person must act on,
@@ -177,7 +179,7 @@ const FIRST_BYTES = 2_000_000, LOG_FIRST_BYTES = 600_000;
 let logHeld = [];   // the log items read so far, kept until the older part has arrived: ingestLog keeps no raw events to rebuild from
 let filling = false;   // the older part is on its way: a poll that lands meanwhile has nothing older of its own, and must not call the history complete (R73)
 function resetLog() {
-  Object.assign(S, { sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(), limitedUntil: {}, limitedScope: {}, diedNow: new Set() });
+  Object.assign(S, { sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(), limitedUntil: {}, limitedScope: {}, diedNow: new Set(), cut: {} });
   S.ledger = S.ledger.filter(r => r.b);
 }
 async function backfill(boardUpto, logUpto) {

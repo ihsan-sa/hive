@@ -471,6 +471,8 @@ export default {
     [/^Summary by (.+)$/, "Riassunto di $1"],
     [new RegExp(`^(.+) wrote back ${AGO}$`), (_, n, t) => `${who(n)} ha risposto ${when(t)}`],
     [new RegExp(`^(.+) wrote last, ${AGO}(?:; (.+) picked it up and (wrote nothing back|has written nothing back yet))?$`), (_, n, t, a, y) => `Ultimo messaggio ${n === "You" ? "tuo" : of(n)}, ${when(t)}${a ? `; ${LOW[a] || who(a)} l'ha preso in carico e ${y[0] === "w" ? "non ha risposto nulla" : "non ha ancora risposto nulla"}` : ""}`],
+    // a finished chat's head: an agent has the last word (threadStand case 7, E203n)
+    [/^(just now|\d+(?:[.,]\d)?[smhd] ago), from (.+)$/, (_, t, n) => { const N = n[0].toUpperCase() + n.slice(1); return `${when(t)}, ${OF[N] || of(n)}`; }],
     [/^(.+) picked it up and has written nothing back yet$/, (_, n) => `${who(n)} l'ha preso in carico e non ha ancora risposto nulla`],
     [/^(.+) waits for your answer$/, (_, n) => `${who(n)} aspetta la tua risposta`],
     [/^(.+) stopped answering$/, (_, n) => `${who(n)} ha smesso di rispondere`],

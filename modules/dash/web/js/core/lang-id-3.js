@@ -673,7 +673,7 @@ export default {
     [/^Added to by (.+)$/, "Ditambah oleh $1"],
     [/^Renamed from (.+)$/, "Diganti namanya dari $1"],
     [/^Moved to (.+)$/, "Dipindahkan ke $1"],
-    [/^Read (.+)$/, "Baca $1"],
+    [/^Read (?!· )(.+)$/, "Baca $1"],
     [/^No backup commit from (.+) to (.+): not recorded$/, "Tidak ada commit cadangan dari $1 sampai $2: tidak tercatat"],
     // E18l: a message's name for screen readers and a chart mark's title: who, then the date (already in the chosen language).
     [/^You, (\d+(?:[.,]\d)?[smhd]) ago: (.+)$/s, "Anda, $1 lalu: $2"],

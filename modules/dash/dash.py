@@ -311,6 +311,7 @@ def activity(out):
     hit = _activity.get(str(p))
     if hit and hit[0] == m: return hit[1]
     res["last"] = m
+    last = None  # the call "doing" names: once it fails (a Stop and send cuts it) it is not what the session is doing
     cur = None   # E11: the Bash call being streamed (--include-partial-messages); a post it writes shows as a draft until it runs
     for e in jlines(p, 256 * 1024):
         t = e.get("type")
@@ -326,9 +327,13 @@ def activity(out):
             elif et == "content_block_stop" and cur and ev.get("index") == cur["i"]: cur["done"] = True
             continue
         if t in ("user", "result"): cur = None   # the tool ran: the post is on the board now
+        if t == "user":
+            body = (e.get("message") or {}).get("content")
+            if isinstance(body, list) and any(isinstance(c, dict) and c.get("type") == "tool_result" and c.get("is_error") and c.get("tool_use_id") == last for c in body) and last: res["doing"] = ""
         if t == "assistant":
             for c in e.get("message", {}).get("content", []) or []:
                 if c.get("type") == "tool_use":
+                    last = c.get("id")
                     res["doing"] = describe_tool(c.get("name"), c.get("input"))
                 elif c.get("type") == "text" and c.get("text", "").strip():
                     res["said"] = c["text"]

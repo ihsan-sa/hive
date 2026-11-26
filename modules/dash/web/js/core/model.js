@@ -1002,8 +1002,13 @@ export function threadStand(th, read, waits) {
   const lp = d && d.posts.at(-1); if (!lp) return null;
   if (lp.stopped && lp.from === "dash") return out("ended", "Stopped", `You stopped it ${ago(lp.t)}`);   // E203c: the person pressed Stop, and nothing has been written since
   // a page's edit notice (dash.py, tagged page:edit) is written as the person but asks nobody, so nobody was meant to pick it up
-  if (lp.from !== "person" || (lp.tags || []).includes("page:edit"))
-    return out("done", "Quiet", `${lastWriter(lp.from, Name)} wrote last, ${ago(lp.t)}`);
+  if (lp.from !== "person" || (lp.tags || []).includes("page:edit")) {
+    // E203n: a chat the person wrote in, where an agent has the last word and no agent is on it, is a finished chat: say so in plain words.
+    // Not "Done": nobody said the work is done (HA-21).
+    const by = lastWriter(lp.from, Name), agent = isAgent(lp.from) || CODE_NAME.test(lp.from) || isWarden(lp.from);
+    if (agent && d.posts.some(p => p.from === "person" && !(p.tags || []).includes("page:edit"))) return out("done", "Replied", `${ago(lp.t)}, from ${agentLabel(lp.from) || "the agent"}`);
+    return out("done", "Quiet", `${by} wrote last, ${ago(lp.t)}`);
+  }
   // The person wrote last. Someone else signed in to this Hive is named, as their message's own head names them (message.js).
   const src = postSource(lp), me = S.app && S.app.signer, who = src && src.how === "Web" && src.name && me && src.name !== me ? src.name : "You";
   const said = `${who} wrote last, ${ago(lp.t)}`;

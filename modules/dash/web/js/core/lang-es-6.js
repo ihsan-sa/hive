@@ -105,6 +105,8 @@ export default {
     // a conversation with nothing written about it: who wrote last and when, and the run that read it and wrote nothing (threadStand case 7)
     // "Último mensaje de …" and not "… escribió el último mensaje": at 390 the longer one ran past a phone's home row and its age was cut off (HA-19)
     [new RegExp(`^(.+) wrote last, ${AGO}(?:; (.+) picked it up and (wrote nothing back|has written nothing back yet))?$`), (_, n, t, a, y) => `Último mensaje ${n === "You" ? "tuyo" : of(n)}, ${when(t)}${a ? `; ${LOW[a] || who(a)} lo recogió y ${y[0] === "w" ? "no respondió nada" : "aún no ha respondido nada"}` : ""}`],
+    // a finished chat's head: an agent has the last word (threadStand case 7, E203n)
+    [/^(just now|\d+(?:[.,]\d)?[smhd] ago), from (.+)$/, (_, t, n) => { const N = n[0].toUpperCase() + n.slice(1); return `${when(t)}, ${OF[N] || of(n)}`; }],
     [/^(.+) picked it up and has written nothing back yet$/, (_, n) => `${who(n)} lo recogió y aún no ha respondido nada`],
     [/^(.+) waits for your answer$/, (_, n) => `${who(n)} espera tu respuesta`],
     [/^(.+) stopped answering$/, (_, n) => `${who(n)} dejó de responder`],

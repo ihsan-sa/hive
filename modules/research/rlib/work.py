@@ -1186,6 +1186,41 @@ def signal_title_why(r, page, org=""):
     return f"{SIGNAL_MARK}its page gives them another post ({given[:90]}), so it may be from before their present one"
 
 
+def old_org_signal_why(r):
+    """Why a verified row on the organisation's signal, not the person's own, is marked partial for its age, or '': UF's "AI in Careers" page, Glover's unit's, published 2022-11-17 and read in 2026, does not name her; two independent reviews rated it WEAK (fnwords149, fnwords150). A person's own statement of the same age still stands (Andrade's 2025-06 Substack quote, CONFIRMED in fnwords150): her own words say more than her unit's standing page."""
+    if not str(r.get("signal") or "").startswith("(the organisation's"): return ""
+    try: days = (dt.date.fromisoformat(str(r.get("read_on") or "")[:10]) - dt.date.fromisoformat(str(r.get("signal_date") or "")[:10])).days
+    except ValueError: return ""
+    if days <= 365: return ""
+    return f"{SIGNAL_MARK}it is the organisation's signal, not theirs, and from {str(r['signal_date'])[:10]}, {days / 365.25:.1f} years before the page was read"
+
+
+OWN_QUOTE = re.compile(r"\u201c([^\u201c\u201d]{12,600})\u201d|\"([^\"]{12,600})\"")
+def own_quotes(text, name):
+    """The person's own quoted words on a page: a quotation whose closing mark is followed by their name and a saying verb ("\u201cRoutine jobs are being replaced by robots ...,\u201d Bachert explains." or "..., says Bachert."), or whose opening mark follows them ("Bachert said, \u201c...\u201d"). A pattern, not a reading: a quotation the page gives no speaker for is nobody's."""
+    toks = [t for t in re.findall(r"[^\W\d_][\w'\u2019-]*", people.clean_name(name or "")) if len(t) >= 2]
+    if not toks: return []
+    nm = r"(?:" + "|".join(re.escape(t) for t in dict.fromkeys(toks[:1] + toks[-1:])) + r")"
+    after = re.compile(r"\s*(?:\(?\w+\)?\s+){0,1}(?:" + nm + r"(?:\s+\w+){0,1}\s+" + SAID + r"|" + SAID + r"\s+(?:\w+\.?\s+){0,2}?" + nm + r")\b", re.I)
+    before = re.compile(r"\b" + nm + r"(?:\s+\w+){0,1}\s+" + SAID + r"(?:\s+\w+){0,2}[,:]?\s*$", re.I)
+    text = str(text or "")
+    out = []
+    for m in OWN_QUOTE.finditer(text):
+        q = m.group(1) or m.group(2)
+        if after.match(text, m.end()) or before.search(text[max(0, m.start() - 80):m.start()]): out.append(" ".join(q.split()))
+    return out
+
+
+def narration_own_words_why(r, page, must):
+    """Why a verified row whose signal is a channel's introduction to its interview (interview_intro) is marked partial, or '': the page quotes the person, and none of their quoted words names AI, so the AI tie is the writer's framing. Workshifter's "Bridging the Gap: Navigating the AI Revolution ..." put AI in its title and standfirst, and Bachert's own words were about robots and hands-on courses (fnwords150 review, WEAK). A page with none of their words quoted (her YouTube video's description, CONFIRMED in fnwords149) says nothing either way, so the row stands."""
+    if not must or r.get("signal_near_person") != "yes" or not page.get("text"): return ""
+    if not interview_intro(str(r.get("signal") or ""), r.get("name")): return ""
+    said = own_quotes(page["text"], r.get("name"))
+    if not said: return ""
+    if any(people.term_regex(m).search(fold(q)) for q in said for m in must): return ""
+    return f"{SIGNAL_MARK}its AI words are the writer's framing of the interview; none of the {len(said)} quote{'s' if len(said) != 1 else ''} of theirs on the page names AI"
+
+
 def signal_title_note(r, page, org=""):
     """A note, not a mark-down, when a verified row's own signal page gives the person a title with another unit word than the title on the page that verifies the row: STC's news story gives Petrosian "Vice President and Provost of Academic Affairs and Economic Development", her staff page "... Academic Affairs and Workforce Innovation", and the reviewer read the staff title as a careers post the story does not give (fnwords148 review). Posts that share no unit word are signal_title_why's, which marks the row partial."""
     if not stored_signal_url(r) or not page.get("text"): return ""
@@ -1678,12 +1713,12 @@ class Hunt:
         return n
 
     def mark_signals(self):
-        """A verified row whose own signal was said under another post (signal_title_why) or names AI only in passing (passing_signal_why) is marked partial, kept on the list with the reason in its note (fnwords146 review: Rotyliano, WEAK)."""
+        """A verified row whose own signal was said under another post (signal_title_why) or names AI only in passing (passing_signal_why), or is a writer's introduction to an interview whose quotes of them don't name AI (narration_own_words_why), is marked partial, kept on the list with the reason in its note (fnwords146 review: Rotyliano, WEAK)."""
         listed = {id(r) for r in self.leads.values()}
         for r in list(self.leads.values()) + list(self.near.values()):
             page = signal_page_of(r, self.case)
             if r.get("check_status") != "verified" or id(r) not in listed: continue
-            why = signal_title_why(r, page, r.get("organisation") or "") or passing_signal_why(r, page, self.must)
+            why = signal_title_why(r, page, r.get("organisation") or "") or passing_signal_why(r, page, self.must) or narration_own_words_why(r, page, self.must)
             if not why:
                 if (said := signal_title_note(r, page, r.get("organisation") or "")) and said not in str(r.get("note") or ""): r["note"] = "; ".join(x for x in (r.get("note"), said) if x)
                 continue
@@ -1769,6 +1804,7 @@ class Hunt:
             if not about_ai: return "", "its unit's event is not about AI (AI is in neither its address nor its title)"
             if not (sp.get("date") or extract.url_date(url)): return "", "its unit's event has no date"
             if (above := unit_post_above(row.get("title", ""), (self.case.page_at(src_url) or {}).get("text", ""))): return "", f"{self.NOT_UNIT_HEAD}: {above}"
+            if self.unit_event_alone(row, sp, url): return "", self.LONE_EVENT
             return self.UNIT_EVENT_SHAPE, ""   # NECC's "AI + Resumes" workshop, organised by Career Services, for its director (Rochon, fnwords148 CC review): the unit's own dated event, though no line of it names her
         news = (NEWS_PAGE.search(host + u.path) or re.search(r"/news-and-events/|/news-releases?/", u.path)) and not listing_url(url)
         last = re.sub(r"\.\w+$", "", ([x for x in u.path.lower().split("/") if x] or [""])[-1])
@@ -1782,6 +1818,26 @@ class Hunt:
             if beside(win, CAREERS_ACTION, 250) and PROGRAMME_WORD.search(win): return self.NEWS_SHAPE, ""
             return "", "the news doesn't announce an AI programme or event for careers or workforce"
         return "", ""
+
+    LONE_EVENT = "its unit's event is a single one: the page doesn't name them, and no other AI event of the unit in the year before it was read is known"
+    def unit_event_alone(self, row, sp, url):
+        """Whether a unit's dated event, the row's only signal, stands alone: its page doesn't name the person, and the case holds no other event page of the same site, about AI, of the same unit, dated in the 365 days before the row was read. NECC's "AI + Resumes" workshop (2026-03-09), organised by Career Services and naming only a coordinator, was Rochon's only signal; the unit's one other AI workshop was 2025-03. Confirmed by fnwords148's CC review, rated WEAK by fnwords150's and fnwords151's: one past workshop says nothing of her view of AI or of a standing programme. A page naming them, or a second AI event of the unit within the year, keeps the shape."""
+        toks = [t for t in re.findall(r"[^\W\d_][\w'\u2019-]*", people.clean_name(row.get("name") or "")) if len(t) >= 2]
+        if toks and re.search(r"\b" + re.escape(fold(toks[-1])) + r"\b", fold(sp.get("text", ""))): return False
+        try: read = dt.date.fromisoformat(str(row.get("read_on") or "")[:10])
+        except ValueError: read = dt.date.today()
+        ai = [people.term_regex(w) for w in (self.must or ["artificial intelligence", "AI"])]
+        site, here = registrable(domain_of(url)), url.rstrip("/")
+        for p in (self.case.pages() if self.case else []):
+            u = p.get("final_url") or p.get("url") or ""
+            if u.rstrip("/") == here or (p.get("url") or "").rstrip("/") == here or registrable(domain_of(u)) != site: continue
+            if not extract.EVENT_PATH.search(urllib.parse.urlsplit(u).path or ""): continue
+            try: d = dt.date.fromisoformat(str(p.get("date") or "")[:10])
+            except ValueError: continue
+            if not 0 <= (read - d).days <= 365: continue
+            if not any(r.search(fold(p.get("title", ""))) or r.search(fold(re.sub(r"[-_/.]+", " ", urllib.parse.urlsplit(u).path))) for r in ai): continue
+            if event_unit(p.get("text", ""), row.get("title", "")): return False
+        return True
 
     def org_shapes(self):
         """The organisation-signal shapes the spec lists rows on: `org_signal_shapes` is a list of "unit" and "news", true for both, false or [] for none. Default ["unit"]. fnwords132's reviewer called both news-shaped rows WEAK (Broward's Blue Collar AI story named a dean, not the workforce VP; GTCC's was an AI degree, not AI for careers), where fnwords130's judge had confirmed them, so news was off by default; fnwords148's CC review confirmed GTCC's again (Pitonzo, #4: dated news of a new AI programme "helping meet workforce needs", run by her division), two reviewers of three, so it was on; fnwords149's review called both news rows WEAK again (Tinsley at Broward: the AI programme is the IT dean's and the story never names him; Pitonzo at GTCC: an AI degree quoted to the president), two reviewers of four, and a WEAK row is no lead, so news is off by default again. `["unit", "news"]` or true turns it on."""
@@ -2937,10 +2993,9 @@ class Hunt:
                 if pg.get("status") != "ok": continue
                 url = pg.get("final_url") or pg["url"]
                 if registrable(domain_of(url)) != registrable(host) or not pg.get("date") or not event_unit(pg.get("text", ""), units[unit]): continue
-                if (excerpt := unit_ai_sentence(pg.get("text", ""), ai)):
+                if unit not in out and (excerpt := unit_ai_sentence(pg.get("text", ""), ai)):
                     out[unit] = (url, excerpt, pg)
-                    self.log(f"  unit events: {org}'s {unit} — {url}")
-                    break
+                    self.log(f"  unit events: {org}'s {unit} — {url}")   # the next AI events are read too, into the case: a second one in the year keeps the newest from standing alone (unit_event_alone)
         return out
 
     def give_unit_signal(self, org, url, excerpt, page):
@@ -3696,6 +3751,7 @@ class Hunt:
     def report(self):
         out_dir = Path(self.s.get("out") or self.case.root)
         out_dir.mkdir(parents=True, exist_ok=True)
+        listed = {id(r) for r in self.leads.values()}
         age = {}   # days between a verified row's signal and its reading, when over a year (with_age_note); not stored on the row
         for r in list(self.leads.values()) + list(self.near.values()):
             local_read_day(r, self.case)
@@ -3714,6 +3770,9 @@ class Hunt:
             if not r.get("signal_date") and r.get("signal") and not str(r["signal"]).startswith("(") and (r.get("signal_url") or r.get("source_url")) == r.get("source_url"): r["signal_date"] = r.get("page_date") or ""   # a signal read on the row's own page is as old as that page: fnwords119 left signal_date empty on 4 of 6 verified rows
             r["signal_date_from"] = signal_date_from(r, self.case)   # here, after the last change to signal_date: set in mark_signals, Cormio's and four other own-page rows got none, their date filled from page_date just above (6z6 reload)
             age[id(r)] = with_age_note(r)
+            if r.get("check_status") == "verified" and id(r) in listed and (why := old_org_signal_why(r)):   # here, not in mark_signals: a stored organisation signal's date is only filled in just above (Glover, fnwords150 reload)
+                r["check_status"] = "partial"
+                if why not in str(r.get("note") or ""): r["note"] = "; ".join(x for x in (r.get("note"), why) if x)
         rows = sorted(self.leads.values(), key=lambda r: (r["check_status"] != "verified", r["signal_near_person"] != "yes", r["organisation"]))
         full = lambda o: self.full_names.get(o) or o
         shown = lambda r: {**r, "organisation": full(r.get("organisation"))} if r.get("organisation") in self.full_names else r   # the hunt files rows under the acronym it searched by; a reader gets the name

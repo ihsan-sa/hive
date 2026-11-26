@@ -782,18 +782,28 @@ def reaped_signalled(log, posts, t0, t1):
 # "broken" as the head of a compound ("the broken-test example", resume feedback 11-22) is a noun phrase, not a report: the only match 11-22..23 and noise.
 NOTICED = re.compile(r"\b(?:hello\?|status\?|not seeing|isn.t working|broken(?![-\w])|nothing happen|why am i not|still (?:not(?! (?:the same|as|quite)\b)|no|isn|doesn|waiting|nothing|broken|missing)\b|why (?:is|are|does|do)\b[^?.!\n]{0,60}?\b(?:not|no|isn.t|doesn.t|don.t|only|gap|wrong|missing)\b)", re.I)
 
+# Words inside quotes are a page or a post the person is pointing at, not their report: 'a box around "... catch a broken circuit"' (11-25) was the only match 11-25..26.
+QUOTED = re.compile(r'"[^"\n]{1,300}"|\u201c[^\u201d\n]{1,300}\u201d')
+
+
+def noticed_in(text):
+    return bool(NOTICED.search(QUOTED.sub(" ", str(text))))
+
+
 def board_in(posts, t0, t1):
     ps = [p for p in posts if t0 <= p.get("at", "") <= t1]
     person = [p for p in ps if p.get("from") == "person"]
-    noticed = sum(1 for p in person if NOTICED.search(str(p.get("text", ""))))
+    noticed = sum(1 for p in person if noticed_in(p.get("text", "")))
     return len(ps), len(person), noticed
 
 AGENT = re.compile(r"[a-z][0-9a-f]{4}")
 
 def reply_s(posts, t0, t1):
     """Seconds from each of the person's posts in the window that names an agent to that agent's next post in the thread, sorted.
-    A post with no reply yet is left out (not a number), so the count is the answered ones. The person says "hello?" after a minute."""
-    out, by_th = [], {}
+    A post with no reply yet is left out (not a number), so the count is the answered ones. The person says "hello?" after a minute.
+    Posts answered by the same reply count once, timed from the earliest: a burst of five lines sent in a minute is one wait, not five
+    (improve-survey 11-26: aca94's five-line burst made p90 96 where the waits gave 76)."""
+    out, by_th = {}, {}
     for i, p in enumerate(posts): by_th.setdefault(p.get("thread") or p.get("id"), []).append((i, p))
     for i, p in enumerate(posts):
         if p.get("from") != "person" or not t0 <= p.get("at", "") <= t1: continue
@@ -806,10 +816,12 @@ def reply_s(posts, t0, t1):
         except (KeyError, ValueError): continue
         for j, q in by_th.get(th, []):
             if j <= i or str(q.get("from", "")).lower() != to[0]: continue
-            try: out.append(dt.datetime.fromisoformat(q["at"]).timestamp() - tp)
-            except (KeyError, ValueError): pass
+            try: d = dt.datetime.fromisoformat(q["at"]).timestamp() - tp
+            except (KeyError, ValueError): break
+            k = q.get("id") or j
+            out[k] = max(out.get(k, 0), d)
             break
-    return sorted(out)
+    return sorted(out.values())
 
 def pct(xs, f): return round(xs[min(len(xs) - 1, int(len(xs) * f))]) if xs else None
 

@@ -470,6 +470,8 @@ export default {
     [/^Summary by (.+)$/, "$1의 요약"],
     [new RegExp(`^(.+) wrote back ${AGO}$`), (_, n, t) => `${who(n)}${ga(who(n))} ${when(t)} 답장했습니다`],
     [new RegExp(`^(.+) wrote last, ${AGO}(?:; (.+) picked it up and (wrote nothing back|has written nothing back yet))?$`), (_, n, t, a, y) => `마지막 메시지: ${nm(n)}, ${when(t)}${a ? `. ${LOW[a] || who(a)}${ga(LOW[a] || who(a))} 확인했지만 ${y[0] === "w" ? "답장은 없습니다" : "아직 답장하지 않았습니다"}` : ""}`],
+    // a finished chat's head: an agent has the last word (threadStand case 7, E203n)
+    [/^(just now|\d+(?:[.,]\d)?[smhd] ago), from (.+)$/, (_, t, n) => `${when(t)}, ${LOW[n] || nm(n)}에게서`],
     [/^(.+) picked it up and has written nothing back yet$/, (_, n) => `${who(n)}${ga(who(n))} 확인했지만 아직 답장하지 않았습니다`],
     [/^(.+) waits for your answer$/, (_, n) => `${who(n)}${ga(who(n))} 사용자의 답변을 기다리고 있습니다`],
     [/^(.+) stopped answering$/, (_, n) => `${who(n)}${ga(who(n))} 응답을 멈췄습니다`],

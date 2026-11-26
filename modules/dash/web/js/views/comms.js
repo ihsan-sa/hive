@@ -675,7 +675,7 @@ function threadRows(c, ctx) {
     }
     // The row says where the conversation stands in the mark and the word the top of its chat says it in (stand(), model.js threadStand), so the list
     // never says less or other than the chat it opens (HA-11; the board on 2026-11-16: 30 of 54 rows said nothing where the chat's top said Done,
-    // Waiting on others, Asked earlier, Needs you, Stopped or Blocked). A conversation nothing was written about stands on who wrote last (HA-21: Quiet, or
+    // Waiting on others, Asked earlier, Needs you, Stopped or Blocked). A conversation nothing was written about stands on who wrote last (HA-21: Replied, Quiet, or
     // Not picked up when the person wrote last and no agent read it), so only one with no message at all has a plain mark and no word.
     const s = stand(d.name), par = flat && threadParent(d.name), sLine = standLine(s);
     const say = inConversation(d.name, () => railSay(mdPlain(inkSaid(lp) ?? chatText(lp)))), fd = inConversation(d.name, () => fadeTag(d.name));
@@ -897,9 +897,9 @@ const standWord = (s, title) => (s ? h("span", { class: "cm-st", "data-state": s
 //           or Stuck when the list has it because its run broke: those wait on the person too (a message is what moves them), and the row's word
 //           says which kind it is.
 //   "run":  an agent is on it now: its row says Working, Working quietly, Waiting its turn or Waiting to start.
-//   "done": its row says Done. Not one that says Quiet or Not picked up: no agent said that work was finished (the review of HA-11: "3 done" over rows
+//   "done": its row says Done. Not one that says Replied, Quiet or Not picked up: no agent said that work was finished (the review of HA-11: "3 done" over rows
 //           that said Quiet).
-// A helper that says anything else (Quiet, Not picked up, Paused, Stopped, Waiting on others, Blocked, Asked, You replied, or a failure the count
+// A helper that says anything else (Replied, Quiet, Not picked up, Paused, Stopped, Waiting on others, Blocked, Asked, You replied, or a failure the count
 // doesn't have) is in no part, so the parts need not add up to the number of helpers.
 const kidStand = th => { const s = stand(th); return waitsOn(th) ? "need" : s && s.running ? "run" : s && s.word === "Done" ? "done" : ""; };
 function kidCount(ths) {

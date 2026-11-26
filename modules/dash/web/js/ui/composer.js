@@ -1172,7 +1172,8 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
     top || null,  // the conversation's status strip: a tab on the box's top edge
     // the strip already names a working agent and carries its Interrupt: the line over the box shows only an interrupt on its way.
     // An agent waiting on the person's answer isn't working: the question above already says so, and there is nothing to interrupt.
-    phase || (busy && !(top && top.querySelector(`[data-key="run:${busy}"]`)) && !waitsHere(th, busy)) ? liveLine(th, lw, phase, armed) : null,
+    // In the app look a Stop and send has one status line, the receipt under the message (message.js), so none is drawn here for it.
+    (phase ? !(S.app && S.app.app) : busy && !(top && top.querySelector(`[data-key="run:${busy}"]`)) && !waitsHere(th, busy)) ? liveLine(th, lw, phase, armed) : null,
     h("div", { class: "cp-box", "data-key": "box" },
       armed || d.reply || d.quote || d.files.length || ink || inkx || (SB.open && (can("secrets") || SB.lost)) || SB.say || (!th && d.naming) ? h("div", { class: "cp-top", "data-key": "top" },
         armed ? intNote(th, busy) : null,
