@@ -2,12 +2,13 @@
 // There is no Approve button here on purpose: the warden's ruling (11231556881e) makes approval in the person's Link app the only
 // go to spend, so the card can only show the request and open it in Link. Everything goes in as text; links are http(s) only.
 // Ask Link again (the person's ask, 24 h): on a request whose 30 min prompt lapsed it sends Link a fresh prompt for the same cart and
-// total (POST /api/buy do=renew, the person's signed-in app only); that approves nothing, the Link app is still the only go.
+// total (POST /api/buy do=renew, the person's signed-in app only) and opens the new prompt's Link page in the same tap; that approves
+// nothing, Link is still the only go.
 // Open in Link opens Link's own page in a pop-up over the dashboard (openInLink below); Link's page can't be framed.
 import { h, tr } from "../core/dom.js";
 import { can, post } from "../core/store.js";
 import { codeBlock } from "./code.js";
-import { parseBuy, money as fmt } from "./buy_parse.js";
+import { parseBuy, linkUrl, money as fmt } from "./buy_parse.js";
 
 /** Open in Link: Link's own page for approving the buy in a small window over the dashboard (the person's 11241042be25, as Zeus shows it).
  *  Link's page refuses to be framed (frame-ancestors 'self'), so a pop-up is as close as it gets. When the request was made with
@@ -17,27 +18,44 @@ function openInLink(url) {
   const a = h("a", { class: "rc-buy-open", href: url, target: "_blank", rel: "noopener noreferrer" }, "Open in Link");
   a.addEventListener("click", (e) => {
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;   // a new tab on purpose: leave it to the browser
-    const W = 460, H = 760;
-    const left = Math.max(0, Math.round((window.screenX || 0) + ((window.outerWidth || W) - W) / 2));
-    const top = Math.max(0, Math.round((window.screenY || 0) + ((window.outerHeight || H) - H) / 2));
-    let w = null;
-    try { w = window.open(url, "h2-link", `popup,width=${W},height=${H},left=${left},top=${top}`); } catch { w = null; }
+    const w = linkWindow(url);
     if (!w) return;   // blocked: the link opens a tab as before
-    try { w.opener = null; } catch { /* already cut */ }
     e.preventDefault();
     try { w.focus(); } catch { /* fine */ }
   });
   return a;
 }
 
-/** The Ask Link again button and the line that says how it went. */
+/** A small window centred over the dashboard for Link's own page (it can't be framed); null if the browser blocked it. */
+function linkWindow(url) {
+  const W = 460, H = 760;
+  const left = Math.max(0, Math.round((window.screenX || 0) + ((window.outerWidth || W) - W) / 2));
+  const top = Math.max(0, Math.round((window.screenY || 0) + ((window.outerHeight || H) - H) / 2));
+  let w = null;
+  try { w = window.open(url, "h2-link", `popup,width=${W},height=${H},left=${left},top=${top}`); } catch { w = null; }
+  if (w) try { w.opener = null; } catch { /* already cut */ }
+  return w;
+}
+
+/** The Ask Link again button and the line that says how it went. One tap (the person's 112520136396: a request should stay
+ *  good for a day): it opens the Link window at once, inside the click so no pop-up blocker stops it, sends Link a fresh prompt
+ *  for the same cart, then points that window at the new prompt's page. Approving there or in the Link app is still the only go. */
 function renewButton(d) {
   const note = h("span", { class: "rc-buy-note", role: "status" });
   const b = h("button", { type: "button", class: "rc-buy-open" }, "Ask Link again");
   b.addEventListener("click", async () => {
     b.disabled = true; note.textContent = tr("Asking Link…");
-    try { await post("/api/buy", { do: "renew", id: d.id }); b.remove(); note.textContent = tr("Sent: approve or decline the new prompt in your Link app."); }
-    catch (e) { b.disabled = false; note.textContent = e.message || tr("Couldn't ask Link again."); }
+    const w = linkWindow("about:blank");
+    try {
+      const r = await post("/api/buy", { do: "renew", id: d.id });
+      const url = linkUrl(r && r.approval_url);
+      b.remove();
+      if (w && url) { try { w.location.href = url; w.focus(); } catch { /* closed meanwhile */ } note.textContent = tr("Sent: approve or decline it on Link's page, or in your Link app."); }
+      else { if (w) try { w.close(); } catch { /* fine */ } note.textContent = tr("Sent: approve or decline the new prompt in your Link app."); }
+    } catch (e) {
+      if (w) try { w.close(); } catch { /* fine */ }
+      b.disabled = false; note.textContent = e.message || tr("Couldn't ask Link again.");
+    }
   });
   return h("div", { class: "rc-buy-act" }, b, note);
 }

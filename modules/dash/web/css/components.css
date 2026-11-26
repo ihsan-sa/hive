@@ -3774,6 +3774,8 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .dv-pn{display:flex;flex-direction:column;gap:var(--s4);padding-bottom:var(--s4)}
 .dv-title{margin:0;font-size:var(--fs-lead);font-weight:var(--w-bold);letter-spacing:var(--track-tight);line-height:var(--lh-tight)}
 .dv-meta{display:flex;gap:var(--s3);align-items:center;margin-top:4px;color:var(--ink-3);font-size:var(--fs-meta)}
+.dv-src{margin-top:2px;color:var(--ink-3);font-size:var(--fs-meta);overflow-wrap:anywhere}
+.dv-src code{color:var(--ink-2)}
 .dv-rev{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--edge);border-radius:var(--r-s);padding:1px 4px}
 .dv-note{margin:var(--s2) 0 0;padding:6px 10px;border-radius:var(--r-m);font-size:var(--fs-small);background:var(--sunken)}
 .dv-note[data-tone=good]{background:color-mix(in oklch,var(--good) 14%,transparent)}
@@ -4149,3 +4151,196 @@ button.rc-buy-open:disabled{opacity:.6;cursor:progress}
 .appr-s[data-tone=bad]{color:var(--bad-ink)}
 .appr-b{flex:none;align-self:center}
 .appr-c+.appr-b{margin-left:auto}
+
+/* ---------- Ink in the chat (thread 112515205dbf; design ~/designs/ink-chat). JS: js/ink/*.js ----------
+   One primitive, the sheet, in two places here: in a message (.ink-sheet, the ```ink fence's "space to write") and over the
+   chat (.ink-over: the person's pen on any message). Strokes are SVG; these rules style the surfaces, the tools and the agent's pen. */
+:root{
+  /* the person's pens: none of them is an agent colour */
+  --pen-ink:var(--ink);
+  --pen-blue:light-dark(oklch(48% .16 255),oklch(74% .13 250));
+  --pen-green:light-dark(oklch(50% .13 155),oklch(76% .13 155));
+  --pen-hl:light-dark(oklch(86% .16 95 / .55),oklch(80% .14 95 / .35));
+  /* the agents' pens, in the order agents first draw in a thread; the first is the tutor's red pen (pen ink, not a status) */
+  --ag-1:light-dark(oklch(54% .19 28),oklch(70% .17 28));
+  --ag-2:light-dark(oklch(52% .14 300),oklch(74% .12 300));
+  --ag-3:light-dark(oklch(52% .12 195),oklch(74% .10 195));
+  --ag-4:light-dark(oklch(55% .13 55),oklch(76% .12 60));
+  /* the agents' handwriting: system faces only, nothing downloaded */
+  --hand:"Bradley Hand","Noteworthy","Chalkboard SE","Chalkboard","Segoe Print","Comic Neue","Comic Sans MS",cursive;
+  --paper:var(--surface);
+  --paper-rule:light-dark(oklch(88% .02 245),oklch(32% .02 245));
+  --paper-dot:light-dark(oklch(80% .006 265),oklch(38% .006 265));
+  --paper-grid:light-dark(oklch(92% .01 245),oklch(27% .01 245));
+  --paper-margin:light-dark(oklch(70% .12 25 / .35),oklch(60% .12 25 / .35));
+  --ink-tb-h:48px;
+  --write-ms:900ms;
+}
+/* strokes */
+.ink-svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
+.ink-svg path,.ink-mark path,.ink-thumb path{fill:none;stroke-linecap:round;stroke-linejoin:round}
+.ink-svg .ink-s,.ink-mark .ink-s,.ink-thumb .ink-s{fill:currentColor;stroke:none}
+.ink-s[data-tool=hl]{fill:var(--pen-hl);mix-blend-mode:multiply}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]) .ink-s[data-tool=hl]{mix-blend-mode:screen}}
+[data-theme=dark] .ink-s[data-tool=hl]{mix-blend-mode:screen}
+.ink-s[data-pending]{opacity:.92}
+.ink-ag{color:var(--ag,var(--ag-1))}
+.ink-ag path{fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.ink-ag path+path{stroke-width:1.1;opacity:.45}
+.ink-ag[data-k=hl] path{stroke:color-mix(in oklab,currentColor 30%,transparent);stroke-width:14;mix-blend-mode:multiply}
+.ink-note{fill:currentColor;font-family:var(--hand);font-size:22px;letter-spacing:.01em}
+.ink-ag[data-hidden],.ink-layer[data-hidden],.ink-own[data-hidden]{display:none}
+.ink-ag[data-new] path{stroke-dasharray:var(--len) var(--len);stroke-dashoffset:var(--len);animation:ink-write var(--dur-w,var(--write-ms)) cubic-bezier(.4,.1,.3,1) var(--at,0ms) forwards}
+.ink-ag[data-new] .ink-note{clip-path:inset(-20% 100% -20% 0);animation:ink-reveal var(--dur-w,var(--write-ms)) steps(18,end) var(--at,0ms) forwards}
+@keyframes ink-write{to{stroke-dashoffset:0}}
+@keyframes ink-reveal{to{clip-path:inset(-20% -4% -20% 0)}}
+@media (prefers-reduced-motion:reduce){.ink-ag[data-new] path{animation:none;stroke-dashoffset:0}.ink-ag[data-new] .ink-note{animation:none;clip-path:none}}
+
+/* 1. the sheet in a message: a page of a pad lying in the message, not a field */
+.ink-sheet{position:relative;display:grid;margin:8px 0 4px;border-radius:var(--r-l);background:var(--paper);box-shadow:0 0 0 1px var(--line),var(--e1);overflow:hidden;container-type:inline-size}
+.ink-sheet[data-flash]{animation:ink-flash 1.2s var(--ease)}
+@keyframes ink-flash{0%,40%{box-shadow:0 0 0 2px var(--accent),var(--e2)}}
+.ink-sheet-h{display:flex;align-items:center;gap:var(--s2);min-height:var(--ctl);padding:6px 6px 6px var(--s3);border-bottom:1px solid var(--line);font-size:var(--fs-small)}
+.ink-sheet-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:var(--w-med);color:var(--ink)}
+.ink-sheet-h .btn{flex:none}
+/* the printed problem: real text, selectable, readable by the agent; set in sheet units so each line sits on a rule */
+.ink-sheet-c{--rule-gap:4cqw;position:relative;aspect-ratio:800/var(--h,192);touch-action:pan-y pinch-zoom;cursor:crosshair}
+.ink-sheet-p{position:absolute;left:7cqw;top:0;right:3cqw;font-size:2.5cqw;line-height:4cqw;color:var(--ink);cursor:text}
+.ink-sheet-p>*{margin:0}
+@container (max-width:520px){.ink-sheet-p{font-size:3.6cqw;line-height:8cqw}}
+.ink-sheet-c[data-paper=ruled]{background:repeating-linear-gradient(to bottom,transparent 0 calc(var(--rule-gap) - 1px),var(--paper-rule) calc(var(--rule-gap) - 1px) var(--rule-gap));background-position:0 -1px}
+.ink-sheet-c[data-paper=ruled]::before{content:"";position:absolute;top:0;bottom:0;left:5.5cqw;width:1px;background:var(--paper-margin)}
+.ink-sheet-c[data-paper=grid]{background-image:linear-gradient(var(--paper-grid) 1px,transparent 1px),linear-gradient(90deg,var(--paper-grid) 1px,transparent 1px);background-size:var(--rule-gap) var(--rule-gap)}
+.ink-sheet-c[data-paper=dot]{background-image:radial-gradient(circle,var(--paper-dot) 1.1px,transparent 1.4px);background-size:calc(var(--rule-gap) * .75) calc(var(--rule-gap) * .75)}
+.ink-sheet-c[data-paper=blank]{background:none}
+.ink-sheet-c[data-tool=eraser]{cursor:cell}
+.ink-invite{position:absolute;left:7.5cqw;top:calc((var(--rows,0) + .55) * var(--rule-gap));display:flex;align-items:center;gap:8px;color:var(--ink-3);font:22px/1 var(--hand);pointer-events:none;transition:opacity var(--dur-l) var(--ease)}
+.ink-invite .ic{width:18px;height:18px;stroke-width:1.6}
+.ink-invite small{font:var(--fs-meta)/1 var(--font);color:var(--ink-3);margin-left:4px}
+.ink-sheet:not([data-empty]) .ink-invite{opacity:0}
+.ink-sheet[data-empty] .ink-sheet-c:hover .ink-invite{color:var(--ink-2)}
+.ink-grow{position:absolute;left:0;right:0;bottom:0;height:var(--rule-gap);background:linear-gradient(transparent,color-mix(in oklab,var(--paper) 80%,transparent));pointer-events:none;opacity:0}
+.ink-sheet[data-writing] .ink-grow{opacity:1}
+.ink-sheet-f{display:flex;align-items:center;gap:var(--s2);min-height:36px;padding:4px 6px 4px var(--s3);border-top:1px solid var(--line);font-size:var(--fs-meta);color:var(--ink-3)}
+.ink-sheet-f:empty,.ink-sheet[data-empty] .ink-sheet-f{display:none}
+.ink-sheet-f>span{flex:1;min-width:0}
+.ink-sheet[data-pending] .ink-sheet-f{background:var(--accent-bg);color:var(--accent-ink)}
+.ink-sheet[data-pending]{box-shadow:0 0 0 1px color-mix(in oklab,var(--accent) 40%,var(--line)),var(--e1)}
+.ink-who{display:inline-flex;gap:4px}
+.ink-who button{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 7px 0 5px;border:1px solid var(--line);border-radius:var(--r-pill);background:var(--surface);color:var(--ink-2);font-size:var(--fs-micro);cursor:pointer}
+.ink-who button::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--c,var(--pen-ink))}
+.ink-who button[aria-pressed=false]{color:var(--ink-3);text-decoration:line-through}
+.ink-who button[aria-pressed=false]::before{background:none;box-shadow:inset 0 0 0 1.5px var(--c,var(--pen-ink))}
+@container (max-width:480px){.ink-sheet-h .ink-who{display:none}.ink-invite{font-size:18px}}
+
+/* 2. ink over the chat: one layer over the messages' scroll box, like .sc-layer. It never takes the pointer: with the pen on,
+   drawing listens on the document, so with it off reading, selecting and scrolling are exactly as before. */
+.ink-over{position:absolute;left:0;top:0;overflow:hidden;pointer-events:none;z-index:3}
+.ink-over:empty{display:none}
+body[data-ink-pen] #main .cm-msgs{cursor:crosshair;user-select:none;-webkit-user-select:none}
+body[data-ink-pen][data-ink-tool=eraser] #main .cm-msgs{cursor:cell}
+body[data-ink-drawing]{user-select:none;-webkit-user-select:none}
+svg.ink-mark{position:absolute;overflow:visible;pointer-events:none;user-select:none;-webkit-user-select:none}
+/* ink over a message is measured in its body (snap.js frameOf), 800 units across a bubble maybe 290 px wide: --z keeps pen
+   widths and notes about the size they have on a sheet */
+.ink-z .ink-ag path{stroke-width:calc(2.4 * var(--z,1))}
+.ink-z .ink-ag path+path{stroke-width:calc(1.1 * var(--z,1))}
+.ink-z .ink-ag[data-k=hl] path{stroke-width:calc(14 * var(--z,1))}
+/* the bubble after a closed loop: ask here, ask in a side chat, or clear; beside the loop, never over what was circled */
+.ink-bubble{position:fixed;z-index:65;display:flex;align-items:center;gap:2px;padding:3px;border-radius:var(--r-pill);background:var(--surface);box-shadow:var(--e2);font-size:var(--fs-small);animation:ink-pop .16s var(--ease)}
+.ink-bubble .btn{height:var(--ctl-s);padding:0 10px;border-radius:var(--r-pill);gap:6px}
+.ink-bubble hr{width:1px;height:18px;margin:0 2px;border:0;background:var(--line)}
+.ink-bubble kbd{margin-left:2px;padding:0 4px;border-radius:4px;background:color-mix(in oklab,currentColor 12%,transparent);font:10px/16px var(--font)}
+.ink-loop{position:fixed;inset:0;width:100%;height:100%;z-index:64;pointer-events:none;overflow:visible}
+.ink-loop path{fill:color-mix(in oklab,var(--accent) 6%,transparent);stroke:var(--accent);stroke-width:1.5;stroke-dasharray:5 4;stroke-linejoin:round}
+body:has(.ink-bubble) .msg-tools{visibility:hidden}
+@keyframes ink-pop{from{opacity:0;transform:translateY(4px) scale(.97)}}
+
+/* the pen's tools: a row in the pen-on strip (desktop), a floating row once a Pencil has touched the chat (iPad, folds to one
+   nib after 3 s), and the Write page's bottom bar */
+.ink-tb{position:fixed;z-index:60;display:flex;align-items:center;gap:2px;height:var(--ink-tb-h);padding:2px 6px;border-radius:var(--r-pill);background:var(--surface);box-shadow:var(--e2)}
+.ink-tb[data-dock=float]{top:calc(var(--bar-h) + 56px);right:16px;bottom:auto}
+:root[data-ink-focus] .ink-tb[data-dock=float]{display:none}
+.ink-tb[data-dock=head]{position:static;height:var(--ctl);padding:0 2px;gap:0;border-radius:var(--r-m);box-shadow:0 0 0 1px var(--line)}
+.ink-t{position:relative;display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;border-radius:var(--r-pill);background:none;color:var(--ink-2);cursor:pointer}
+.ink-tb[data-dock=head] .ink-t{width:var(--ctl);height:var(--ctl);border-radius:var(--r-s)}
+.ink-t:hover{background:var(--hover);color:var(--ink)}
+.ink-t:disabled{opacity:.4;cursor:default;background:none}
+.ink-t[aria-pressed=true]{background:var(--tint);color:var(--ink)}
+.ink-t[aria-pressed=true]::after{content:"";position:absolute;bottom:4px;left:50%;width:4px;height:4px;margin-left:-2px;border-radius:50%;background:var(--c,var(--ink))}
+.ink-tb[data-dock=head] .ink-t[aria-pressed=true]::after{bottom:2px}
+.ink-t:focus-visible,.ink-sw:focus-visible{outline:none;box-shadow:var(--ring)}
+.ink-t .ic{width:20px;height:20px}
+.ink-tb[data-dock=head] .ink-t .ic{width:17px;height:17px}
+.ink-tb hr,.ink-focus-tb hr{flex:none;width:1px;height:22px;margin:0 4px;border:0;background:var(--line)}
+.ink-sw{display:grid;place-items:center;width:32px;height:44px;padding:0;border:0;border-radius:var(--r-s);background:none;cursor:pointer}
+.ink-tb[data-dock=head] .ink-sw{width:24px;height:var(--ctl)}
+.ink-sw::before{content:"";width:18px;height:18px;border-radius:50%;background:var(--c);box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--ink) 15%,transparent)}
+.ink-tb[data-dock=head] .ink-sw::before{width:14px;height:14px}
+.ink-sw[aria-pressed=true]::before{box-shadow:0 0 0 2px var(--surface),0 0 0 3.5px var(--c)}
+.ink-tb[data-collapsed]{padding:2px}
+.ink-tb[data-collapsed]>:not(.ink-t[aria-pressed=true]){display:none}
+.ink-tb[data-collapsed]>.ink-t[aria-pressed=true]{color:var(--c,var(--ink));background:none}
+.ink-tb[data-collapsed]>.ink-t[aria-pressed=true]::after{display:none}
+/* the header's Pen button: quiet off, the accent "on" look when on */
+.ink-pen{gap:6px}
+.ink-pen[aria-pressed=true]{background:var(--accent-bg);color:var(--accent-ink);box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--accent) 50%,transparent)}
+.ink-pen kbd{padding:0 4px;border:1px solid var(--line);border-radius:4px;font:10px/15px var(--font);color:var(--ink-3)}
+/* the pen-on strip over the top of the messages: the tool row, then what the pointer does now */
+.ink-on{position:absolute;left:0;right:0;top:0;z-index:4;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px 12px;padding:6px 10px;background:color-mix(in oklab,var(--accent-bg) 92%,transparent);backdrop-filter:blur(6px);color:var(--accent-ink);font-size:var(--fs-meta);border-bottom:1px solid color-mix(in oklab,var(--accent) 25%,transparent)}
+.ink-on .ink-tb{background:var(--surface)}
+.ink-on kbd{padding:0 5px;border:1px solid color-mix(in oklab,var(--accent) 45%,transparent);border-radius:4px;font:10px/16px var(--font)}
+
+/* 3. sending: the chip in the composer */
+.ink-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px 0}
+.ink-chip{display:inline-flex;align-items:center;gap:8px;max-width:100%;height:40px;padding:3px 4px 3px 3px;border:1px solid var(--line-2);border-radius:var(--r-m);background:var(--sunken);font-size:var(--fs-small);color:var(--ink)}
+.ink-chip>svg.ink-thumb{flex:none;width:44px;height:32px;border-radius:var(--r-s);background:var(--paper);box-shadow:0 0 0 1px var(--line)}
+.ink-chip>span{display:grid;min-width:0;line-height:1.2}
+.ink-chip b{font-weight:var(--w-med);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ink-chip small{font-size:var(--fs-micro);color:var(--ink-3)}
+.ink-chip .ink-x{display:grid;place-items:center;width:24px;height:24px;border:0;border-radius:var(--r-s);background:none;color:var(--ink-3);cursor:pointer}
+.ink-chip .ink-x:hover{background:var(--hover);color:var(--ink)}
+
+/* 4. the agent's card in its own post: one line that jumps to the sheet it drew on */
+.ink-card{display:flex;align-items:center;gap:var(--s3);width:fit-content;max-width:100%;margin:6px 0;padding:6px 12px 6px 6px;border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface);color:var(--ink);font-size:var(--fs-small);text-decoration:none;cursor:pointer}
+.ink-card:hover{border-color:var(--line-2);box-shadow:var(--e1)}
+.ink-card>svg.ink-thumb{flex:none;width:72px;height:48px;border-radius:var(--r-s);background:var(--paper);box-shadow:0 0 0 1px var(--line)}
+.ink-card b{display:flex;align-items:center;gap:6px;font-weight:var(--w-med)}
+.ink-card b::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--ag,var(--ag-1))}
+.ink-card .meta{display:block}
+.ink-card[data-err]{border-style:dashed}
+
+/* the Write page: the sheet fills the screen and a finger draws; Done returns to the chat with the ink pending */
+.ink-focus{position:fixed;inset:0;z-index:85;display:grid;grid-template-rows:auto minmax(0,1fr) auto;background:var(--bg)}
+.ink-focus-h{display:flex;align-items:center;gap:var(--s2);height:var(--bar-h);padding:0 var(--s2) 0 var(--s3);border-bottom:1px solid var(--line);background:var(--surface)}
+.ink-focus-h b{flex:1;min-width:0;font-size:var(--fs-title);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ink-focus-s{overflow:auto;padding:var(--s3)}
+.ink-focus .ink-sheet{margin:0 auto;max-width:1000px}
+.ink-focus .ink-sheet-h{display:none}
+.ink-focus .ink-sheet-c{touch-action:none}
+.ink-focus-tb{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:2px;padding:4px 8px calc(4px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line);background:var(--surface)}
+.ink-focus-tb .ink-t{width:44px;height:44px}
+@media (max-width:640px){
+  .ink-pen-l,.ink-pen kbd,.ink-on-k{display:none}
+  .ink-sheet-h .ink-who{display:none}
+  .ink-bubble{left:12px!important;right:12px;bottom:calc(84px + env(safe-area-inset-bottom,0px));top:auto!important;justify-content:space-between}
+  .ink-bubble .btn{height:40px}
+  .ink-chip{height:44px}
+  .ink-focus-tb .ink-sw{width:28px}
+}
+@media print{.ink-tb,.ink-bubble,.ink-invite,.ink-on{display:none}}
+/* the person's sent ink (ui/message.js inkLine): one quiet line under the message, however many sheets */
+.ink-line{display:inline-flex;align-items:center;flex-wrap:wrap;gap:2px 6px;min-height:24px;font-size:var(--fs-small);color:var(--ink-3)}
+.ink-line>.ic{flex:none;width:14px;height:14px}
+.ink-line .ink-one{display:inline-flex;align-items:center}
+.ink-line button{display:inline-grid;place-items:center;min-width:24px;height:24px;padding:0 4px;border:0;border-radius:var(--r-s);background:none;color:var(--ink-2);font:inherit;cursor:pointer}
+.ink-line .ink-go{text-decoration:underline;text-decoration-color:var(--line-2);text-underline-offset:3px}
+.ink-line button:hover{background:var(--hover);color:var(--ink)}
+.ink-line .ink-pic .ic{width:14px;height:14px}
+.msg[data-ink-only] .msg-files{margin-top:0}
+@media (max-width:640px){.ink-line{gap:2px 4px}.ink-line button{min-width:30px;height:32px;padding:0 2px}.ink-line .ink-sep>span{display:none}}
+/* the person's sent ink in their message (ui/message.js fileRow): one chip per sheet */
+.ink-chip[data-sent]>img{flex:none;width:44px;height:32px;border-radius:var(--r-s);background:var(--paper);box-shadow:0 0 0 1px var(--line);object-fit:cover;object-position:left top}
+.ink-chip[data-sent]>.ic{flex:none;width:32px;color:var(--ink-3)}
+.ink-chip .ink-go{display:grid;min-width:0;padding:0 4px;border:0;background:none;color:inherit;font:inherit;line-height:1.2;text-align:left;cursor:pointer}
+.ink-chip .ink-go:hover small{color:var(--ink);text-decoration:underline}

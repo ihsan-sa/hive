@@ -137,6 +137,7 @@ export default {
   "Download my chats": "チャットをダウンロード",
   "Every chat as plain text with its files, in one zip. A big Hive takes a minute.": "すべてのチャットをプレーンテキストとファイルにして、1つのzipにまとめます。大きなHiveでは1分ほどかかります。",
   "Download": "ダウンロード",
+  "Built from": "作成元",
   "How you want answers fits in 2000 characters.": "答え方の希望は2000文字以内です。",
   "Empty means no limit. Saves when you leave the box.": "空欄は無制限です。入力欄を離れると保存されます。",
   "no limit": "無制限",

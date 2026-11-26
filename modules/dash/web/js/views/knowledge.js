@@ -126,7 +126,7 @@ const leaveEd = () => { const ed = edOf(); return !ed || !ed.dirty() || confirm(
 function later(load) { const box = h("div", { class: "kb-later" }); load().then(n => { box.replaceChildren(n); box._kbed = n._ed ? n : null; }); return box; }
 function viewBody(d, line) {
   const v = line ? "src" : viewOf(d);
-  if (d.type === "md" && v === "") return own("kb-pages", `${d.path}|${d.t}|page`, () => later(() => import("../preview/paged.js").then(m => m.paged(d.text, { cut: d.truncated }))));
+  if (d.type === "md" && v === "") return own("kb-pages", `${d.path}|${d.t}|page`, () => later(() => import("../preview/paged.js").then(m => m.paged(d.text, { cut: d.truncated, md: mdBody(d.text, d.path) }))));   // mdBody: [x](deep/other.md) and ~/kb paths link within Knowledge, as in Text
   if (v === "edit") {   // keyed without the time: your own save, or the 30 s refresh, mustn't wipe what's being typed
     return own("kb-edwrap", `${d.path}|edit`, () => later(() => import("../preview/edit.js").then(m => m.editor({ kb: d.path, name: d.name }, d.text, d.version))));
   }

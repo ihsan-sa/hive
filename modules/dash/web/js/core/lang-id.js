@@ -137,6 +137,7 @@ export default {
   "Download my chats": "Unduh obrolan saya",
   "Every chat as plain text with its files, in one zip. A big Hive takes a minute.": "Setiap obrolan sebagai teks biasa beserta berkasnya, dalam satu zip. Hive yang besar butuh waktu semenit.",
   "Download": "Unduh",
+  "Built from": "Dibuat dari",
   "How you want answers fits in 2000 characters.": "Cara Anda ingin jawaban muat dalam 2000 karakter.",
   "Empty means no limit. Saves when you leave the box.": "Kosong berarti tanpa batas. Tersimpan saat Anda keluar dari kotak.",
   "no limit": "tanpa batas",

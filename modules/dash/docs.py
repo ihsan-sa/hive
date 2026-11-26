@@ -12,8 +12,11 @@ The agent that edits the document uses the command line (projects/doc-review-vie
     docs.py addressed 006-0002 1 3 [--rev CM] [--pdf new.pdf]  these notes are done in the new revision; the rest stay open
                                                (--pdf also does `pending` with that PDF, in the same call)
     docs.py check                              open every document as the page would (words, page 1); names any that fail
+    docs.py source 006-0002                    the files under projects/ the newest PDF was likely built from, best first
+    docs.py source --all                       how many documents have a source found (exit 1 names those with none)
+    docs.py md-pdf SRC.md OUT.pdf              print a markdown source as the library does; file that PDF, not the .md
 """
-import fcntl, hashlib, json, os, re, subprocess, sys, threading, time
+import bisect, fcntl, hashlib, json, os, re, subprocess, sys, threading, time
 from pathlib import Path
 
 HOME = Path.home()
@@ -244,7 +247,34 @@ def doc(base, rev=None):
     title = next((revs[x]["title"] for x in reversed(sorted(revs, key=_revkey)) if revs[x]["title"]), "") or Path(r["path"]).stem.replace("_", " ")
     return {"id": base, "title": title, "thread": f"doc-{base}", "rev": rev,
             "revs": [{k: allr[x][k] for k in ("rev", "doc", "path", "at", "status")} for x in order],
-            "path": r["path"], "sha": _key(r), "pages": _cached_words(r), "notes": _resolve_next(notes["notes"], revs, pend), "next": notes["next"]}
+            "path": r["path"], "sha": _key(r), "pages": _cached_words(r), "notes": _resolve_next(notes["notes"], revs, pend), "next": notes["next"],
+            "source": source_of(base, revs)}
+
+
+_SRC = {}          # (base, sha of the newest revision) -> (time, the source path or "" when none was found)
+_SRC_BUSY = set()  # lookups running in the background: a poll never waits on the walk of projects/
+
+
+def _source_bg(k, base):
+    try:
+        out = [o for o in find_source(base)[1] if "copy filed" not in o]
+        _SRC[k] = (time.time(), out[0].split("  ")[0] if out else "")
+    except Exception:
+        _SRC[k] = (time.time(), "")
+    finally:
+        _SRC_BUSY.discard(k)
+
+
+def source_of(base, revs):
+    """The likeliest file the newest revision was built from (docs.py source), or None while it is being looked up or when none is found."""
+    k = (base, _key(revs[sorted(revs, key=_revkey)[-1]]))
+    got = _SRC.get(k)
+    if got and (got[1] or time.time() - got[0] < 300): return got[1] or None   # a miss is looked up again after 5 minutes
+    if k not in _SRC_BUSY:
+        _SRC_BUSY.add(k)
+        t = threading.Thread(target=_source_bg, args=(k, base), daemon=True); t.start()
+        t.join(1.0)   # a quick lookup shows on the first load; a slow one (a cold walk of projects/) on a later poll
+    return (_SRC.get(k) or (0, ""))[1] or None
 
 
 _PRUNED = [0.0]
@@ -444,6 +474,110 @@ def cli_check():
     if bad: sys.exit(1)
 
 
+SRC_EXT = (".tex", ".md", ".html", ".typ", ".rst", ".txt")
+SRC_SKIP = {"node_modules", ".git", "__pycache__", ".venv", "venv", "dist", "build", "replay", "runs", "fixtures", "home"}   # home: fixture homes
+
+_SRC_WALK = {}   # root -> (time, [(dir, [source and pdf files])]): one walk of projects/ serves every lookup for a minute
+
+
+def _src_index(root, ttl=60):
+    """(sorted names, {name: [(dir, file, ext)]}) of the source and PDF files under root, skipping SRC_SKIP folders."""
+    got = _SRC_WALK.get(str(root))
+    if got and time.time() - got[0] < ttl: return got[1]
+    by = {}
+    for d, dirs, files in os.walk(root):
+        dirs[:] = [x for x in dirs if x not in SRC_SKIP]
+        for f in files:
+            fs, ext = os.path.splitext(f)
+            if ext in SRC_EXT or ext == ".pdf": by.setdefault(fs, []).append((d, f, ext))
+    idx = (sorted(by), by)
+    _SRC_WALK[str(root)] = (time.time(), idx)
+    return idx
+
+
+def find_source(base, root=None):
+    """Likely sources of a document's newest revision: files under projects/ whose name matches the PDF's (the exact stem, or the stem
+    without a trailing revision letter, then variants of it like `_AI-human4`), exact names first, then newest first. A copy beside the
+    PDF in the library outbox comes last: it is what was filed, not where to edit."""
+    revs = _revisions().get(base) or {}
+    if not revs: return None, []
+    last = revs[sorted(revs, key=_revkey)[-1]]
+    pdf = HOME / last["path"]
+    stem = pdf.stem
+    short = re.sub(r"[_-][A-Z]{1,3}$", "", stem)
+    root = Path(root) if root else HOME / "projects"
+    hits, beside = [], []
+    names, by = _src_index(root)
+    want = {stem, short}
+    if len(short) >= 6:   # variants of the name: short + "-" or "_" + anything
+        i = bisect.bisect_left(names, short)
+        while i < len(names) and names[i].startswith(short):
+            if names[i][len(short):len(short) + 1] in ("-", "_"): want.add(names[i])
+            i += 1
+    for fs in want:
+        for d, f, ext in by.get(fs, ()):
+            if ext == ".pdf":
+                if fs in (stem, short): beside.append(Path(d))
+                continue
+            p = Path(d) / f
+            try: hits.append((fs not in (stem, short), -p.stat().st_mtime, str(p.relative_to(HOME))))
+            except (OSError, ValueError): pass
+    words = _pdf_words(pdf)
+    if words and len(hits) > 1:   # the file holding most of the PDF's words first: the resume has a dozen same-named variants
+        hits = [(-round(_overlap(words, HOME / h[2]), 2),) + h for h in hits]
+    hits.sort()
+    out = [h[-1] for h in hits]
+    if not out:   # no file by that name: a source beside a copy of the PDF in a project (projects/resume/asic has VLSI.pdf and one .tex)
+        for d in beside:
+            out += [str(f.relative_to(HOME)) + f"  (beside a copy of {pdf.name}; check it builds this PDF)"
+                    for f in sorted(d.iterdir()) if f.suffix in SRC_EXT and f.is_file()]
+    for f in sorted(pdf.parent.glob(stem + ".*")) if pdf.parent.is_dir() else []:
+        if f.suffix in SRC_EXT: out.append(str(f.relative_to(HOME)) + "  (the copy filed with the PDF)")
+    return last, out
+
+
+def _pdf_words(pdf):
+    try: t = subprocess.run(["pdftotext", "-q", str(pdf), "-"], capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError): return set()
+    return {w for w in re.findall(r"[a-z]{4,}", t.lower())}
+
+
+def _overlap(words, path):
+    try: t = path.read_text(errors="replace")[:400000].lower()
+    except OSError: return 0.0
+    return len(words & set(re.findall(r"[a-z]{4,}", t))) / len(words)
+
+
+def cli_source_all():
+    rows = documents()["docs"]
+    miss = [r["id"] for r in rows if not [o for o in find_source(r["id"])[1] if "copy filed" not in o]]
+    print(f"{len(rows) - len(miss)} of {len(rows)} documents have a source found")
+    if miss: print("none found:", " ".join(miss)); sys.exit(1)
+
+
+def cli_source(base):
+    if base == "--all": return cli_source_all()
+    if not BASE.match(base or ""): sys.exit("bad document id: " + str(base))
+    last, out = find_source(base)
+    if not last: sys.exit(f"{base}: not in the library ledger")
+    print(f"{base}-{last['rev']}: {last['path']}")
+    for o in out[:8]: print("  " + o)
+    if not out:
+        print("  no source found by name; look for the PDF's name in the project that made it (grep -rl), or ask in the reply")
+        sys.exit(1)
+
+
+def cli_md_pdf(md, out):
+    """Print a markdown source to PDF exactly as the library does for a filed .md (hive-library md_pdf: markdown-it, headless Chrome).
+    File that PDF, not the .md: the library would print the .md again and those bytes differ from what `addressed --pdf` recorded."""
+    import importlib.util
+    if not md.endswith(".md") or not out.endswith(".pdf"): sys.exit("md-pdf SRC.md OUT.pdf")
+    spec = importlib.util.spec_from_file_location("h2_library", Path(__file__).resolve().parent.parent / "library/library.py")
+    lib = importlib.util.module_from_spec(spec); spec.loader.exec_module(lib)
+    lib.md_pdf(os.path.abspath(md), os.path.abspath(out))
+    print(out)
+
+
 def main(a):
     if len(a) >= 2 and a[0] == "show": return cli_show(a[1])
     if len(a) == 3 and a[0] == "pending": return cli_pending(a[1], a[2])
@@ -464,6 +598,8 @@ def main(a):
         if pdf: cli_pending(a[1], pdf)
         return cli_addressed(a[1], nums, rev, _sha(_safe_pdf(pdf)) if pdf else None)
     if a == ["check"]: return cli_check()
+    if len(a) == 2 and a[0] == "source": return cli_source(a[1])
+    if len(a) == 3 and a[0] == "md-pdf": return cli_md_pdf(a[1], a[2])
     if a and a[0] == "list":
         for r in documents()["docs"]: print(r["id"], r["rev"], r["title"], f"drafts={r['drafts']} open={r['open']}")
         return

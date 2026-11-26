@@ -65,7 +65,7 @@ const whoOf = p => (p.from === "person" ? "your" : p.from + "'s");
 const said = (who) => (who === "your" ? "your message" : who.replace(/'s$/, "") + "'s message");
 
 // ---- the text of a message, as offsets: what a mark holds on to ----
-const SKIP = "button,input,textarea,.rc-bar,.rc-tools,.rc-fig-note,svg,.katex-mathml,annotation,style,script,.sc-layer";
+const SKIP = "button,input,textarea,.rc-bar,.rc-tools,.rc-fig-note,svg,.katex-mathml,annotation,style,script,.sc-layer,.ink-over,.ink-sheet-h";
 export const bodyOf = art => art && (art.querySelector(".msg-b .md") || art.querySelector(".msg-b") || art.querySelector(".md"));
 function texts(root) {
   const out = [], w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: n => (n.parentElement && n.parentElement.closest(SKIP) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
@@ -582,7 +582,7 @@ export function msgUnder(R) {
   }
   return art && S.byId[art.dataset.key] ? art : null;
 }
-/** A side chat about what a screen rectangle covers (a drawn box, or a loop drawn with the pen: ink/overlay.js). */
+/** A side chat about what a screen rectangle covers (a drawn box, or a loop drawn with the pen: ink/over.js). */
 export function boxSideChat(main, R) {
   const art = msgUnder(R), small = R.right - R.left < 10 && R.bottom - R.top < 10;
   if (!art) return;

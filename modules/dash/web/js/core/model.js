@@ -594,6 +594,16 @@ export function displayText(p) {
 // Blocked/Waiting/Needs the person stay. A line of @names after it (the "end your result post with @name" hand-back) goes with it (R25).
 const DONE_LAST = /\n[ \t]*(?:\*\*)?Done:[^\n]*(?:\s*\n[ \t]*(?:@[\w.-]+[ \t,.]*)+)?(?=\s*$|\s*\n+[ \t]*(?:\*\*)?(?:Next|Measure):[^\n]*(?:\n[ \t]*(?:\*\*)?(?:Next|Measure):[^\n]*)*\s*$)/;
 export const chatText = p => { const t = displayText(p); if (p.from === "person" || !DONE_LAST.test(t)) return t; const r = t.replace(DONE_LAST, "").replace(/\s+$/, ""); return r.trim() && !/^(?:[ \t]*@[\w.-]+[ \t,.]*)+$/.test(r) ? r : t; };
+/** A person's send with ink (ink/snap.js: ink-<sheet>.json/.png and a "✎ …" line per sheet for the agent) in one short line for
+ *  a list of conversations: what they typed, else "✎ Ink on a message" or "✎ Ink in 3 places". Null for any other post. */
+const INK_FILE = /^ink-(.+)\.(?:json|png)$/;
+export function inkSaid(p) {
+  if (!p || p.from !== "person" || !(p.files || []).some(f => INK_FILE.test(f.name))) return null;
+  const t = chatText(p).replace(/^✎ .*$\n?/gm, "").replace(/\s+$/, "");
+  if (t.trim()) return t;
+  const ids = [...new Set(p.files.map(f => (INK_FILE.exec(f.name) || [])[1]).filter(Boolean))];
+  return ids.length > 1 ? `✎ Ink in ${ids.length} places` : "✎ Ink on " + (/^m-/.test(ids[0]) ? "a message" : ids[0] === "board" ? "the whiteboard" : "a writing space");
+}
 /** What the person typed, for sending again: no reply line, no source head and no agent's name (that agent may have moved on, so the To chip decides). @new and the like stay, since the person often types them. On every route, unlike displayText. */
 export function typedText(p) {
   let t = String(p.text || ""); const kept = [];

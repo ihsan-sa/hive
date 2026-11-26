@@ -12,12 +12,13 @@ import { button } from "../ui/kit.js";
 import { icon } from "../ui/icons.js";
 import { parseInk, W, LINE } from "./grammar.js";
 import * as K from "./store.js";
-import { outline, markParts, bbox, snapShape, nearStroke, isLoop, writeMs, noteMs, plen, NOTE } from "./draw.js";
+import { outline, markParts, bbox, snapShape, nearStroke, isLoop, writeMs, noteMs, plen } from "./draw.js";
 
 const LIVE = new Map();   // th \0 sid -> {el, ghost, sheet}
 const COARSE = matchMedia("(any-pointer: coarse)");
 const COLORS = { red: "var(--ag-1)", violet: "var(--ag-2)", purple: "var(--ag-2)", teal: "var(--ag-3)", orange: "var(--ag-4)", blue: "var(--pen-blue)", green: "var(--pen-green)", black: "var(--ink)" };
-export const sheetTitle = (sh, sid) => sid === "board" ? "Whiteboard" : /^m-/.test(sid) ? "Ink on a message" : (sh && sh.title) || "Writing space";
+export const sheetTitle = (sh, sid) => sid === "board" ? "Whiteboard" : /^m-/.test(sid) ? msgName(S.byId[sid.slice(2)]) : (sh && sh.title) || "Writing space";
+const msgName = post => !post ? "a message" : K.isPerson(post.from) ? "your message" : capFirst(agentLabel(post.from) || post.from) + "'s message";
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
 // ---------- printed text: plain lines on the rules, $maths$ inline (never markdown() inside a figure) ----------
@@ -27,27 +28,70 @@ function printedLine(line) {
   if (at < line.length) out.push(line.slice(at));
   return out.length ? out : [" "];
 }
-const printedNodes = text => String(text || "").split("\n").map(l => h("div", {}, ...printedLine(l.replace(/\s+$/, ""))));
+const printedNodes = text => String(text || "").split("\n").map(l => h("div", {}, ...printedLine(l.trimEnd())));
+
+const BLOCK = "p,li,div,h1,h2,h3,h4,h5,h6,td,th,pre,blockquote,dd,dt";
+/** Where printed words are in root (an @"words" anchor): their client rect, or null. The text is read as shown: runs of space
+ *  and the breaks between blocks count as one space, so words that wrap still match; KaTeX's hidden MathML and anything matching
+ *  skip are left out. */
+export function wordsRect(root, words, skip = ".katex-mathml") {
+  const want = String(words).replace(/\s+/g, " ").trim().toLowerCase(); if (!want) return null;
+  const acceptNode = n => n.parentElement && n.parentElement.closest(skip) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode }), map = [];
+  let flat = "", line = null;
+  const space = (n, i) => { if (flat && !flat.endsWith(" ")) { flat += " "; map.push([n, i]); } };
+  for (let n; (n = walk.nextNode());) {
+    const d = n.parentElement.closest(BLOCK); if (d !== line) { space(n, 0); line = d; }
+    const v = n.nodeValue;
+    for (let i = 0; i < v.length; i++) {
+      if (/\s/.test(v[i])) { space(n, i); continue; }
+      for (const c of v[i].toLowerCase()) { flat += c; map.push([n, i]); }
+    }
+  }
+  const i = flat.indexOf(want); if (i < 0) return null;
+  const [a, ao] = map[i], [b, bo] = map[i + want.length - 1], r = document.createRange();
+  try { r.setStart(a, ao); r.setEnd(b, Math.min(bo + 1, b.nodeValue.length)); } catch (e) { return null; }
+  const R = r.getBoundingClientRect(); return R.width || R.height ? R : null;
+}
 
 // ---------- an agent's layer as SVG ----------
 /** One mark as a <g class=ink-ag>: paths in its pen and its note, with write-on timing from `at` (ms). Returns {g, at} or null. */
-function markG(m, seed, own, find, H, at, pen) {
-  const p = markParts(m, seed, own, find, H); if (!p) return null;
+function markG(m, seed, own, find, H, at, pen, z = 1) {
+  let p; try { p = markParts(m, seed, own, find, H, z); } catch (e) { console.warn("ink mark", m, e); return null; } if (!p) return null;
   const g = s("g", { class: "ink-ag", "data-k": p.k, style: m.color && COLORS[m.color] ? `--ag:${COLORS[m.color]}` : pen ? `--ag:${pen}` : null });
   for (const d of p.paths) {
     const len = plen(d), dur = writeMs(d);
-    const a = s("path", { d, style: `--len:${len};--at:${at}ms;--dur-w:${dur}ms` + (p.hl ? `;stroke-width:${p.hl}` : "") });
+    const a = s("path", { d, style: `--len:${len};--at:${at}ms;--dur-w:${dur}ms` + (p.hl ? `;stroke-width:calc(${p.hl}px * var(--z, 1))` : "") });
     g.append(a); at += Math.round(dur * .85);
     if (p.k !== "hl") { const second = s("path", { d, transform: "translate(.7 .5)", style: `--len:${len};--at:${at - Math.round(dur * .85)}ms;--dur-w:${dur}ms` }); g.append(second); }
   }
   if (p.note) {
-    const t = s("text", { class: "ink-note", x: p.note.x, y: p.note.y, style: `--at:${at}ms;--dur-w:${noteMs(p.note.lines)}ms;font-size:${NOTE}px` });
-    p.note.lines.forEach((l, i) => t.append(s("tspan", { x: p.note.x, dy: i ? NOTE * 1.15 : 0 }, l)));
+    const t = s("text", { class: "ink-note", x: p.note.x, y: p.note.y, style: `--at:${at}ms;--dur-w:${noteMs(p.note.lines)}ms;font-size:${p.note.n}px` });
+    p.note.lines.forEach((l, i) => t.append(s("tspan", { x: p.note.x, dy: i ? p.note.n * 1.15 : 0 }, l)));
     g.append(t); at += noteMs(p.note.lines);
   }
   return { g, at: at + 120, box: p.box };
 }
 const strokeP = (st, pend) => s("path", { class: "ink-s", d: outline(st), "data-tool": st.t === "hl" ? "hl" : null, "data-pending": pend ? "" : null, "data-id": st.id, style: st.t === "hl" ? null : `color:${K.PENS[st.c] || K.PENS.ink}` });
+
+/** The ink on a sheet with no paper of its own (a message, the whiteboard): the agents' layers and the person's strokes, in an
+ *  <svg class=ink-svg> 800 units wide and H high. find(words) places @"words" anchors; play starts fresh layers' write-on. */
+export function inkLayerSvg(th, sid, H, { find = null, play = false, z = 1 } = {}) {
+  const gL = s("g", { class: "ink-layers" }), gO = s("g", { class: "ink-own" }), hid = K.hidden(th, sid);
+  const sh = K.fold(th).sheets.get(sid), own = K.ownStrokes(th, sid), sent = [];
+  const gone = new Set(); if (sh) for (const l of sh.layers) if (l.own) for (const e of l.erase) gone.add(e);
+  if (sh) for (const l of sh.layers) {
+    if (l.own) { for (const st of l.strokes) if (!gone.has(st.id)) sent.push(bbox(st.p)); continue; }
+    if (l.cleared || hid.has(l.who)) continue;
+    const g = s("g", { class: "ink-layer", "data-who": l.who, "data-post": l.post }), pen = K.agentPen(th, l.who), boxes = sent.slice(); let at = 0;
+    l.marks.forEach((m, i) => { const r = markG(m, l.post + ":" + i, boxes, find, H, at, pen, z); if (r) { g.append(r.g); at = r.at; } });
+    if (play && K.shouldPlay(l.post)) { K.markPlayed(l.post); for (const c of g.children) c.setAttribute("data-new", ""); }
+    gL.append(g);
+  }
+  gO.append(...own.map(st => strokeP(st, st.pending)));
+  gO.toggleAttribute("data-hidden", hid.has("person"));
+  return s("svg", { class: "ink-svg" + (z > 1 ? " ink-z" : ""), viewBox: `0 0 ${W} ${Math.max(1, H)}`, "aria-hidden": "true", style: z > 1 ? `--z:${z}` : null }, gL, gO);
+}
 
 // ---------- thumbnails (cards, chips) ----------
 /** A small picture of part of a sheet: own strokes and the given marks, cropped to them. */
@@ -115,21 +159,18 @@ export class Sheet {
   measure() {
     const w = this.c.clientWidth; if (!w) return;
     this.k = W / w;
-    const lh = parseFloat(getComputedStyle(this.p).lineHeight) || w / 25;
-    const rows = this.p.textContent.trim() ? Math.round(this.p.scrollHeight / lh) : 0;
-    if (rows !== this.rows || !this.measured) { this.rows = rows; this.measured = true; this.paint(); }
+    // under 520 px the printed text grows to 3.6cqw (css .ink-sheet-p): the agents' notes and strokes grow with it, so they stay
+    // as readable as the problem they mark
+    const z = w <= 520 ? 1.44 : 1;
+    if (z !== this.z) { this.z = z; this.svg.classList.toggle("ink-z", z > 1); this.svg.style.setProperty("--z", z); this.measured = false; }
+    // rows: the sheet lines (LINE units) the printed problem covers, whatever its line height at this width
+    const rows = this.p.textContent.trim() ? Math.ceil(this.p.scrollHeight * this.k / LINE - .05) : 0;
+    if (rows !== this.rows || !this.measured || Math.round(w) !== this.w) { this.rows = rows; this.w = Math.round(w); this.measured = true; this.figDone = false; this.paint(); }
   }
   /** Find printed words on this sheet: their box in sheet units, or null (an @"words" anchor). */
   find(words) {
     if (!this.c.isConnected || !this.k) return null;
-    const want = String(words).replace(/\s+/g, " ").trim().toLowerCase(); if (!want) return null;
-    const walk = document.createTreeWalker(this.p, NodeFilter.SHOW_TEXT), nodes = []; let all = "";
-    for (let n; (n = walk.nextNode());) { nodes.push([n, all.length]); all += n.nodeValue; }
-    const flat = all.toLowerCase().replace(/\s/g, " "), i = flat.indexOf(want); if (i < 0) return null;
-    const at = pos => { for (let j = nodes.length - 1; j >= 0; j--) if (nodes[j][1] <= pos) return [nodes[j][0], pos - nodes[j][1]]; return [nodes[0][0], 0]; };
-    const r = document.createRange(), [a, ao] = at(i), [b, bo] = at(i + want.length);
-    try { r.setStart(a, ao); r.setEnd(b, Math.min(bo, b.nodeValue.length)); } catch (e) { return null; }
-    const R = r.getBoundingClientRect(), C = this.c.getBoundingClientRect();
+    const R = wordsRect(this.p, words), C = this.c.getBoundingClientRect(); if (!R) return null;
     return { x: (R.left - C.left) * this.k, y: (R.top - C.top) * this.k, w: R.width * this.k, h: R.height * this.k };
   }
   paint() {
@@ -139,7 +180,7 @@ export class Sheet {
     // printed text and figure: rebuilt only when the offer changes
     const psig = M.printed + "\0" + JSON.stringify(M.figure);
     if (this.psig !== psig) { this.psig = psig; this.p.replaceChildren(...(M.printed ? printedNodes(M.printed) : [])); this.figDone = false; }
-    const top = this.rows * LINE, own = th ? K.ownStrokes(th, sid) : [], pend = th ? K.pend(th).sheets[sid] : null;
+    const top = this.rows * LINE, own = th ? K.ownStrokes(th, sid) : [], pend = th && Object.hasOwn(K.pend(th).sheets, sid) ? K.pend(th).sheets[sid] : null;
     // height: the rows the problem takes, the writing lines asked for, and room for everything drawn
     let H = top + (M.info.h || 6 * LINE), low = 0;
     for (const st of own) for (const p of st.p) if (p[1] > low) low = p[1];
@@ -165,17 +206,18 @@ export class Sheet {
     const keep = new Set(), sentBefore = [];
     const ownSent = new Map(); for (const l of M.layers) if (l.own) ownSent.set(l.post, l);
     const gone = new Set(); for (const l of M.layers) if (l.own) for (const e of l.erase) gone.add(e);
-    let at = 0;
+    let at = 0; const nIn = new Map();
     for (const l of M.layers) {
       if (l.own) { for (const st of l.strokes) if (!gone.has(st.id)) sentBefore.push(bbox(st.p)); continue; }
       if (l.cleared) continue;
-      const key = l.post + ":" + l.code.length, sig = sentBefore.length + ":" + (this.k ? 1 : 0) + ":" + this.rows;
+      const nth = (nIn.get(l.post) || 0) + 1; nIn.set(l.post, nth);
+      const key = l.post + ":" + nth, sig = sentBefore.length + ":" + (this.k ? 1 : 0) + ":" + this.rows + ":" + (this.z || 1) + ":" + (this.w || 0) + ":" + l.code.length;
       keep.add(key);
       let c = this.lg.get(key);
       if (!c || c.sig !== sig) {
         const g = s("g", { class: "ink-layer", "data-who": l.who, "data-post": l.post }); at = 0;
         const pen = K.agentPen(th, l.who), boxes = sentBefore.slice();
-        l.marks.forEach((m, i) => { const r = markG(m, l.post + ":" + i, boxes, w => this.find(w), H, at, pen); if (r) { g.append(r.g); at = r.at; } });
+        l.marks.forEach((m, i) => { const r = markG(m, l.post + ":" + i, boxes, w => this.find(w), H, at, pen, this.z || 1); if (r) { g.append(r.g); at = r.at; } });
         if (c) c.g.replaceWith(g); else this.gLayers.append(g);
         const fresh = !c && this.mode !== "snap" && K.shouldPlay(l.post);
         c = { g, sig, post: l.post, pend: fresh || (c && c.pend) };
@@ -217,18 +259,20 @@ export class Sheet {
   pt(e) { const r = this.c.getBoundingClientRect(), k = W / r.width; return [(e.clientX - r.left) * k, (e.clientY - r.top) * k, e.pointerType === "pen" ? (e.pressure || .5) : .5]; }
   down(e) {
     if (!this.th) return;
+    if (this.cur && (e.pointerType !== "touch" || this.curType !== "touch")) return;   // a palm or a second pointer while writing
     if (e.pointerType === "touch") {
       if (this.mode !== "focus") return;   // a finger scrolls, except on the Write page
       (this.touches ||= new Map()).set(e.pointerId, [e.clientX, e.clientY]);
-      if (this.touches.size > 1) { this.cancel(); this.pan = true; return; }   // two fingers move the page
+      if (K.TOOL.pencil || this.touches.size > 1) { this.cancel(); this.pan = true; return; }   // two fingers (or one, once a Pencil writes) move the page
     } else if (e.pointerType === "mouse" && e.button !== 0) return;
     if (e.target.closest && e.target.closest("a, button, .rc-im, input")) return;
     if (e.pointerType === "pen" && !K.TOOL.pencil) K.setTool("pencil", true);
     e.preventDefault();
     const at = this.pt(e), t = K.TOOL.t;
     this.c.setPointerCapture(e.pointerId);
-    this.pid = e.pointerId;
+    this.pid = e.pointerId; this.curType = e.pointerType;
     this.el.setAttribute("data-writing", "");
+    const bx = this.el.closest(".cm-msgs"); if (bx) bx.dispatchEvent(new Event("rc-hand"));   // writing up the chat lets go of its end (goSheet letGo)
     if (t === "eraser") { this.cur = { erase: true }; this.erase(at); return; }
     this.cur = { id: K.sid(), t: t === "hl" ? "hl" : "pen", c: K.TOOL.c, w: t === "hl" ? 16 : 2.8, p: [at], lasso: t === "lasso" };
     this.livePath = s("path", { class: "ink-s", "data-tool": this.cur.t === "hl" ? "hl" : null, style: this.cur.lasso ? "color:var(--accent);opacity:.7" : `color:${K.PENS[this.cur.c] || K.PENS.ink}` });
@@ -311,16 +355,31 @@ function liveEl(th, sid, offer) {
 
 // ---------- going to a sheet ----------
 const SEEN = new Set();
+/** A jump up the chat is the reader's own move: once it lands, tell the chat (comms.js "rc-hand") so it stops holding the end,
+ *  or the composer's ink chip appearing after the next stroke would pin the chat back to the bottom. */
+function letGo() {
+  const box = document.querySelector("#main .cm-msgs"); if (!box) return;
+  let done = false; const go = () => { if (done) return; done = true; box.dispatchEvent(new Event("rc-hand")); };
+  box.addEventListener("scrollend", go, { once: true }); setTimeout(go, 1200);
+}
+/** Scroll the chat so the ink on message art is in view: post's agent layer, else the person's own strokes, else any ink.
+ *  A long message with ink low down (under its pictures) would otherwise be centred on its middle, far from the drawing. */
+function toInk(art, post) {
+  const box = document.querySelector("#main .cm-msgs"), svg = art.querySelector("svg.ink-mark[data-sid]"); if (!box || !svg) return false;
+  const seen = el => { const r = el && el.getBoundingClientRect(); return r && r.width + r.height > 2 ? r : null; };
+  const r = seen(post && svg.querySelector(`g.ink-layer[data-post="${CSS.escape(post)}"]`)) || seen(svg.querySelector("g.ink-own")) || seen(svg.querySelector("g.ink-layers")); if (!r) return false;
+  const b = box.getBoundingClientRect(), mid = r.height > b.height * .8 ? r.top - b.top - 48 : r.top + r.height / 2 - (b.top + b.height / 2);
+  box.scrollBy({ top: mid, behavior: "smooth" }); return true;
+}
 /** Scroll to sheet sid in chat th, flash it, and replay post's layer on it. A message ref scrolls to that message. */
 export function goSheet(th, sid, post) {
-  if (sid === "board") { import("./board.js").then(m => m.openBoard(th)).catch(() => {}); return; }
   if (/^m-/.test(sid)) {
     const art = document.querySelector(`#main article.msg[data-key="${CSS.escape(sid.slice(2))}"]`);
-    if (art) { art.scrollIntoView({ block: "center", behavior: "smooth" }); art.classList.remove("msg-flash"); void art.offsetWidth; art.classList.add("msg-flash"); }
+    if (art) { toInk(art, post) || art.scrollIntoView({ block: "center", behavior: "smooth" }); letGo(); art.classList.remove("msg-flash"); void art.offsetWidth; art.classList.add("msg-flash"); }
     return;
   }
   const sh = liveSheet(th, sid); if (!sh) return;
-  sh.el.scrollIntoView({ block: "center", behavior: "smooth" }); sh.flash();
+  sh.el.scrollIntoView({ block: "center", behavior: "smooth" }); letGo(); sh.flash();
   if (post) setTimeout(() => sh.replay(post), 350);
 }
 
@@ -367,18 +426,21 @@ export function openFocus(th, sid) {
   const sheet = new Sheet(th, sid, { mode: "focus" });
   const done = () => closeFocus();
   const bar = h("div", { class: "ink-focus-tb" });
-  const page = h("div", { class: "ink-focus", role: "dialog", "aria-label": "Write on " + sheet.model().title },
+  const back = document.activeElement;
+  const page = h("div", { class: "ink-focus", role: "dialog", "aria-modal": "true", tabindex: "-1", "data-th": th, "aria-label": "Write on " + sheet.model().title },
     h("div", { class: "ink-focus-h" }, h("b", {}, sheet.model().title), button("Done", done, { kind: "primary", size: "s" })),
     h("div", { class: "ink-focus-s" }, sheet.el), bar);
   import("./toolbar.js").then(m => bar.replaceChildren(...m.toolRow(th, { dock: "focus" }))).catch(() => {});
-  const key = e => { if (e.key === "Escape") done(); };
+  const key = e => { if (e.key === "Escape" && !e.defaultPrevented && !document.querySelector(".ink-bubble")) { e.preventDefault(); done(); } };
   addEventListener("keydown", key, { signal: sheet.ac.signal });
   document.body.append(page);
-  FOCUS = { page, sheet };
+  FOCUS = { page, sheet, back };
   document.documentElement.setAttribute("data-ink-focus", "");
+  page.focus({ preventScroll: true });
 }
 export function closeFocus() {
   if (!FOCUS) return;
-  FOCUS.sheet.ac.abort(); FOCUS.page.remove(); FOCUS = null;
+  const back = FOCUS.back; FOCUS.sheet.ac.abort(); FOCUS.page.remove(); FOCUS = null;
+  if (back && back.isConnected && back.focus) back.focus({ preventScroll: true });
   document.documentElement.removeAttribute("data-ink-focus");
 }

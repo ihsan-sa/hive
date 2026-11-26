@@ -5,7 +5,7 @@
 //  - the person's ink goes as attachments of their next message: ink-<sheet>.json (the strokes) and ink-<sheet>.png (what the agent looks at).
 // Until it is sent, the person's ink is pending in this browser (localStorage ink:<thread>), like a draft.
 // Sheet ids: the fence's id=, else <postid>.<n> (the nth offer in that post); m-<postid> is the ink over a message; "board" the whiteboard.
-import { S, OUTSIDE } from "../core/store.js";
+import { S } from "../core/store.js";
 import { parseInk, fences, W, LINE } from "./grammar.js";
 
 export { W, LINE };
@@ -19,6 +19,7 @@ export const PENS = { ink: "var(--pen-ink)", blue: "var(--pen-blue)", green: "va
 // ---- pending: the person's ink not sent yet ----
 const PK = th => "ink:" + th;
 const PEND = new Map();
+const own = (o, k) => o && Object.hasOwn(o, k) ? o[k] : undefined;
 export function pend(th) {
   let v = PEND.get(th);
   if (!v) { try { v = JSON.parse(localStorage.getItem(PK(th)) || "null"); } catch (e) { v = null; } if (!v || typeof v.sheets !== "object") v = { sheets: {} }; PEND.set(th, v); }
@@ -30,7 +31,7 @@ function save(th) {
   try { Object.keys(v.sheets).length ? localStorage.setItem(PK(th), JSON.stringify(v)) : localStorage.removeItem(PK(th)); } catch (e) {}
   say(th);
 }
-const pSheet = (th, sid, meta) => { const v = pend(th); return (v.sheets[sid] ||= { strokes: [], erase: [], ...(meta || {}) }); };
+const pSheet = (th, sid, meta) => { const v = pend(th); return own(v.sheets, sid) || (v.sheets[sid] = { strokes: [], erase: [], ...(meta || {}) }); };
 // Undo and redo stay in this page: [{th, sid, add: stroke} | {th, sid, erase: id} | {th, sid, drop: stroke}]
 const UNDO = [], REDO = [];
 export function addStroke(th, sid, st, meta) {
@@ -46,8 +47,10 @@ export function eraseStroke(th, sid, id) {
   REDO.length = 0; save(th);
 }
 export function dropStroke(th, sid, id) {   // a loop handed to a side chat, or Clear in the bubble: gone without an undo step
-  const p = pend(th).sheets[sid]; if (!p) return;
-  p.strokes = p.strokes.filter(x => x.id !== id); save(th);
+  const p = own(pend(th).sheets, sid); if (!p) return;
+  p.strokes = p.strokes.filter(x => x.id !== id);
+  for (const l of [UNDO, REDO]) for (let i = l.length - 1; i >= 0; i--) if (l[i].th === th && l[i].sid === sid && (l[i].add || l[i].drop || {}).id === id) l.splice(i, 1);
+  save(th);
 }
 function apply(op, back) {
   const p = pSheet(op.th, op.sid);
@@ -74,22 +77,40 @@ export function clearPending(th, sid, { sent = false } = {}) {
   for (const l of [UNDO, REDO]) for (let i = l.length - 1; i >= 0; i--) if (l[i].th === th && (!sid || l[i].sid === sid)) l.splice(i, 1);
   save(th);
 }
+/** After a send: only the strokes and erasures that went (packed, from snap.js inkPack) leave pending; they are held on screen
+ *  until the board brings them back. Ink drawn while the message was being packed stays for the next one. */
+export function clearSent(th, packed) {
+  const v = pend(th), hd = HOLD.get(th) || HOLD.set(th, {}).get(th);
+  for (const [sid, k] of Object.entries(packed || {})) {
+    const p = own(v.sheets, sid); if (!p) continue;
+    const ids = new Set(k.strokes), er = new Set(k.erase);
+    hd[sid] = { strokes: p.strokes.filter(x => ids.has(x.id)), erase: p.erase.filter(e => er.has(e)), t: Date.now() };
+    p.strokes = p.strokes.filter(x => !ids.has(x.id)); p.erase = p.erase.filter(e => !er.has(e));
+    for (const l of [UNDO, REDO]) for (let i = l.length - 1; i >= 0; i--) { const o = l[i]; if (o.th === th && o.sid === sid && (ids.has((o.add || o.drop || {}).id) || er.has(o.erase))) l.splice(i, 1); }
+  }
+  save(th);
+}
+/** Every sheet with ink in this chat: on the board, pending, or sent and not back yet. */
+export const sheetIds = th => new Set([...fold(th).sheets.keys(), ...Object.keys(pend(th).sheets), ...Object.keys(HOLD.get(th) || {})]);
 addEventListener("storage", e => { if (e.key && e.key.startsWith("ink:") && e.key !== "ink:played") { const th = e.key.slice(4); PEND.delete(th); say(th); } });
 
 export const sid = () => Date.now().toString(36).slice(-5) + Math.random().toString(36).slice(2, 6);
 
 // ---- what was sent: the board's posts, folded ----
-const JSON_CACHE = new Map();   // "<post>/<name>" -> data | "wait" | "err"
+const JSON_CACHE = new Map(), TRIES = new Map();   // "<post>/<name>" -> data | "wait" | "err"
 const fileUrl = (p, f) => `/files/${encodeURIComponent(p.id)}/${encodeURIComponent(f.name)}`;
 const INKF = /^ink-(.+)\.json$/;
 function inkJson(th, p, f) {
   const k = p.id + "/" + f.name, v = JSON_CACHE.get(k);
   if (v !== undefined) return v === "wait" || v === "err" ? null : v;
   JSON_CACHE.set(k, "wait");
-  fetch(fileUrl(p, f)).then(r => r.ok ? r.json() : Promise.reject(r.status)).then(j => { JSON_CACHE.set(k, j && j.v === 1 ? j : "err"); FOLD.delete(th); say(th); }, () => JSON_CACHE.set(k, "err"));
+  fetch(fileUrl(p, f)).then(r => r.ok ? r.json() : Promise.reject(r.status)).then(j => { JSON_CACHE.set(k, j && j.v === 1 ? j : "err"); FOLD.delete(th); say(th); }, () => {
+    const n = (TRIES.get(k) || 0) + 1; TRIES.set(k, n); JSON_CACHE.set(k, "err");
+    if (n < 5) setTimeout(() => { JSON_CACHE.delete(k); FOLD.delete(th); say(th); }, 5000 * n);
+  });
   return null;
 }
-export const isPerson = who => OUTSIDE.has(who);
+export const isPerson = who => who === "person";
 const FOLD = new Map();   // th -> {n, sheets}
 /** Every sheet in chat th: Map sid -> {sid, offers:[{post, n, parsed}], home, title, paper, h, layers:[...]}.
  *  A layer: {who, post, t, own: true, strokes, erase} or {who, post, t, marks, skipped}. */
@@ -162,11 +183,11 @@ export function markPlayed(post) {
 
 /** All the person's strokes on a sheet, sent and pending, with erased ones taken out: [{...stroke, pending}] */
 export function ownStrokes(th, sid) {
-  const s = fold(th).sheets.get(sid), p = pend(th).sheets[sid], sentGone = new Set(), sent = [];
+  const s = fold(th).sheets.get(sid), p = own(pend(th).sheets, sid), sentGone = new Set(), sent = [];
   if (s) for (const l of s.layers) if (l.own) { for (const e of l.erase) sentGone.add(e); for (const st of l.strokes) sent.push(st); }
-  const hd = HOLD.get(th), held = hd && hd[sid], have = new Set(sent.map(x => x.id));
+  const hd = HOLD.get(th), held = own(hd, sid), have = new Set(sent.map(x => x.id));
   if (held && (Date.now() - held.t > 120e3 || (held.strokes.every(x => have.has(x.id)) && held.erase.every(e => sentGone.has(e))))) delete hd[sid];
-  const live = hd && hd[sid], gone = new Set([...sentGone, ...(p ? p.erase : []), ...(live ? live.erase : [])]);
+  const live = own(hd, sid), gone = new Set([...sentGone, ...(p ? p.erase : []), ...(live ? live.erase : [])]);
   const out = sent.filter(st => !gone.has(st.id));
   if (live) for (const st of live.strokes) if (!have.has(st.id) && !gone.has(st.id)) out.push(st);
   if (p) for (const st of p.strokes) out.push({ ...st, pending: true });

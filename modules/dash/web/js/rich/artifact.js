@@ -93,6 +93,7 @@ function onMessage(e) {
 // The chat view builds the series from the pages it shows (artifactSeries), so a reply hidden behind Edit or Retry arrows is not a version.
 const SERIES = new Map(), COPY = new Map(), LIVE = new Set();
 let CUR = null, VIEW = null, COLLECT = null;
+export const chatCtx = () => CUR;
 // A page's name: its fence title=, else its own <title> or first heading. A page with none is not part of a series.
 const plain = s => s.replace(/<[^>]*>/g, " ").replace(/&amp;/g, "&").replace(/&[a-z#0-9]+;/gi, " ").replace(/\s+/g, " ").trim().toLowerCase();
 // A page's names: the fence's title= and the page's own <title> or first heading, in one namespace, so a page first posted bare and then with title= of the same words chains.

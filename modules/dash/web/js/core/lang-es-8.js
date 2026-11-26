@@ -94,11 +94,6 @@ export default {
   "Search messages": "Buscar mensajes",
   "Search these messages": "Buscar en estos mensajes",
   "Back to": "Volver a",
-  "This is a side question about": "Esta es una pregunta aparte sobre",
-  "Side questions you asked with /btw here": "Preguntas aparte que hiciste aquí con /btw",
-  "Side": "Preguntas",   // "Side" + " questions" (the wide-screen part): "Preguntas" + " aparte"
-  "questions": "aparte",
-  "Side questions": "Preguntas aparte",
   "Finished since you last looked": "Terminado desde la última vez que miraste",
   "Still open": "Aún abierto",
   "· another ask here waits on you": "· otro pedido de aquí te espera",

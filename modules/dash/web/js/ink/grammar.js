@@ -20,9 +20,10 @@ const VERB = {
 };
 const PAPER = new Set(["ruled", "grid", "dot", "blank"]);
 const NUM = String.raw`-?\d+(?:\.\d+)?`;
-const PT = new RegExp(String.raw`^\(?\s*(${NUM})\s*(?:,\s*|\s+)(${NUM})\s*\)?`);
+const PT = new RegExp(String.raw`^\(?\s*(${NUM})(?:\s*,\s*|\s+)(${NUM})\s*\)?`);
 /** A sheet id as the page keeps it: letters, digits, - and _ only, at most 40. */
-export const cleanId = s => String(s || "").replace(/[^\w-]/g, "").slice(0, 40);
+const PROTO = new Set(Object.getOwnPropertyNames(Object.prototype));
+export const cleanId = s => { const v = String(s || "").replace(/[^\w-]/g, "").slice(0, 40); return PROTO.has(v) ? "s" + v : v; };
 /** What an on= names: a post id (12 hex) is the ink over that message, "wb" or "board" the whiteboard, else a sheet. */
 export function target(on) {
   const s = String(on || "").trim().replace(/^m[:-]/, "");
@@ -48,8 +49,9 @@ export function markLine(raw) {
   let s = raw.trim();
   if (!s || s.startsWith("#") || s.startsWith("//")) return null;
   s = s.replace(/→|⟶|=>/g, "->").replace(/[“”]/g, '"');
-  const q = /"([^"]*)"/.exec(s), label = q ? q[1] : null;
-  const rest = q ? (s.slice(0, q.index) + " " + s.slice(q.index + q[0].length)).trim() : s;
+  // the first quoted words are the note, or after @ what to find; an anchored mark's second quoted words are its note
+  const qs = [...s.matchAll(/"([^"]*)"/g)], label = qs.length ? qs[0][1] : null;
+  const rest = qs.length ? s.replace(/"[^"]*"/g, " ").trim() : s;
   const w = /^([^\s(]+)\s*(.*)$/.exec(rest); if (!w) return { print: raw };
   let word = w[1].toLowerCase(), color = null;
   const verb = VERB[word];
@@ -70,7 +72,7 @@ export function markLine(raw) {
     }
     left += " " + t;
   }
-  const mk = { k: verb, pts, label: at ? null : label, anchor: at ? label : null, color, ...opt };
+  const mk = { k: verb, pts, label: at ? (qs[1] ? qs[1][1] : null) : label, anchor: at ? label : null, color, ...opt };
   if (/[a-z]{2,}/i.test(left)) mk.loose = true;   // words after the numbers: on an offer sheet that's prose ("Box 3, 4 apples into crates")
   const need = { circle: 1, box: 1, underline: 1, strike: 1, arrow: 2, line: 2, check: 1, cross: 1, text: 1, hl: 1, path: 2 }[verb];
   if (!mk.anchor && pts.length < need) return { bad: raw };
