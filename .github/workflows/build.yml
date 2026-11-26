@@ -144,6 +144,24 @@ jobs:
         timeout-minutes: 25
         env: { HIVE_APP_REAL: "1", HIVE_REAL_MINUTES: "20" }
         run: node test/real.js "${{ matrix.app }}"
+      # An Apple silicon person who picks the Intel zip (the download page shows both buttons): the x64 app under Rosetta.
+      # Its download must open on the setup screen, and the real install from it must still fetch arm64 Lima (under Rosetta
+      # uname -m says x86_64, so the installer reads sysctl hw.optional.arm64) and end on the same failure screen.
+      - if: matrix.os == 'macos-15'
+        continue-on-error: true
+        timeout-minutes: 45
+        env: { HIVE_APP_REAL: "1", HIVE_REAL_MINUTES: "20" }
+        run: |
+          arch -x86_64 /usr/bin/true 2>/dev/null || sudo softwareupdate --install-rosetta --agree-to-license
+          echo "under Rosetta: uname -m says $(arch -x86_64 /bin/sh -c 'uname -m'), hw.optional.arm64 is $(arch -x86_64 /bin/sh -c 'sysctl -n hw.optional.arm64')"
+          npx electron-builder --mac zip --x64 -c.mac.identity=- --publish never -c.directories.output=dist-x64
+          L="$HOME/.hive/lima-dist/bin/limactl"; if [ -x "$L" ]; then LIMA_HOME="$HOME/.hive/lima" "$L" delete -f hive || true; fi
+          rm -rf "$HOME/.hive" "$HOME/Applications/Hive.app"
+          if HIVE_DL_EXPECT=setup node test/macdl.js dist-x64/Hive-mac-x64.zip; then echo "ok mac download x64 under Rosetta"; else echo "FAILED mac download x64 under Rosetta"; fi
+          ditto -x -k dist-x64/Hive-mac-x64.zip "$RUNNER_TEMP/x64"
+          file "$RUNNER_TEMP/x64/Hive.app/Contents/MacOS/Hive"
+          node test/real.js "$RUNNER_TEMP/x64/Hive.app/Contents/MacOS/Hive" || true
+          echo "the Lima the x64 app's install fetched: $(file -b "$HOME/.hive/lima-dist/bin/limactl" 2>&1)"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
