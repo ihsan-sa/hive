@@ -359,7 +359,12 @@ const title = page => page.locator('#title').textContent();
   // One copy at a time: a second start while one runs leaves at once and the first stays (still one window); closing the window quits (Linux, Windows).
   ({ app, page } = await start());
   await page.waitForSelector('#app', { timeout: WAIT });
+  // The second copy can quit while Playwright is still attaching to it; Playwright then rejects a promise of its own that
+  // nobody awaits ("session closed", run 45790781910), which would end this test though the copy did what it should.
+  const closed = e => { if (!/session closed|Target page, context or browser has been closed/i.test(String(e && e.message))) throw e; };
+  process.on('unhandledRejection', closed);
   const second = await start().catch(e => ({ failed: e }));
+  await new Promise(r => setTimeout(r, 500)); process.off('unhandledRejection', closed);
   if (second.app) await second.app.close().catch(() => {});
   assert.ok(second.failed, 'a second copy did not stay open');
   const wins = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
