@@ -132,6 +132,15 @@ jobs:
         timeout-minutes: 15
         env: { HIVE_DL_EXPECT: "${{ matrix.os == 'macos-15' && 'setup' || '' }}" }
         run: node test/macdl.js dist/Hive-mac-$HIVE_ARCH.zip ${HIVE_NEXT:+dist-next/Hive-mac-$HIVE_ARCH.zip $HIVE_NEXT}
+      # The public link an Apple silicon Mac person clicks, end to end: the live download page's Hive-mac-arm64.zip link,
+      # fetched through hivelab.ca/downloads/ (the site's redirect to the app's release, not this run's build), given the
+      # browser's quarantine mark, checked against the site's SHA256SUMS and /app-version.json, then opened from
+      # /Applications on its setup screen as above. test/downloads.sh counts this step's two fetches as ours by its name:
+      # rename both together.
+      - name: the public download link, as an Apple silicon Mac person clicks it
+        if: matrix.os == 'macos-15'
+        timeout-minutes: 15
+        run: bash test/livemac.sh
       # The README's "Remove it" steps, run after the real install: nothing of the Hive may be left.
       - if: runner.os == 'Linux'
         run: HIVE_APP_REAL=1 node test/remove.js
