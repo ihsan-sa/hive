@@ -158,3 +158,23 @@ jobs:
             test/shots/*.png
           if-no-files-found: warn
           retention-days: 7
+  # Inside an Apple silicon Mac's VM is arm64 Ubuntu 24.04. get-mac.sh runs the site's install.sh there as root with
+  # HIVE_INSIDE=1, then asks `hive web` as the hive user for the address. The same steps here, on a real arm64 Ubuntu 24.04.
+  linux-arm:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - run: uname -m; . /etc/os-release; echo "$PRETTY_NAME"
+      - name: the site's install.sh, as the Mac's VM runs it
+        run: sudo env HIVE_INSIDE=1 SITE=https://hivelab.ca sh -c 'f=$(mktemp); curl -fsSL -o "$f" "$SITE/install.sh" && sh "$f"' </dev/null
+      - name: the address the Mac app opens, and the web app's first page there
+        shell: bash
+        run: |
+          # shellcheck disable=SC2016
+          ask() { sudo -u hive -H bash -lc 'cd; export XDG_RUNTIME_DIR=/run/user/$(id -u); exec "$@"' _ "$@"; }
+          a=""; for i in $(seq 20); do a=$(ask hive web 2>&1 | tr -d '\r' | sed -n 's/.*\(http:[^ ]*\).*/\1/p' | head -n 1); [ -n "$a" ] && break; sleep 3; done
+          [ -n "$a" ] || { echo "FAILED no address from hive web"; ask hive web || true; exit 1; }
+          echo "address: ${a%%[#?]*}"
+          page=$(curl -fsSL -m 20 "$a"); echo "page: ${#page} bytes, title: $(printf '%s' "$page" | grep -o '<title>[^<]*' | head -n 1 | sed 's/<title>//')"
+          [ "${#page}" -gt 500 ] || { echo "FAILED the page is nearly empty: $page"; exit 1; }
+          echo "ok linux arm64: the web app answers at ${a%%[#?]*}"
