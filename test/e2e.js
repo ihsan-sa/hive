@@ -193,7 +193,8 @@ const title = page => page.locator('#title').textContent();
   await page.locator('#out').click({ button: 'right' });
   let menu = null;
   for (let i = 0; i < 50 && !menu; i++) { await new Promise(r => setTimeout(r, 200)); menu = await app.evaluate(() => global.popped ? global.popped.items.map(m => m.label) : null); }
-  assert.deepStrictEqual(menu, ['Copy link'], 'right-click on a link pops the menu');
+  // A Mac selects the word under a right-click, as Safari does, so Copy (the link's text) is offered there too.
+  assert.deepStrictEqual(menu, process.platform === 'darwin' ? ['Copy link', 'Copy'] : ['Copy link'], 'right-click on a link pops the menu');
   const link = await app.evaluate(({ clipboard }) => { global.popped.items[0].click(); return clipboard.readText(); });
   assert.strictEqual(link, 'https://example.com/', '"Copy link" copies the link');
   assert.strictEqual(new URL(page.url()).port, String(port), 'the right-click did not follow the link');
