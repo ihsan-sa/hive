@@ -1112,6 +1112,18 @@ def thin_signal_why(r, page_text="", page_title="", must=()):
 
 
 SIGNAL_MARK = "the signal is marked down: "
+POINTER = re.compile(r"\b(?:article|story|interview|feature|piece|podcast|episode|video|newsroom|op-ed|q&a)\b[^.!?]{0,160}?\b(?:featuring|features|featured|with|quoting|quotes)\b", re.I)
+PRINTED_URL = re.compile(r"https?://[^\s<>\"')\]]+")
+def pointer_url(sig, text):
+    """The address printed just after a signal that only points to another page for the person, or '': Bentley CareerEdge's "Check out Bentley's latest newsroom article about using AI in Your Job Search featuring Alyssa Hammond, Director of Undergraduate Career Development!", the article's address on the next line, stood undated as her signal while the article held her own quote (fnwords147)."""
+    sig, t = " ".join(str(sig or "").split()), " ".join(str(text or "").split())
+    if not sig or not POINTER.search(sig): return ""
+    i = t.find(sig[:80])
+    if i < 0: return ""
+    m = PRINTED_URL.search(t[i + len(sig):i + len(sig) + 300])
+    return m.group(0).rstrip(".,;:!?") if m else ""
+
+
 def signal_page_of(r, case):
     """The stored page a row's signal is from (its own page when the signal is from there), or {}."""
     url = stored_signal_url(r) or r.get("signal_url") or r.get("source_url") or ""
@@ -1166,13 +1178,14 @@ def date_printed(text, iso):
     return any(re.search(rf"(?<![\w/]){re.escape(x)}(?![\w/])", f) for x in _date_forms(iso))
 
 
+NO_SIGNAL_DATE = "no signal date: none on its page, in its address or in its metadata"
 SHOWN_ON_PAGE = {"meta": "its page's metadata", "url": "its address", "text": "a date printed on its page", "modified": "the site's record of its page", "event": "the event date on its page"}
 def signal_date_from(r, case):
-    """Where a row's signal_date came from, for leads.csv's signal_date_from: Rotyliano's and Castonguay's podcast dates are in their pages' metadata only, and Bachert's is the YouTube video's while her row's page has no date (fnwords146 review). '' when there is no signal date."""
+    """Where a row's signal_date came from, for leads.csv's signal_date_from: Rotyliano's and Castonguay's podcast dates are in their pages' metadata only, and Bachert's is the YouTube video's while her row's page has no date (fnwords146 review). When there is a signal but no date, NO_SIGNAL_DATE; '' only when there is no signal."""
     sd = str(r.get("signal_date") or "")[:10]
-    if not sd: return ""
-    url = stored_signal_url(r) or r.get("signal_url") or r.get("source_url") or ""
     page = signal_page_of(r, case)
+    if not sd: return (NO_SIGNAL_DATE if page else "no signal date: its page is not in the case") if r.get("signal") else ""   # a listed row with no date says so: Hammond's verified row left the column blank (fnwords147)
+    url = stored_signal_url(r) or r.get("signal_url") or r.get("source_url") or ""
     own = not stored_signal_url(r)
     if not page: return "its page is not in the case"
     shown = date_printed(page.get("text"), sd)
@@ -1553,6 +1566,26 @@ class Hunt:
         if not self.case or not r.get("signal") or str(r["signal"]).startswith("("): return ""
         pg = self.case.page_at(stored_signal_url(r) or r.get("signal_url") or r.get("source_url") or "") or {}
         return thin_signal_why(r, pg.get("text") or "", pg.get("title") or "", self.must)
+
+    def follow_pointers(self):
+        """A listed row whose signal is undated and only points to a page of the organisation's for the person (pointer_url) takes the person's own sentence, address and date from that page when it has one that stands (searched_signal_why), as a search for them would: Hammond's row stood on CareerEdge's undated pointer to the newsroom article that quoted her (fnwords147; fnwords144 had her quote of 2025-05-21)."""
+        n = 0
+        for r in list(self.leads.values()):
+            if r.get("signal_date") or r.get("check_status") != "verified" or time.monotonic() >= self.deadline: continue
+            href = pointer_url(r.get("signal"), signal_page_of(r, self.case).get("text"))
+            if not href or not people.official(r.get("organisation") or "", href, self.domains): continue
+            sub = fetcher.fetch(href, self.case, allow_browser=False)
+            if sub.get("status") != "ok" or gone_live(sub, href): continue
+            url = sub.get("final_url") or href
+            ex = self.own_sentence(sub.get("text") or "", r["name"], r["organisation"], self.must)
+            if not ex or self.searched_signal_why(sub, url, ex, r): continue
+            r.update(signal=ex, signal_near_person="yes", signal_url=url, signal_date=self.signal_when(sub, url, r["name"]))
+            r["note"] = "; ".join(x for x in (f"the person's own signal is from {url} (the page their signal pointed to)", *[x for x in note_items(r.get("note")) if x and not OWN_SIGNAL_NOTE.search(x)]) if x)
+            with_event_note(r, sub, url)
+            if "signal_kind" in r: r["signal_kind"] = signal_kind(r["signal"], r.get("source_url"))
+            self.log(f"  + {r['name']} ({r['organisation']}): own signal from the page their signal pointed to, {url}")
+            n += 1
+        return n
 
     def mark_signals(self):
         """A verified row whose own signal was said under another post (signal_title_why) or names AI only in passing (passing_signal_why) is marked partial, kept on the list with the reason in its note (fnwords146 review: Rotyliano, WEAK)."""
@@ -3378,6 +3411,7 @@ class Hunt:
         if len(self.leads) < self.target: self.held_signals()
         self.stored_fresher_signals()   # rows this run found: a one-pass case gets the search too
         self.hold_thin()
+        self.follow_pointers()
         self.mark_signals()
         if len(self.leads) >= self.target: self.stop_reason = f"reached the target of {self.target}"
         elif out_of_time or time.monotonic() >= self.deadline: self.stop_reason = "ran out of time: run it again on this case to carry on"
@@ -3474,12 +3508,13 @@ class Hunt:
         rest = collections.Counter(r["check_status"] for r in rows if r["check_status"] != "verified")
         unver = ", ".join(f"{c} {'with the person only on another site' if st == 'secondary' else st}" for st, c in sorted(rest.items(), key=lambda kv: kv[0] != "secondary")) or "every listed row verified"   # by status: "1 on another site" after the signal's own-site count read as a third signal count, where it was Mitchell's partial row (fnwords145 review)
         aged = sorted((r for r in rows if age.get(id(r))), key=lambda r: -age[id(r)])
+        undated = [r for r in rows if r.get("signal") and not str(r.get("signal_date") or "").strip()]   # a blank date is not a fresh one: Hammond's undated row dropped out of the old-signal count silently (fnwords147 review)
         status = "reached" if len(rows) >= self.target else "SHORT"
         orgs = collections.Counter(r["organisation"] for r in rows)
         untried = [o for o in self.orgs if not any(t[0] == o and not str(t[1]).startswith("(statement) ") for t in self.tried)]  # a menu search alone is not a try for leads
         named_orgs = set(self.s.get("orgs", [])) | set(self.pages); found = [o for o in self.orgs if o not in named_orgs]; n_disc = len(found)   # an organisation the spec names counts as named even when a discovery search found it too
         found_note = ', listed under "Organisations found by discovery"' if n_disc else ''
-        lines = [f"# Hunt: {self.s.get('goal', '')}", "", f"**{status}: {len(rows)} of {self.target}** ({n_ver} with the person on the organisation's own site{': ' + kinds if kinds else ''}{own_sig}; {unver}). Stopped: {self.stop_reason}.", "", *([f"{len(aged)} of the {len(rows)} listed rows ({sum(r['check_status'] == 'verified' for r in aged)} of the {n_ver} verified) rest on a signal more than a year older than the day its page was read (an old signal is not a current priority): " + ", ".join(f"{r['name']} ({str(r['signal_date'])[:10]}, {age[id(r)] / 365.25:.1f} years{(', its page last modified ' + ed) if (ed := signal_page_edited(r, self.case)) else ''}{'' if r['check_status'] == 'verified' else ', ' + r['check_status']})" for r in aged[:20]) + ".", ""] if aged else []), "Every row is backed by a saved page: `check_quote` is the text next to the name on `source_url`, and `page_date` is that page's date (for a staff or directory page its last edit, which says the list is kept current; blank when the only date it gives is the day it was read); `signal_url` is the page the signal is from, dated `signal_date`. It says what the page says on the day it was read, not that the person still holds the post. No addresses were inferred.", "",
+        lines = [f"# Hunt: {self.s.get('goal', '')}", "", f"**{status}: {len(rows)} of {self.target}** ({n_ver} with the person on the organisation's own site{': ' + kinds if kinds else ''}{own_sig}; {unver}). Stopped: {self.stop_reason}.", "", *([f"{len(aged)} of the {len(rows)} listed rows ({sum(r['check_status'] == 'verified' for r in aged)} of the {n_ver} verified) rest on a signal more than a year older than the day its page was read (an old signal is not a current priority): " + ", ".join(f"{r['name']} ({str(r['signal_date'])[:10]}, {age[id(r)] / 365.25:.1f} years{(', its page last modified ' + ed) if (ed := signal_page_edited(r, self.case)) else ''}{'' if r['check_status'] == 'verified' else ', ' + r['check_status']})" for r in aged[:20]) + ".", ""] if aged else []), *([f"{len(undated)} of the {len(rows)} listed rows ({sum(r['check_status'] == 'verified' for r in undated)} verified) have no signal date, so their age is unknown and they are not in any old-signal count: " + ", ".join(r['name'] + ('' if r['check_status'] == 'verified' else ', ' + r['check_status']) for r in undated[:20]) + ".", ""] if undated else []), "Every row is backed by a saved page: `check_quote` is the text next to the name on `source_url`, and `page_date` is that page's date (for a staff or directory page its last edit, which says the list is kept current; blank when the only date it gives is the day it was read); `signal_url` is the page the signal is from, dated `signal_date`. It says what the page says on the day it was read, not that the person still holds the post. No addresses were inferred.", "",
                  f"{sum(1 for l in self.log_rows if l['org'] != '(discover)')} org-and-angle searches on all runs of this case, {(lambda k: f'{k} of them' if k else 'none of them')(sum(1 for l in self.log_rows[getattr(self, 'run_rows0', 0):] if l['org'] != '(discover)'))} on the latest run{self.cache_note()}, over {len(orgs)} organisations with leads, of {len(self.orgs)} considered ({len(self.orgs) - n_disc} named in the spec, {n_disc} found by discovery searches{found_note}); {len(self.near)} near misses in `near_misses.csv`; {len(self.blocked)} pages unread.", "",
                  "## Leads", "", "| Name | Organisation | Title | Kind | Signal date | Status |", "|---|---|---|---|---|---|", *["| " + " | ".join(md_cell(x) for x in (r.get('name'), full(r.get('organisation')), r.get('title'), r.get('signal_kind') or 'none', str(r.get('signal_date') or '')[:10], r.get('check_status'))) + " |" for r in rows], ""]  # the rows themselves, in the report a reader opens first (fnwords144 review); the considered count split by where each organisation came from ("of 126 considered" could not be reconciled from the run logs, fnwords144 review)  # the log holds every run on the case: fnwords143's 1062 could not be traced in one run's log (review); "0 of them on this run" read as wrong after six passes, the last with nothing left to search (fnwords144 review)
         if self.misreads: lines += ["## Misread names dropped", f"- {len(self.misreads)} rows from an earlier run carried a name their page, read again, doesn't give (a degree taken for a first name, the tail of a post); each went, or took the name the page gives where it was the person's only row: {', '.join(self.misreads[:20])}.", ""]

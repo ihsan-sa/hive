@@ -1084,10 +1084,11 @@ function retiredFoot(ctx) {
 // A focus heading's ⋯ (E201e, GAPS row 28): rename it or retire it where it shows, as a chat app's project menu does. Only a full sign-in
 // (the server says the same); retiring isn't offered for the person's priorities, which come from kb/priorities.md.
 export function focusMore(f, label, ctx, o = {}) {
-  const key = "f:" + f.id, open = !!rowM && rowM.th === key;
+  // The heading in the list and the focus page's own ⋯ are two buttons for one focus: each is open only when it opened the menu (churn, state walks, 2026-11-26).
+  const key = "f:" + f.id + "|" + (o.key || ""), open = !!rowM && rowM.th === key;
   return h("button", { type: "button", class: o.cls || "tm-sec-add tm-sec-menu", "data-key": o.key || null, ...(o.attrs || {}), "aria-haspopup": "true", "aria-expanded": open ? "true" : "false", "data-open": open ? "" : null,
     title: f.own ? `Rename ${label}` : `Rename or retire ${label}`, "aria-label": `Actions for ${label}`,
-    onclick: e => { e.preventDefault(); e.stopPropagation(); const b = e.target.closest("button"), was = rowM && rowM.btn === b; closeRowMenu(); if (!was) openFocusMenu(b, f, ctx, o.after); } }, icon("more"), o.text ? h("span", null, o.text) : null);
+    onclick: e => { e.preventDefault(); e.stopPropagation(); const b = e.target.closest("button"), was = rowM && rowM.btn === b; closeRowMenu(); if (!was) openFocusMenu(b, f, ctx, o.after, key); } }, icon("more"), o.text ? h("span", null, o.text) : null);
 }
 export function renameFocusDialog(f, ctx) {
   const field = h("input", { class: "input", value: focusName(f), maxlength: "80", "aria-label": "Name", autocomplete: "off" });
@@ -1109,7 +1110,7 @@ export function retireFocusDialog(f, n, ctx, after) {
       "Its page, summary and to-do list leave the home. Bring it back with its conversations from Retired focuses, at the foot of the list by focus."],
     onOk: async () => { await apiPost("/api/focus", { retire: f.id }); FOLD.delete("f:" + f.id); saveFold(); await loadFoci(true); if (after) after(); ctx.update(); } });
 }
-function openFocusMenu(b, f, ctx, after) {
+function openFocusMenu(b, f, ctx, after, key) {
   const n = [...S.threads.keys()].filter(th => focusOf(th) === f.id).length;
   const it = (label, ic, go, key, tip) => h("button", { type: "button", class: "menu-i", role: "menuitem", "data-key": key, title: tip || null, onclick: e => { e.stopPropagation(); closeRowMenu(); go(); } }, icon(ic), h("span", { class: "menu-i-t" }, label));
   const m = h("div", { class: "menu lr-menu", role: "menu", "aria-label": "Focus actions" },
@@ -1121,7 +1122,7 @@ function openFocusMenu(b, f, ctx, after) {
   const top = r.bottom + 4 + mh > innerHeight - 8 ? Math.max(8, r.top - 4 - mh) : r.bottom + 4;
   Object.assign(m.style, { position: "fixed", top: top + "px", left: Math.max(8, Math.min(r.right - mw, innerWidth - mw - 8)) + "px" });
   b.setAttribute("aria-expanded", "true"); b.dataset.open = "";
-  rowM = { btn: b, th: "f:" + f.id, nodes: [sc, m], key: e => { if (e.key === "Escape") { e.stopPropagation(); closeRowMenu(); b.focus(); } }, scroll: e => { if (!m.contains(e.target)) closeRowMenu(); } };
+  rowM = { btn: b, th: key, nodes: [sc, m], key: e => { if (e.key === "Escape") { e.stopPropagation(); closeRowMenu(); b.focus(); } }, scroll: e => { if (!m.contains(e.target)) closeRowMenu(); } };
   document.addEventListener("keydown", rowM.key, true); window.addEventListener("scroll", rowM.scroll, true);
   m.querySelector(".menu-i")?.focus();
 }
