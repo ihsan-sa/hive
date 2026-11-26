@@ -34,6 +34,11 @@ PER_6H = 3           # judge wakes of one agent in one conversation in six hours
 MISSED = re.compile(r"^judge missed:", re.I)
 VERDICTS = ("done", "blocked", "wait", "continue")
 HEX12 = re.compile(r"^[0-9a-f]{12}$")
+# a wait whose first clause awaits the person: their reply never arrives by itself, so it is blocked, not a wake (11-26 shadow read: two waits on "the person's next comment round")
+PERSON_WAIT = re.compile(r"^\W*(?:when |once |after |until )?(?:the )?person(?:'s)?\b|\b(?:when|once|until|till) the person\b|\bwait\w* (?:on|for) the person\b"
+                         r"|\b(?:round|reply|replies|answer|pick|picks|word|decision|approval|comments?) from the person\b"
+                         r"|\bthe person's [\w -]{0,30}?\b(?:reply|replies|answer|pick|picks|decision|approval|comments?|comment round|confirmation)\b", re.I)
+def awaits_person(step): return bool(PERSON_WAIT.search(re.split(r";|\.\s|,\s*then\b", str(step or ""), maxsplit=1)[0]))
 
 def now(): return dt.datetime.now(dt.timezone.utc)
 def day_of(ts): return dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d")   # the host's day, the clock post ids (and so rung ticks) are written in
@@ -225,7 +230,7 @@ def build_case(r, rows, posts, statuses, unit=None, is_own=False, title=None, en
     return {"now": utc(end) + f" ({host_now(end)})", "name": name, "thread": thread, "title": title, "unit": unit, "own": is_own,
             "started": str(r.get("at", ""))[:16], "minutes": round((end - since) / 60), "model": r.get("model"), "goal": goal,
             "wake": {"from": wake.get("from"), "at": str(wake.get("at", ""))[:16], "text": trim(wake.get("text"), 2400)} if wake else {"from": r.get("from"), "text": ""},
-            "own_posts": [{"id": p.get("id"), "at": str(p.get("at", ""))[:16], "text": trim(p.get("text"), 3200 if p is own[-1] else 900)} for p in own[-3:]], "n_own": len(own),
+            "own_posts": [{"id": p.get("id"), "at": str(p.get("at", ""))[:16], "text": trim(p.get("text"), 3200 if p in own[-2:] else 900)} for p in own[-3:]], "n_own": len(own),
             "others": [{"from": p.get("from"), "at": str(p.get("at", ""))[:16], "text": trim(p.get("text"), 500)} for p in others],
             "bar": trim(bar[0].get("text"), 700) if bar else "", "asks": open_asks(thread) if extras else [], "reminders": reminders(name, thread, end) if extras else [],
             "post": own[-1].get("id"), "since": C.epoch(own[-1].get("at")) or 0,
@@ -342,8 +347,9 @@ def run(snap, model=None, asker=ask):
     e = {**base, **v, "model": m, "cost": cost, "secs": secs, "acted": False}
     if v["verdict"] == "wait" and v.get("until"):   # the minutes come from the named time, not the model's sums (11-20: a gate 16 h off and a reminder 15 h off were both woken in under 2 h)
         e["model_minutes"] = v["minutes"]; v["minutes"] = e["minutes"] = max(10, round((v["until"] - t) / 60) + 10); e["until"] = utc(v["until"])
+    if v["verdict"] == "wait" and awaits_person(v["step"]): e.update(model_verdict="wait", verdict="blocked", person_wait=True); v["verdict"] = "blocked"
     wake_at = t + v["minutes"] * 60
-    if v["verdict"] == "wait" and v["minutes"] > MAX_WAIT_MIN: e["long_wait"] = True
+    if v["verdict"] == "wait" and v["minutes"] > MAX_WAIT_MIN: e.update(long_wait=True, model_verdict="wait", verdict="done")   # the prompt says answer done; the code makes it so
     elif v["verdict"] == "wait" and any(d <= wake_at for d, _ in pending_reminders(name, thread, t)): e["reminder_set"] = True   # rule 5: a reminder wakes it first
     elif v["verdict"] in ("wait", "continue") and a == "judge" and not shadow:
         write_intent(r, case, v, t); e["acted"] = True

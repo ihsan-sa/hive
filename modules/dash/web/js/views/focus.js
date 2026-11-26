@@ -17,7 +17,7 @@ import { loadFoci, fociFailed, focusById, focusOf, threadsOf, needsOf, askedOf, 
 import { waitingLater } from "../core/needs.js";
 import { archived } from "../ui/threadmeta.js";
 import { draft, answer } from "../ui/composer.js";
-import { inChat, chatEscape, chatLeave, answerer, summaryWait, sumLines, lineText, flat, liftIn, updatedAt, rowStand, newMark, leadWord } from "./comms.js";
+import { inChat, chatEscape, chatLeave, answerer, summaryWait, sumLines, lineText, flat, liftIn, updatedAt, rowStand, newMark, leadWord, focusMore } from "./comms.js";
 import { quickIs, laterButtons, setLater } from "../ui/quick.js";
 import { when, exact } from "../ui/when.js";
 import { yoursPosts, yoursText } from "../core/yours.js";
@@ -266,7 +266,9 @@ function page(ctx) {
   const pz = tierOn ? pauseOf("focus", id) : null;
   const actions = h("div", { class: "fp-a" }, can("post") ? button("New conversation", () => newIn(id), { size: "s", icon: "new" }) : null,
     pz && !pz.held ? button("Pause…", () => askPause("focus", id, null, ctx.update), { size: "s", kind: "quiet", icon: "pause", cls: "fp-pause", title: PAUSE_SAYS }) : null,
-    !simpleOn() ? button("This focus in Flow", null, { href: href("flow"), kind: "icon", size: "s", icon: "bands", cls: "fp-flow" }) : null);
+    !simpleOn() ? button("This focus in Flow", null, { href: href("flow"), kind: "icon", size: "s", icon: "bands", cls: "fp-flow" }) : null,
+    // Rename or retire the group from its own page, as from its heading in the list and its home card (E201g, GAPS row 28); a retired one leaves for Chat.
+    !f.misc && can("config") ? focusMore(f, name, ctx, { cls: "btn fp-menu", key: "fp-menu", attrs: { "data-kind": "icon", "data-size": "s" }, after: () => go("comms") }) : null);
   const allDone = checks.length && done.length === checks.length;
   const extra = quiet.length + arch.length;
   return h("div", { class: "page fp", "data-key": "fp:" + (id || "misc") },

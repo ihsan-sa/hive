@@ -25,8 +25,10 @@ export function askKill(n, said) {
     title: said ? said + "?" : `Kill ${n}?`, ok: said || `Kill ${n}`, kind: "danger", typed: S.app.app && said ? null : n, failText: `Nothing was ${done}`,
     body: [
       L && L.doing ? h("p", { class: "meta" }, "Doing now: ", h("span", { "data-content": "" }, short(S.app && S.app.app ? plainStep(L.doing) : L.doing, 160))) : null,
+      // The app look says it in the person's words (E203, GAPS row 22: "starter", "nohup" and "pids" read as back-room talk); the developer look keeps the detail.
+      ...(S.app && S.app.app ? ["This stops it right away, without letting it save what it was in the middle of. It won't carry on by itself: send a message in the conversation when you want it to."] : [
       "This ends the run and the shells it started, right away, without letting it save its work.",
-      "The starter won't resume it, and any wakes queued for it are dropped. A new post that mentions it starts it again. Jobs it detached with nohup keep running, and you'll be told their pids.",
+      "The starter won't resume it, and any wakes queued for it are dropped. A new post that mentions it starts it again. Jobs it detached with nohup keep running, and you'll be told their pids."]),
     ],
     onOk: async code => {
       let d;
@@ -61,6 +63,15 @@ export function askStop(n, said = agentLabel(n)) {
     ],
     onOk: async () => { await post("/api/stop", { name: n, when: "after-step" }); await poll(); },
   });
+}
+
+// E203e (GAPS row 22, the E203c reader): the conversation's own Stop is one click, as in Claude.ai and ChatGPT: it stops the run at once, and a
+// message there carries on with the same agent and model. Nothing to confirm; the stopped mark under the reply says what happened. If the
+// stop fails, the window opens instead so its error shows. The Agents pages keep their window.
+export async function stopNow(n) {
+  if (!can("stop")) return;
+  try { await post("/api/kill", { name: n, confirm: n }); } catch (e) { return askStop(n); }
+  await poll();
 }
 
 // ---- Pause or resume a login ----

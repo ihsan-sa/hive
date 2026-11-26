@@ -16,7 +16,9 @@ The agent that edits the document uses the command line (projects/doc-review-vie
     docs.py source --all                       how many documents have a source found (exit 1 names those with none)
     docs.py md-pdf SRC.md OUT.pdf              print a markdown source as the library does; file that PDF, not the .md
     docs.py verify 006-0002                    each addressed note against the revision it names: exit 1 when a note names the
-                                               revision it was made on; lists notes whose words are unchanged there, to look at
+                                               revision it was made on; lists notes whose words, links, icons and bold are
+                                               unchanged there, to look at
+    docs.py looked 006-0002 21 30 [--why W]    mark addressed notes as seen by eye (spacing, an answered question): verify skips them
 """
 import bisect, fcntl, hashlib, json, os, re, subprocess, sys, threading, time
 from pathlib import Path
@@ -610,17 +612,94 @@ def _note_words(r, n):
     return " ".join(out)
 
 
+_MARKS_JS = r"""
+var doc=Document.openDocument(scriptArgs[0]);var out=[];
+for(var p=0;p<doc.countPages();p++){var pg=doc.loadPage(p);var L=[],S=[],cur=null;
+ var ls=pg.getLinks();for(var i=0;i<ls.length;i++){var b=ls[i].getBounds();L.push([b[0],b[1],b[2],b[3],ls[i].getURI()||""]);}
+ pg.toStructuredText().walk({onChar:function(c,o,font,size,q){var n=font.getName();
+   if(!cur||cur[4]!=n||Math.abs(cur[1]-Math.min(q[1],q[3]))>2){cur=[q[0],Math.min(q[1],q[3]),q[6],Math.max(q[5],q[7]),n,""];S.push(cur);}
+   cur[5]+=c;cur[2]=Math.max(cur[2],q[2],q[6]);},endLine:function(){cur=null;}});
+ out.push({links:L,spans:S});}
+print(JSON.stringify(out));
+"""
+
+
+def _marks(r):
+    """Per page {links: [[x0, y0, x1, y1, uri]], spans: [[x0, y0, x1, y1, font, text]]} from mutool, cached by the file's sha:
+    what words alone miss (a link, an icon glyph, bold). [] when mutool is missing or fails, so verify falls back to words."""
+    CACHE.mkdir(parents=True, exist_ok=True)
+    f = CACHE / f"{_key(r)}.marks.json"
+    m = _jload(f, None)
+    if m is None:
+        js = _tmp(CACHE / "marks.js"); js.write_text(_MARKS_JS)
+        try:
+            x = subprocess.run(["mutool", "run", str(js), str(HOME / r["path"])], capture_output=True, text=True, timeout=60)
+            m = json.loads(x.stdout) if x.returncode == 0 else []
+        except (OSError, subprocess.SubprocessError, ValueError):
+            m = []
+        finally:
+            js.unlink(missing_ok=True)
+        if m: t = _tmp(f); t.write_text(json.dumps(m)); os.replace(t, f)
+    return m
+
+
+def _mark_lines(pg):
+    """A page's mutool spans grouped into lines: [[y0, y1, [span...]]] top to bottom."""
+    lines = []
+    for sp in sorted(pg["spans"], key=lambda s: (round(s[1]), s[0])):
+        if lines and abs(lines[-1][0] - sp[1]) <= 2: lines[-1][2].append(sp)
+        else: lines.append([sp[1], sp[3], [sp]])
+    return lines
+
+
+def _sig(pg, sps):
+    """Links, icon glyphs and bold words on a run of spans: (uris, icons, bold words)."""
+    y0, y1 = min(s[1] for s in sps) - 1, max(s[3] for s in sps) + 1
+    uris = sorted({l[4] for l in pg["links"] if l[1] < y1 and l[3] > y0})
+    icons = sum(1 for s in sps if "Awesome" in s[4] and s[5].strip() not in ("○", "•", ""))
+    return (uris, icons, _norm(" ".join(s[5] for s in sps if "Bold" in s[4])))
+
+
+def _text_marks(r, t, p=None, band=None):
+    """Signatures of every run of up to 6 lines of revision r that starts where the words t (normalized) start; with p and band
+    (y0, y1), only runs on page p whose lines sit in that band (a note's box)."""
+    out = []
+    for k, pg in enumerate(_marks(r), 1):
+        if p and k != p: continue
+        lines = _mark_lines(pg)
+        if band: lines = [ln for ln in lines if band[0] <= (ln[0] + ln[1]) / 2 <= band[1]]
+        norm = [_norm(" ".join(s[5] for s in ln[2])) for ln in lines]
+        for i in range(len(lines)):
+            acc = ""
+            for j in range(i, min(i + 6, len(lines))):
+                acc = (acc + " " + norm[j]).strip()
+                if t in acc:
+                    if j == i or t not in acc[len(norm[i]):].strip(): out.append(_sig(pg, [s for ln in lines[i:j + 1] for s in ln[2]]))
+                    break
+                if len(acc) > len(t) + 400: break
+    return out
+
+
+def _note_marks(r, n, t):
+    """The signature of the note's words t inside its box on revision r, or None (no box, words not found there, no mutool)."""
+    if not n.get("p") or not n.get("rects"): return None
+    try: m = _text_marks(r, t, int(n["p"]), (min(b[1] for b in n["rects"]) - 2, max(b[3] for b in n["rects"]) + 2))
+    except (TypeError, ValueError, IndexError): return None
+    return m[0] if m else None
+
+
 def verify(base):
     """Each addressed note against the revision it says addressed it: {same: [(n, rev)], unchanged: [(n, rev, from, words)],
     changed: [n], unknown: [(n, why)]}. "same" is a wrong letter (a note can't be addressed in the revision it was made on);
-    "unchanged" means the words the note points at are still there word for word, which a link, logo, spacing or a question can
-    rightly leave, so those are for a look, not an error."""
+    "unchanged" means the words the note points at are still there word for word, with the same links, icons and bold on their
+    lines, which spacing or a question can rightly leave, so those are for a look, not an error; a note marked `looked` (someone
+    saw the change by eye: `docs.py looked`) goes to "looked" instead."""
     if not BASE.match(base or ""): raise ValueError("bad document id")
     revs = _revisions().get(base) or {}
     nd = load_notes(base)
     pend = _pending(base, revs, nd)
     allr = dict(revs, **({"next": pend} if pend else {}))
-    res = {"same": [], "unchanged": [], "changed": [], "unknown": []}
+    res = {"same": [], "unchanged": [], "changed": [], "unknown": [], "looked": []}
     text = {}
     for n in _resolve_next(nd["notes"], revs, pend):
         if n.get("status") != "addressed": continue
@@ -633,9 +712,27 @@ def verify(base):
         if len(t) < 3:
             res["unknown"].append((n["n"], "no words under the note")); continue
         if a not in text: text[a] = _norm(" ".join(w[4] for pg in (_cached_words(allr[a]) or []) for w in pg["words"]))
-        if t in text[a]: res["unchanged"].append((n["n"], a, o, t))
-        else: res["changed"].append(n["n"])
+        if t not in text[a]: res["changed"].append(n["n"]); continue
+        mo = _note_marks(allr[o], n, t)
+        ma = _text_marks(allr[a], t) if mo is not None else []
+        if ma and mo not in ma: res["changed"].append(n["n"]); continue   # same words, but a link, icon or bold changed
+        if n.get("looked"): res["looked"].append(n["n"]); continue
+        res["unchanged"].append((n["n"], a, o, t))
     return res
+
+
+def cli_looked(base, nums, why=""):
+    """Mark addressed notes as checked by eye (the change is there but words, links, icons and bold don't show it: spacing, an
+    answered question), so verify stops listing them."""
+    if not BASE.match(base or ""): sys.exit("bad document id: " + str(base))
+    with _Lock(base) as nd:
+        done, bad = [], []
+        for k in nums:
+            n = next((x for x in nd["notes"] if x.get("n") == k), None)
+            if not n or n.get("status") != "addressed": bad.append(k); continue
+            n["looked"] = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), **({"why": why} if why else {})}; done.append(k)
+        _save_notes(base, nd)
+    print(f"{base}: looked at {done or 'none'}" + (f"; not addressed or no such note, left alone {bad}" if bad else ""))
 
 
 def cli_verify(base):
@@ -643,12 +740,12 @@ def cli_verify(base):
     r = verify(base)
     tot = sum(len(v) for v in r.values())
     print(f"{base}: {tot} addressed notes: {len(r['changed'])} changed, {len(r['unchanged'])} words unchanged, "
-          f"{len(r['same'])} name the revision they were made on, {len(r['unknown'])} can't tell")
+          f"{len(r['same'])} name the revision they were made on, {len(r['unknown'])} can't tell, {len(r['looked'])} looked at by eye")
     for k, a in r["same"]:
         print(f"  #{k}: addressed in rev {a}, the revision it was made on: the fix went into a later build; set it with"
               f" `docs.py addressed {base} {k} --rev <that letter>`")
     for k, a, o, t in r["unchanged"]:
-        print(f'  #{k}: "{t[:70]}" reads the same in rev {a} as in rev {o}: fine for a link, logo, spacing or a question; else reopen it')
+        print(f'  #{k}: "{t[:70]}" reads the same in rev {a} as in rev {o}: fine for spacing or a question; look, then `docs.py looked {base} {k}` or reopen it')
     for k, why in r["unknown"]:
         print(f"  #{k}: can't tell ({why})")
     if r["same"]: sys.exit(1)
@@ -677,6 +774,12 @@ def main(a):
     if len(a) == 2 and a[0] == "source": return cli_source(a[1])
     if len(a) == 3 and a[0] == "md-pdf": return cli_md_pdf(a[1], a[2])
     if len(a) == 2 and a[0] == "verify": return cli_verify(a[1])
+    if len(a) >= 3 and a[0] == "looked":
+        why = ""
+        if "--why" in a:
+            i = a.index("--why"); why = " ".join(a[i + 1:i + 2]); a = a[:i] + a[i + 2:]
+        try: return cli_looked(a[1], [int(x.lstrip("#")) for x in a[2:]], why)
+        except ValueError: sys.exit("note numbers, like: looked 006-0002 21 30 --why 'spacing'")
     if a and a[0] == "list":
         for r in documents()["docs"]: print(r["id"], r["rev"], r["title"], f"drafts={r['drafts']} open={r['open']}")
         return

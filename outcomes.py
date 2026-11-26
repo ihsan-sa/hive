@@ -234,13 +234,14 @@ def limit_cut(run, log, until=None):
     same session's next start is on the same post, within PARK_WAIT_S (moved to another login, or at the reset). The ask runs on in that run,
     which is graded with this run's posts too (`reap_origin`), so this one is outside the score: graded alone, ad2a5's cut run read as nothing
     ("only posted that it took the job") and its resume 2 s later as delivered (1123104240c2, 2026-11-23); ae214 and a4b0e read partial on
-    11-18 with resumes 32 and 13 min later. `not_run` covers the limited runs that posted nothing. Returns the resume's start, or None;
+    11-18 with resumes 32 and 13 min later. A lost connection (the starter's `died` event) counts the same: a33b1 and adadc died after a
+    claim post on 2026-11-25 04:55, resumed on the same post 64 s later and delivered, and their cut runs read partial (hive-meta R82). `not_run` covers the limited runs that posted nothing. Returns the resume's start, or None;
     with `until`, "" while no run has started since and PARK_WAIT_S hasn't passed (the reset may still bring it back: grade it later)."""
     if run.get("exit") in (0, None): return None
     try: t1 = dt.datetime.fromisoformat(run["ended"])
     except (KeyError, TypeError, ValueError): return None
     end = iso(t1 + dt.timedelta(seconds=LIMIT_S))
-    if not any(r.get("event") == "limited" and r.get("session") == run.get("session") and run["started"] <= r.get("at", "") <= end for r in log): return None
+    if not any(r.get("event") in ("limited", "died") and r.get("session") == run.get("session") and run["started"] <= r.get("at", "") <= end for r in log): return None
     nxt = next((r for r in log if r.get("event") == "start" and r.get("session") == run.get("session") and r.get("name") == run.get("name")
                 and r.get("at", "") >= run["ended"]), None)
     if not nxt and until and (dt.datetime.fromisoformat(until) - t1).total_seconds() < PARK_WAIT_S: return ""
@@ -599,7 +600,7 @@ def cmd_grade(a):
         post = ask
         g = "not_asked" if sw or sup or pz or rp or lc else "not_run" if not_run(r, mine, lims, log) else mechanical(r, post, mine)
         if g:
-            why = "switched model or effort and stopped; the run it resumed as carries the ask, with this run's posts" if sw else "reaped on a background wait and resumed on the same post; that run carries the ask" if rp else "cut by a usage limit after posting and resumed on the same post; that run carries the ask" if lc else "stopped for the person's edit or retry; the run it resumed as carries the ask" if sup else "the person paused it mid-run and it stopped; the run that resumes carries the ask" if pz else "hit a usage limit before posting; the same session resumes on the same post and carries the ask" if g == "not_run" \
+            why = "switched model or effort and stopped; the run it resumed as carries the ask, with this run's posts" if sw else "reaped on a background wait and resumed on the same post; that run carries the ask" if rp else "cut by a usage limit or a lost connection after posting and resumed on the same post; that run carries the ask" if lc else "stopped for the person's edit or retry; the run it resumed as carries the ask" if sup else "the person paused it mid-run and it stopped; the run that resumes carries the ask" if pz else "hit a usage limit before posting; the same session resumes on the same post and carries the ask" if g == "not_run" \
                 else "the post asked nothing" if g == "not_asked" else "posted nothing" + (" though named" if g == "silent" else "")
             if not a.dry: append(LEDGER, {**r, **({"switch": True} if sw else {}), **({"superseded": True} if sup else {}), **({"person_pause": True} if pz else {}), **({"reap_resumed": True} if rp else {}), **({"limit_resumed": True} if lc else {}), **tag, "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
             graded += 1

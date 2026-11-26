@@ -296,7 +296,9 @@ export function agentSay(n, thread) {
 }
 
 // ---- the agent card: what an agent runs on. One list of rows, so a new harness or option adds a row here. ----
-export function modelName(id) { const m = /^claude-([a-z]+)-(\d+)-(\d+)(?:-\d{8})?$/.exec(id || ""); return m ? `${m[1][0].toUpperCase() + m[1].slice(1)} ${m[2]}.${m[3]}` : id; }
+// E203g: a run asked for by its short word (--model opus, as a resumed run is) reads as the composer's menu does, not "opus"
+const MODEL_WORD = { opus: "Opus 5.5", sonnet: "Sonnet 5.5", haiku: "Haiku 5.5", fable: "Fable 5.2" };
+export function modelName(id) { const m = /^claude-([a-z]+)-(\d+)-(\d+)(?:-\d{8})?$/.exec(id || ""); return m ? `${m[1][0].toUpperCase() + m[1].slice(1)} ${m[2]}.${m[3]}` : MODEL_WORD[id] || id; }
 export function loginName(path) { const l = ((S.live && S.live.logins) || []).find(x => x.path === path); return l ? l.name : path ? String(path).replace(/^.*\/\.claude-?/, "") || "main" : null; }
 /** [{k, v, short, hint}] — short is the compact form used on Now cards. */
 export function agentCard(n) {
@@ -566,6 +568,8 @@ export const savedFacts = p => (p.memory && p.memory.length ? p.memory : (displa
 export function displayText(p) {
   if (!S.app.app) return String(p.text || "");
   if (p.disp != null) return p.disp;
+  // E203c: the dashboard's kill notice (dash.py kill_run) is for agents; the person pressed Stop, so the chat and its row say that in their words
+  if (p.stopped && p.from === "dash") return (p.disp = "You stopped it. Send a message to carry on.");
   let t = String(p.text || "").replace(MENTIONS, "");
   t = t.replace(/^reply to message [0-9a-f]+:\s*/i, "");
   if (p.retry_of) return (p.disp = "Asked for another answer");   // E12: the chat hides it and shows the reply after it as the reply's newer version
@@ -694,7 +698,7 @@ export const isScript = n => !/^[a-z][0-9a-f]{4,5}$/.test(n) && !OUTSIDE.has(n) 
 export function postKind(p) {
   if (p.lv !== undefined) return p.lv;
   if (p.th === SIDE_THREAD) return p.lv = 0;
-  if (p.from === "person" || p.men.includes("person")) return p.lv = SHOW.you;
+  if (p.from === "person" || p.men.includes("person") || p.stopped) return p.lv = SHOW.you;   // E203c: the line saying the person stopped a run is theirs to see
   if (SYS.has(p.from) || OPS.has(p.from) || isWarden(p.from) || HOUSE.has(p.th)) return p.lv = SHOW.comms;
   if (p.men.some(m => m !== p.from && !OUTSIDE.has(m))) return p.lv = SHOW.comms;
   if (isScript(p.from)) return FOR_YOU.test(p.text || "") || (p.reply_to && S.byId[p.reply_to]?.from === "person") ? SHOW.you : SHOW.comms;   // not kept in p.lv: a named agent is only known once its first start has loaded
@@ -996,6 +1000,7 @@ export function threadStand(th, read, waits) {
   // 7. nothing written about it, not on the list, no agent on it and none that broke: it stands on who wrote last and when, the one fact there is
   //    (HA-21: on the board of 2026-11-17, 15 of 55 rows of the list said nothing at all, and so did the top of the conversation each opened).
   const lp = d && d.posts.at(-1); if (!lp) return null;
+  if (lp.stopped && lp.from === "dash") return out("ended", "Stopped", `You stopped it ${ago(lp.t)}`);   // E203c: the person pressed Stop, and nothing has been written since
   // a page's edit notice (dash.py, tagged page:edit) is written as the person but asks nobody, so nobody was meant to pick it up
   if (lp.from !== "person" || (lp.tags || []).includes("page:edit"))
     return out("done", "Quiet", `${lastWriter(lp.from, Name)} wrote last, ${ago(lp.t)}`);

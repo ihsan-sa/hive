@@ -250,6 +250,9 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklab,var(--warn) 3
 .btn[aria-busy=true]::after{content:"";position:absolute;left:calc(50% - 7px);top:calc(50% - 7px);width:14px;height:14px;box-sizing:border-box;border-radius:50%;border:2px solid var(--ink-3);border-right-color:transparent;animation:spin .7s linear infinite}
 .btn[data-kind=primary][aria-busy=true]::after,.btn[data-kind=danger-solid][aria-busy=true]::after{border-color:var(--on-ink);border-right-color:transparent}
 .btn[data-kind=accent][aria-busy=true]::after{border-color:var(--on-accent);border-right-color:transparent}
+/* E203d: a busy button whose label says what it is doing ("Adding…") keeps the word, with the spinner before it */
+.btn.btn-says[aria-busy=true]{color:var(--ink-2)!important;padding-left:28px}
+.btn.btn-says[aria-busy=true]::after{left:9px}
 .btn .kbd{margin-left:4px;opacity:.6;font-size:var(--fs-micro)}
 .btn-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
 .seg{display:inline-flex;gap:2px;padding:3px;border-radius:var(--r-m);background:var(--sunken)}
@@ -330,9 +333,13 @@ a.lr-in:hover{background:var(--hover);color:inherit}
 .mod-one{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mod-line .sec-info{flex:none}
 .mod-where{display:block;font-size:var(--fs-small);margin-top:2px}
+.mod-skills{display:block;font-size:var(--fs-small);margin-top:2px}
+.mod-skills b{font-weight:600}
 .mod-group+.mod-group{margin-top:var(--s4)}
 .mod-gt{font-size:var(--fs-small);font-weight:600;margin:0 0 var(--s2);display:flex;flex-wrap:wrap;gap:var(--s2);align-items:baseline}
 .mod-gn{font-weight:400;color:var(--ink-2)}
+.mod-sw{display:inline-flex;align-items:center;gap:var(--s2);min-height:24px;cursor:pointer;color:var(--ink-2);font-size:var(--fs-small);white-space:nowrap}
+li[data-off] .mod-name{color:var(--ink-2)}
 .mod-none{font-size:var(--fs-small);margin:var(--s1) 0}
 .mod-browse{margin-top:var(--s2)}
 /* Settings > Connectors (E55): name, kind and state on one line; the line, what it needs, then the README link and a paste box */
@@ -1888,10 +1895,10 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cm-line-a{margin-left:auto;opacity:0}
 .cm-line:hover .cm-line-a,.cm-line:focus-within .cm-line-a{opacity:1}
 @media (hover:none){.cm-line-a{opacity:1}}
-/* a working agent's Interrupt lives on its strip line, always shown (the person, 11081336a82e: no second line over the box); closed, Stop stays in the open strip */
-.cm-strip:not([data-open]) .cm-line[data-key^="run:"] .cm-line-a:has(.cp-arm){display:flex}
-.cm-strip:not([data-open]) .cm-line[data-key^="run:"] .cm-line-a>:not(.cp-arm){display:none}
-.cm-line-a:has(.cp-arm){opacity:1}
+/* a working agent's Interrupt and Stop live on its strip line, always shown (the person, 11081336a82e: no second line over the box) */
+.cm-strip:not([data-open]) .cm-line[data-key^="run:"] .cm-line-a:is(:has(.cp-arm),:has(.btn-stop)){display:flex}
+.cm-strip:not([data-open]) .cm-line[data-key^="run:"] .cm-line-a>:not(.cp-arm,.btn-stop){display:none}
+.cm-line-a:is(:has(.cp-arm),:has(.btn-stop)){opacity:1}   /* E203: Stop shows with its word, as Interrupt does */
 .cm-strip[data-open] .cm-line{align-items:flex-start;padding-right:28px}
 .cm-strip[data-open] .cm-line>.st{margin-top:5px}
 .cm-strip[data-open] .cm-line-x,.cm-strip[data-open] .cm-line[data-key^="run:"] .cm-line-x{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
@@ -4368,3 +4375,7 @@ body:has(.ink-bubble) .msg-tools{visibility:hidden}
 .tm-new-focus:hover{background:var(--hover);color:var(--ink)}
 .tm-new-focus .ic{width:14px;height:14px}
 @media (hover:none){.tm-new-focus{min-height:40px}}
+.tm-ret-l{list-style:none;margin:2px 0 6px;padding:0}   /* Retired focuses (E201g): a name and Bring back */
+.tm-ret-l li{display:flex;align-items:center;gap:8px;padding:2px 8px;font-size:var(--fs-meta);color:var(--ink-3)}
+.tm-ret-n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (hover:none){.tm-ret-l .btn{min-height:40px}}
