@@ -18,6 +18,17 @@ SCOPE = ("kb/", "core/", "projects/", "modules/")
 READERS = re.compile(r"\b(cat|head|tail|sed)\b|\bh2\s+read\b|\bcd\b")
 WRITES = re.compile(r"(?<![0-9&])>")
 OTHER_WAY, OTHER_CALLS = re.compile(r"(?:^|[|;&(\s])(?:rg|grep|egrep|fgrep|ag|gh)\s|\bh2\s+search\b"), 3   # a lookup another way: grep, gh, board search
+PIPE_FILTER = re.compile(r"\s*(?:rg|grep|egrep|fgrep|ag)\b")
+
+def other_way(cmd):
+    """cmd looks something up another way (OTHER_WAY), not counting a grep that only filters the output of the command before
+    its pipe (`ps | grep pytest`, `git diff | grep x`, `kb drafts | grep -c`): K101 (hive-meta, 2026-11-26) found those were 5 of 10
+    hand-read records and at least 29 of 157 (18%) overall. Live from 2026-11-26 19:38Z (core dca6b46); records before it include them."""
+    kept = []
+    for seg in re.split(r"&&|\|\||;|\n", cmd):
+        parts = seg.split("|")
+        kept.append(" | ".join([parts[0]] + [p for p in parts[1:] if not PIPE_FILTER.match(p)]))
+    return bool(OTHER_WAY.search(" ; ".join(kept)))
 
 
 def woke_thread():
@@ -164,7 +175,7 @@ def observe(who, p):
                 e["touched"].append(path); log({"touch": path, "find": e["id"], "calls": e["calls"], "tool": tool, "session": sid})
         if e["kind"] == "find" and 1 <= e["calls"] <= OTHER_CALLS and not e["touched"] and not e.get("other") and ok:   # an unread find, then within 3 calls a grep/gh/hive search, or a read of a path it didn't show
             cmd = inp.get("command") if tool == "Bash" and isinstance(inp.get("command"), str) else ""
-            if "kb find" not in cmd and "kb open" not in cmd and (OTHER_WAY.search(cmd) or any(not shows(e, rp, lo, hi) for rp, lo, hi in reads)):
+            if "kb find" not in cmd and "kb open" not in cmd and (other_way(cmd) or any(not shows(e, rp, lo, hi) for rp, lo, hi in reads)):
                 said = (cmd + " " + " ".join(rp for rp, _, _ in reads)).lower()   # K94 (hive-meta): how many of the find's query words the lookup names; 0 is likely the agent's next, unrelated step
                 e["other"] = True; log({"other": tool, "find": e["id"], "calls": e["calls"], "session": sid, "qhit": sum(1 for w in qwords(e.get("q")) if w in said)})
     for path, lo, hi in reads:
