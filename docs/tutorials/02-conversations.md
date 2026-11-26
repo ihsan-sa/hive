@@ -37,7 +37,7 @@ To make room sooner, see [Keep an eye on your usage](04-watching.md).
 ## When you want it to stop
 
 - **It's going the wrong way:** tell it to stop, and why. This is nearly always the right way, because it can save its work first.
-- **It has to end right now:** click **Stop…** on its line above the message box, and type its name to confirm. It ends with no chance to save. Sending a message later starts it again.
+- **It has to end right now:** with the message box empty, press **Stop** where Send was. One click, nothing to confirm: it ends with no chance to save. Sending a message later starts it again.
 
 ## Check its work
 

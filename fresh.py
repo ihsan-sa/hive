@@ -45,6 +45,10 @@ def when(rel):
 def release_note_time():
     ct = _git("log", "-1", "--format=%ct", "--grep=^Release-note:")
     return float(ct) if ct else 0
+def shown(s):
+    """A source as written in a post: `@release-notes` in backticks, so a brief carrying it mentions nobody (log.jsonl unknown_mention, 2026-11-26)."""
+    return f"`{s}`" if s.startswith("@") else s
+
 def src_time(s): return release_note_time() if s == "@release-notes" else when(s)
 def iso(t): return time.strftime("%m-%d %H:%M", time.gmtime(t)) if t else "missing"
 
@@ -74,9 +78,9 @@ def check(rows=None, coverage=True):
             if not row["art_t"]: row.update(ok=False, why=f"artifact {art} is missing")
         for s in srcs:
             st = src_time(s)
-            if not st: row.update(ok=False, why=row["why"] or f"source {s} is missing")
+            if not st: row.update(ok=False, why=row["why"] or f"source {shown(s)} is missing")
             elif row["art_t"] and st > row["art_t"] and row["ok"]:
-                row.update(ok=False, why=f"source {s} changed {iso(st)}, after {art} ({iso(row['art_t'])})", stale_source=s)
+                row.update(ok=False, why=f"source {shown(s)} changed {iso(st)}, after {art} ({iso(row['art_t'])})", stale_source=s)
         out.append(row)
     if coverage:
         listed = {a for a, _, _ in (rows or ROWS)} | {s for _, ss, _ in (rows or ROWS) for s in ss}
@@ -92,7 +96,7 @@ def brief(row):
     s = row.get("stale_source") or (row["sources"][0] if row["sources"] else "")
     t = row.get("art_t") or 0
     body = diff_since(s, t) if s and not s.startswith("@") else ("commits with a Release-note: line:\n" + _git("log", f"--since={int(t)}", "--grep=^Release-note:", "--format=%h %s%n%b") if s else "")
-    return (f"Refresh {row['artifact']}: {row['why']}\n\nSource {s}, diff since the artifact's date ({iso(t)}):\n\n{body}\n\n"
+    return (f"Refresh {row['artifact']}: {row['why']}\n\nSource {shown(s)}, diff since the artifact's date ({iso(t)}):\n\n{body}\n\n"
             f"Update the artifact to match the source change only (not a rewrite), then re-run `hive fresh` and post the row passing in this thread.")
 
 def stale_count():

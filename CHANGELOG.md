@@ -10,6 +10,9 @@ Web pages and documents in the side panel have a Comment mode: press **Comment**
 
 ## Smaller fixes, 2026-11-26
 
+- Spend notice: with the cost module added, when one agent uses an unusually large amount in a day, counted at API prices, one post says so while its run is still going. Nothing is stopped.
+- An agent held at extra high or max effort is now told who picked it and when each time it wakes, and after two days it is asked once to keep it or step down.
+- hivelab.ca's search snippets now say it is open-source Claude Code agents on your own machine.
 - A message from you now gets through to an agent within seconds even when it is sitting in a waiting loop. The loop is stopped only while it is sleeping, never during a build or test run before it.
 - The website's Download page now links the Hive's GitHub repo and shows a picture when its link is shared.
 - The website build now checks that every page links the Hive's GitHub repo.

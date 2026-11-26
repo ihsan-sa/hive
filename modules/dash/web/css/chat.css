@@ -537,6 +537,13 @@ html[data-read="1.3"]{--read-scale:1.3}
 .msg-ver-b{min-width:28px;min-height:28px;border:0;border-radius:6px;background:none;color:inherit;font:inherit;font-size:1.1em;cursor:pointer}
 .msg-ver-b:hover:not(:disabled){background:color-mix(in oklch,var(--ink) 8%,transparent)}
 .msg-ver-b:disabled{opacity:.35;cursor:default}
+/* E203j (the E203i reader): Edit under the person's message waits for the pointer, as the chat apps' does; a keyboard reaches it (focus-within),
+   an open version picker or a touch screen (no hover) keeps it showing. Opacity, not display, so the row doesn't move when it comes. */
+.msg-edit{transition:opacity var(--tool-in,.12s) ease-out}
+/* Hidden until the page knows it is touched (E203j reader: a laptop or browser that reports no hover kept it showing); a phone that says
+   it is one (no hover, coarse pointer) shows it before its first tap. */
+:root:not([data-pointer=touch]) .msg:not(:hover,:focus-within) .msg-edit{opacity:0}
+@media (hover:none) and (pointer:coarse){:root:not([data-pointer]) .msg:not(:hover,:focus-within) .msg-edit{opacity:1}}
 .msg-editor{display:flex;flex-direction:column;gap:var(--s2,8px);min-width:min(520px,100%)}
 .msg-edit-t{width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border:1px solid var(--line,#ccc);border-radius:8px;background:var(--surface);color:inherit;resize:vertical}
 .msg-edit-acts{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2,8px)}

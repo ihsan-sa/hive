@@ -70,7 +70,7 @@ class Case:
         d = dict(r)
         d["links"], d["people_ld"] = json.loads(d["links"] or "[]"), json.loads(d["people_ld"] or "[]")
         if not d.get("date") and d.get("status") == "ok" and (td := extract.text_date(d.get("text") or "", d.get("title") or "")): d["date"], d["date_from"] = td, "text"  # a page stored before text_date read its dateline (Parks' GRCC story, fnwords74)
-        if d.get("date_from") in ("meta", "modified") and d.get("date") and (rd := extract.local_day(d.get("fetched_at"))) and len(rd) == 10:
+        if d.get("date_from") in ("meta", "modified", "rest") and d.get("date") and (rd := extract.local_day(d.get("fetched_at"))) and len(rd) == 10:
             try:
                 if (dt.date.fromisoformat(d["date"][:10]) - dt.date.fromisoformat(rd)).days == 1: d["date"] = rd   # a page stored before parse_date read a UTC stamp as the local day: its metadata date is the day after it was read (Garib's, fnwords134)
             except ValueError: pass

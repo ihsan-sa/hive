@@ -337,6 +337,28 @@ def unit_post_above(title, staff_text):
 UNIT_VOICE = re.compile(r"\b(?:we|our|us|career (?:services|center|centre|office|connections)|this (?:guide|page|resource|toolkit|handout))\b")   # a page that speaks of itself ("This guide will introduce you to generative AI ...") is in the unit's voice as much as "we": Boise State's first such sentence lost to a later "We'll explore ..." (fnwords144 review)
 UNIT_PROGRAMME = re.compile(r"\b(?:workshops?|coach\w*|programming|events?|fairs?|training|resumes?|pop-ups?)\b")
 UNIT_COMMITMENT = re.compile(r"\b(?:dedicated|committed|commitment)\s+to\b|\bour\s+mission\b|\bensur(?:e|es|ing)\s+(?:that\s+)?(?:all\s+|every\s+|our\s+)?students\b")   # what the unit binds itself to: UF's "is dedicated to ensuring students are prepared with competencies to engage with AI" over a partnership for "AI resume support" (Glover, fnwords143 review)
+UNIT_PLAN_HEAD = re.compile(r"\b(?:will|plans?\s+to|aims?\s+to)\b")
+def unit_ai_plan(text, ai):
+    """The unit's own plan for AI and careers, quoted as its heading and its items ("How the Career Connections Center will prepare students for the AI-enabled workforce: Educate how AI impacts their career search; ...; Hire an AI Pathways Coach ..."), or "". A heading line ending ":" in the unit's voice that says what it will do, then two to six short item lines that end without a full stop (a "We host ..." sentence is prose, not an item), stopping at a Title Case heading; the must word and a careers action somewhere in the block, the must word in the heading or two items. UF's plan lines are the page's most specific AI-in-careers statement, over its mission sentence (Glover, fnwords147 review); "How UF will ..." is the university's plan, not the unit's."""
+    lines = [x.strip() for x in text.split("\n") if x.strip()]
+    def has_ai(x): return any(r.search(fold(x)) for r in ai)
+    for i, head in enumerate(lines):
+        low = fold(head)
+        if not head.endswith(":") or len(head) > 200 or not UNIT_VOICE.search(low) or not UNIT_PLAN_HEAD.search(low): continue
+        items = []
+        for x in lines[i + 1:i + 7]:
+            words = x.split()
+            if len(words) < 2 or len(words) > 20 or re.search(r"[.!?:;]$", x): break
+            if sum(w[:1].isupper() for w in words if len(w) > 3) == sum(len(w) > 3 for w in words) and len(words) > 1 and words[1][:1].isupper(): break   # "AI In Careers": the next section's heading
+            items.append(x)
+        if len(items) < 2: continue
+        block = " ".join([head] + items)
+        if not CAREERS_ACTION.search(fold(block)) or not (has_ai(head) or sum(map(has_ai, items)) >= 2): continue
+        while len(items) > 2 and len(head) + sum(len(x) + 2 for x in items) > 320: items.pop()   # the signal's 400 characters less its "(the organisation's, from URL) " prefix: the heading and its first items
+        return f"{head} {'; '.join(items)}"
+    return ""
+
+
 def unit_ai_sentence(text, ai):
     """The sentence on a careers unit's AI page saying what the unit does with AI for careers: the must word and a careers action within 120 characters, six words or more, not a heading or a question; a sentence in the unit's voice ("we", "our", the centre's name, "this guide") scores 2, one naming a workshop, coach, event or fair 1 more, one saying what the unit is dedicated or committed to, or ensures for students, 2 more; a sentence whose every mention of the must word is inside a name (in_a_name) scores a tenth, one where it is a short item of a long list (people.list_item) a third; the first of the best wins. '' when none."""
     best, top = "", 0
@@ -1179,7 +1201,29 @@ def date_printed(text, iso):
 
 
 NO_SIGNAL_DATE = "no signal date: none on its page, in its address or in its metadata"
-SHOWN_ON_PAGE = {"meta": "its page's metadata", "url": "its address", "text": "a date printed on its page", "modified": "the site's record of its page", "event": "the event date on its page"}
+SHOWN_ON_PAGE = {"meta": "its page's metadata", "url": "its address", "text": "a date printed on its page", "modified": "the site's record of its page", "event": "the event date on its page", "rest": "the site's REST record of its page, not its HTML"}
+ORG_GROUPS = (("community or technical colleges", "a community or technical college", re.compile(r"\b(?:Community|Technical|Junior) Colleges?\b|\bCommunity and Technical\b|\bTechnical Institute\b", re.I)),
+              ("universities", "a university", re.compile(r"\bUniversity\b", re.I)))
+def main_group_note(named, rows):
+    """A sentence for the headline when no verified row is from the group most of the spec's named organisations are in: 57 of fnwords116's 91 named are community or technical colleges by name, and none of fnwords147's 10 verified rows is (review). Groups are told by name only, so a two-year college without the words in its name (Valencia College) is not counted."""
+    ver = [r for r in rows if r.get("check_status") == "verified"]
+    for plural, one, rx in ORG_GROUPS:
+        n = sum(1 for o in named if rx.search(o))
+        if ver and named and n * 2 > len(named) and not any(rx.search(str(r.get("organisation") or "")) for r in ver):
+            in_spec = sum(1 for r in ver if r.get("organisation") in set(named))
+            return f" None of the {len(ver)} verified rows is from {one}, though {n} of the {len(named)} organisations the spec names are {plural} by name; {in_spec} of the {len(ver)} are from an organisation the spec names."
+    return ""
+
+def search_count_note(log_rows, case):
+    """What the report's search count counts: fnwords147's "1008 org-and-angle searches" could not be matched to case.db's 3160 search rows over 1309 distinct queries (review). One counted search is one query asked for one organisation; it asks several engines, and the cache keeps a row per query and engine, with discovery's and the checks' own queries among them."""
+    rows = [l for l in log_rows if l.get("org") != "(discover)"]
+    kind = collections.Counter("people" if l.get("org") == "(people)" else "site" if str(l.get("angle")).startswith("(site) ") else "statement" if str(l.get("angle")).startswith(("(statement) ", "(unit statement) ")) else "page" if str(l.get("angle")).startswith("(page) ") else "angle" for l in rows)
+    words = {"angle": "on an angle of the spec", "site": "of an organisation's own site", "statement": "of its site for a statement", "people": "for a person by name", "page": "reading a page the spec names"}
+    parts = ", ".join(f"{kind[k]} {words[k]}" for k in words if kind[k])
+    with case.lock: n, q, src = case.db.execute("select count(*), count(distinct q), count(distinct source) from searches").fetchone()
+    return (f"What the search count counts: one search is one query the hunt asked for one organisation ({parts}). Each asks several engines, and the case's search cache keeps a row per query and engine: "
+            f"{n} rows over {q} distinct queries and {src} engines, counting the discovery searches and the queries the checks ask on their own (a name looked up, a page's site searched again).")
+
 def signal_date_from(r, case):
     """Where a row's signal_date came from, for leads.csv's signal_date_from: Rotyliano's and Castonguay's podcast dates are in their pages' metadata only, and Bachert's is the YouTube video's while her row's page has no date (fnwords146 review). When there is a signal but no date, NO_SIGNAL_DATE; '' only when there is no signal."""
     sd = str(r.get("signal_date") or "")[:10]
@@ -1189,7 +1233,8 @@ def signal_date_from(r, case):
     own = not stored_signal_url(r)
     if not page: return "its page is not in the case"
     shown = date_printed(page.get("text"), sd)
-    if str(page.get("published") or "")[:10] == sd: how = "its page's published date (metadata)"
+    if page.get("date_from") == "event" and str(page.get("date") or "")[:10] == sd: how = SHOWN_ON_PAGE["event"]   # before published: an event page's published field holds its event day, and Mitchell's 2024-09-25 read "published date (metadata)" though the page's datePublished is 2024-07-30 (fnwords147 review)
+    elif str(page.get("published") or "")[:10] == sd: how = "its page's published date (metadata)"
     elif str(page.get("date") or "")[:10] == sd: how = SHOWN_ON_PAGE.get(page.get("date_from") or "", "its page's date")
     elif extract.url_date(url) == sd: how = "its address"
     elif shown: how = "a date printed on its page"
@@ -1203,6 +1248,7 @@ def signal_date_from(r, case):
                 how = f"the page it links for them ({href})"; break
         if not how: return "not found on its page"
     where = "the row's own page" if own else "the signal's page"
+    if shown and not how.startswith(("a date printed", "the event date")): how = f"a date printed on its page and {how}"   # a printed date is named as printed: Arminio's read "its page's metadata" though "Monday, September 28, 2026" is on the page (fnwords147 review)
     return f"{how}, {where}" + ("" if shown or how.startswith(("a date printed", "its address", "the page it links")) else "; not printed on the page")
 
 HUNT_SPEC_KEYS = frozenset("fresher_signal org_signal_shapes goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms head_terms allow_org_signal allow_weak_org_signal roster_verifies person_signal held_signal official_recheck sources read_per_search skip_hosts allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words signal_kinds menu_statement unit_signal people_first".split())
@@ -1641,7 +1687,8 @@ class Hunt:
         if ok == self.OWN_UNIT_SHAPE:
             url = re.match(r"\(the organisation's, from (\S+)\) ", row["signal"]).group(1)
             ai = [people.term_regex(w) for w in (self.must or ["artificial intelligence", "AI"])]
-            if (best := unit_ai_sentence((self.case.page_at(url) or {}).get("text", ""), ai)): row["signal"] = f"(the organisation's, from {url}) {best}"
+            text = (self.case.page_at(url) or {}).get("text", "")
+            if (best := unit_ai_plan(text, ai) or unit_ai_sentence(text, ai)): row["signal"] = f"(the organisation's, from {url}) {best}"
         return row
 
     def org_signal_shape(self, row):
@@ -3514,8 +3561,8 @@ class Hunt:
         untried = [o for o in self.orgs if not any(t[0] == o and not str(t[1]).startswith("(statement) ") for t in self.tried)]  # a menu search alone is not a try for leads
         named_orgs = set(self.s.get("orgs", [])) | set(self.pages); found = [o for o in self.orgs if o not in named_orgs]; n_disc = len(found)   # an organisation the spec names counts as named even when a discovery search found it too
         found_note = ', listed under "Organisations found by discovery"' if n_disc else ''
-        lines = [f"# Hunt: {self.s.get('goal', '')}", "", f"**{status}: {len(rows)} of {self.target}** ({n_ver} with the person on the organisation's own site{': ' + kinds if kinds else ''}{own_sig}; {unver}). Stopped: {self.stop_reason}.", "", *([f"{len(aged)} of the {len(rows)} listed rows ({sum(r['check_status'] == 'verified' for r in aged)} of the {n_ver} verified) rest on a signal more than a year older than the day its page was read (an old signal is not a current priority): " + ", ".join(f"{r['name']} ({str(r['signal_date'])[:10]}, {age[id(r)] / 365.25:.1f} years{(', its page last modified ' + ed) if (ed := signal_page_edited(r, self.case)) else ''}{'' if r['check_status'] == 'verified' else ', ' + r['check_status']})" for r in aged[:20]) + ".", ""] if aged else []), *([f"{len(undated)} of the {len(rows)} listed rows ({sum(r['check_status'] == 'verified' for r in undated)} verified) have no signal date, so their age is unknown and they are not in any old-signal count: " + ", ".join(r['name'] + ('' if r['check_status'] == 'verified' else ', ' + r['check_status']) for r in undated[:20]) + ".", ""] if undated else []), "Every row is backed by a saved page: `check_quote` is the text next to the name on `source_url`, and `page_date` is that page's date (for a staff or directory page its last edit, which says the list is kept current; blank when the only date it gives is the day it was read); `signal_url` is the page the signal is from, dated `signal_date`. It says what the page says on the day it was read, not that the person still holds the post. No addresses were inferred.", "",
-                 f"{sum(1 for l in self.log_rows if l['org'] != '(discover)')} org-and-angle searches on all runs of this case, {(lambda k: f'{k} of them' if k else 'none of them')(sum(1 for l in self.log_rows[getattr(self, 'run_rows0', 0):] if l['org'] != '(discover)'))} on the latest run{self.cache_note()}, over {len(orgs)} organisations with leads, of {len(self.orgs)} considered ({len(self.orgs) - n_disc} named in the spec, {n_disc} found by discovery searches{found_note}); {len(self.near)} near misses in `near_misses.csv`; {len(self.blocked)} pages unread.", "",
+        lines = [f"# Hunt: {self.s.get('goal', '')}", "", f"**{status}: {len(rows)} of {self.target}** ({n_ver} with the person on the organisation's own site{': ' + kinds if kinds else ''}{own_sig}; {unver}). Stopped: {self.stop_reason}.{main_group_note(self.s.get('orgs') or [], rows)}", "", *([f"{len(aged)} of the {len(rows)} listed rows ({sum(r['check_status'] == 'verified' for r in aged)} of the {n_ver} verified) rest on a signal more than a year older than the day its page was read (an old signal is not a current priority): " + ", ".join(f"{r['name']} ({str(r['signal_date'])[:10]}, {age[id(r)] / 365.25:.1f} years{(', its page last modified ' + ed) if (ed := signal_page_edited(r, self.case)) else ''}{'' if r['check_status'] == 'verified' else ', ' + r['check_status']})" for r in aged[:20]) + ".", ""] if aged else []), *([f"{len(undated)} of the {len(rows)} listed rows ({sum(r['check_status'] == 'verified' for r in undated)} verified) have no signal date, so their age is unknown and they are not in any old-signal count: " + ", ".join(r['name'] + ('' if r['check_status'] == 'verified' else ', ' + r['check_status']) for r in undated[:20]) + ".", ""] if undated else []), "Every row is backed by a saved page: `check_quote` is the text next to the name on `source_url`, and `page_date` is that page's date (for a staff or directory page its last edit, which says the list is kept current; blank when the only date it gives is the day it was read); `signal_url` is the page the signal is from, dated `signal_date`. It says what the page says on the day it was read, not that the person still holds the post. No addresses were inferred.", "",
+                 f"{sum(1 for l in self.log_rows if l['org'] != '(discover)')} org-and-angle searches on all runs of this case, {(lambda k: f'{k} of them' if k else 'none of them')(sum(1 for l in self.log_rows[getattr(self, 'run_rows0', 0):] if l['org'] != '(discover)'))} on the latest run{self.cache_note()}, over {len(orgs)} organisations with leads, of {len(self.orgs)} considered ({len(self.orgs) - n_disc} named in the spec, {n_disc} found by discovery searches{found_note}); {len(self.near)} near misses in `near_misses.csv`; {len(self.blocked)} pages unread.", "", *([search_count_note(self.log_rows, self.case), ""] if self.case else []),
                  "## Leads", "", "| Name | Organisation | Title | Kind | Signal date | Status |", "|---|---|---|---|---|---|", *["| " + " | ".join(md_cell(x) for x in (r.get('name'), full(r.get('organisation')), r.get('title'), r.get('signal_kind') or 'none', str(r.get('signal_date') or '')[:10], r.get('check_status'))) + " |" for r in rows], ""]  # the rows themselves, in the report a reader opens first (fnwords144 review); the considered count split by where each organisation came from ("of 126 considered" could not be reconciled from the run logs, fnwords144 review)  # the log holds every run on the case: fnwords143's 1062 could not be traced in one run's log (review); "0 of them on this run" read as wrong after six passes, the last with nothing left to search (fnwords144 review)
         if self.misreads: lines += ["## Misread names dropped", f"- {len(self.misreads)} rows from an earlier run carried a name their page, read again, doesn't give (a degree taken for a first name, the tail of a post); each went, or took the name the page gives where it was the person's only row: {', '.join(self.misreads[:20])}.", ""]
         if self.moved: lines += ["## Moved out by this spec", f"- {len(self.moved)} rows from an earlier run on this case don't pass the spec as it now stands and are now near misses: {', '.join(self.moved[:20])}.", ""]

@@ -24,8 +24,8 @@ function card(o) {
   const go = o.url && https(o.url) && !OVER.has(o.state);
   return block({ title: o.shop || "Order", sub: o.total || null, state: statusLabel(TONE[o.state] || "off", o.state_words), key: "order-" + o.id },
     h("ul", { class: "order-items" }, (o.items || []).map(i => h("li", null, i))),
-    o.why ? h("p", { class: "field-h" }, o.why) : null,
-    o.note ? h("p", { class: "field-h" }, o.note) : null,
+    o.why ? h("p", { class: "field-h order-note" }, o.why) : null,
+    o.note ? h("p", { class: "field-h order-note" }, o.note) : null,
     go ? h("div", { class: "frow" }, h("a", { class: "btn", "data-kind": BUY.has(o.state) ? "primary" : null, "data-size": "s", href: o.url, target: "_blank", rel: "noreferrer noopener" }, o.source === "buy" && o.state === "waiting" && /(^|\.)link\.com$/.test(o.host) ? "Open in Link" : BUY.has(o.state) ? "Open the order" : "Open the shop"),
       h("span", { class: "muted order-host" }, o.host)) : null,
     h("p", { class: "muted order-meta" }, meta, o.thread ? [meta ? " · " : "", h("a", { href: "#comms/t:" + encodeURIComponent(o.thread) }, "conversation")] : null));

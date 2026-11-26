@@ -165,16 +165,30 @@ function matcher(c, mask, ended) {
 
 // Things that happened to the agents in a thread, shown in the conversation in the order they happened: a stop at a usage
 // limit, a run that ended in an error. Only trouble: start and end are in each message's head and the strip under the list.
-function threadEvents(th) {
-  const out = [];
+// E203j (the E203i reader: header "started 20s ago", sidebar "11s"): a row's age is when the conversation last moved, and a run starting in it
+// is a move, so the rail says the header's clock; both are live spans the one ticker below redraws, so neither stands still while the other counts.
+// While a run is on it the row says when that run began, the very clock the header's "started … ago" reads (a post the run makes on the way would
+// otherwise put the two seconds apart); with none it is the last post.
+const railAt = d => { const r = (S.live ? S.live.agents : []).filter(a => a.thread === d.name && a.since).map(a => a.since * 1e3); return r.length ? Math.min(...r) : d.last || 0; };
+const railAge = d => liveAgo(railAt(d), true);
+export const liveAgo = (t, bare) => h("span", { "data-ago": String(t), "data-bare": bare ? "" : null }, bare ? ago(t).replace(" ago", "") : ago(t));
+setInterval(() => { if (document.hidden) return; for (const e of document.querySelectorAll("[data-ago]")) { const t = ago(Number(e.dataset.ago)), w = e.dataset.bare != null ? t.replace(" ago", "") : t; if (e.textContent !== w) e.textContent = w; } }, 1000);
+// E203j: which pointer the person is using, for chat.css (Edit under their message waits for a mouse's hover, stays for a finger). The media
+// query alone misses a laptop with a touch screen and a browser that reports no hover; the last pointer used says it.
+for (const k of ["pointermove", "pointerdown"]) addEventListener(k, e => { const p = e.pointerType === "mouse" ? "mouse" : e.pointerType ? "touch" : null; if (p && document.documentElement.dataset.pointer !== p) document.documentElement.dataset.pointer = p; }, { passive: true, capture: true });
+function threadEvents(th) { return inConversation(th, () => threadEventsHere(th)); }   // E203j: named as the conversation names its agents ("The agent"), not "Seeds' agent"
+function threadEventsHere(th) {
+  const out = [], posts = (S.threads.get(th) || { posts: NONE }).posts;
   if (!app()) return out;
+  // E203j (the E203i reader): "its last message above" only when the run wrote one; a run that failed before writing points at the next step
+  const wrote = s => posts.some(p => p.from === s.name && p.t >= s.start - 1e3 && p.t <= s.end + 1e3);
   for (const s of S.sessions) {
     if (s.thread !== th || !s.end) continue;
-    if (s.limited) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${s.name} stopped at a usage limit`, sub: (u => (u ? `It carries on by itself after ${stamp(u)}.` : "It carries on by itself once there's room."))(s === S.lastSess[s.name] && S.limitedNow.has(s.session) && carryOn(S.limitedUntil[s.session], limitStop(), now(), !!S.limitedScope[s.session]).at) });   // when it carries on while it still holds, as the strip says (carryOn, HA-15); an older stop of a session that has carried on since names no new time
+    if (s.limited) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${(w => w[0].toUpperCase() + w.slice(1))(agentLabel(s.name))} stopped at a usage limit`, sub: (u => (u ? `It carries on by itself after ${stamp(u)}.` : "It carries on by itself once there's room."))(s === S.lastSess[s.name] && S.limitedNow.has(s.session) && carryOn(S.limitedUntil[s.session], limitStop(), now(), !!S.limitedScope[s.session]).at) });   // when it carries on while it still holds, as the strip says (carryOn, HA-15); an older stop of a session that has carried on since names no new time
     else if (s.retry) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${(w => w[0].toUpperCase() + w.slice(1))(agentLabel(s.name))} stopped (${retryWords(s.retry)})`, sub: "It carries on by itself." });
-    else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "failed", text: simpleOn() ? "Your Hive ran into a problem" : `${(w => w[0].toUpperCase() + w.slice(1))(agentLabel(s.name))} stopped with an error (exit ${s.exit})`, sub: simpleOn() ? "Send a message and it tries again." : "Its last message above is where it got to." });
+    else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "failed", text: simpleOn() ? "Your Hive ran into a problem" : `${(w => w[0].toUpperCase() + w.slice(1))(agentLabel(s.name))} stopped with an error (exit ${s.exit})`, sub: simpleOn() || !wrote(s) ? "Send a message and it tries again." : "Its last message above is where it got to." });
   }
-  return sameInARow(out, (S.threads.get(th) || { posts: NONE }).posts);
+  return sameInARow(out, posts);
 }
 
 // The same trouble twice with no message between says nothing new: one line stays, the later one, and says how many times (E203i).
@@ -614,7 +628,7 @@ function askRows(c) {
   if (AI.st === "error") return note("Couldn't ask", "Try again: press Enter");
   if (AI.st === "done") {
     const rows = AI.res.filter(r => S.threads.has(r.thread)).map(r => { const d = S.threads.get(r.thread);
-      return { key: r.thread, href: threadHref(r.thread), current: c.thread === r.thread, title: railTitle(r.thread), meta: ago(d.last).replace(" ago", ""), lead: tierLead(r.thread), text: r.why || "fits" }; });
+      return { key: r.thread, href: threadHref(r.thread), current: c.thread === r.thread, title: railTitle(r.thread), meta: railAge(d), lead: tierLead(r.thread), text: r.why || "fits" }; });
     return rows.length ? rows : note("Nothing fits", "Try other words");
   }
   const a = aiAnswer();
@@ -654,7 +668,7 @@ function threadRows(c, ctx) {
     // The developer route keeps its one-line log row: 100+ threads have to fit.
     if (!app()) {
       const who = lp.from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: railTitle(d.name), meta: ago(d.last).replace(" ago", ""),
+      return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: railTitle(d.name), meta: railAge(d),
         lead: [tierLead(d.name), live ? h("span", { title: "an agent is on this thread now" }, statusDot("working", { live: true })) : null],
         text: `${d.posts.length} · ${lp.from}: ${short(mdPlain(lp.text).replace(new RegExp("^(@\\S+\\s+)*" + who + ":\\s*"), ""), 60)}`, sec: secOf(d.name, null), dim: faded(d.name) };
     }
@@ -666,7 +680,7 @@ function threadRows(c, ctx) {
     const say = inConversation(d.name, () => railSay(mdPlain(inkSaid(lp) ?? chatText(lp)))), fd = inConversation(d.name, () => fadeTag(d.name));
     const tag = standWord(s, sLine);
     const from = par ? [h("span", { class: "tm-from", title: "A helper conversation, started from " + threadTitle(par) }, "from " + short(threadTitle(par), 28)), " · "] : null;
-    return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: railTitle(d.name), meta: ago(d.last).replace(" ago", ""),
+    return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: railTitle(d.name), meta: railAge(d),
       lead: [tierLead(d.name), standMark(s)],
       text: [from, d.name !== c.thread && hasDraft(d.name) ? [h("span", { class: "cm-draft", title: "You left unsent text in this conversation" }, "Draft"), " · "] : null, tag, tag ? " · " : null, fd, fd ? " · " : null, lp.from === "person" ? ["You: ", ...say] : say], sec: secOf(d.name, true), dim: faded(d.name) };   // no agent code on the row: the conversation names its agent
   };
@@ -983,15 +997,17 @@ function stripLines(th) {
   }
   if (st.key === "failed") out.push(line("failed", [who(st.who), simpleOn() ? " ran into a problem. Send a message and it tries again." : ` stopped with an error ${ago(st.t)}. A message wakes it to try again.`], null, { key: "failed" }));
   const sendStops = th ? sendStopsWho(th) : null;   // E203i: one Stop: while Send is Stop for an agent, its line in the strip doesn't carry a second one
+  // E203j (the E203i reader): nor Interrupt, which only means something once there are words to send: with an empty box the one control is Send-as-Stop, as in the chat apps
   for (const a of run) {
     if (st.key === "asks" && a.name === st.who) continue;
     const s = agentState(a);
     if (simpleOn()) { if (!out.some(x => x.dataset.key === "run")) out.push(line("working", "Your Hive is working on it.", can("stop") ? stopButton("Stop this work", () => app() ? stopNow(a.name) : askStop(a.name)) : null, { key: "run", live: true })); continue; }
     // Closed it reads "a7c31 Editing fetch.py"; how long ago it was active shows only when open.
     const step = a.doing && app() ? plainStep(a.doing) : a.doing;   // a bare command reads as plain words in the app look (a0ad9's re-check)
-    const doing = step && !(app() && ownStep(a.doing)) ? step.charAt(0).toUpperCase() + step.slice(1) : AGENT_WORDS[s.key] || s.text;   // E10: its own board commands are not a step to read
-    out.push(line(s.key, [who(a.name), " ", doing, h("span", { class: "meta cm-line-m" }, " · " + (s.key === "working" ? ago(a.last * 1e3) : s.text))],
-      [post && th ? interruptButton(th, a.name) : null, can("stop") && a.name !== sendStops ? stripStop(a.name) : null], { key: "run:" + a.name, live: true }));
+    // the step is the agent's own words (data-content, as in actions.js), and " · " is its own text node so the state after it translates whole
+    const doing = step && !(app() && ownStep(a.doing)) ? h("span", { "data-content": "" }, step.charAt(0).toUpperCase() + step.slice(1)) : AGENT_WORDS[s.key] || s.text;   // E10: its own board commands are not a step to read
+    out.push(line(s.key, [who(a.name), " ", doing, h("span", { class: "meta cm-line-m" }, " · ", s.key === "working" ? ago(a.last * 1e3) : s.text)],
+      a.name === sendStops ? null : [post && th ? interruptButton(th, a.name) : null, can("stop") ? stripStop(a.name) : null], { key: "run:" + a.name, live: true }));
   }
   // after the working agents (11081336a82e: folded, the strip shows who works and its Interrupt, not where the conversation sits)
   // Where it sits (the person, 110601450d55): a helper's conversation names the one it came from, and that one lists its helpers.
@@ -1017,7 +1033,7 @@ function stripLines(th) {
   const more = out.length - 1, open = !C.strip ? false : true;
   // Closed it is one line: the second agent rides on it as a quiet note.
   const k2 = out.length > 1 && !open ? String(out[1].dataset.key) : "", x0 = out[0] && out[0].querySelector(".cm-line-x");
-  if (/^run:/.test(k2) && x0) x0.append(h("span", { class: "meta cm-line-2" }, " · and " + agentLabel(k2.slice(4))));
+  if (/^run:/.test(k2) && x0) x0.append(h("span", { class: "meta cm-line-2" }, " · and ", agentLabel(k2.slice(4))));   // "· and" its own node, as lang-es-8 has it
   return h("div", { class: "cm-strip", "data-key": "strip", "data-open": open ? "" : null, role: "status", "aria-live": "polite" }, out,
     more > 0 && !open ? h("span", { class: "meta num cm-strip-n", "data-key": "n" }, "+" + more) : null,
     out.length > 1 || out.some(x => x.querySelector(".cm-line-a") || /^run:/.test(x.dataset.key)) ? stripToggle(open) : null);
@@ -1122,7 +1138,8 @@ function openFocusMenu(b, f, ctx, after, key) {
   const top = r.bottom + 4 + mh > innerHeight - 8 ? Math.max(8, r.top - 4 - mh) : r.bottom + 4;
   Object.assign(m.style, { position: "fixed", top: top + "px", left: Math.max(8, Math.min(r.right - mw, innerWidth - mw - 8)) + "px" });
   b.setAttribute("aria-expanded", "true"); b.dataset.open = "";
-  rowM = { btn: b, th: key, nodes: [sc, m], key: e => { if (e.key === "Escape") { e.stopPropagation(); closeRowMenu(); b.focus(); } }, scroll: e => { if (!m.contains(e.target)) closeRowMenu(); } };
+  // A scroll closes the menu only when it moved the button away from it: the scroll event of a scrollIntoView just before the press comes after it (state walk, #focus, 2026-11-26).
+  rowM = { btn: b, th: key, nodes: [sc, m], key: e => { if (e.key === "Escape") { e.stopPropagation(); closeRowMenu(); b.focus(); } }, scroll: e => { if (!m.contains(e.target) && (!b.isConnected || Math.abs(b.getBoundingClientRect().top - r.top) > 2)) closeRowMenu(); } };
   document.addEventListener("keydown", rowM.key, true); window.addEventListener("scroll", rowM.scroll, true);
   m.querySelector(".menu-i")?.focus();
 }
@@ -1162,7 +1179,7 @@ function openRowMenu(b, th, ctx) {
   const top = r.bottom + 4 + mh > innerHeight - 8 ? Math.max(8, r.top - 4 - mh) : r.bottom + 4;
   Object.assign(m.style, { position: "fixed", top: top + "px", left: Math.max(8, Math.min(r.right - mw, innerWidth - mw - 8)) + "px" });
   b.setAttribute("aria-expanded", "true"); b.dataset.open = "";
-  rowM = { btn: b, th, nodes: [sc, m], key: e => { if (e.key === "Escape") { e.stopPropagation(); closeRowMenu(); b.focus(); } }, scroll: e => { if (!m.contains(e.target)) closeRowMenu(); } };
+  rowM = { btn: b, th, nodes: [sc, m], key: e => { if (e.key === "Escape") { e.stopPropagation(); closeRowMenu(); b.focus(); } }, scroll: e => { if (!m.contains(e.target) && (!b.isConnected || Math.abs(b.getBoundingClientRect().top - r.top) > 2)) closeRowMenu(); } };
   document.addEventListener("keydown", rowM.key, true); window.addEventListener("scroll", rowM.scroll, true);
   m.querySelector(".menu-i")?.focus();
 }
@@ -1642,7 +1659,10 @@ function homeNeeds(ws) {
     const p0 = p || (w.post && S.byId[w.post]) || null;   // the question itself, for its one-tap choices (ui/pick.js)
     const to = w.src === "summary" && w.focus ? href("focus", w.focus) : threadHref(w.th), open = answerer(w), lf = liftIn(w.text);
     // The whole row opens the panel (the question holds agent and thread links, so it can't be a button itself); Answer is the keyboard's way.
-    return h("li", { class: "cm-need", "data-hover-acts": open ? "" : null, "data-key": w.key || w.th + ":" + (w.post || w.src), "data-open": open ? "" : null, onclick: open ? (e, n) => { if (!e.target.closest("a,button")) open(e, n); } : null },
+    return h("li", { class: "cm-need", "data-hover-acts": open ? "" : null, "data-key": w.key || w.th + ":" + (w.post || w.src), "data-open": open ? "" : null,
+      // A press that began on its link or a button and was let go on the row is called off, not an Answer (WCAG 2.5.2: the click lands on the row they share; drive_app_cancel, 2026-11-26).
+      onpointerdown: open ? (e, n) => { n._from = e.target; } : null,
+      onclick: open ? (e, n) => { const from = n._from; n._from = null; if (!e.target.closest("a,button") && !(from && from.closest && from.closest("a,button"))) open(e, n); } : null },
       // A trailing ", in #thread" goes to the meta line, as on the card (V3 handoff point 9), so no pill sits mid-sentence.
       h("p", { class: "cm-need-q" }, lineText(lf.text, { pill: false })),
       h("p", { class: "cm-need-m meta" }, h("a", { href: to }, needSource(w)), lf.th && lf.th !== w.th ? [h("span", { class: "cm-need-in" }, " \u00b7 in "), h("a", { class: "th", href: threadHref(lf.th) }, threadTitle(lf.th))] : null,
@@ -1827,7 +1847,7 @@ function archivedPane(c, ctx) {
   const ds = [...S.threads.values()].filter(d => archived(d.name) && (threadKinds(d) & mask) && theirs(d)).sort((a, b) => b.last - a.last);
   // a row here says where its conversation stands as the top of its chat does, like every other list of conversations (HA-11)
   const rows = ds.map(d => { const lp = d.posts.at(-1), s = stand(d.name), tag = standWord(s, standLine(s)), say = inConversation(d.name, () => railSay(mdPlain(inkSaid(lp) ?? chatText(lp))));
-    return { key: d.name, href: threadHref(d.name), title: railTitle(d.name), meta: ago(d.last).replace(" ago", ""), lead: standMark(s), text: [tag, tag ? " · " : null, lp.from === "person" ? ["You: ", ...say] : say],
+    return { key: d.name, href: threadHref(d.name), title: railTitle(d.name), meta: railAge(d), lead: standMark(s), text: [tag, tag ? " · " : null, lp.from === "person" ? ["You: ", ...say] : say],
       acts: can("post") ? button("Bring back", () => back(d.name), { size: "s", kind: "quiet", icon: "archive", title: "Back in the list", cls: "cm-arch-back" }) : null }; });
   return h("div", { class: "cm-home cm-arch", "data-key": "archived" },
     h("a", { class: "cm-arch-up only-phone", href: href("comms", "~list") }, icon("chevron-left"), "Conversations"),

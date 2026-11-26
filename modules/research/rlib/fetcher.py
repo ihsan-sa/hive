@@ -57,7 +57,7 @@ def _wp_date(parsed, url):
     try: rec = json.loads(r.body)
     except ValueError: return parsed
     d = parse_date(str(rec.get("date") or "")) if isinstance(rec, dict) else ""
-    return dict(parsed, date=d, date_from="meta") if d else parsed
+    return dict(parsed, date=d, date_from="rest") if d else parsed   # its own source: the episode HTML has no such date, so "its page's metadata" was wrong (fnwords147 review)
 
 
 def _direct(url):
