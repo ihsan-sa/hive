@@ -43,7 +43,7 @@ import { brought } from "../ui/brought.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
 import { hiveStopped, TOPX } from "../ui/shell.js";
 import { openApproval, forCard, cardWhy, pollCard } from "../ui/rootword.js";
-import { composer, interruptButton, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, hasDraft, quoteRef, prefill, sendStopsWho } from "../ui/composer.js";
+import { composer, interruptButton, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, hasDraft, quoteRef, prefill, boxAgent } from "../ui/composer.js";
 
 const STEP = 500, FIRST = 250, NEAR = 60, GROUP = 10 * MIN, HELPER_AFTER = 3 * MIN;
 const NONE = [];
@@ -306,9 +306,10 @@ function versioned(items) {
     const posts = out.filter(p => !p.ev && !p.retry_of), li = posts.findLastIndex(p => p.from === "person" && !docNotes(p)), lastMe = posts[li];   // notes from a document aren't a message to edit
     V.edit = lastMe && !pageEdit(lastMe) ? lastMe.id : null;   // a page edited by hand is changed with the page's own Edit (E43)
     const after = posts.slice(li + 1).filter(p => isAgent(p.from)), lastAg = after.at(-1);
-    // E203e: not after the person's Stop; its line already says a message carries on, and Retry beside it competed with that (the E203c reader)
+    // E203k (the E203j reader): a stopped answer is the last reply too, with the same Copy and Retry as any other, as the chat apps give it
     const stopped = posts.length && posts.at(-1).stopped && posts.at(-1).from === "dash";
-    if (lastAg && !stopped && !V.wait && !workingIn(L.th)) { V.retry = lastAg.id; V.retryRoot = (V.info.get(after[0].id) || {}).root || after[0].id; }
+    const end = stopped && posts.length - 1 > li ? posts.at(-1) : lastAg, first = after[0] || end;
+    if (end && !V.wait && !workingIn(L.th)) { V.retry = end.id; V.retryRoot = (V.info.get(first.id) || {}).root || first.id; }
   }
   return out;
 }
@@ -996,8 +997,7 @@ function stripLines(th) {
       room && post && !held ? button("Carry on", () => say(th, "Please carry on where you stopped.", st.who), { size: "s" }) : null, { key: "limited" }));
   }
   if (st.key === "failed") out.push(line("failed", [who(st.who), simpleOn() ? " ran into a problem. Send a message and it tries again." : ` stopped with an error ${ago(st.t)}. A message wakes it to try again.`], null, { key: "failed" }));
-  const sendStops = th ? sendStopsWho(th) : null;   // E203i: one Stop: while Send is Stop for an agent, its line in the strip doesn't carry a second one
-  // E203j (the E203i reader): nor Interrupt, which only means something once there are words to send: with an empty box the one control is Send-as-Stop, as in the chat apps
+  const boxed = th ? boxAgent(th) : null;   // E203i/E203k: one place to stop the agent you're writing to: the composer (Send as Stop, or Stop and send once there are words), so its line here carries no buttons
   for (const a of run) {
     if (st.key === "asks" && a.name === st.who) continue;
     const s = agentState(a);
@@ -1007,7 +1007,7 @@ function stripLines(th) {
     // the step is the agent's own words (data-content, as in actions.js), and " · " is its own text node so the state after it translates whole
     const doing = step && !(app() && ownStep(a.doing)) ? h("span", { "data-content": "" }, step.charAt(0).toUpperCase() + step.slice(1)) : AGENT_WORDS[s.key] || s.text;   // E10: its own board commands are not a step to read
     out.push(line(s.key, [who(a.name), " ", doing, h("span", { class: "meta cm-line-m" }, " · ", s.key === "working" ? ago(a.last * 1e3) : s.text)],
-      a.name === sendStops ? null : [post && th ? interruptButton(th, a.name) : null, can("stop") ? stripStop(a.name) : null], { key: "run:" + a.name, live: true }));
+      a.name === boxed ? null : [post && th ? interruptButton(th, a.name) : null, can("stop") ? stripStop(a.name) : null], { key: "run:" + a.name, live: true }));
   }
   // after the working agents (11081336a82e: folded, the strip shows who works and its Interrupt, not where the conversation sits)
   // Where it sits (the person, 110601450d55): a helper's conversation names the one it came from, and that one lists its helpers.

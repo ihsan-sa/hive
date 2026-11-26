@@ -261,7 +261,6 @@ export default {
   "Update now": "Actualizar ahora",
 
   // Settings › Modules
-  "optional tools your agents can use": "herramientas opcionales que tus agentes pueden usar",
   "Installed": "Instalados",
   "this app": "esta aplicación",
   "comes with the Hive": "viene con el Hive",

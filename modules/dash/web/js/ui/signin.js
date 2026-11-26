@@ -3,7 +3,7 @@
 import { h } from "../core/dom.js";
 import { jget, post, loadApp } from "../core/store.js";
 import { simpleOn } from "../core/simple.js";
-import { button, input, field } from "./kit.js";
+import { button, input, field, copyPress } from "./kit.js";
 import { act, begin, finish, isBusy, note } from "./activity.js";
 
 const LOST = "Can't reach the Hive to follow the sign-in. It keeps trying.";
@@ -77,7 +77,8 @@ export function signinBox(key, update) {
   else if (v.name && SI.name && v.name !== SI.name) body = say("Another sign-in is under way. Finish or cancel it first.", "warn");
   else if (v.state === "waiting") body = [
     h("ol", { class: "steps" },
-      h("li", null, /^https:\/\//.test(v.url) ? h("a", { href: v.url, target: "_blank", rel: "noreferrer noopener" }, "Open the sign-in page") : "The sign-in page didn't give a usable link.", " and sign in."),
+      h("li", null, /^https:\/\//.test(v.url) ? h("a", { href: v.url, target: "_blank", rel: "noreferrer noopener" }, "Open the sign-in page") : "The sign-in page didn't give a usable link.", " and sign in.",
+        /^https:\/\//.test(v.url) ? [" ", button("Copy link", (e, b) => copyPress(b, v.url), { kind: "quiet", size: "s", icon: "copy", title: "Copy the link, to open it in another browser" })] : null),
       h("li", null, "If it shows a code, paste it here.")),
     h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (SI.code.trim()) send(update); } },
       h("div", { style: "flex:1;min-width:12rem" }, field("Code", input({ placeholder: "Paste the code here", autocomplete: "off", spellcheck: "false", value: SI.code, oninput: (e, n) => { SI.code = n.value; } }))),

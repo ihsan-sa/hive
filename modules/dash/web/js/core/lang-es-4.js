@@ -91,7 +91,6 @@ export default {
   "Make an empty focus; move conversations into it from a row's ⋯ menu": "Crea un enfoque vacío; mueve conversaciones a él desde el menú ⋯ de una fila",
   "Rename…": "Cambiar el nombre…",
   "Retire focus…": "Retirar el enfoque…",
-  "Its conversations go back to Other": "Sus conversaciones vuelven a Otras",
   "Focus actions": "Acciones del enfoque",
   "Rename this focus": "Cambiar el nombre de este enfoque",
   "Its conversations, page and summary stay as they are. Agents still know it as ": "Sus conversaciones, su página y su resumen se quedan como están. Los agentes lo siguen conociendo como ",
@@ -103,7 +102,6 @@ export default {
   // E201g: retired focuses brought back, a name already in use refused
   "Its conversations go back to Other; it can be brought back": "Sus conversaciones vuelven a Otras; se puede recuperar",
   "Bring back": "Recuperar",
-  "Couldn't bring it back: ": "No se pudo recuperar: ",
   "Waits on you": "Te espera",
   "What waits on you, newest first: each one opens in its conversation, at that message.": "Lo que te espera, lo más reciente primero: cada cosa se abre en su conversación, en ese mensaje.",
   "Every exchange you had, newest first: what you said, what was said to you, and each agent's answer. An entry opens in its conversation, at that message.": "Cada intercambio que tuviste, el más reciente primero: lo que dijiste, lo que te dijeron y la respuesta de cada agente. Una entrada se abre en su conversación, en ese mensaje.",
@@ -811,7 +809,7 @@ export default {
     [/^(?:([a-z][\w-]*): )?failed \(exit (\d+)\)$/, (_, a, x) => `${a ? a + ": " : ""}falló (salida ${x})`],
     [/^(\d+) errored$/, "$1 con error"],
     [/^(.+), (working|quiet|stuck|ended|killed|queued|limited|failed|paused|done|in job queue|waiting for your answer|hasn't run|sending|in use|new reply for you|not picked up)$/, (_, n, w) => `${n === "the agent" ? "el agente" : n}, ${({ working: "trabajando", quiet: "en silencio", stuck: "atascado", ended: "terminado", killed: "detenido", queued: "en cola", limited: "limitado", failed: "fallido", paused: "en pausa", done: "hecho", "in job queue": "en la cola de trabajos", "waiting for your answer": "esperando tu respuesta", "hasn't run": "no ha corrido", sending: "enviando", "in use": "en uso", "new reply for you": "nueva respuesta para ti", "not picked up": "sin recoger" })[w]}`],
-    [/^Reach (.+) now, without waiting for its step to end(\. Nothing is sent until you press Interrupt again\.)?$/, (_, a, more) => `Contacta con ${a === "the agent" ? "el agente" : a === "your Hive" ? "tu Hive" : a} ya, sin esperar a que termine su paso${more ? ". No se envía nada hasta que vuelvas a pulsar Interrumpir." : ""}`],
+    [/^Reach (.+) now, without waiting for its step to end(\. Nothing is sent until you press Interrupt again\.)?$/, (_, a, more) => `Contacta con ${a === "your Hive" ? "tu Hive" : ag(a)} ya, sin esperar a que termine su paso${more ? ". No se envía nada hasta que vuelvas a pulsar Interrumpir." : ""}`],
     [/^(?:([a-z][\w-]*): )?quiet (.+?)(?:(, no job in the queue)|, hasn't seen (\d+) new posts? for it)?$/, (_, a, d, q, n) => `${a ? a + ": " : ""}en silencio ${d}${q ? ", sin tarea en la cola" : n ? `, no ha visto ${n} ${pl(n, "mensaje nuevo", "mensajes nuevos")} para él` : ""}`],
   ],
 };

@@ -33,7 +33,6 @@ const SELF = {
   "What should change here?": "¿Qué debería cambiar aquí?",
   "What to do with what you circled": "Qué hacer con lo que rodeaste",
   "Whiteboard": "Pizarra",
-  "Work on a writing space": "Trabajo en un espacio de escritura",
   "Write": "Escribir",
   "Write here": "Escribe aquí",
   "Write here with your Pencil": "Escribe aquí con tu Pencil",

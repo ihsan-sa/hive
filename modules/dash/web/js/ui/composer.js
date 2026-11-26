@@ -165,7 +165,7 @@ export function recipient(th) {
   if (d.to) return { who: wordTarget(d.to, th) || d.to, why: "chosen", server: sv, to: d.to };
   // E203c: right after Stop, the next message goes back to the agent that was stopped (named, so the starter starts it again), on its own model
   const lp = S.threads.get(th)?.posts.at(-1);
-  if (lp && lp.stopped && lp.from === "dash" && isAgent(lp.stopped)) return { who: lp.stopped, why: "last", server: sv };
+  if (lp && lp.stopped && lp.from === "dash" && isAgent(lp.stopped)) return { who: lp.stopped, why: "last", server: sv, stopped: true };
   const p = partner(th);
   if (p) return { who: p, why: sv && sv !== p ? "partner" : "last", server: sv };
   // The target is fetched when the board changes, and a run starting doesn't change the board: an agent already running here still counts.
@@ -179,7 +179,7 @@ function wire(th, d, r) {
   if (!t && r.why !== "chosen") return "";   // files with no words and no To picked: nothing is added to the text (R7 step 2)
   if (r.to && r.to !== r.who && !named(t, th)) return "@" + r.to + " " + t;   // a focus picked in the To menu: hive post finds its keeper and marks the post
   if (r.who === "new") return "@new " + t;
-  if (r.who && r.who !== r.server) return "@" + r.who + " " + t;
+  if (r.who && (r.who !== r.server || r.stopped)) return "@" + r.who + " " + t;   // stopped: unnamed, a killed agent's message goes to its heir
   return t;
 }
 
@@ -1094,7 +1094,7 @@ function doingWords(who) {
 function liveLine(th, who, phase, armed) {
   const txt = phase === "stopping" ? "is stopping its current step…" : phase === "reading" ? "stopped and is reading your message" : doingWords(who);
   let arm = null;
-  if (!phase && !armed) { arm = button("Interrupt", () => armInterrupt(th, who), { kind: "quiet", size: "s", icon: "pause", cls: "cp-arm", title: `Reach ${said(th, who)} now, without waiting for its step to end` }); arm.setAttribute("aria-describedby", "cp-arm-d"); }
+  if (!phase && !armed && !(S.app && S.app.app)) { arm = button("Interrupt", () => armInterrupt(th, who), { kind: "quiet", size: "s", icon: "pause", cls: "cp-arm", title: `Reach ${said(th, who)} now, without waiting for its step to end` }); arm.setAttribute("aria-describedby", "cp-arm-d"); }
   return h("div", { class: "cp-live", "data-key": "live", "data-phase": phase || null },
     statusDot(agentStatus(who).key, { live: !phase || phase === "stopping" }),
     h("span", { class: "grow" }, h("b", null, Said(th, who)), " " + txt),
@@ -1132,8 +1132,8 @@ function filesRow(th, d) {
     h("button", { type: "button", class: "cp-x", title: "Remove " + f.name, "aria-label": "Remove " + f.name, onclick: () => { const [x] = d.files.splice(i, 1); if (x.url) URL.revokeObjectURL(x.url); refresh(); } }, "×"))));
 }
 /** Who the message would reach while it works (the agent it goes to, running now), or null. Only then can it interrupt. */
-/** E203i (the E203g reader: two Stops): the agent whose Stop the Send button is now (the box is empty), or null. The strip leaves its Stop off for it. */
-export function sendStopsWho(th) { const w = busyWho(th, recipient(th)); return w && !hasDraft(th) && can("stop") && S.app && S.app.app ? w : null; }   // with words in the box Send sends, and the strip keeps its Stop
+/** E203i, E203k: the running agent this box reaches, in the app's look, or null. Its Stop is here (sendStop with an empty box, stopSend with words), not in the strip. */
+export function boxAgent(th) { return S.app && S.app.app ? busyWho(th, recipient(th)) : null; }
 function busyWho(th, r) { return th && !simpleOn() && r.who && r.who !== "new" && r.why !== "btw" && isAgent(r.who) && isRunning(r.who) ? r.who : null; }
 
 const waitsHere = (th, who) => { const st = threadState(th); return st.key === "asks" && st.who === who; };
@@ -1229,13 +1229,22 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
           simpleOn() ? null : modelPick(d, r, th),
           simpleOn() ? null : effortPick(d, r, th),
           // E203g (the E203e reader): while its agent runs and the box is empty, Send is Stop, where the chat apps put it; typing turns it back into Send
+          // E203k (the E203j reader: Send, Stop and Interrupt at once): with words, the choice is Send (read after this step) or Stop and send
+          busy && !empty && !armed && !approve && S.app && S.app.app ? stopSend(th, busy) : null,
           busy && empty && !armed && !approve && can("stop") && S.app && S.app.app ? sendStop(th, busy) : sendButton(sendWord, () => send(th), empty, approve ? (covers ? `${sendWord} (Enter). Opens a card that shows "${covers}", what the message you're answering asks. Confirm there sends it as your approval.` : `${sendWord} (Enter). Opens a card that shows these words; Confirm there sends them as your approval.`)
             : armed ? "Enter interrupts and sends · Esc cancels"
-            : busy ? `${sendWord} (Enter). ${Said(th, busy)} reads it after its current step` : `${sendWord} (Enter). Shift+Enter for a new line. Edit your last message from its Edit button.`, armed && !approve)))));
+            : busy ? `${sendWord} (Enter). ${Said(th, busy)} reads it after its current step` : `${sendWord} (Enter). Shift+Enter for a new line. Edit your last message from its Edit button.`, armed && !approve)))),
+    // E203l (the E203k reader): what each of the two does is on screen, not only in a tooltip a phone never shows
+    busy && !empty && !armed && !approve && S.app && S.app.app ? h("p", { class: "cp-wait", "data-key": "wait" }, "Send waits for the current step to end. Stop and send tries to cut that step short.") : null);
 }
 function sendStop(th, who) {
   const b = button("Stop", () => stopNow(who), { kind: "primary", icon: "stop", cls: "cp-send cp-stop", title: `Stop ${said(th, who)} now. Type to send a message instead.` });
   b.setAttribute("aria-label", tr(`Stop ${said(th, who)} now`)); return b;
+}
+function stopSend(th, who) {
+  const say = `Stop ${said(th, who)} now and send this, without waiting for its step to end`;
+  const b = button("Stop and send", () => { CP.mode[th] = "interrupt"; send(th); }, { kind: "quiet", size: "s", cls: "cp-stopsend", title: say });
+  b.setAttribute("data-key", "stopsend"); return b;
 }
 // The hint lines under the box went into the send button's name and title (the Nov 8 handoff §8.1); the queued line under your bubble says the busy part.
 function sendButton(word, fn, empty, say, armed) {

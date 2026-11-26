@@ -76,8 +76,11 @@ export function morph(a, b) {
   // data-keep="style data-w": attributes the element's own code sets by hand (the composer's Markdown layer copies the box's font and width), kept through a re-render.
   const keep = b.getAttribute("data-keep"), kept = keep ? keep.split(" ") : null;
   for (const { name } of [...a.attributes]) if (!b.hasAttribute(name) && !(kept && kept.includes(name)) && !(name === "open" && a._pend) && name !== "data-ok" && name !== "data-fail" && name !== "data-shut") a.removeAttribute(name);   // a copy button's moment of feedback and an Escape-closed agent list (refs.js), set by hand: a poll's re-render mustn't wipe them
+  // a copy button saying "Copied" or "Couldn't copy" (copyPress) keeps its word and title through a poll's re-render: the Codex sign-in polls every 1.5 s and put "Copy link" back at once
+  const said = a._was && (a.hasAttribute("data-ok") || a.hasAttribute("data-fail")) ? a.title : null;
   for (const { name, value } of b.attributes) if (a.getAttribute(name) !== value && !(name === "open" && a._pend)) a.setAttribute(name, value);
   a._on = b._on;
+  if (said !== null) { a._was.title = b.title; a.title = said; return a; }
   if (b._v !== undefined && document.activeElement !== a && a.value !== b._v) a.value = b._v;
   // A box shows the app's state even with focus (a click leaves it focused), so one turned off another way, or refused, shows off;
   // only while its own handler still works (_busy, set in delegate) does it keep the person's tick (fw-bench goals, 2026-11-20).

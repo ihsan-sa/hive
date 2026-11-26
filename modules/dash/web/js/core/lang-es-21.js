@@ -20,8 +20,6 @@ const SELF = {
   "tools and skills your agents can use": "herramientas y habilidades que tus agentes pueden usar",
   "Move to a focus": "Mover a un enfoque",
   "Its conversations, page and summary stay as they are. Agents still know it as": "Sus conversaciones, su página y su resumen se quedan como están. Los agentes todavía lo conocen como",
-  "Its conversations, page and summary stay as they are.": "Sus conversaciones, su página y su resumen se quedan como están.",
-  "Agents still know it as": "Los agentes todavía lo conocen como",
   "Couldn't bring it back:": "No se pudo recuperar:",
   // E203h: making and uploading a skill (settings.js)
   "1. Ask where, when and the budget.\n2. …": "1. Pregunta adónde, cuándo y el presupuesto.\n2. …",
@@ -37,5 +35,11 @@ const SELF = {
   "What the agent should do, in order.": "Lo que el agente debe hacer, en orden.",
   "You added it on this Hive, so this deletes its file too. Agents stop using it from their next run.": "La añadiste en este Hive, así que esto también borra su archivo. Los agentes dejan de usarla desde su próxima ejecución.",
   "your skills are under Skills": "tus habilidades están en Habilidades",
+  "Stop and send": "Parar y enviar",
+  "Stopped and sent": "Parado y enviado",
+  "Send waits for the current step to end. Stop and send tries to cut that step short.": "Enviar espera a que termine el paso actual. Parar y enviar intenta cortar ese paso.",
+  __patterns: [
+    [/^Stop .+ now and send this, without waiting for its step to end$/, () => "Pararlo ya y enviar esto, sin esperar a que termine su paso"],
+  ],
 };
 export default SELF;

@@ -25,7 +25,11 @@ export default {
   "Waiting for Link": "Link を待っています",
   "Waiting in Link": "Link で待機中",
   "test mode": "テストモード",
+  "Stop and send": "停止して送信",
+  "Stopped and sent": "停止して送信しました",
+  "Send waits for the current step to end. Stop and send tries to cut that step short.": "送信は今のステップが終わるまで待ちます。「停止して送信」はそのステップを打ち切ろうとします。",
   __patterns: [
+    [/^Stop .+ now and send this, without waiting for its step to end$/, () => "ステップの終了を待たず、今すぐ停止してこれを送信します"],
     [/^Still open from rev (.+)$/, (_, r) => "未解決(この版から: rev" + " " + r + ")"],   // ui/docviewer.js: a carried item, the text is joined before h()
   ],
 };

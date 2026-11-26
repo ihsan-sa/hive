@@ -65,6 +65,7 @@ def clean_title(t):
     t = re.split(r"(?<![A-Z])(?<!Assist)(?<!Asst)(?<!Assoc)(?<!Exec)(?<!Coord)(?<!Dept)(?<!aka)[.;:|•]\s|\s[–—-]\s|(?<!Associates)(?<!Associate)(?<!Bachelors)(?<!Bachelor)(?<!Masters)(?<!Master)\sin\s|\s(?:said|says|who|and has|has|is|was|will|at|on)\s|(?<![Aa]ssistant)\sto\s|[\"“”(]|,\s+(?:sees|see|feels|believes|notes|adds|hopes|expects|thinks|wants|plans|looks|knows|argues|stresses)\b|,?\s(?:said|says|added|explained)\b|,\s+(?:Dr|Prof|Mr|Ms|Mrs)\.?\s|,\s+[a-z]+s\s+(?:the|a|an|its)\b|,\s+the\s+[a-z]|,\s+(?:where|which|whose|when)\b|\suntil\s|\sand\s+(?:highly|widely|also|one)\b", t)[0].strip(" ,.")
     t = re.sub(r"\b((?:co-?)?founder)\s+of\s+[a-z][a-z -]*(?:,.*)?$", r"\1", t, flags=re.I)  # "co-founder of advanced materials supplier"
     t = re.sub(r"\s+\S+@\S+.*$", "", t)  # "Interim Director jdoe@example.com": the email is no part of the post
+    t = re.sub(r"(?<=[a-z])\s+(?:Ph\.?D|M\.?B\.?A|Ed\.?D|M\.?Ed|MPA|MPH|MSW|MFA|DBA|JD)\.?$", "", t)  # a degree glued on by a catalog's next line: "Interim Vice President for Lifelong Learning and Workforce Development PhD" (MWCC, fnwords148 CC review #17, #18)
     if len(t) > 160: t = t[:160].rsplit(" ", 1)[0].strip(" ,")  # whole words only: a cut "Inno" read as another employer. 160, not 110: UF's "Associate Vice President for ... and Executive Director of the Career Connections Center" is 120 (fnwords123 review cut it at "the Career")
     return t
 
@@ -463,6 +464,24 @@ def title_given(text, name):
     return ""
 
 
+_BEFORE_WORD = re.compile(r"(?:[A-ZÀ-Þ][\w'’&-]*|of|for|and|the|&|in)$")
+def title_before(text, name):
+    """The post a page prints right before the person's name, as a news story does: "Vice President and Provost of Academic Affairs and Economic Development Anahid Petrosian, Ph.D., said" (South Texas College, fnwords148 review). The capitalised run ending at the name, from its first rank or role word, on one line; the first such with a role word, or ''."""
+    rx = re.compile(name_regex(name).pattern, re.I)
+    for m in rx.finditer(str(text or "")):
+        line = text[:m.start()].rsplit("\n", 1)[-1][-160:]
+        words = line.split()
+        run = []
+        for w in reversed(words):
+            if not _BEFORE_WORD.match(w): break
+            run.insert(0, w)
+        while run and not (_ROLE_RE.fullmatch(run[0]) or run[0].lower() in RANK): run.pop(0)
+        while run and run[-1].lower() in {"of", "for", "and", "the", "&", "in"}: run.pop()
+        seg = " ".join(run)
+        if 2 < len(seg) <= 120 and _ROLE_RE.search(seg): return seg
+    return ""
+
+
 def _alone_name(line):
     """A line that is just someone's name, as on a staff card."""
     m = re.fullmatch(rf"\s*{HONOR}({LINE_NAME}){SUFFIX}\s*", line)
@@ -766,6 +785,32 @@ def elsewhere(title, org):
 UNI_ACRONYM_NOT = {"UX", "UI", "US", "USA", "UK", "UN", "UAV", "UAS", "GUI", "EU", "ESU"}
 
 
+def org_initials(org):
+    """The initials a college goes by, with and without its possessive: Prince George's Community College is PGCC, not PGSCC (Snowden, fnwords148 CC review #19)."""
+    out = set()
+    for o in (re.sub(r"['’]s\b", "", org or ""), org or ""):
+        i = "".join(t[0] for t in re.findall(r"[a-z0-9]+", fold(o)) if t not in ("the", "of", "and", "at", "for", "in"))
+        if len(i) >= 2: out.add(i)
+    return out
+
+
+# A catalog's degree line under a name is not an employer: "MA, Art, U Iowa, IA", "BS Arkansas State University", "PhD, Brown University" (fnwords148 CC review #13, #15, #17, #18).
+DEGREE_LINE = re.compile(r"(?:A\.?A|A\.?S|AAS|AAA|B\.?A|B\.?S|BSN|BSc|BFA|BBA|M\.?A|M\.?S|MSc|M\.?B\.?A|M\.?Ed|MFA|MPA|MPH|MSW|MSN|Ed\.?D|EdS|Ph\.?D|J\.?D|DBA|DNP)\.?(?:[ ,]|$)")
+# An org chart's next heading names a group of posts, not a body: "Workforce Project Managers" (Maybry, #14).
+GROUP_HEADING = re.compile(r"\b(?:Managers|Directors|Coordinators|Specialists|Advisors|Advisers|Deans|Officers|Assistants|Analysts|Navigators|Coaches|Staff|Team)$")
+
+
+def not_a_body(label, title, org):
+    """Why a label read as another employer is none, or '': a degree line, a heading over a group of posts, the person's own unit (every word is in their title: "Career Experiences" for its director, #16), or the college's own initials."""
+    label = (label or "").strip(" ,.;:|-–—")
+    if DEGREE_LINE.match(label): return "degree"
+    if GROUP_HEADING.search(label): return "heading"
+    words = set(re.findall(r"[a-z0-9]+", fold(label))) - ORG_NOISE
+    if words and words <= set(re.findall(r"[a-z0-9]+", fold(title or ""))): return "own unit"
+    if fold(label).replace(" ", "") in org_initials(org): return "initials"
+    return ""
+
+
 GENERIC_EMPLOYER = {"organization", "organisation", "employer", "company", "webinars", "webinar", "events", "summit"}  # a heading or label, not a body
 
 
@@ -783,7 +828,7 @@ def employer_after(text, name, org, window=120):
         # "Ilya Sutskever at the Mathematics Genealogy Project" (a reference title) gives no post, so no employer.
         if not _ROLE_RE.search(tail[:at.start()]): continue
         words = [fold(w) for w in at.group(1).split()]
-        if at.group(1).lower() == initials or set(words) & (own - ORG_NOISE) or set(words) <= GENERIC_EMPLOYER: continue
+        if at.group(1).lower() == initials or at.group(1).lower() in org_initials(org) or set(words) & (own - ORG_NOISE) or set(words) <= GENERIC_EMPLOYER: continue
         # "at the College", "at Downtown Campus": a place within, not another employer.
         if set(words) & {"campus", "center", "centre", "school", "office", "department"} or all(w in ORG_NOISE or w in POST_WORDS for w in words): continue
         return at.group(1)
@@ -836,6 +881,7 @@ def employer_listed(text, name, org, official=False):
         label = label.strip(" ,.;:|-–—")
         words = label.split()
         if not 1 <= len(words) <= 5 or not words[0][0].isupper() or label.lower() == initials: return ""
+        if DEGREE_LINE.match(label) or GROUP_HEADING.search(label) or label.lower() in org_initials(org): return ""
         if official and own_unit(label, org): return ""
         if SITE_NOTICE.fullmatch(label): return ""  # a browser banner under the last staff entry (Broward: "Attention!")
         if GREETING.match(label) or set(re.findall(r"[a-z]+", fold(label))) & own_name: return ""  # a link to the person's own profile: "Meet Gabriel", "Email Robin", "Robin's calendar" (Kogod staff page)
@@ -1118,6 +1164,7 @@ def check(page, name, title, org="", domains=None, claim="", today=None):
     res["note"] = "; ".join(notes)
     if org:
         other = employer_after(text, name, org) or employer_before(text, name, org) or employer_listed(text, name, org, res.get("official")) or elsewhere(title, org)
+        if other and not_a_body(other, title, org): other = ""
         if other:
             res["other_employer"] = other
             return dict(res, status="partial", note="; ".join([f"the page puts them at {other}, not {org}"] + notes))

@@ -3749,6 +3749,8 @@ class BoardIndex:
     for the person. inbox.py decides what's addressed to whom, so this page and the door agree."""
     def __init__(self):
         self.off, self.last, self.authors, self.mine, self.answered, self.lock = 0, {}, {}, [], {}, threading.Lock()
+        self.stopped = {}   # stop notices: post id -> the agent whose run the person stopped, for a retry of that reply (everyday E203k)
+        self.turns = {}   # thread -> [post ids since the person's last message, the agent the person stopped in them or None] (everyday E203l)
         self.threads, self.names = set(), None
         self.pfiles = {}   # the person's posts with files: id -> (thread, first version's id, [paths]), so an edit keeps them (everyday E12d)
 
@@ -3770,6 +3772,12 @@ class BoardIndex:
                 if not isinstance(p, dict): continue
                 who, th = str(p.get("from", "")), p.get("thread") or p.get("id")
                 self.authors[p.get("id")] = who; self.threads.add(th)
+                if who == "dash" and isinstance(p.get("stopped"), str): self.stopped[p.get("id")] = p["stopped"]
+                if who == PERSON and p.get("retry_of"): self.turns.get(th, [None, None])[1] = None   # a new attempt: the stop was the old one's
+                elif who == PERSON: self.turns[th] = [set(), None]
+                elif who == "dash" or AGENT_CODE.fullmatch(who.lower()):
+                    turn = self.turns.setdefault(th, [set(), None]); turn[0].add(p.get("id"))
+                    if who == "dash" and isinstance(p.get("stopped"), str): turn[1] = p["stopped"]
                 if AGENT_CODE.fullmatch(who.lower()): self.last[th] = who.lower()
                 if who == PERSON:
                     self.answered[th] = p.get("at", "")
@@ -3777,6 +3785,10 @@ class BoardIndex:
                 elif PERSON in self.targets(p):
                     self.mine.append({"id": p.get("id"), "at": p.get("at"), "from": who, "thread": th,
                                       "text": str(p.get("text", ""))[:600], "files": len(p.get("files") or [])})
+
+    def halted(self, v):
+        """The agent the person stopped while it wrote the answer post v is part of, if that answer is still its thread's last."""
+        return next((who for ids, who in list(self.turns.values()) if v in ids), None)
 
 
 INDEX = BoardIndex()
@@ -4087,6 +4099,10 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     if edit_of or retry_of:
         INDEX.refresh(); v = str(edit_of or retry_of); author = INDEX.authors.get(v, "").lower()
         if edit_of and author != PERSON: raise ValueError("only your own messages can be edited")
+        # a stopped answer is written again by the agent whose run it was, even where a helper or an earlier post of its own starts it (E203l)
+        halted = str(INDEX.halted(v) or "").lower() if retry_of else ""
+        if retry_of and author == "dash": author = INDEX.stopped.get(v, "").lower()
+        if halted and AGENT_CODE.fullmatch(author): author = halted   # a dashboard notice in that turn stays what it is
         if retry_of and not AGENT_CODE.fullmatch(author): raise ValueError("only an agent's reply can be tried again")
         if retry_of: who = author
         if retry_of: text = (f"(retry of reply {v}: the person asked for another answer in its place. Write that answer again from scratch as a new attempt. The chat shows it as a newer version of that reply, so don't mention the earlier one or this note.)")
@@ -4094,7 +4110,9 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     if not word and not calls_someone(text):
         who = who or (thread_agent(thread) if thread else None)
         text = f"@{who or 'new'} {text}"
-        routed = bool(who)  # we picked the name, so a dead agent's heir may take it; only a typed name brings a dead agent back
+        # we picked the name, so a dead agent's heir may take it; only a typed name brings a dead agent back. Retry on the answer the person
+        # stopped is theirs to that agent: their stop made it dead, and the same one writes the new answer (everyday E203l), as after Stop.
+        routed = bool(who) and not (retry_of and (halted or INDEX.authors.get(str(retry_of)) == "dash"))
     if pairing:  # before the post, so a connector reading the board always finds it
         PAIR_ACCEPTED.parent.mkdir(parents=True, exist_ok=True)
         with PAIR_ACCEPTED.open("a") as f: f.write(json.dumps({"at": time.time(), "text": text}) + "\n")
