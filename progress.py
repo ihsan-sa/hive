@@ -287,6 +287,7 @@ def autojudge(post=True, t=None):
         subprocess.run([sys.executable, "-I", str(Hive), "post", "--thread", "improve"], input=body, text=True, capture_output=True, env={**os.environ, "HIVE_NAME": "improve-judge"})
     return out
 
+JOINT_READ_GAP = dt.timedelta(days=7)  # rung 199 (2): a group is read by hand at most once a week, pass or fail
 JOINT_FLAG = "joint_verdicts"  # core/config.json; off by default
 
 def joint_on():
@@ -358,21 +359,31 @@ def joint_read(i, t=None, write=True):
     if me in ("check", "late-check", "joint"): sys.exit(f"hive improve joint: {me} is a script's name; a read by hand signs with yours.")
     mine = [x for x in g if items[x].get("by") == me]
     if mine: sys.exit(f"hive improve joint: {', '.join(mine)} was logged by you; the joint read is by a non-owner of every row in {', '.join(g)}.")
+    if not write: sys.exit("hive improve joint: a --read is always on the record (pass or fail), so there is no --dry read.")
+    since = iso(t - JOINT_READ_GAP)
+    last = [r for r in jsonl(LEDGER) if r.get("joint_read") and r.get("judge") in g and str(r.get("at", "")) >= since]
+    if last: sys.exit(f"hive improve joint: {last[-1]['judge']} was read jointly at {last[-1]['at']} ({last[-1]['verdict']}); a group is read at most once in 7 days, so it can't be re-read until it happens to read held.")
+    pre = [f"{x} has no check" if not items[x].get("check") else f"{x} reads {items[x].get('status')}, not inconclusive" if items[x].get("status") != "inconclusive"
+           else f"{x} has no before or want" if items[x].get("before") is None or items[x].get("want") not in ("up", "down") else None for x in g]
+    # a landed row is the script's to read first; a held, reverted or closed one has its verdict; a row with no check can never pass: nothing is read, so nothing is written
+    if any(pre): sys.exit(f"hive improve joint: no joint read of {', '.join(g)}: " + "; ".join(x for x in pre if x))
     reads, bad = {}, []
     for x in g:
         o = items[x]
-        if not o.get("check"): bad.append(f"{x} has no check"); continue
-        if o.get("status") != "inconclusive": bad.append(f"{x} reads {o.get('status')}, not inconclusive"); continue  # a landed row is the script's to read first; a held, reverted or closed one has its verdict
-        if o.get("before") is None or o.get("want") not in ("up", "down"): bad.append(f"{x} has no before or want"); continue
         n, err = read_check(o)
-        if n is None: bad.append(f"{x}'s check did not read: {err}"); continue
+        if n is None: bad.append(f"{x}'s check did not read: {err}"); reads[x] = (None, 0.0, 0.0); continue
         base = o["before"] * n[1] / o["control_before"] if o.get("control") and o.get("control_before") else o["before"]
         v = score(base, n[0], o["want"], o.get("band"))
         pb, pa = paused_windows(o, t)
         if v != "held": bad.append(f"{x} {o['want']}: {o['before']:g} -> {n[0]:g} reads {v}")
         elif max(pb, pa) > PAUSED_MAX: bad.append(f"{x}'s window is {round(100 * max(pb, pa))}% paused")
         reads[x] = (n[0], pb, pa)
-    if bad: sys.exit(f"hive improve joint: no joint verdict for {', '.join(g)}: " + "; ".join(bad))
+    if bad:  # rung 199 (2): the failed read is on the record, each row with its number, so the next read is a week off
+        for x in g:
+            n = reads[x][0]; o = items[x]
+            append(LEDGER, {"judge": x, "at": iso(t), "by": me, "verdict": "inconclusive", "reading": "inconclusive", "before": o["before"], "after": n, "joint": g, "joint_read": True,
+                            "why": f"joint read by {me} did not pass: " + "; ".join(bad) + f"; this row {o['want']}: {o['before']:g} -> " + (f"{n:g}" if n is not None else "no reading") + "; the group can be read again after 7 days"})
+        sys.exit(f"hive improve joint: no joint verdict for {', '.join(g)}: " + "; ".join(bad) + ". Written as inconclusive on each row; the group can be read again in 7 days.")
     out = []
     for x in g:
         n, pb, pa = reads[x]; o = items[x]
@@ -565,6 +576,12 @@ def cmd_judge(a):
             if not (re.search(r"\d", a.why) and src): sys.exit("hive improve judge: inseparable needs --why to give the fresh reading of the shared number (a number) and where you read it (a file path or a post id).")
             if e.get("check"):  # the reading is the row's own check, now, on the record beside the judge's
                 n, err = read_check(e); a.why += f"; its check reads {n[0]:g} now" if n else f"; its check did not read now: {err}"
+                # rung 199 (1): a change that made its own number worse takes a hand reverted, which is never downgraded, not a closing
+                if n and e.get("before") is not None and e.get("want") in ("up", "down"):
+                    base = e["before"] * n[1] / e["control_before"] if e.get("control") and e.get("control_before") and n[1] is not None else e["before"]
+                    if score(base, n[0], e["want"], e.get("band")) == "reverted-candidate":
+                        sys.exit(f"hive improve judge: {a.id}'s own check reads {e['want']}: {e['before']:g} -> {n[0]:g} now, the wrong way. That is a reading, not a row with none: "
+                                 f"judge it reverted (hive improve judge {a.id} reverted --why ...), never inseparable.")
         day = (now() - dt.timedelta(hours=24)).isoformat()
         mine24 = [r["judge"] for r in jsonl(LEDGER) if r.get("judge") and r.get("by") == me and r.get("verdict") in CLOSING and str(r.get("at", "")) >= day]
         if len(mine24) >= 3: sys.exit(f"hive improve judge: you closed {', '.join(mine24)} in the last 24 h; three a day is the most one judge closes. Ask another agent.")
