@@ -89,13 +89,16 @@ _WATCH_BOARD = {}
 def _rkey(text): return re.sub(r"\s+", " ", re.sub(r"\b(?:after:\s*|on-post:)\S+\s*", "", text)).strip()   # the tags come and go as rounds re-date or retag a rung
 def watch_fresh(watched, rung_text, board=None):
     """An `on-post:THREAD` rung is due when the person has posted in THREAD after the last keeper brief that handed this rung
-    ("**Your rung:** ..."), or at any time when no brief has handed it yet. The board is read once per process."""
+    ("**Your rung:** ..."); when no brief has handed it yet, after the newest board post its text cites, or at any person post if it cites none. The board is read once per process."""
     if board is None:
         k = str(BOARD)
         if k not in _WATCH_BOARD: _WATCH_BOARD.clear(); _WATCH_BOARD[k] = jsonl(BOARD)
         board = _WATCH_BOARD[k]
     key = _rkey(rung_text)[:70]
     last = max((p.get("at", "") for p in board if "**Your rung:**" in (p.get("text") or "") and key in _rkey(p.get("text") or "")), default="")
+    if not last:   # never handed out: a rung that names the post it waits after ("the first note after 11260043152e") counts from that post, not from the thread's first person post (a9323, 11260322f386: a new watch woke a round on a person post from before the rung)
+        cited = set(re.findall(r"\b[0-9a-f]{12}\b", rung_text.split("check:")[0]))
+        last = max((p.get("at", "") for p in board if p.get("id") in cited), default="") if cited else ""
     return any(p.get("thread") == watched and str(p.get("from", "")).lower() == "person" and p.get("at", "") > last for p in board)
 
 def rounds(board, threads, since):

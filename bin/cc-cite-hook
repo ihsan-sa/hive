@@ -22,19 +22,35 @@ CLOSE = re.compile(r"\b(you['\u2019]?re|you are|that['\u2019]?s|it['\u2019]?s) (
 SELFAUDIT = re.compile(r"\b(did not|didn['\u2019]?t|have not|haven['\u2019]?t|never) (watch(ed)?|see|seen|click(ed)?|open(ed)?) (it|the (chart|animation|page|pages)) ?(play|run|drawn|being drawn|render(ed)?)?\b|\bfrom memory, (did not|didn['\u2019]?t) open\b|\bI did not watch it\b", re.I)
 
 
+def lines_back(path, size=1 << 20):
+    """The file's lines, last first, holding one chunk and the line across its edge: a transcript can be over 1 GB."""
+    with open(path, "rb") as f:
+        pos, rest = f.seek(0, 2), []
+        while pos:
+            n = min(size, pos); pos -= n; f.seek(pos)
+            parts = f.read(n).split(b"\n")
+            if len(parts) == 1: rest.append(parts[0]); continue
+            yield b"".join([parts[-1], *rest[::-1]])
+            yield from parts[-2:0:-1]
+            rest = [parts[0]]
+        yield b"".join(rest[::-1])
+
+
 def web_reads(transcript):
-    """Tool uses since the agent's last post that read the outside web."""
-    reads = []
-    for line in Path(transcript).read_text(errors="replace").splitlines():
-        try: m = json.loads(line)
+    """The latest tool use since the agent's last post that read the outside web, as a list: empty when there is none.
+    Read from the end and stopped at the first post or web read. Loading the whole file took 4-6 GB on a long session
+    and ran the machine out of memory (2026-11-26)."""
+    for line in lines_back(transcript):
+        if b'"tool_use"' not in line: continue
+        try: m = json.loads(line.decode(errors="replace"))
         except ValueError: continue
         if m.get("type") != "assistant": continue
-        for b in (m.get("message") or {}).get("content") or []:
+        for b in reversed((m.get("message") or {}).get("content") or []):
             if not isinstance(b, dict) or b.get("type") != "tool_use": continue
             name, inp = b.get("name"), b.get("input") or {}
-            if name == "Bash" and POST.search(inp.get("command") or ""): reads = []
-            elif name in ("WebFetch", "WebSearch") or (name == "Bash" and WEB.search(inp.get("command") or "")): reads.append(name)
-    return reads
+            if name == "Bash" and POST.search(inp.get("command") or ""): return []
+            if name in ("WebFetch", "WebSearch") or (name == "Bash" and WEB.search(inp.get("command") or "")): return [name]
+    return []
 
 
 def main():

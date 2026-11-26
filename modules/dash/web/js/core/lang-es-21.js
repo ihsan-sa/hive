@@ -1,0 +1,27 @@
+// es: the skills words in Settings (settings.js modules and connectors), a reply's tool and skill lines (message.js),
+// and the stop words (actions.js, model.js). Exact English keys.
+const SELF = {
+  "A skill your agents can use.": "Una habilidad que tus agentes pueden usar.",
+  "Adding…": "Añadiendo…",
+  "Agents can use it from their next run.": "Los agentes pueden usarlo desde su próxima ejecución.",
+  "Brings the skill": "Trae la habilidad",
+  "Brings the skills": "Trae las habilidades",
+  "Code it ran": "Código que ejecutó",
+  "Comes with the": "Viene con el",
+  "From the": "Del",
+  "Its skill": "Su habilidad",
+  "Its skills": "Sus habilidades",
+  "Skill": "Habilidad",
+  "Skills": "Habilidades",
+  "Steps it took": "Pasos que siguió",
+  "This stops it right away, without letting it save what it was in the middle of. It won't carry on by itself: send a message in the conversation when you want it to.": "Esto lo detiene de inmediato, sin dejarle guardar lo que estaba haciendo. No seguirá por sí solo: envía un mensaje en la conversación cuando quieras que siga.",
+  "Turn on": "Activar",
+  "You stopped it. Send a message to carry on.": "Lo detuviste. Envía un mensaje para que siga.",
+  "tools and skills your agents can use": "herramientas y habilidades que tus agentes pueden usar",
+  "Move to a focus": "Mover a un enfoque",
+  "Its conversations, page and summary stay as they are. Agents still know it as": "Sus conversaciones, su página y su resumen se quedan como están. Los agentes todavía lo conocen como",
+  "Its conversations, page and summary stay as they are.": "Sus conversaciones, su página y su resumen se quedan como están.",
+  "Agents still know it as": "Los agentes todavía lo conocen como",
+  "Couldn't bring it back:": "No se pudo recuperar:",
+};
+export default SELF;

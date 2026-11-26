@@ -92,7 +92,9 @@ const C = { view: (() => { try { const v = localStorage.getItem(VIEW_KEY); retur
   hideFaded: (() => { try { return localStorage.getItem(HIDE_KEY) !== "0"; } catch (e) { return true; } })(),   // on unless the person turned it off (2026-11-08)
   err: "", imp: false, conv: undefined, q: "", show: null, commsNew: true, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, more: null, find: false, strip: false };
 /** A change to a conversation (pin, star, archive) is shown at once; when the server refuses it the list goes back, and this says why for a few seconds. */
-const tryMeta = (th, patch, ctx) => setMeta(th, patch).catch(e => { C.err = "Couldn't save that: " + (e && e.message || "the server didn't answer") + "."; ctx.update(); });   // the error stays until its Close: no clock (WCAG 2.2.1)
+// a failed action's line, in the reader's words: h() only swaps whole strings, so the lead and the reason are swapped one by one
+const oops = (lead, e) => tr(lead) + " " + tr(String((e && e.message) || e || "the server didn't answer")) + ".";
+const tryMeta = (th, patch, ctx) => setMeta(th, patch).catch(e => { C.err = oops("Couldn't save that:", e); ctx.update(); });   // the error stays until its Close: no clock (WCAG 2.2.1)
 // What the message list holds. matched grows as posts arrive; pend is what sync() still has to append.
 const L = { key: null, src: null, seen: 0, matched: [], pend: [], evs: new Set(), rebuild: true, keep: false, shown: 0, day: "", prev: null, names: new Set(), opts: null,
   box: null, out: null, jump: null, unseen: 0, outSig: "", ro: null, stuck: true, heads: "", near: new Set(), io: null, tl: null, tlSig: "", tlConv: null, saved: null, ctx: null, jumpTo: null, marked: "" };
@@ -716,7 +718,7 @@ function foldAll(ctx) {
 // Without a mouse: Alt+Up/Down on a focus heading, or the card's move buttons. Other stays last and doesn't move.
 const DND = { id: null, el: null, at: 0 }, DND_TYPE = "text/x-h2-focus";
 const dropMark = el => { if (DND.el && DND.el !== el) DND.el.removeAttribute("data-drop"); DND.el = el; };
-function moved(err, ctx) { if (err) C.err = "Couldn't move the focus: " + err + "."; ctx.update(); }
+function moved(err, ctx) { if (err) C.err = oops("Couldn't move the focus:", err); ctx.update(); }
 /** Drag-and-drop props for a focus's section (rail) or card (home): `grab` goes on the handle, `drop` on the whole block. */
 function focusDnd(fid, ctx) {
   if (!fid || !can("post")) return { grab: {}, drop: {} };
@@ -1064,7 +1066,7 @@ function retiredFoot(ctx) {
       h("span", { class: "tm-ret-n" }, r.name),
       h("button", { type: "button", class: "btn", "data-kind": "quiet", "data-size": "s", "data-key": "restore", title: `Bring ${r.name} back with its conversations`,
         onclick: e => { const b = e.currentTarget; b.disabled = true;
-          apiPost("/api/focus", { restore: r.id }).then(() => loadFoci(true), e2 => { C.err = "Couldn't bring it back: " + (e2 && e2.message || "the server didn't answer") + "."; }).then(() => { FOLD.delete("f:" + r.id); saveFold(); ctx.update(); }); } }, "Bring back")))) : null);
+          apiPost("/api/focus", { restore: r.id }).then(() => loadFoci(true), e2 => { C.err = oops("Couldn't bring it back:", e2); }).then(() => { FOLD.delete("f:" + r.id); saveFold(); ctx.update(); }); } }, "Bring back")))) : null);
 }
 // A focus heading's ⋯ (E201e, GAPS row 28): rename it or retire it where it shows, as a chat app's project menu does. Only a full sign-in
 // (the server says the same); retiring isn't offered for the person's priorities, which come from kb/priorities.md.
@@ -1125,7 +1127,7 @@ function openRowMenu(b, th, ctx) {
   const fs = can("post") && S.foci ? fociOrder().filter(f => !f.misc) : [];
   if (can("post") && S.foci) {   // with no focus yet too: the list then offers New focus… (E201c)
     const cur = focusOf(th), items = [...m.children];
-    const file = v => { closeRowMenu(); apiPost("/api/focus", v ? { thread: th, focus: v } : { thread: th, off: true }).then(() => loadFoci(true), e2 => { C.err = "Couldn't file it: " + (e2 && e2.message || "the server didn't answer") + "."; }).then(() => ctx.update()); };
+    const file = v => { closeRowMenu(); apiPost("/api/focus", v ? { thread: th, focus: v } : { thread: th, off: true }).then(() => loadFoci(true), e2 => { C.err = oops("Couldn't file it:", e2); }).then(() => ctx.update()); };
     const pick = (v, label) => h("button", { type: "button", class: "menu-i", role: "menuitemradio", "aria-checked": (v || null) === (cur || null) ? "true" : "false", "data-focus": v || "",
       onclick: e => { e.stopPropagation(); if ((v || null) === (cur || null)) closeRowMenu(); else file(v); } }, icon((v || null) === (cur || null) ? "check" : "blank"), h("span", { class: "menu-i-t" }, label));
     const list = () => { m.replaceChildren(
@@ -1181,7 +1183,7 @@ function titleMenu(c, n, d, off, ctx) {
   const fs = full && mine && S.foci ? fociOrder().filter(f => !f.misc) : [], cur = full ? focusOf(th) : null;
   const focusRow = full && mine && S.foci ? h("label", { class: "cm-focus-row" }, h("span", null, "Focus"),
     h("select", { class: "cm-focus-sel", "aria-label": "The focus this conversation is filed under", title: "Which focus this conversation belongs to; No focus leaves it in Other",
-      onchange: e => { const v = e.target.value; C.menu = null; if (v === "+new") { ctx.update(); newFocusDialog(th, ctx); return; } apiPost("/api/focus", v ? { thread: th, focus: v } : { thread: th, off: true }).then(() => loadFoci(true), e2 => { C.err = "Couldn't file it: " + (e2 && e2.message || "the server didn't answer") + "."; }).then(() => ctx.update()); } },
+      onchange: e => { const v = e.target.value; C.menu = null; if (v === "+new") { ctx.update(); newFocusDialog(th, ctx); return; } apiPost("/api/focus", v ? { thread: th, focus: v } : { thread: th, off: true }).then(() => loadFoci(true), e2 => { C.err = oops("Couldn't file it:", e2); }).then(() => ctx.update()); } },
       h("option", { value: "", selected: !cur ? "" : null }, "No focus"), fs.map(f => h("option", { value: f.id, selected: f.id === cur ? "" : null }, focusName(f))), h("option", { value: "+new" }, "New focus…"))) : null;
   const lead = part(...own,
     focusRow,
