@@ -7,7 +7,7 @@
 // Wipe the knowledge base, documents; es-17: Buying, Orders, the shop sign-in; -mcp: Add a connector by address; -qr: Open on your phone; es-19: ink (pen toolbar, writing sheets) and where ink shows; es-20: joined ink words, Link's approve line. fr, de, it, pt, ja, ko, hi, id follow the same way.
 const FILES = {
   es: ["", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9", "-10", "-11", "-12", "-13", "-14", "-15", "-kbwipe", "-16", "-17", "-mcp", "-qr", "-18", "-19", "-20", "-21"],
-  fr: ["", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9", "-10", "-11", "-12", "-13", "-14", "-mcp", "-qr"],
+  fr: ["", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9", "-10", "-11", "-12", "-13", "-14", "-mcp", "-qr", "-15"],
   de: ["", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9", "-10", "-11", "-mcp", "-qr"],
   it: ["", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9", "-10", "-11", "-mcp", "-qr"],
   pt: ["", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9", "-10", "-11", "-mcp", "-qr"],

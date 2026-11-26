@@ -8,7 +8,7 @@ Tell it what you're working on, or how you want it to work. Wake up to progress,
 
 **Install on Linux:** `curl -fsSL https://hivelab.ca/install.sh | sh` ([read it first](docs/install.md), or [start with a small server](docs/tutorials/11-small-server.md) if you only have a laptop).
 
-[Website](https://hivelab.ca) · [Demo](https://hivelab.ca/demo/) · [Docs](https://hivelab.ca/guide/) · [How we know it works](https://hivelab.ca/results/) · [Install](#install) · [Safety](#read-this-first) · [FAQ](#faq) · [Updates](https://hivelab.ca/updates/) · [Roadmap](ROADMAP.md)
+[Website](https://hivelab.ca) · [Demo](https://hivelab.ca/demo/) · [Docs](https://hivelab.ca/guide/) · [How we know it works](https://hivelab.ca/results/) · [Install](#install) · [Download](https://hivelab.ca/download/) · [Safety](#read-this-first) · [FAQ](#faq) · [Hard questions](https://hivelab.ca/questions/) · [Updates](https://hivelab.ca/updates/) · [Roadmap](ROADMAP.md)
 
 If the Hive is useful to you, a star on this repo helps others find it.
 

@@ -112,3 +112,4 @@
 /* Orders (views/orders.js) */
 .order-items{margin:0;padding-left:1.2em;color:var(--ink);overflow-wrap:anywhere}
 .order-host,.order-meta{font-size:var(--fs-small);overflow-wrap:anywhere}
+.order-note{overflow-wrap:anywhere}   /* a note or reason with a long word wraps instead of widening the card (long walk, 390, 2026-11-26) */

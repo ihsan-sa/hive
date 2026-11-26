@@ -139,7 +139,7 @@ def url_date(url):
 PEOPLE_PAGE = re.compile(r"/(?:profiles?|directory|staff(?:-directory)?|people|our-team|meet-the-team|meet-our-staff|leadership)(?:/|\.html?|$|[?#])", re.I)  # a page that lists people by name
 
 
-META_DATES_SINCE = "2026-11-25T01:05:00Z"   # pages saved before this read their metadata dates under older rules (a template's node first, ISO basic form unread, a last edit before the first publication): Hunt.stored_dates reads a stored row's page again once. Move it forward when page_date's metadata rules change.
+META_DATES_SINCE = "2026-11-26T14:30:00Z"   # (moved 2026-11-26: a WordPress REST record's date is now date_from "rest", not "meta", fnwords147 review) pages saved before this read their metadata dates under older rules (a template's node first, ISO basic form unread, a last edit before the first publication): Hunt.stored_dates reads a stored row's page again once. Move it forward when page_date's metadata rules change.
 ARTICLE_LD = re.compile(r"Article|BlogPosting|Posting|PressRelease|Report\b|NewsItem")
 
 
