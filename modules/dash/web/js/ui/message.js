@@ -61,7 +61,7 @@ export function delivery(p, m) {
   if (!isAgent(m) || now() - p.t > 3 * DAY || p.from === m) return null;
   // A post to the warden starts a fresh warden run (w + 4 hex), and one to a dead agent starts its heir: that run has it.
   const took = (S.woke[p.id] || []).find(s => s.name !== m && !p.men.includes(s.name) && (s.heirOf === m || m === "warden" && isWarden(s.name) && s.name !== "rootwarden"));
-  if (took) return { key: "seen", tone: "good", text: `${took.name} took it for ${m}`, who: took.name };
+  if (took) return { key: "seen", tone: "good", text: S.app && S.app.app ? "Read" : `${took.name} took it for ${m}`, who: took.name };   // E203i: the app look names no code ("a5c5c took it for a3d4e" after carrying on a stop)
   const q = S.pending[m], queued = q && (q.ids || []).includes(p.id);
   const set = DELIV.sets[m], last = S.lastSess[m];
   const sess = !queued && last && last.start >= p.t - 2000;
@@ -440,7 +440,7 @@ export function messageHead(p, { showThread = true, mark, asks } = {}) {
     mine ? h("b", { class: "msg-me" }, other ? src.name : "You") : h("b", null, OUTSIDE.has(p.from) ? who(p.from) : hiveName()),
     h("span", { class: "msg-end" }, more(p, mark), h("time", { class: "meta num", datetime: p.at, title: stamp(p.t) }, clock(p.t))));
   return h("div", { class: "msg-h" },
-    mine ? h("b", { class: "msg-me", title: other ? src.said : "you (person)" }, other ? src.name : "You") : p.stopped && p.from === "dash" ? h("b", null, hiveName()) : agentRef(p.from, { dot: false, cap: true }),   // E203c: the Stop notice is the Hive's word, not "Dash"; §10.2: the consumer head has no dot
+    mine ? h("b", { class: "msg-me", title: other ? src.said : "you (person)" }, other ? src.name : "You") : p.stopped && p.from === "dash" ? (typeof p.stopped === "string" && p.stopped ? agentRef(p.stopped, { dot: false, cap: true }) : h("b", null, hiveName())) : agentRef(p.from, { dot: false, cap: true }),   // E203c: the Stop notice is the Hive's word, not "Dash"; E203i: a kept reply is the stopped agent's, as stoppedMark draws it (comms.js refreshHead redraws this head alone); §10.2: the consumer head has no dot
     src ? h("span", { class: "msg-src", title: src.said }, (src.name && src.name !== me && !other ? src.name + " · " : "") + src.how) : null,
     tos.length ? h("span", { class: "msg-to" }, toYou ? "to you" : "to") : null,
     toYou ? null : tos.map(m => m === "person" ? h("b", { class: "msg-me" }, "you") : agentRef(m, { dot: false })),
@@ -487,16 +487,22 @@ function phoneCall(p) {
 // E203e (GAPS row 22, the E203c reader): the person's Stop leaves one quiet line under the reply, as Claude.ai's "Stopped" does, not a
 // message from "Your Hive" with an avatar and a head. Its steps fold under it as a run's do; the conversation's header says it too.
 function stoppedMark(p) {
-  return h("article", { class: "msg msg-stopped", tabindex: "-1", "data-key": p.id, "data-who": "sys", "aria-label": `You stopped it, ${stamp(p.t)}` },
+  const said = stoppedSaidText(p);
+  const line = h("p", { class: "msg-stop-l meta" }, icon("stop"), h("span", null, displayText(p)), h("time", { class: "num", datetime: p.at, title: stamp(p.t) }, " · " + clock(p.t)));
+  if (!said) return h("article", { class: "msg msg-stopped", tabindex: "-1", "data-key": p.id, "data-who": "sys", "aria-label": `You stopped it, ${stamp(p.t)}` },
+    h("div", { class: "msg-c" }, line, ranFold(p)));
+  // E203i (the E203g reader): what it had started writing stays in place as the agent's answer, in its own type, with the stopped line
+  // under it, as Claude.ai and ChatGPT keep a half-written reply; not a grey quote after the line.
+  const name = typeof p.stopped === "string" && p.stopped ? p.stopped : null;
+  return h("article", { class: "msg msg-stopped msg-stopped-said", tabindex: "-1", "data-key": p.id, "data-who": "agent", "data-name": name || "", "aria-label": `Stopped reply, ${stamp(p.t)}` },
+    name ? agentAvatar(name) : msgAvatar(p, "sys"),
     h("div", { class: "msg-c" },
-      h("p", { class: "msg-stop-l meta" }, icon("stop"), h("span", null, displayText(p)), h("time", { class: "num", datetime: p.at, title: stamp(p.t) }, " · " + clock(p.t))),
-      stoppedSaid(p), ranFold(p)));
+      h("div", { class: "msg-h" }, simpleOn() || !name ? h("b", null, hiveName()) : agentRef(name, { dot: false, cap: true })),
+      h("div", { class: "msg-b msg-stop-said" }, markBody(mdIn(said, p))),
+      line, ranFold(p)));
 }
-// E203g (the E203e reader): what it had started writing when you stopped it stays, as the chat apps keep a half-written answer.
-function stoppedSaid(p) {
-  const e = RAN.get(p.id), t = e && e.v && e.v.said;
-  return t ? h("div", { class: "msg-stop-said", "data-key": "said" }, h("p", { class: "meta" }, "It had started writing:"), h("blockquote", null, t)) : null;
-}
+// E203g: what it had started writing when you stopped it (kill_run keeps it with the steps, /api/ran returns it as said).
+function stoppedSaidText(p) { const e = RAN.get(p.id), t = e && e.v && e.v.said; return typeof t === "string" && t.trim() ? t : ""; }
 export { approvalLine };
 export function message(p, opts = {}) {
   if (!S.app.app) return devMessage(p, opts);
@@ -657,6 +663,8 @@ async function ranFetch() {
       const r = v && v[id] && Array.isArray(v[id].steps) ? v[id] : { steps: [] };
       RAN.set(id, { v: r, at: now() });
       const p0 = S.byId[id];
+      // E203i: a stopped run's kept reply comes with its steps, after the first draw: draw the stop again whole, reply and all
+      if (p0 && p0.stopped && p0.from === "dash" && r.said) { for (const el of document.querySelectorAll(`.msg.msg-stopped[data-key="${CSS.escape(id)}"]:not(.msg-stopped-said)`)) el.replaceWith(inConversation(p0.th, () => stoppedMark(p0))); continue; }   // named as in its conversation, not "Your Hive" (the E203i reader)
       // E42b: the post lands on the board a moment before its command's result reaches the run's log, so a fresh reply's first ask often finds nothing. Ask again on a timer, not on the next redraw, which may not come.
       if (!r.steps.length) { if (p0 && now() - p0.t < 3 * MIN) setTimeout(() => { for (const slot of document.querySelectorAll(`.msg[data-key="${CSS.escape(id)}"] .msg-ran-slot`)) slot.replaceWith(ranFold(S.byId[id] || p0)); }, ranWait(p0) + 100); continue; }
       for (const slot of document.querySelectorAll(`.msg[data-key="${CSS.escape(id)}"] .msg-ran-slot`)) { const p = S.byId[id]; if (p) slot.replaceWith(ranFold(p)); }

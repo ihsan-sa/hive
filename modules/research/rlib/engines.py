@@ -331,6 +331,7 @@ FULL_FIT = 0.25  # the share of the query's words a result needs before its engi
 
 
 SECS, _SECS_LOCK = {}, __import__("threading").Lock()   # seconds each source spent answering, cache hits aside: a hunt logs it, to say which engine its searches wait on
+LIVE = {}   # source -> searches sent to it, cache hits aside: a hunt's report says when its pass ran from the case's cache (fnwords146 review)
 
 
 def search(q, sources, n=10, case=None, grace=None, late=None):
@@ -341,6 +342,7 @@ def search(q, sources, n=10, case=None, grace=None, late=None):
         cached = case.cached_search(q, s) if case else None
         if cached is not None: return s, [Hit(**h) for h in cached], ""
         t0 = time.monotonic()
+        with _SECS_LOCK: LIVE[s] = LIVE.get(s, 0) + 1
         try:
             hits = SOURCES[s](q, n)
             if case: case.save_search(q, s, [h.dict() for h in hits], "")

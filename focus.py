@@ -941,6 +941,7 @@ def nudge(name, thread, since, posts=None, own=None, st=None):
             f"If you read the card and your result changes nothing it says, don't rewrite it: hive focus set {f['id']} --still \"why\".\n" + reader(f, posts))
 
 FILE_ASKED = STATE / "file-asked.jsonl"     # {thread, name, at, file, title}: which agent was asked to file or title which conversation
+REASK_S = 600     # the same run is asked once more at a Stop this long after its first file-and-title ask (R83, a79ca 11-23)
 META, RENAMED = STATE / "thread-meta.json", STATE / "renamed.jsonl"
 HEXID = re.compile(r"[0-9a-f]{12}")
 
@@ -1009,9 +1010,14 @@ def file_nudge(name, thread, since, posts=None, st=None):
         # the helpers stopping at 19:51 and 19:59 were never asked, being inside its hour (thread improve, 7 pickups in a day)
         # the same agent is asked again when it is in a new run since the ask (11-23: a79ca, asked 19:20, ended without filing, woken
         # again at 19:50 to post in the same threads, was not asked and the 20:19 pass found two untitled; rsi-lab keeper a6a48)
-        if any((r := json.loads(l)).get("thread") == thread and now() - r.get("at", 0) < 3600
-               and ((r.get("name") == name and not _new_run_since(name, r.get("at", 0))) or _still_in_asked_run(r.get("name"), r.get("at", 0)))
-               for l in FILE_ASKED.read_text().splitlines() if l.strip()): return None
+        # an ask can be lost on its way (11-23, a79ca: its turn ended at 19:20:26, the slow hook recorded the ask at 19:20:34 while a
+        # finished background task had already started the next turn, and the text never reached it); at its real end at 19:35 the
+        # same-run rule kept it silent. So the same run is asked once more at a later Stop, REASK_S after the first, and no more (R83)
+        recent = [r for l in FILE_ASKED.read_text().splitlines() if l.strip()
+                  if (r := json.loads(l)).get("thread") == thread and now() - r.get("at", 0) < 3600]
+        mine = [r for r in recent if r.get("name") == name and not _new_run_since(name, r.get("at", 0))]
+        if len(mine) >= 2 or any(now() - r.get("at", 0) < REASK_S for r in mine): return None
+        if any(r.get("name") != name and _still_in_asked_run(r.get("name"), r.get("at", 0)) for r in recent): return None
     except (OSError, ValueError): pass
     tagged = False
     try: tagged = any(r.get("kind") == "tag" and r.get("thread") == thread for r in map(json.loads, filter(str.strip, FILE.read_text().splitlines())))

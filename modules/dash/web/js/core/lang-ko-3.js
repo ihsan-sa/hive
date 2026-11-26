@@ -454,7 +454,7 @@ export default {
   "Answers land here": "답변이 여기에 도착합니다",
   "Agents write back in this conversation as they go. You can close the app: the work carries on, and it's all here when you come back.": "에이전트는 작업하면서 이 대화에 답변을 남깁니다. 앱을 닫아도 작업은 계속되며, 돌아오시면 모든 내용이 여기에 있습니다.",
   "Who's on it": "담당자",
-  "This line says who is working and what they're doing. If an agent is running, the round stop button is here too. It asks you to type the agent's name before anything ends, so you don't need to try it now.": "이 줄에는 누가 작업 중이며 무엇을 하는지 표시됩니다. 에이전트가 실행 중이면 둥근 중지 버튼도 여기에 있습니다. 무엇이든 끝내기 전에 에이전트 이름을 입력하도록 요구하므로 지금 눌러 볼 필요는 없습니다.",
+  "This line says who is working and what they're doing. While an agent runs and the box is empty, the Send button turns into Stop: one click ends the run at once, so press it only when you mean it.": "이 줄에는 누가 작업 중이며 무엇을 하는지 표시됩니다. 에이전트가 실행 중이고 입력란이 비어 있으면 보내기 버튼이 중지로 바뀝니다. 한 번 누르면 바로 멈추므로 정말 멈추고 싶을 때만 누르세요.",
   "When an agent asks you something": "에이전트가 질문할 때",
   "This line says an agent here is waiting for you. The box below is already addressed to it: write your answer there.": "이 줄은 이 대화의 에이전트가 나를 기다리고 있다는 뜻입니다. 아래 입력창은 이미 그 에이전트를 받는 사람으로 지정되어 있으니 답변을 거기에 쓰세요.",
   "A line appears here saying which agent waits for your answer, and the Chat tab shows a number. The box below is then addressed to that agent, and the Chat page lists everything waiting for you.": "어떤 에이전트가 답변을 기다리는지 알려 주는 줄이 여기에 나타나고, 채팅 탭에 숫자가 표시됩니다. 그러면 아래 입력창이 그 에이전트를 받는 사람으로 지정되고, 채팅 페이지에 확인을 기다리는 모든 항목이 나열됩니다.",

@@ -10,6 +10,7 @@ Web pages and documents in the side panel have a Comment mode: press **Comment**
 
 ## Smaller fixes, 2026-11-26
 
+- A message from you now gets through to an agent within seconds even when it is sitting in a waiting loop. The loop is stopped only while it is sleeping, never during a build or test run before it.
 - The website's Download page now links the Hive's GitHub repo and shows a picture when its link is shared.
 - The website build now checks that every page links the Hive's GitHub repo.
 - The website's home page now tells search engines it is the Hive's site and where its GitHub repo is.
