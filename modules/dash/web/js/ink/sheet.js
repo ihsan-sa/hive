@@ -95,11 +95,14 @@ export function inkLayerSvg(th, sid, H, { find = null, play = false, z = 1 } = {
 
 // ---------- thumbnails (cards, chips) ----------
 /** A small picture of part of a sheet: own strokes and the given marks, cropped to them. */
+/** Marks tied to words (`underline @"cos(x²)"`) have no words to find in a thumbnail, so each gets a stand-in word box,
+ *  one under the other: the card shows the mark's shape rather than an empty picture (R-1125-s). */
 export function thumb(th, sid, { marks = null, who = null, w = 72, hgt = 48 } = {}) {
+  let row = 0; const stand = a => ({ x: 40, y: 40 + 70 * row++, w: Math.min(W - 80, 16 * String(a).length + 24), h: 26 });
   const sv = s("svg", { class: "ink-thumb", "aria-hidden": "true" }), sh = th ? K.fold(th).sheets.get(sid) : null;
   const own = th ? K.ownStrokes(th, sid) : [], boxes = [];
   for (const st of own) { sv.append(strokeP(st)); boxes.push(bbox(st.p)); }
-  if (marks) { const ob = own.map(st => bbox(st.p)); let i = 0; for (const m of marks) { const r = markG(m, (sid || "") + i++, ob, null, (sh && sh.h) || 400, 0, who && th ? K.agentPen(th, who) : null); if (r) { sv.append(r.g); boxes.push(r.box); } } }
+  if (marks) { const ob = own.map(st => bbox(st.p)); let i = 0; for (const m of marks) { const r = markG(m, (sid || "") + i++, ob, stand, (sh && sh.h) || 400, 0, who && th ? K.agentPen(th, who) : null); if (r) { sv.append(r.g); boxes.push(r.box); } } }
   let bb = boxes.length ? boxes.reduce((a, b) => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), x1: Math.max(a.x1, b.x + b.w), y1: Math.max(a.y1, b.y + b.h) }), { x: 1e9, y: 1e9, x1: -1e9, y1: -1e9 }) : { x: 0, y: 0, x1: W, y1: 160 };
   let bw = Math.max(80, bb.x1 - bb.x + 40), bh = Math.max(50, bb.y1 - bb.y + 40); const asp = w / hgt;
   if (bw / bh > asp) bh = bw / asp; else bw = bh * asp;
@@ -411,7 +414,7 @@ function markCard(th, post, r) {
   return h("a", { class: "ink-card", href: "#", "data-err": missing || k ? "" : null, style: `--ag:${K.agentPen(th, post.from)}`,
     title: k ? "Skipped: " + r.skipped.map(x => x.raw.trim()).join(" | ") : `Go to ${name}`,
     onclick: e => { e.preventDefault(); goSheet(th, sid, post.id); } },
-    thumb(th, sid, { marks: r.marks.filter(m => !m.anchor), who: post.from }),
+    thumb(th, sid, { marks: r.marks, who: post.from }),
     h("span", {}, h("b", {}, r.marks.some(m => m.k === "clear") && !n ? `Cleared its marks on ${name}` : `Marked up ${name}`), h("span", { class: "meta" }, meta)));
 }
 function homeCard(th, sid, sh) {

@@ -22,6 +22,7 @@ import { askTier, askStop, stopButton } from "../actions.js";
 import { seen, unreadIn, markRead, onInbox, IB } from "../core/inbox.js";
 import { MN, onMail } from "../core/mailnew.js";
 import { heldRoom } from "../core/room.js";
+import { confirm as askDialog } from "../ui/dialog.js";
 import { bar as skBar, button, empty, icon, input, list, scrim, seg, skeleton, statusDot, statusWord } from "../ui/kit.js";
 import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
 import { message, messageHead, messageReceipt, localMessage, draftMessage, markWords, pollDelivered, marksSig, approvalLine, delivery, onJump, helperFolds, chatPages, pageEdit } from "../ui/message.js";
@@ -1015,6 +1016,22 @@ function rowMore(th, ctx) {
   return h("button", { type: "button", class: "lr-more-b", "aria-haspopup": "true", "aria-expanded": open ? "true" : "false", "data-open": open ? "" : null, title: "Pin, mark important, archive", "aria-label": "Actions for this conversation",
     onclick: e => { e.preventDefault(); e.stopPropagation(); const b = e.target.closest(".lr-more-b"), was = rowM && rowM.btn === b; closeRowMenu(); if (!was) openRowMenu(b, th, ctx); } }, icon("more"));
 }
+// "New focus…" in both move lists (E201c, GAPS row 28): a newcomer has no focus to move a chat into, and both chat apps make a project from the move.
+// The dash makes the focus (POST /api/focus {new}) and files the chat under it in one go.
+function newFocusDialog(th, ctx) {
+  const field = h("input", { class: "input", maxlength: "80", "aria-label": "Name", autocomplete: "off", placeholder: "Home, Work, Trip to Lisbon…",
+    oninput: e => { const er = e.target.closest("dialog")?.querySelector(".dlg-err"); if (er) er.textContent = ""; } });   // a typed name clears "give it a name first" (E201c outside read)
+  const dlg = askDialog({ title: "New focus", ok: "Make it and move", failText: "Not made",
+    body: [h("label", { class: "field" }, h("span", { class: "field-l" }, "Name"), field),
+      h("p", { class: "meta" }, "A focus groups conversations under one heading in the list and on the home, with its own page. This conversation moves into it.")],
+    onOk: async () => {
+      const name = field.value.trim(); if (!name) { field.focus(); throw new Error("give it a name first"); }
+      await apiPost("/api/focus", { new: { name, thread: th } }); await loadFoci(true); ctx.update();
+    } });
+  queueMicrotask(() => field.focus());
+  return dlg;
+}
+
 function openRowMenu(b, th, ctx) {
   const im = important(th), pn = pinned(th), ar = archived(th), fd = faded(th);
   const it = (label, ic, patch, tip) => h("button", { type: "button", class: "menu-i", role: "menuitem", title: tip || null, onclick: e => { e.stopPropagation(); closeRowMenu(); tryMeta(th, patch, ctx); } }, icon(ic), h("span", { class: "menu-i-t" }, label));
@@ -1024,6 +1041,26 @@ function openRowMenu(b, th, ctx) {
     h("div", { class: "menu-sep", role: "separator" }),
     it(fd ? "Needed again" : "Not needed", "check", { faded: !fd }, fd ? null : "Grey it in the list; back by itself when something new is for you"),
     it(ar ? "Unarchive" : "Archive", "archive", { archived: !ar }, ar ? null : "Out of the list until something new is for you"));
+  // Move to a focus from the row, where both chat apps put move-to-project and a newcomer looks first (E201b, runs/e201/28-1-menu.png):
+  // the title menu's Focus picker, as a list of the focuses in place of the menu's items, so it needs no opening of the chat.
+  const fs = can("post") && S.foci ? fociOrder().filter(f => !f.misc) : [];
+  if (can("post") && S.foci) {   // with no focus yet too: the list then offers New focus… (E201c)
+    const cur = focusOf(th), items = [...m.children];
+    const file = v => { closeRowMenu(); apiPost("/api/focus", v ? { thread: th, focus: v } : { thread: th, off: true }).then(() => loadFoci(true), e2 => { C.err = "Couldn't file it: " + (e2 && e2.message || "the server didn't answer") + "."; }).then(() => ctx.update()); };
+    const pick = (v, label) => h("button", { type: "button", class: "menu-i", role: "menuitemradio", "aria-checked": (v || null) === (cur || null) ? "true" : "false", "data-focus": v || "",
+      onclick: e => { e.stopPropagation(); if ((v || null) === (cur || null)) closeRowMenu(); else file(v); } }, icon((v || null) === (cur || null) ? "check" : "blank"), h("span", { class: "menu-i-t" }, label));
+    const list = () => { m.replaceChildren(
+      h("button", { type: "button", class: "menu-i", role: "menuitem", "data-key": "back", onclick: e => { e.stopPropagation(); m.replaceChildren(...items); m.querySelector(".menu-i")?.focus(); } }, icon("chevron-left"), h("span", { class: "menu-i-t" }, "Move to a focus")),
+      h("div", { class: "menu-sep", role: "separator" }),
+      ...fs.map(f => pick(f.id, focusName(f))), pick("", "No focus"),
+      h("div", { class: "menu-sep", role: "separator" }),
+      h("button", { type: "button", class: "menu-i", role: "menuitem", "data-key": "new-focus", onclick: e => { e.stopPropagation(); closeRowMenu(); newFocusDialog(th, ctx); } }, icon("plus"), h("span", { class: "menu-i-t" }, "New focus…")));
+      const r = b.getBoundingClientRect(), mh = m.offsetHeight; m.style.top = (r.bottom + 4 + mh > innerHeight - 8 ? Math.max(8, r.top - 4 - mh) : r.bottom + 4) + "px";   // taller now: placed again like the first time
+      (m.querySelector('[aria-checked="true"]') || m.querySelector(".menu-i")).focus(); };
+    const mv = h("button", { type: "button", class: "menu-i", role: "menuitem", "aria-haspopup": "true", "data-key": "move", title: "File it under a focus without opening it", onclick: e => { e.stopPropagation(); list(); } },
+      icon("folder"), h("span", { class: "menu-i-t" }, "Move to a focus"), cur && focusById(cur) ? h("small", null, focusName(focusById(cur))) : null);
+    m.insertBefore(mv, m.querySelector(".menu-sep")); items.splice(2, 0, mv);
+  }
   const sc = h("button", { type: "button", class: "scrim", "aria-label": "Close the menu", tabindex: "-1", onclick: e => { e.stopPropagation(); closeRowMenu(); } });
   document.body.append(sc, m);
   const r = b.getBoundingClientRect(), mh = m.offsetHeight, mw = m.offsetWidth;
@@ -1063,10 +1100,10 @@ function titleMenu(c, n, d, off, ctx) {
   const prio = th && simpleOn() ? null : th && can("tier") ? button([h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority", h("small", null, t.label)], () => { C.menu = null; askTier(th); }, { size: "s", kind: "quiet", title: "Where this sits in the hive's priority list" })
     : th ? h("p", { class: "meta cm-tier", title: "This thread's priority" }, h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority: " + t.label) : null;
   const fs = full && mine && S.foci ? fociOrder().filter(f => !f.misc) : [], cur = full ? focusOf(th) : null;
-  const focusRow = fs.length ? h("label", { class: "cm-focus-row" }, h("span", null, "Focus"),
+  const focusRow = full && mine && S.foci ? h("label", { class: "cm-focus-row" }, h("span", null, "Focus"),
     h("select", { class: "cm-focus-sel", "aria-label": "The focus this conversation is filed under", title: "Which focus this conversation belongs to; No focus leaves it in Other",
-      onchange: e => { const v = e.target.value; C.menu = null; apiPost("/api/focus", v ? { thread: th, focus: v } : { thread: th, off: true }).then(() => loadFoci(true), e2 => { C.err = "Couldn't file it: " + (e2 && e2.message || "the server didn't answer") + "."; }).then(() => ctx.update()); } },
-      h("option", { value: "", selected: !cur ? "" : null }, "No focus"), fs.map(f => h("option", { value: f.id, selected: f.id === cur ? "" : null }, focusName(f))))) : null;
+      onchange: e => { const v = e.target.value; C.menu = null; if (v === "+new") { ctx.update(); newFocusDialog(th, ctx); return; } apiPost("/api/focus", v ? { thread: th, focus: v } : { thread: th, off: true }).then(() => loadFoci(true), e2 => { C.err = "Couldn't file it: " + (e2 && e2.message || "the server didn't answer") + "."; }).then(() => ctx.update()); } },
+      h("option", { value: "", selected: !cur ? "" : null }, "No focus"), fs.map(f => h("option", { value: f.id, selected: f.id === cur ? "" : null }, focusName(f))), h("option", { value: "+new" }, "New focus…"))) : null;
   const lead = part(...own,
     focusRow,
     full ? titleExtras(th, { files: () => import("../ui/preview.js").then(m => m.openFiles()), close: () => { C.menu = null; ctx.update(); } }) : null);

@@ -745,6 +745,25 @@ def dismiss_shown(d):
 CHECKLIST = STATE / "checklist.json"   # needs_you.CHECKS: {"items": [...]}; agents write it with `hive summary check`
 
 FOCUS_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,60}")
+def focus_new_id(name):
+    """An id for a focus named from the page: the name's letters as a slug, never one in use or retired (focus.py new on a used id renames it,
+    on a retired one brings its old chats back), "group" when the name has no Latin letters."""
+    import unicodedata
+    base = re.sub(r"[^a-z0-9]+", "-", unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()).strip("-")[:30].strip("-")
+    if not re.fullmatch(r"[a-z][a-z0-9-]{1,40}", base): base = ("g-" + base if base else "group")[:30].strip("-")
+    used = {"misc"}
+    try:
+        for line in (STATE / "focus.jsonl").read_text().splitlines():
+            try: r = json.loads(line)
+            except ValueError: continue
+            if isinstance(r, dict) and r.get("kind") == "focus" and r.get("id"): used.add(str(r["id"]))
+    except OSError: pass
+    try: used |= {str(f.get("id")) for f in json.loads(subprocess.run([sys.executable, "-I", str(HOME / "core" / "focus.py"), "list", "--json"], capture_output=True, text=True, timeout=30).stdout or "[]")}   # the person's priorities too, which aren't records
+    except (ValueError, subprocess.SubprocessError, AttributeError): pass
+    fid, n = base, 2
+    while fid in used: fid, n = f"{base}-{n}", n + 1
+    return fid
+
 def focus_do(d, full=True, driven=False):
     """POST /api/focus: put a thread in a focus ({thread, focus}) or take it out ({thread, off: true}); focus.py keeps the record (hive focus tag).
     {order: [focus ids]} sets the order the foci show in, rail and home alike (hive focus order).
@@ -821,6 +840,19 @@ def focus_do(d, full=True, driven=False):
         if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
         foci_c.t = 0
         return {"ok": True, "later": what, "key": key}
+    if "new" in d:   # {new: {name, thread?}}: a focus made from a move list, and the chat moved into it (E201c, GAPS row 28: a newcomer has none to move into)
+        x = d.get("new") if isinstance(d.get("new"), dict) else {}
+        name = " ".join(str(x.get("name") or "").split())[:80]; th = str(x.get("thread") or "").strip()
+        if not name or not name.isprintable(): raise ValueError("give the focus a name")
+        if th and not THREAD_NAME.fullmatch(th): raise ValueError("bad thread")
+        fid = focus_new_id(name)
+        r = subprocess.run(["nice", "-n", "15", sys.executable, "-I", str(HOME / "core" / "focus.py"), "new", fid, name], capture_output=True, text=True, timeout=30, env={**os.environ, "HIVE_NAME": "person"})
+        if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
+        if th:
+            r = subprocess.run(["nice", "-n", "15", sys.executable, "-I", str(HOME / "core" / "focus.py"), "tag", th, fid], capture_output=True, text=True, timeout=30, env={**os.environ, "HIVE_NAME": "person"})
+            if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
+        foci_c.t = 0
+        return {"ok": True, "focus": fid, "name": name, "thread": th or None}
     th = str(d.get("thread") or "").strip(); f = str(d.get("focus") or "").strip().lower(); off = bool(d.get("off"))
     if not THREAD_NAME.fullmatch(th): raise ValueError("bad thread")
     if not off and not FOCUS_ID.fullmatch(f): raise ValueError("bad focus")
@@ -3121,7 +3153,7 @@ GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/subagents": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/export": "config", "/api/modules": "modules", "/api/connectors": "modules", "/api/shops": "logins", "/api/mcp-url": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/buy": "logins", "/api/orders": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/shop-signin": "logins", "/api/shop-signin/frame": "logins", "/api/brand/logo": "read",
-           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/kb/wipe": "files", "/api/kb/copies": "files", "/api/progress": "read", "/api/checklist": "read", "/api/goals": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files", "/api/docs": "files", "/api/docs/doc": "files", "/api/docs/page": "files"}
+           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/kb/wipe": "files", "/api/kb/copies": "files", "/api/progress": "read", "/api/checklist": "read", "/api/goals": "read", "/api/box-sent": "post", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files", "/api/docs": "files", "/api/docs/doc": "files", "/api/docs/page": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/kb/wipe": "files", "/api/kb/putback": "files", "/api/docs/notes": "files", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/side-ask": "post", "/api/door": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/default-model": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/mcp-url": "modules", "/api/voice": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/kb/save": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
@@ -3151,6 +3183,23 @@ def word_shell(key="word_shell"):
     if not isinstance(v, list) or not v or len(v) > 4: return None
     ok = all(isinstance(o, str) and re.fullmatch(r"https://[a-z0-9-]+(\.[a-z0-9-]+)*(:[0-9]{1,5})?", o) for o in v)
     return list(dict.fromkeys(v)) if ok else None
+def box_sent(seq, home=None):
+    """What became of the root box's send number seq (ui/rootbox.js): {"id"} once core/word_outbox.py posted it, {"why"} if it was skipped,
+    {} while it waits. Read from word_outbox's own acks and skipped files, the last 256 lines of each."""
+    d = (home or HOME) / ".hive" / "word-shell"
+    for name, key in (("acks.jsonl", "id"), ("skipped.jsonl", "why")):
+        try:
+            with open(d / name, "rb") as f:
+                f.seek(0, 2); f.seek(max(0, f.tell() - 65536)); lines = f.read().decode("utf-8", "replace").splitlines()[-256:]
+        except OSError: continue
+        for l in reversed(lines):
+            try: r = json.loads(l)
+            except ValueError: continue
+            if isinstance(r, dict) and str(r.get("seq")) == str(seq) and isinstance(r.get(key), str):
+                v = r[key]
+                if key == "id" and re.fullmatch(r"[0-9a-f]{6,20}", v): return {"id": v}
+                if key == "why": return {"why": v[:300]}
+    return {}
 
 
 DOOR_ROUTE = re.compile(r"/api/[a-z][a-z-]{0,30}")
@@ -7438,6 +7487,7 @@ def serve(port):
             # Board text is written by agents: the page takes nothing from elsewhere and sends nothing anywhere.
             framing = "; frame-ancestors 'self'" if framed_here else "" if self.route == "open" else "; frame-ancestors 'none'" if not (self.route != "open" and "post" in self.can and word_shell()) else "; frame-ancestors " + " ".join(word_shell())  # the page can post as the person, so it can't sit in someone's frame; a TV page may sit in this site's own (the deck's single screen)
             frames = ""
+            if self.route != "open" and ct.startswith("text/html") and "post" in self.can and (rb := word_shell("word_composer")): frames += " " + " ".join(rb)   # root's box in place of the composer (k3014)
             self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'".replace("frame-src 'self'", "frame-src 'self'" + frames) + framing)
             if self.route != "open": self.send_header("Referrer-Policy", "no-referrer")
             if gz: self.send_header("Content-Encoding", "gzip")
@@ -7666,6 +7716,7 @@ def serve(port):
             if self.route != "open": info["default_model"] = default_model(); info["voice"] = voice_ready(); info["phone"] = phone_ready() and "post" in self.can
             if self.route != "open" and "post" in self.can and word_shell(): info["word_shell"] = word_shell()
             if self.route != "open" and "post" in self.can and word_shell("word_card"): info["word_card"] = word_shell("word_card")   # root's approval card (k2992)
+            if self.route != "open" and "post" in self.can and word_shell("word_composer"): info["word_composer"] = word_shell("word_composer")   # root's box drawn in place of the composer (k3014, ui/rootbox.js)
             if self.route != "open" and "post" in self.can and "files" in self.can and (self.route != "outside" or self.mode == "full"):
                 ds = {x["page"]: n for n, x in doors().items() if door_for(n, self.route, self.email)}
                 if ds: info["doors"] = ds   # project page -> door name: the preview relays that page's calls (preview/render.js)
@@ -7858,6 +7909,9 @@ def serve(port):
                 gz = "gzip" in self.headers.get("Accept-Encoding", "")
                 self.send(tail_json(BOARD if u.path == "/api/board" else LOG, off, num("last") or 0, num("upto"), gz), J, gzipped=gz)
             elif u.path == "/api/goals": self.send(json.dumps(goals_c.get()).encode(), J)
+            elif u.path == "/api/box-sent":   # the root box's send, by its number: the post it became (ui/rootbox.js opens a new conversation there)
+                seq = (q.get("seq") or [""])[0]
+                self.send(json.dumps(box_sent(seq) if re.fullmatch(r"[0-9]{1,12}", seq) else {}).encode(), J)
             elif u.path == "/api/approvals":
                 self.send(json.dumps(approvals_list()).encode(), J)
             elif u.path == "/api/feedback-drafts":
