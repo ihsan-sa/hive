@@ -30,7 +30,7 @@ vm_why() {
   [ -r "$1" ] || return 0
   w=$(grep -E '"level":"(error|fatal)"|level=(error|fatal)' "$1" 2>/dev/null | grep -v 'exiting, status=' | tail -n 2)
   [ -n "$w" ] || w=$(grep -v '^[[:space:]]*$' "$1" 2>/dev/null | tail -n 1)
-  [ -z "$w" ] || printf '%s\n' "$w" | sed -E -e 's/.*"msg":"(([^"\\]|\\.)*)".*/\1/' -e 's/.*msg="(([^"\\]|\\.)*)".*/\1/' -e 's/\\"/"/g' \
+  [ -z "$w" ] || printf '%s\n' "$w" | sed -E -e 's/.*"msg":"(([^"\\]|\\.)*)".*/\1/' -e 's/.*msg="(([^"\\]|\\.)*)".*/\1/' -e 's/ UserInfo=\{.*//' -e 's/\\"/"/g' \
     | cut -c 1-300 | sed 's/^/hive: Lima says: /' >&2
 }
 stage() { STOP=$1; WHY=$2; }

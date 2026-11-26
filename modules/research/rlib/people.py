@@ -971,6 +971,8 @@ def official(org, url, domains=None, text=None, title=None):
     # duke.com is not Duke University, and acme.co.uk is not Acme CC: a school takes an institutional domain, or one named in the spec.
     # Nor does a school sit on an open gTLD anyone can buy (duke.university, harvard.college): those need the domain given.
     if _SCHOOL.search(fold(org_core(org))) and ((len(tld) > 2 and not institutional) or tld in ("co", "io") or ".co." in reg): return False
+    # Nor on a government's site, whose name may spell the school's: miamidade.gov is Miami-Dade County's, and Miami Dade College's is mdc.edu (fnwords143 review). A school that does sit on one is named in the spec's domains.
+    if _SCHOOL.search(fold(org_core(org))) and (tld == "gov" or re.search(r"\.gov\.[a-z]{2}$", reg)): return False
     if text and _rival_school(toks, org, text): return False
     joined = "".join(toks)
     if label == joined or label == "".join(all_toks) or label + tld == joined: return True  # lina.energy
@@ -1020,6 +1022,20 @@ def departed(text, name):
     return ""
 
 
+def quote_from_open(text, quote):
+    """The quote widened back to its opening mark when it closes a quote it doesn't open: a name's sentence that ends a two-sentence quote ('We must move beyond ...," said Daniel Newell') starts at the quote's first sentence. The nearest opening mark before it, with no closing mark between and at most 1200 characters back; the quote unchanged when it isn't found on the page as written. Newell's check_quote started mid-quote (fnwords144 review)."""
+    q = str(quote or "")
+    curly = q.count("\u201d") > q.count("\u201c")
+    straight = not curly and q.count('"') % 2 == 1 and bool(re.search(r'[,.!?]"', q))
+    if not (curly or straight): return quote
+    m = re.search(r"\s+".join(re.escape(w) for w in q.split()), text)
+    if not m: return quote
+    mark = "\u201c" if curly else '"'
+    j = text.rfind(mark, max(0, m.start() - 1200), m.start())
+    if j < 0 or (curly and "\u201d" in text[j:m.start()]): return quote
+    return " ".join(text[j:m.end()].split())
+
+
 def check(page, name, title, org="", domains=None, claim="", today=None):
     """Does this saved page back 'name holds title at org'? Returns {status, quote, note, ...}.
     verified: on a site that looks like the org's own, the role's words are attached to the name (same sentence or the lines under it, with no other person between). A pattern match, not a reading of the page, and a page saying they held a post doesn't show they hold it today. secondary: the same on another site. partial: the name is there and the role isn't, or the page says they've left.
@@ -1034,7 +1050,7 @@ def check(page, name, title, org="", domains=None, claim="", today=None):
     if not name_regex(name).search(fold(text)): return dict(res, status="not-found", note="the page has no such name")
     if named_not_person(text, name): return dict(res, status="not-a-person", note="the name appears only as part of a named post or place")
     share, quote, other_rank = title_on(text, name, title, org)
-    res.update(title_share=round(share, 2), quote=quote)
+    res.update(title_share=round(share, 2), quote=quote_from_open(text, quote))
     notes = []
     if org and not names_org(org, text) and not res["official"]: notes.append("the page doesn't name the organisation")
     if res["via"] == "archive": notes.append(f"read from an archive copy dated {page.get('snapshot')}: confirm it still holds")
@@ -1066,7 +1082,7 @@ def check(page, name, title, org="", domains=None, claim="", today=None):
     if not slot: return dict(res, status="partial", note="; ".join(["no unambiguous name/title slot; read the quoted text"] + notes))
     # A page that is old, an archive copy, or silent on a claim can't stand as a held post today.
     if res["stale"] or res["via"] == "archive" or (claim and (res["claim_share"] == "" or res["claim_share"] < 0.5)): return dict(res, status="partial", note="; ".join(notes))
-    res["quote"] = slot
+    res["quote"] = quote_from_open(text, slot)
     if org and not names_org(org, text) and not res["official"]: return dict(res, status="partial")
     if org and not res["official"] and not org_near(text, name, org): return dict(res, status="partial", note="; ".join(["the page names the organisation, but not near this person"] + notes))
     return dict(res, status="verified" if res["official"] else "secondary")
@@ -1113,6 +1129,16 @@ def byline(text, near):
     return False
 
 
+LIST_PARTS = 5
+def list_item(sent, terms, blank=None, regs=None):
+    """True when every mention of the terms in the sentence is one short item (five words or fewer) of a list of LIST_PARTS or more comma or semicolon parts: "seven core competencies among students, including Resilience and Adaptability, Analytical Thinking, Creative Thinking, AI & Technological Literacy, ..." names AI as one skill of seven and says nothing about it (Newell, fnwords144 review)."""
+    parts = re.split(r"[,;]", blank(sent) if blank else sent)
+    if len(parts) < LIST_PARTS: return False
+    regs = regs or [term_regex(t) for t in terms]   # compiled ones from unit_ai_sentence
+    hit = [p for p in parts if any(r.search(fold(p)) for r in regs)]
+    return bool(hit) and all(len(p.split()) <= 5 for p in hit)
+
+
 def sentences_with(text, terms, near=None, limit=300, blank=None):
     """The first sentence with one of the terms, preferring one close to `near` (a compiled pattern on folded text). `blank` (without_events) hides words from the test but not from the sentence returned: "World Economic Forum" names no one's job, yet the stored sentence keeps it (Newell's "adopts the 's future-ready skills framework", fnwords120 review).
     With `near` and no sentence naming it, the one nearest the first that does is taken, never a heading or a photo caption: the first on the page was a headline or a caption above the story (fnwords121 review)."""
@@ -1126,5 +1152,6 @@ def sentences_with(text, terms, near=None, limit=300, blank=None):
             hits.append(i)
     prose = [i for i in hits if not _not_prose(segs, i) or (at is not None and i == at - 1)]   # the line just above the name is their unit's label ("Artificial Intelligence Office" over "Jane Doe"), not a headline
     if not prose: return ""
+    prose = [i for i in prose if not list_item(segs[i], terms, blank)] or prose   # a sentence that says it over one that only lists it: SDSU's "seven core competencies ... AI & Technological Literacy, ..." for Newell, beside "integrate AI literacy into career preparation" (fnwords144 review)
     i = min(prose, key=lambda i: abs(i - at)) if at is not None else prose[0]
     return _clip(segs[i], limit)

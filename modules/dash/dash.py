@@ -257,6 +257,7 @@ def describe_tool(name, inp):
     fn = Path(str(inp.get("file_path") or "")).name
     if name == "Bash": return inp.get("description") or f"Running: {inp.get('command', '')}"
     if name in ("Agent", "Task"): return f"Delegating: {inp.get('description') or inp.get('prompt', '')}"
+    if name == "Skill" and inp.get("skill"): return f"Using the {inp['skill']} skill"
     if name in ("Read", "Edit", "Write") and fn:
         return {"Read": "Reading ", "Edit": "Editing ", "Write": "Writing "}[name] + fn
     for k in ("description", "pattern", "query", "url", "skill"):
@@ -764,6 +765,37 @@ def focus_new_id(name):
     while fid in used: fid, n = f"{base}-{n}", n + 1
     return fid
 
+def foci_retired(live):
+    """The foci retired from the page or with hive focus new ID --off and not made again: [{id, name, at}], newest first, at most 30 (E201g,
+    GAPS row 28: a group let go by mistake comes back with its chats, because focus.py new on a retired id keeps its old tags)."""
+    last = {}
+    try:
+        for line in (STATE / "focus.jsonl").read_text().splitlines():
+            try: r = json.loads(line)
+            except ValueError: continue
+            if not (isinstance(r, dict) and r.get("kind") == "focus" and r.get("id")): continue
+            fid = str(r["id"]); was = last.get(fid, {})
+            last[fid] = {"id": fid, "name": was.get("name") or fid, "off": True, "at": r.get("at")} if r.get("off") else {"id": fid, "name": r.get("name") or was.get("name") or fid, "off": False, "at": r.get("at")}
+    except OSError: return []
+    out = [x for x in last.values() if x["off"] and x["id"] not in live and x["id"] != "misc"]
+    def when(x):
+        try: return float(x.get("at") or 0)
+        except (TypeError, ValueError): return 0.0
+    out.sort(key=when, reverse=True)
+    return [{"id": x["id"], "name": x["name"], "at": x.get("at")} for x in out[:30]]
+
+def focus_name_taken(name, live, but=None):
+    """A live focus other than `but` already called `name`, case and spacing aside (E201g: two groups both called "Garden" can't be told apart)."""
+    key = " ".join(name.split()).casefold()
+    if key == "other": return {"id": "misc", "name": "Other"}   # the list's own group for chats in no focus; a second "Other" heading couldn't be told apart
+    for f in live:
+        if str(f.get("id")) != but and " ".join(str(f.get("name") or "").split()).casefold() == key: return f
+    return None
+
+def focus_live():
+    try: return json.loads(subprocess.run([sys.executable, "-I", str(HOME / "core" / "focus.py"), "list", "--json"], capture_output=True, text=True, timeout=30).stdout or "[]")
+    except (ValueError, subprocess.SubprocessError, AttributeError): return []
+
 def focus_do(d, full=True, driven=False):
     """POST /api/focus: put a thread in a focus ({thread, focus}) or take it out ({thread, off: true}); focus.py keeps the record (hive focus tag).
     {order: [focus ids]} sets the order the foci show in, rail and home alike (hive focus order).
@@ -845,6 +877,7 @@ def focus_do(d, full=True, driven=False):
         name = " ".join(str(x.get("name") or "").split())[:80]; th = str(x.get("thread") or "").strip()
         if not name or not name.isprintable(): raise ValueError("give the focus a name")
         if th and not THREAD_NAME.fullmatch(th): raise ValueError("bad thread")
+        if focus_name_taken(name, focus_live()): raise ValueError(f"a focus called {name} already exists; pick another name")
         fid = focus_new_id(name)
         r = subprocess.run(["nice", "-n", "15", sys.executable, "-I", str(HOME / "core" / "focus.py"), "new", fid, name], capture_output=True, text=True, timeout=30, env={**os.environ, "HIVE_NAME": "person"})
         if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
@@ -864,6 +897,7 @@ def focus_do(d, full=True, driven=False):
         if "rename" in d:
             name = " ".join(str(x.get("name") or "").split())[:80]
             if not name or not name.isprintable(): raise ValueError("give the focus a name")
+            if focus_name_taken(name, list(now.values()), but=fid): raise ValueError(f"a focus called {name} already exists; pick another name")
             args = ["new", fid, name]
         else:
             if now[fid].get("own"): raise ValueError("this focus is one of your priorities; it goes when kb/priorities.md changes")
@@ -872,6 +906,19 @@ def focus_do(d, full=True, driven=False):
         if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
         foci_c.t = 0
         return {"ok": True, "focus": fid, "name": args[2] if "rename" in d else None, "retired": "retire" in d}
+    if "restore" in d:   # {restore: id}: a retired focus brought back under its old name, its chats with it (E201g)
+        if not full: raise ValueError("only a full sign-in can bring back a focus")
+        fid = str(d.get("restore") or "").strip().lower()
+        if not FOCUS_ID.fullmatch(fid) or fid == "misc": raise ValueError("bad focus")
+        live = focus_live()
+        was = next((x for x in foci_retired({str(f.get("id")) for f in live}) if x["id"] == fid), None)
+        if not was: raise ValueError("that focus isn't retired; reload the page")
+        name = was["name"]
+        if focus_name_taken(name, live): raise ValueError(f"a focus called {name} already exists; rename that one first")
+        r = subprocess.run(["nice", "-n", "15", sys.executable, "-I", str(HOME / "core" / "focus.py"), "new", fid, name], capture_output=True, text=True, timeout=30, env={**os.environ, "HIVE_NAME": "person"})
+        if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
+        foci_c.t = 0
+        return {"ok": True, "focus": fid, "name": name, "restored": True}
     th = str(d.get("thread") or "").strip(); f = str(d.get("focus") or "").strip().lower(); off = bool(d.get("off"))
     if not THREAD_NAME.fullmatch(th): raise ValueError("bad thread")
     if not off and not FOCUS_ID.fullmatch(f): raise ValueError("bad focus")
@@ -1171,6 +1218,15 @@ def kill_run(r):
     be resumed or woken from its queue however the two interleave. Jobs that left the tree (nohup, then the shell ended) keep
     running, as they do when the starter reaps a run; they're reported, not touched. Returns what was killed and what's left."""
     name, pid = r["name"], r["pid"]
+    # E203c: what it had run since its last post, read before the kill, so the chat keeps the step block under its "you stopped it" line
+    try: ran = ran_live(r.get("out"))
+    except Exception: ran = {"steps": [], "more": 0}
+    try: said = said_live(r.get("out"))   # E203g: and what it had started to write, which the chat apps keep after a stop
+    except Exception: said = ""
+    try:   # E203g reader: the reply it was writing in an hive post call, streamed live as a draft, is the main thing to keep
+        dr = ((activity(r.get("out")) or {}).get("draft") or {}).get("text", "").strip()
+        if dr: said = "\n\n".join(x for x in (said, dr[-4000:]) if x)
+    except Exception: pass
     d = STATE / "killed"; d.mkdir(parents=True, exist_ok=True)
     t = d / f".{name}.{os.getpid()}"
     t.write_text(json.dumps({"pid": pid, "session": r.get("session"), "at": now_iso()})); t.replace(d / f"{name}.json")
@@ -1192,7 +1248,13 @@ def kill_run(r):
     if stuck: text += f" These didn't die: {stuck}."
     if detached: text += f" Detached jobs it left running: {detached}."
     p = {"id": datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now_iso(), "from": "dash", "to": [],
-         "thread": r.get("thread") or r.get("post") or "starter", "text": text}
+         "thread": r.get("thread") or r.get("post") or "starter", "text": text, "stopped": name}
+    if ran.get("steps") or said:
+        try:
+            sd = STATE / "stopped"; sd.mkdir(parents=True, exist_ok=True)
+            steps = [{k: v for k, v in s.items() if k != "running"} for s in ran.get("steps") or []]   # nothing runs any more
+            (sd / f"{p['id']}.json").write_text(json.dumps({"steps": steps, "more": ran.get("more", 0), **({"said": said} if said else {})}))
+        except OSError: pass
     with BOARD.open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(p) + "\n")
     return {"ok": not stuck, "name": name, "killed": len(procs), "stuck": stuck, "detached": detached}
@@ -1704,12 +1766,19 @@ def drafts_in(thread, steps=False):
         if d or ran["steps"]: got.append({"name": r.get("name", f.stem), "draft": d, **({"steps": ran["steps"], "more": ran.get("more", 0)} if steps else {})})
     return [g for g in got if g["draft"] or g.get("steps")] if steps else [g for g in got if g["draft"]]
 
+def person_stopped(r, stem):
+    """A run record whose process is gone because the person stopped it (kill_run's record names the same pid)."""
+    if alive(r.get("pid")): return False
+    k = jload(STATE / "killed" / f"{r.get('name', stem)}.json", {}) or {}
+    return bool(k) and k.get("pid") == r.get("pid")
+
 def live():
     """The cheap part, polled by the web page: who is running and what the starter holds. No board parse."""
     agents, jobs = [], heavy_jobs()
     runs = []
     for f in sorted(RUN.glob("*.json")):
         r = jload(f, {}) or {}; runs.append({**r, "name": r.get("name", f.stem)})
+        if person_stopped(r, f.stem): continue   # E203g: stopped by the person and gone; until the starter reaps its record it read "Stuck, process gone" with a Stop that did nothing
         a = activity(r.get("out"))
         agents.append({
             "name": r.get("name", f.stem), "pid": r.get("pid"), "alive": alive(r.get("pid")),
@@ -2347,6 +2416,12 @@ def _ran_step(c):
         lang = "python" if _ran_word(cmd).startswith("python") else "node" if _ran_word(cmd) == "node" else "shell"
         return {"what": short(i.get("description") or "", 160), "lang": lang, "code": redact(_ran_clip(cmd)), "out": redact(_ran_clip(c["out"])), "err": c["err"], "t": c["t"],
                 **({} if c.get("done", True) else {"running": True})}
+    if c["name"] == "Skill":   # E203d: a skill the run loaded (one a module brought, or a learned one), named in plain words
+        sk = str(i.get("skill") or i.get("name") or "").strip()
+        if not re.fullmatch(r"[\w.:-]{1,80}", sk): return None
+        base = sk.split(":")[-1].removeprefix("learned-")
+        return {"what": f"Used the {base} skill", "lang": "skill", "skill": base, "code": "", "out": "", "err": c["err"], "t": c["t"],
+                "about": skill_about(skills_dir() / sk.split(":")[-1] / "SKILL.md")}
     if c["name"] in ("Write", "Edit"):
         fp = str(i.get("file_path") or "")
         if Path(fp).suffix.lower() not in RAN_EXT: return None
@@ -2360,6 +2435,8 @@ def ran_for(pid, who=None, at=None, limit=30):
     """{"steps": [...], "more": N} for the code the run that wrote post PID ran before writing it; {"steps": []} when none or not found.
     WHO is the post's author (the board's word wins over the caller's), AT its time (a hint for which logs to look in)."""
     if not re.fullmatch(r"[0-9a-f]{12}", pid or ""): return {"steps": []}
+    try: return json.loads((STATE / "stopped" / f"{pid}.json").read_text())   # E203c: a stop notice keeps the steps the run had taken (kill_run)
+    except (OSError, ValueError): pass
     who = INDEX.authors.get(pid) or who or ""
     if not AGENT_CODE.fullmatch(who.lower()): return {"steps": []}
     try: fs = sorted((HOME / "sessions").glob(who + "-*.jsonl"), key=lambda q: q.stat().st_mtime)
@@ -2398,6 +2475,30 @@ def ran_live(out, limit=30):
     if len(_ran_live) > 64: _ran_live.pop(next(iter(_ran_live)))
     _ran_live[str(p)] = (key, r)
     return r
+
+
+def said_live(out, limit=4000):
+    """E203g: the text a live run had written since its last post (its reply in the making), for the stop notice to keep. A run
+    writes its answer with hive post, so text blocks after the last post call are what the person would have read next. "" if none."""
+    p = Path(out or "")
+    try:
+        with open(p, "rb") as f:
+            f.seek(0, 2); n = f.tell(); f.seek(max(0, n - 8 * 1024 * 1024))
+            if n > 8 * 1024 * 1024: f.readline()
+            data = f.read()
+    except OSError: return ""
+    parts = []
+    for ln in data.splitlines():
+        if b'"assistant"' not in ln or ln.startswith(b'{"type":"stream_event"'): continue
+        try: e = json.loads(ln)
+        except Exception: continue
+        if e.get("type") != "assistant": continue
+        for b in _blocks((e.get("message") or {}).get("content")):
+            if b.get("type") == "text" and (b.get("text") or "").strip(): parts.append(b["text"].strip())
+            elif b.get("type") == "tool_use" and b.get("name") == "Bash" and _POST_CMD.search(str((b.get("input") or {}).get("command") or "") + "\n"):
+                parts = []   # that text went out in the post
+    t = redact("\n\n".join(parts)).strip()
+    return t if len(t) <= limit else t[:limit].rsplit(" ", 1)[0] + "…"
 
 
 def _blocks(c):
@@ -4871,6 +4972,7 @@ def foci_bytes():
     with each one's share of the hive's runs, posts and cost over the last day and week (activity: focus.py's counts, the costs from Usage here)."""
     out = core_json("focus.py", "json", timeout=20)
     if isinstance(out, dict) and out.get("activity"): out["activity"] = foci_costs(out["activity"], USAGE)
+    if isinstance(out, dict): out["retired"] = foci_retired({str(f.get("id")) for f in out.get("foci") or []})   # E201g: the focus page's Retired list, to bring one back
     if not isinstance(out, dict) and foci_c.v: return foci_c.v  # a read that failed keeps the last good list: an empty one reads as "no such focus" on every focus page
     return json.dumps(out if isinstance(out, dict) else {"foci": [], "tags": {}, "error": "focus.py gave nothing"}).encode()
 foci_c = CachedStale(foci_bytes, 20)  # stale, not Cached: at nice 15 focus.py took 2 to 9 s on a cold read, and every page that opened then waited on it (design round 2026-11-09)
@@ -5393,7 +5495,41 @@ def modules_view():
     for m in rows:
         m["repo"] = module_repo(m["name"])
         m["where"] = module_where(m["name"]) if m["state"] == "installed" else None
+        m["skills"] = module_skills(m["name"], m["state"])
     return rows
+
+
+def skill_about(f):
+    """A SKILL.md's description: line (its frontmatter), cut to one sentence, or ""."""
+    try: t = Path(f).read_text(errors="replace")[:4000]
+    except OSError: return ""
+    m = re.match(r"---\n(.*?)\n---", t, re.S)
+    d = re.search(r"^description:\s*(.+)$", m[1], re.M) if m else None
+    if not d: return ""
+    d = d[1].strip().strip("'\"")
+    d = re.sub(r"^Use (?:this )?(?:when|for|after|before)\s+", "", d)   # "Use when someone ..." reads as an instruction to the model; the page says what it is for
+    d = d[:1].upper() + d[1:]
+    return d if len(d) <= 160 else d[:159].rsplit(" ", 1)[0].rstrip(" -,;:") + "…"   # cut between words, not "or a on…"
+
+
+def skills_dir():
+    """The first login's skills folder, where hive module add links a module's skills (core/hive module_links)."""
+    ls = (jload(HOME / "core" / "config.json", {}) or {}).get("logins") or ["~/.claude"]
+    return Path(str(ls[0]).replace("~", str(HOME), 1)) / "skills"
+
+
+def module_skills(name, state):
+    """E203d: the skills a module brings, [{name, about}], from its module.json provides.skills: the installed copy, or for one not yet
+    added, the copy that ships with this release (core/modules). A public module not yet cloned has no manifest here, so it shows none."""
+    for d in ([HOME / "modules" / name] if state == "installed" else [HOME / "core" / "modules" / name]):
+        m = jload(d / "module.json", {}) or {}
+        out = []
+        for sp in (m.get("provides") or {}).get("skills") or []:
+            q = Path(str(sp))
+            if ".." in q.parts or not q.parent.name: continue
+            out.append({"name": q.parent.name, "about": skill_about(d / q), **({"off": q.parent.name in skills_off()} if state == "installed" else {})})
+        return out
+    return []
 
 
 # Settings > Connectors (projects/everyday/CONNECTORS.md, E55): read-only. The rows come from connectors.json; their state is read from
@@ -5476,8 +5612,41 @@ def connectors_view(fresh=False, secrets=True):
     return view
 
 
-def module_do(what, name):
+def skills_off():
+    """E203f: skills the person turned off in Settings > Modules, kept in ~/.hive/skills-off.json; core/hive module add skips them too."""
+    v = jload(STATE / "skills-off.json", [])
+    return set(v) if isinstance(v, list) else set()
+
+
+def skill_switch(module, skill, on):
+    """E203f: turn one skill of an installed module off (its link leaves every login's skills folder, the module stays) or back on."""
+    module, skill = str(module or "").strip(), str(skill or "").strip()
+    if not (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", module or "") and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", skill or "")): raise ValueError("name a module and one of its skills")
+    d = HOME / "modules" / module
+    mine = {s["name"] for s in module_skills(module, "installed")} if d.is_dir() else set()
+    if skill not in mine: raise ValueError(f"{module} doesn't bring a skill called {skill}")
+    target = (d / "skills" / skill)
+    for sp in (jload(d / "module.json", {}) or {}).get("provides", {}).get("skills") or []:
+        if Path(str(sp)).parent.name == skill: target = (d / str(sp)).parent
+    off = skills_off()
+    ls = (jload(HOME / "core" / "config.json", {}) or {}).get("logins") or ["~/.claude"]
+    for l in ls:
+        link = Path(str(l).replace("~", str(HOME), 1)) / "skills" / skill
+        if on:
+            if link.is_symlink() or link.exists():
+                if not link.resolve().is_relative_to(d.resolve()): continue   # someone else's skill of that name: left alone
+                link.unlink()
+            link.parent.mkdir(parents=True, exist_ok=True); link.symlink_to(target)
+        elif link.is_symlink() and link.resolve().is_relative_to(d.resolve()): link.unlink()
+    off = (off - {skill}) if on else (off | {skill})
+    STATE.mkdir(parents=True, exist_ok=True)
+    tmp = STATE / "skills-off.json.tmp"; tmp.write_text(json.dumps(sorted(off))); tmp.replace(STATE / "skills-off.json")
+    return f"The {skill} skill is {'on' if on else 'off'}" + ("" if on else f"; the {module} module stays added")
+
+
+def module_do(what, name, skill=None):
     name = str(name or "").strip()
+    if what in ("skill-on", "skill-off"): return skill_switch(name, skill, what == "skill-on")
     if what not in ("add", "remove"): raise ValueError("add or remove")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*|(https://|ssh://|git@)[A-Za-z0-9_.@:/~+-]+", name): raise ValueError("give a module's name, or a git URL")
     if what == "remove" and name == "dash": raise ValueError("dash is this app, so it can't be removed from here")
@@ -8109,7 +8278,7 @@ def serve(port):
                     elif u.path == "/api/default-model": res = set_default_model(d.get("model"), self.signer)
                     elif u.path == "/api/brand": res = set_brand(d)
                     elif u.path == "/api/starter": starter_do(d.get("do")); SETUP.t = 0; res = {"ok": True}
-                    elif u.path == "/api/module": res = {"said": module_do(d.get("do"), d.get("name"))}
+                    elif u.path == "/api/module": res = {"said": module_do(d.get("do"), d.get("name"), d.get("skill"))}
                     elif u.path == "/api/voice":
                         if d.get("do") != "retry": raise ValueError("do: retry")
                         res = voice_retry()

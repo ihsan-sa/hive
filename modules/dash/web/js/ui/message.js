@@ -440,7 +440,7 @@ export function messageHead(p, { showThread = true, mark, asks } = {}) {
     mine ? h("b", { class: "msg-me" }, other ? src.name : "You") : h("b", null, OUTSIDE.has(p.from) ? who(p.from) : hiveName()),
     h("span", { class: "msg-end" }, more(p, mark), h("time", { class: "meta num", datetime: p.at, title: stamp(p.t) }, clock(p.t))));
   return h("div", { class: "msg-h" },
-    mine ? h("b", { class: "msg-me", title: other ? src.said : "you (person)" }, other ? src.name : "You") : agentRef(p.from, { dot: false, cap: true }),   // §10.2: the consumer head has no dot
+    mine ? h("b", { class: "msg-me", title: other ? src.said : "you (person)" }, other ? src.name : "You") : p.stopped && p.from === "dash" ? h("b", null, hiveName()) : agentRef(p.from, { dot: false, cap: true }),   // E203c: the Stop notice is the Hive's word, not "Dash"; §10.2: the consumer head has no dot
     src ? h("span", { class: "msg-src", title: src.said }, (src.name && src.name !== me && !other ? src.name + " · " : "") + src.how) : null,
     tos.length ? h("span", { class: "msg-to" }, toYou ? "to you" : "to") : null,
     toYou ? null : tos.map(m => m === "person" ? h("b", { class: "msg-me" }, "you") : agentRef(m, { dot: false })),
@@ -484,6 +484,19 @@ function phoneCall(p) {
       h("summary", null, icon("phone"), h("b", null, "Phone call"), h("span", { class: "meta" }, ` · ${m[1]} · ${lines.length} lines · ${clock(p.t)}`)),
       h("div", { class: "msg-call-t" }, lines.map(l => h("p", { class: l.startsWith("(") ? "meta" : null }, l)))));
 }
+// E203e (GAPS row 22, the E203c reader): the person's Stop leaves one quiet line under the reply, as Claude.ai's "Stopped" does, not a
+// message from "Your Hive" with an avatar and a head. Its steps fold under it as a run's do; the conversation's header says it too.
+function stoppedMark(p) {
+  return h("article", { class: "msg msg-stopped", tabindex: "-1", "data-key": p.id, "data-who": "sys", "aria-label": `You stopped it, ${stamp(p.t)}` },
+    h("div", { class: "msg-c" },
+      h("p", { class: "msg-stop-l meta" }, icon("stop"), h("span", null, displayText(p)), h("time", { class: "num", datetime: p.at, title: stamp(p.t) }, " · " + clock(p.t))),
+      stoppedSaid(p), ranFold(p)));
+}
+// E203g (the E203e reader): what it had started writing when you stopped it stays, as the chat apps keep a half-written answer.
+function stoppedSaid(p) {
+  const e = RAN.get(p.id), t = e && e.v && e.v.said;
+  return t ? h("div", { class: "msg-stop-said", "data-key": "said" }, h("p", { class: "meta" }, "It had started writing:"), h("blockquote", null, t)) : null;
+}
 export { approvalLine };
 export function message(p, opts = {}) {
   if (!S.app.app) return devMessage(p, opts);
@@ -497,6 +510,7 @@ function appMessage(p, opts) {
   }
   if (btwOpener(p)) return btwMessage(p, ws);
   const call = phoneCall(p); if (call) return call;
+  if (p.stopped && p.from === "dash" && EDIT.id !== p.id) return stoppedMark(p);
   if (EDIT.id !== p.id) { const ap = approvalLine(p); if (ap) return ap; }   // the person's yes:, yes, standing: or withdraw standing: as one line saying whether it counts
   const kind = SYS.has(p.from) || isScript(p.from) ? "sys" : p.from === "person" ? "me" : OUTSIDE.has(p.from) ? "out" : "agent";
   const asks = kind === "agent" && !simpleOn() && asksYou(p), split = kind === "agent" && !SOURCE.has(p.id) ? didSplit(p) : null;
@@ -518,7 +532,7 @@ function appMessage(p, opts) {
       kind === "agent" ? savedNote(p) : null,
       tagChips(p),
       split ? didFold(p, split) : null,
-      kind === "agent" ? ranFold(p) : null,
+      kind === "agent" || p.stopped ? ranFold(p) : null,   // E203c: a stopped run's steps stay under its stopped line
       wordButton(p),
       messageReceipt(p),
       versionBar(p, opts),
@@ -660,7 +674,7 @@ function ranFold(p) {
   const r = e.v, n = r.steps.length + (r.more || 0);
   if (RAN_LIVE_OPEN.has(p.from) && now() - p.t < 3 * MIN) { if (RAN_LIVE_OPEN.get(p.from)) RAN_OPEN.add(p.id); RAN_LIVE_OPEN.delete(p.from); }
   return h("details", { class: "msg-fold msg-ran", open: RAN_OPEN.has(p.id) || null, ontoggle: (ev, d) => { if (ev.target !== d) return; if (d.open) RAN_OPEN.add(p.id); else RAN_OPEN.delete(p.id); } },
-    h("summary", null, icon("chevron-right"), `Code it ran · ${n} ${n === 1 ? "step" : "steps"}`),
+    h("summary", null, icon("chevron-right"), `${ranTitle(r)} · ${n} ${n === 1 ? "step" : "steps"}`),
     h("div", { class: "ran-b" },
       r.more ? h("div", { class: "meta ran-more" }, `${r.more} earlier ${r.more === 1 ? "step" : "steps"} not shown`) : null,
       r.steps.map((s, i) => ranStep(p, s, i))));
@@ -670,16 +684,21 @@ function ranFold(p) {
 function ranLiveFold(p, r, run) {
   const n = r.steps.length + (r.more || 0), name = p.id.slice(6);
   return h("details", { class: "msg-fold msg-ran", "data-live": "", open: RAN_OPEN.has(p.id) || null, ontoggle: (ev, d) => { if (ev.target !== d) return; if (d.open) RAN_OPEN.add(p.id); else RAN_OPEN.delete(p.id); RAN_LIVE_OPEN.set(name, d.open); } },
-    h("summary", null, icon("chevron-right"), `Code it ran · ${n} ${n === 1 ? "step" : "steps"}${run ? " · running" : ""}`),
+    h("summary", null, icon("chevron-right"), `${ranTitle(r)} · ${n} ${n === 1 ? "step" : "steps"}${run ? " · running" : ""}`),
     h("div", { class: "ran-b" },
       r.more ? h("div", { class: "meta ran-more" }, `${r.more} earlier ${r.more === 1 ? "step" : "steps"} not shown`) : null,
       r.steps.map((s, i) => ranStep(p, s, i))));
 }
+// E203f: a run that used a skill did more than run code, so its fold says so, as the chat apps' step list does.
+const ranTitle = r => r.steps.some(s => s.lang === "skill") ? "Steps it took" : "Code it ran";
 const RAN_LIVE_OPEN = new Map();   // agent name -> the live fold was opened (true) or shut: its next reply's fold starts the same way
 const RAN_LANG = { python: "Python", node: "JavaScript", shell: "Shell", file: "File" };
 function ranStep(p, s, i) {
   const k = p.id + ":" + i, long = (s.out || "").split("\n").length > 12 && !RAN_STEP_OPEN.has(k);
   const out = long ? s.out.split("\n").slice(0, 12).join("\n") : s.out;
+  if (s.lang === "skill") return h("div", { class: "ran-s ran-skill", "data-key": "skill" },   // E203d: a skill the run used, in words: no code, no "No output"
+    h("div", { class: "ran-h" }, h("span", { class: "ran-lang" }, "Skill"), h("span", { class: "ran-what" }, s.what), s.t ? h("span", { class: "meta ran-t" }, clock(s.t * 1e3)) : null),
+    s.about ? h("div", { class: "meta ran-none" }, s.about) : null);
   return h("div", { class: "ran-s", "data-err": s.err ? "" : null },
     h("div", { class: "ran-h" },
       h("span", { class: "ran-lang" }, s.lang === "file" ? s.file || "File" : RAN_LANG[s.lang] || s.lang),

@@ -9,6 +9,7 @@
 //   its text and offers Retry, Edit and Discard. The board is append-only, so nothing here suggests unsending a posted one.
 import { uploadFile } from "../core/upload.js";
 import { h, tr } from "../core/dom.js";
+import { stopNow } from "../actions.js";
 import { S, can, jget, post, poll, loadApp, fullEnded, kept, keep as keepTyped, KEPT_NOTE } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { foci, focusById, focusOf, focusName, listed, threadLine } from "../core/foci.js";
@@ -162,6 +163,9 @@ export function recipient(th) {
   if (d.reply) return { who: isAgent(d.reply.from) ? d.reply.from : sv, why: "reply", server: sv };
   const w = namedWord(d.text, th); if (w) return { who: wordTarget(w, th), why: "named", server: sv, to: w };
   if (d.to) return { who: wordTarget(d.to, th) || d.to, why: "chosen", server: sv, to: d.to };
+  // E203c: right after Stop, the next message goes back to the agent that was stopped (named, so the starter starts it again), on its own model
+  const lp = S.threads.get(th)?.posts.at(-1);
+  if (lp && lp.stopped && lp.from === "dash" && isAgent(lp.stopped)) return { who: lp.stopped, why: "last", server: sv };
   const p = partner(th);
   if (p) return { who: p, why: sv && sv !== p ? "partner" : "last", server: sv };
   // The target is fetched when the board changes, and a run starting doesn't change the board: an agent already running here still counts.
@@ -1222,9 +1226,14 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
           !th && S.app && !simpleOn() ? focusPick(d) : null,
           simpleOn() ? null : modelPick(d, r, th),
           simpleOn() ? null : effortPick(d, r, th),
-          sendButton(sendWord, () => send(th), empty, approve ? (covers ? `${sendWord} (Enter). Opens a card that shows "${covers}", what the message you're answering asks. Confirm there sends it as your approval.` : `${sendWord} (Enter). Opens a card that shows these words; Confirm there sends them as your approval.`)
+          // E203g (the E203e reader): while its agent runs and the box is empty, Send is Stop, where the chat apps put it; typing turns it back into Send
+          busy && empty && !armed && !approve && can("stop") && S.app && S.app.app ? sendStop(th, busy) : sendButton(sendWord, () => send(th), empty, approve ? (covers ? `${sendWord} (Enter). Opens a card that shows "${covers}", what the message you're answering asks. Confirm there sends it as your approval.` : `${sendWord} (Enter). Opens a card that shows these words; Confirm there sends them as your approval.`)
             : armed ? "Enter interrupts and sends · Esc cancels"
             : busy ? `${sendWord} (Enter). ${Said(th, busy)} reads it after its current step` : `${sendWord} (Enter). Shift+Enter for a new line. Edit your last message from its Edit button.`, armed && !approve)))));
+}
+function sendStop(th, who) {
+  const b = button("Stop", () => stopNow(who), { kind: "primary", icon: "stop", cls: "cp-send cp-stop", title: `Stop ${said(th, who)} now. Type to send a message instead.` });
+  b.setAttribute("aria-label", tr(`Stop ${said(th, who)} now`)); return b;
 }
 // The hint lines under the box went into the send button's name and title (the Nov 8 handoff §8.1); the queued line under your bubble says the busy part.
 function sendButton(word, fn, empty, say, armed) {

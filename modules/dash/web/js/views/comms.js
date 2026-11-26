@@ -18,7 +18,7 @@ import { ago, dayName, stamp, clock, dur, short, mdPlain, bareLinks, now, plural
 import { href, threadHref, go, parse } from "../core/router.js";
 import { yoursSearch, yoursText } from "../core/yours.js";
 import { tier, status } from "../core/status.js";
-import { askTier, askStop, stopButton } from "../actions.js";
+import { askTier, askStop, stopNow, stopButton } from "../actions.js";
 import { seen, unreadIn, markRead, onInbox, IB } from "../core/inbox.js";
 import { MN, onMail } from "../core/mailnew.js";
 import { heldRoom } from "../core/room.js";
@@ -278,7 +278,9 @@ function versioned(items) {
     const posts = out.filter(p => !p.ev && !p.retry_of), li = posts.findLastIndex(p => p.from === "person" && !docNotes(p)), lastMe = posts[li];   // notes from a document aren't a message to edit
     V.edit = lastMe && !pageEdit(lastMe) ? lastMe.id : null;   // a page edited by hand is changed with the page's own Edit (E43)
     const after = posts.slice(li + 1).filter(p => isAgent(p.from)), lastAg = after.at(-1);
-    if (lastAg && !V.wait && !workingIn(L.th)) { V.retry = lastAg.id; V.retryRoot = (V.info.get(after[0].id) || {}).root || after[0].id; }
+    // E203e: not after the person's Stop; its line already says a message carries on, and Retry beside it competed with that (the E203c reader)
+    const stopped = posts.length && posts.at(-1).stopped && posts.at(-1).from === "dash";
+    if (lastAg && !stopped && !V.wait && !workingIn(L.th)) { V.retry = lastAg.id; V.retryRoot = (V.info.get(after[0].id) || {}).root || after[0].id; }
   }
   return out;
 }
@@ -791,6 +793,7 @@ function sections(rs, ctx, opts) {
     // New focus at the foot of the Focus view: an empty group to move chats into, as both chat apps' New project (E201e, GAPS row 28).
     byFocus && can("post") && S.foci ? h("button", { type: "button", class: "tm-new-focus", "data-key": "new-focus", title: "Make an empty focus; move conversations into it from a row's ⋯ menu", onclick: () => newFocusDialog(null, ctx) },
       icon("plus"), h("span", null, "New focus")) : null,
+    byFocus ? retiredFoot(ctx) : null,
     by.arch.length ? h("div", { class: "tm-sec", "data-key": "sec:arch", "data-sec": "arch" },
       h("a", { class: "tm-sec-h tm-arch-b", href: href("comms", "~archived"), "aria-current": C.conv === "~archived" ? "page" : null, title: "Conversations out of the list; bring one back from there" },
         icon("archive"), `Archived (${by.arch.length})`)) : null);
@@ -809,7 +812,7 @@ function syncThreads(c, ctx) {
   const tl = document.querySelector("#main .cm-tl"); if (!tl) return;
   if (!simpleOn()) loadFoci();   // the foci (core/foci.js); a store emit when they change
   const held = byFocusOn() && S.foci === undefined && !C.tq.trim();   // Focus groups its rows by the focuses: grey rows until they're read, not a flat list that re-sorts
-  const sig = [held, S.ver, C.view, impAll, C.hideFaded, S.foci && S.foci.at, S.foci && (S.foci.foci || []).map(f => f.id).join(), C.scope, C.conv, C.imp, tmetaSig(), [...FOLD].join(), [...VISIT.shut].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, liveSig(), marksSig().length, readSig(IB.items), readSig(S.needsYou), readSig(S.foci)].join("|");
+  const sig = [held, S.ver, C.view, impAll, C.hideFaded, S.foci && S.foci.at, S.foci && (S.foci.foci || []).map(f => f.id).join(), S.foci && (S.foci.retired || []).map(f => f.id).join(), !!C.retOpen, C.scope, C.conv, C.imp, tmetaSig(), [...FOLD].join(), [...VISIT.shut].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, liveSig(), marksSig().length, readSig(IB.items), readSig(S.needsYou), readSig(S.foci)].join("|");
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv || L.tlHeld;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
@@ -942,6 +945,9 @@ function jobRows(th) {
     js.length > 4 ? h("span", { class: "meta cm-job-more" }, `and ${js.length - 4} more`) : null);
 }
 
+// Stop sits beside Interrupt on the running line, folded or open, with its word on it (E203, GAPS row 22: an icon that showed only on hover in the open strip went unfound).
+// E203e: in the app look it stops at once (stopNow); the expert look keeps the window.
+const stripStop = n => button("Stop", () => app() ? stopNow(n) : askStop(n, agentLabel(n)), { size: "s", icon: "stop", cls: "btn-stop", title: `Stop ${agentLabel(n)} now` });
 const strip = th => inConversation(th, () => stripLines(th));
 function stripLines(th) {
   const st = threadState(th, seen), out = [], run = (S.live ? S.live.agents : []).filter(a => a.thread === th), post = can("post") && app();
@@ -965,12 +971,12 @@ function stripLines(th) {
   for (const a of run) {
     if (st.key === "asks" && a.name === st.who) continue;
     const s = agentState(a);
-    if (simpleOn()) { if (!out.some(x => x.dataset.key === "run")) out.push(line("working", "Your Hive is working on it.", can("stop") ? stopButton("Stop this work", () => askStop(a.name)) : null, { key: "run", live: true })); continue; }
+    if (simpleOn()) { if (!out.some(x => x.dataset.key === "run")) out.push(line("working", "Your Hive is working on it.", can("stop") ? stopButton("Stop this work", () => app() ? stopNow(a.name) : askStop(a.name)) : null, { key: "run", live: true })); continue; }
     // Closed it reads "a7c31 Editing fetch.py"; how long ago it was active shows only when open.
     const step = a.doing && app() ? plainStep(a.doing) : a.doing;   // a bare command reads as plain words in the app look (a0ad9's re-check)
     const doing = step && !(app() && ownStep(a.doing)) ? step.charAt(0).toUpperCase() + step.slice(1) : AGENT_WORDS[s.key] || s.text;   // E10: its own board commands are not a step to read
     out.push(line(s.key, [who(a.name), " ", doing, h("span", { class: "meta cm-line-m" }, " · " + (s.key === "working" ? ago(a.last * 1e3) : s.text))],
-      [post && th ? interruptButton(th, a.name) : null, can("stop") ? stopButton(`Stop ${agentLabel(a.name)}`, () => askStop(a.name, agentLabel(a.name))) : null], { key: "run:" + a.name, live: true }));
+      [post && th ? interruptButton(th, a.name) : null, can("stop") ? stripStop(a.name) : null], { key: "run:" + a.name, live: true }));
   }
   // after the working agents (11081336a82e: folded, the strip shows who works and its Interrupt, not where the conversation sits)
   // Where it sits (the person, 110601450d55): a helper's conversation names the one it came from, and that one lists its helpers.
@@ -1035,6 +1041,7 @@ function newFocusDialog(th, ctx) {
         : "A focus groups conversations under one heading in the list and on the home, with its own page. Move conversations into it from a row's ⋯ menu, or start one with its +.")],
     onOk: async () => {
       const name = field.value.trim(); if (!name) { field.focus(); throw new Error("give it a name first"); }
+      if (nameTaken(name)) { field.focus(); field.select(); throw new Error(`a focus called ${name} already exists; pick another name`); }
       const r = await apiPost("/api/focus", th ? { new: { name, thread: th } } : { new: { name } }); await loadFoci(true);
       if (r && r.focus) { FOLD.delete("f:" + r.focus); saveFold(); }   // the new section shows open, so its "Nothing this week" says it is there
       ctx.update();
@@ -1043,39 +1050,56 @@ function newFocusDialog(th, ctx) {
   return dlg;
 }
 
+// Two focuses with one name can't be told apart in the list or a move menu (E201g): the dialogs say so before asking, and the server refuses too.
+const nameTaken = (name, but) => { const k = name.split(/\s+/).join(" ").toLowerCase(); return k === "other" || foci().some(x => x.id !== but && focusName(x).split(/\s+/).join(" ").toLowerCase() === k); };
+// Retired focuses (E201g, GAPS row 28): one let go by mistake comes back under its old name with its conversations.
+function retiredFoot(ctx) {
+  const rs = (S.foci && S.foci.retired) || [];
+  if (!rs.length || !can("config")) return null;
+  const open = C.retOpen;
+  return h("div", { class: "tm-sec tm-ret", "data-key": "sec:retired" },
+    h("button", { type: "button", class: "tm-sec-h tm-fold", "aria-expanded": String(!!open), onclick: () => { C.retOpen = !open; ctx.update(); } },
+      icon(open ? "chevron-down" : "chevron-right"), h("span", { class: "tm-sec-nm" }, `Retired focuses (${rs.length})`)),
+    open ? h("ul", { class: "tm-ret-l" }, rs.map(r => h("li", { "data-key": "ret:" + r.id },
+      h("span", { class: "tm-ret-n" }, r.name),
+      h("button", { type: "button", class: "btn", "data-kind": "quiet", "data-size": "s", "data-key": "restore", title: `Bring ${r.name} back with its conversations`,
+        onclick: e => { const b = e.currentTarget; b.disabled = true;
+          apiPost("/api/focus", { restore: r.id }).then(() => loadFoci(true), e2 => { C.err = "Couldn't bring it back: " + (e2 && e2.message || "the server didn't answer") + "."; }).then(() => { FOLD.delete("f:" + r.id); saveFold(); ctx.update(); }); } }, "Bring back")))) : null);
+}
 // A focus heading's ⋯ (E201e, GAPS row 28): rename it or retire it where it shows, as a chat app's project menu does. Only a full sign-in
 // (the server says the same); retiring isn't offered for the person's priorities, which come from kb/priorities.md.
-function focusMore(f, label, ctx) {
+export function focusMore(f, label, ctx, o = {}) {
   const key = "f:" + f.id, open = !!rowM && rowM.th === key;
-  return h("button", { type: "button", class: "tm-sec-add tm-sec-menu", "aria-haspopup": "true", "aria-expanded": open ? "true" : "false", "data-open": open ? "" : null,
+  return h("button", { type: "button", class: o.cls || "tm-sec-add tm-sec-menu", "data-key": o.key || null, ...(o.attrs || {}), "aria-haspopup": "true", "aria-expanded": open ? "true" : "false", "data-open": open ? "" : null,
     title: f.own ? `Rename ${label}` : `Rename or retire ${label}`, "aria-label": `Actions for ${label}`,
-    onclick: e => { e.preventDefault(); e.stopPropagation(); const b = e.target.closest("button"), was = rowM && rowM.btn === b; closeRowMenu(); if (!was) openFocusMenu(b, f, ctx); } }, icon("more"));
+    onclick: e => { e.preventDefault(); e.stopPropagation(); const b = e.target.closest("button"), was = rowM && rowM.btn === b; closeRowMenu(); if (!was) openFocusMenu(b, f, ctx, o.after); } }, icon("more"), o.text ? h("span", null, o.text) : null);
 }
-function renameFocusDialog(f, ctx) {
+export function renameFocusDialog(f, ctx) {
   const field = h("input", { class: "input", value: focusName(f), maxlength: "80", "aria-label": "Name", autocomplete: "off" });
   const dlg = askDialog({ title: "Rename this focus", ok: "Rename", failText: "Not renamed",
     body: [h("label", { class: "field" }, h("span", { class: "field-l" }, "Name"), field),
       h("p", { class: "meta" }, "Its conversations, page and summary stay as they are. Agents still know it as ", h("code", null, f.id), ".")],
     onOk: async () => {
       const name = field.value.trim(); if (!name) { field.focus(); throw new Error("give it a name first"); }
+      if (nameTaken(name, f.id)) { field.focus(); field.select(); throw new Error(`a focus called ${name} already exists; pick another name`); }
       if (name !== focusName(f)) { await apiPost("/api/focus", { rename: { focus: f.id, name } }); await loadFoci(true); }
       ctx.update();
     } });
   queueMicrotask(() => { field.focus(); field.select(); });
   return dlg;
 }
-function retireFocusDialog(f, n, ctx) {
+export function retireFocusDialog(f, n, ctx, after) {
   return askDialog({ title: `Retire ${focusName(f)}?`, ok: "Retire it", kind: "danger", failText: "Not retired",
     body: [n === 1 ? "Its one conversation goes back to Other in the list. Nothing is deleted: the conversation stays as it is." : n ? `Its ${n} conversations go back to Other in the list. Nothing is deleted: the conversations stay as they are.` : "It has no conversations. Nothing is deleted.",
-      "Its page, summary and to-do list leave the home. Making a focus with the same name later starts a new one."],
-    onOk: async () => { await apiPost("/api/focus", { retire: f.id }); FOLD.delete("f:" + f.id); saveFold(); await loadFoci(true); ctx.update(); } });
+      "Its page, summary and to-do list leave the home. Bring it back with its conversations from Retired focuses, at the foot of the list by focus."],
+    onOk: async () => { await apiPost("/api/focus", { retire: f.id }); FOLD.delete("f:" + f.id); saveFold(); await loadFoci(true); if (after) after(); ctx.update(); } });
 }
-function openFocusMenu(b, f, ctx) {
+function openFocusMenu(b, f, ctx, after) {
   const n = [...S.threads.keys()].filter(th => focusOf(th) === f.id).length;
   const it = (label, ic, go, key, tip) => h("button", { type: "button", class: "menu-i", role: "menuitem", "data-key": key, title: tip || null, onclick: e => { e.stopPropagation(); closeRowMenu(); go(); } }, icon(ic), h("span", { class: "menu-i-t" }, label));
   const m = h("div", { class: "menu lr-menu", role: "menu", "aria-label": "Focus actions" },
     it("Rename…", "edit", () => renameFocusDialog(f, ctx), "rename"),
-    f.own ? null : it("Retire focus…", "archive", () => retireFocusDialog(f, n, ctx), "retire", "Its conversations go back to Other"));
+    f.own ? null : it("Retire focus…", "archive", () => retireFocusDialog(f, n, ctx, after), "retire", "Its conversations go back to Other; it can be brought back"));
   const sc = h("button", { type: "button", class: "scrim", "aria-label": "Close the menu", tabindex: "-1", onclick: e => { e.stopPropagation(); closeRowMenu(); } });
   document.body.append(sc, m);
   const r = b.getBoundingClientRect(), mh = m.offsetHeight, mw = m.offsetWidth;
@@ -1484,14 +1508,16 @@ function cardMenu(f, id, ctx) {
   const all = foci().map(x => x.id), at = all.indexOf(id), mv = all.length > 1, open = C.menu === "fc:" + id, name = focusName(f);
   const close = () => { C.menu = null; ctx.update(); };
   const pz = !simpleOn() && can("tier") ? pauseOf("focus", id) : null;
-  const item = (label, fn, off) => h("button", { type: "button", class: "menu-i", role: "menuitem", disabled: off ? "" : null, onclick: () => { C.menu = null; fn(); ctx.update(); } }, label);
+  const item = (label, fn, off, key) => h("button", { type: "button", class: "menu-i", role: "menuitem", "data-key": key || null, disabled: off ? "" : null, onclick: () => { C.menu = null; fn(); ctx.update(); } }, label);
   return h("span", { class: "fc-more pop" },
-    h("button", { type: "button", class: "btn fc-moreb", "data-kind": "icon", "data-size": "s", "aria-haspopup": "menu", "aria-expanded": String(open), "aria-label": `More for ${name}: ${mv ? "move earlier or later, " : ""}new conversation`, title: "More",
+    h("button", { type: "button", class: "btn fc-moreb", "data-kind": "icon", "data-size": "s", "aria-haspopup": "menu", "aria-expanded": String(open), "aria-label": `More for ${name}: ${mv ? "move earlier or later, " : ""}new conversation${can("config") ? ", rename" + (f.own ? "" : ", retire") : ""}`, title: "More",
       onclick: () => { C.menu = open ? null : "fc:" + id; ctx.update(); } }, icon("more")),
     open ? [scrim(close), h("div", { class: "cm-menu menu fc-menu", role: "menu", "data-side": "bottom-end", "data-key": "fcm" },
       mv ? item("Move earlier", () => moveFocus(id, { step: -1 }).then(err => moved(err, ctx)), at <= 0) : null,
       mv ? item("Move later", () => moveFocus(id, { step: 1 }).then(err => moved(err, ctx)), at >= all.length - 1) : null,
       item("New conversation", () => newIn(id)),
+      can("config") ? item("Rename…", () => renameFocusDialog(f, ctx), false, "rename") : null,
+      can("config") && !f.own ? item("Retire focus…", () => retireFocusDialog(f, [...S.threads.keys()].filter(th => focusOf(th) === id).length, ctx), false, "retire") : null,
       pz ? item(pz.held ? "Resume" : "Pause…", () => askPause("focus", id, null, ctx.update)) : null)] : null);
 }
 function focusCard(f, ctx, onlyNew) {

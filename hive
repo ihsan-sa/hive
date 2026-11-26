@@ -1086,7 +1086,10 @@ def cmd_module(a):
             if pinned:
                 shutil.rmtree(d, ignore_errors=True); sys.exit(f"couldn't check {a.name}'s releases, so it wasn't added; try again in a few minutes")
     if not manifest(d): print(f"note: {d} has no module.json, so nothing was linked")
+    try: off = set(json.loads((STATE / "skills-off.json").read_text()))  # skills the person turned off in Settings stay off through an add or an update
+    except (OSError, ValueError, TypeError): off = set()
     for link, target in module_links(d):
+        if link.parent.name == "skills" and link.name in off: print(f"note: the {link.name} skill is turned off, so it wasn't linked"); continue
         link.parent.mkdir(parents=True, exist_ok=True)
         if link.exists() and not link.resolve().is_relative_to(d.resolve()):  # a module never takes over another's command or skill (hive, claude, git)
             print(f"note: {link} already belongs to something else, so it was left alone"); continue

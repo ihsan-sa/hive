@@ -707,7 +707,8 @@ function modulesSection(ctx) {
   if (!can("modules")) return null;
   const act = async (what, name) => {
     F.busy[name] = true; say("mods", (what === "add" ? "Adding " : "Removing ") + name + "…"); ctx.update();
-    try { const r = await post("/api/module", { do: what, name }); say("mods", r.said); } catch (e) { say("mods", e.message, "bad"); }
+    try { await post("/api/module", { do: what, name }); const sk = ((F.mods || []).find(x => x.name === name) || {}).skills || [];
+      say("mods", what === "add" ? `Added ${name}.` + (sk.length ? ` ${sk.length === 1 ? "Its skill" : "Its skills"} ${sk.map(k => k.name).join(", ")} ${sk.length === 1 ? "is" : "are"} ready for your agents from their next run.` : " Agents can use it from their next run.") : `Removed ${name}.`, "good"); /* never the reply's own text: it is the install's output, with this machine's paths (E203) */ } catch (e) { say("mods", e.message, "bad"); }
     delete F.busy[name]; await loadMods(ctx);
   };
   const about = x => x.about.replace(/`/g, "") + (x.needs ? ` Needs ${x.needs}.` : "");
@@ -728,16 +729,34 @@ function modulesSection(ctx) {
     if (x.state === "installed" && inBrowse) return h("span", { class: "meta" }, "installed");
     return x.state === "installed"
       ? button("Remove", () => confirm({ title: `Remove ${x.name}?`, body: ["It comes off this Hive. You can add it back from this page."], ok: "Remove", kind: "danger", onOk: () => act("remove", x.name) }), { size: "s", busy: F.busy[x.name] })
-      : button("Add", () => act("add", x.name), { size: "s", busy: F.busy[x.name] });
+      : button(F.busy[x.name] ? "Adding…" : "Add", () => act("add", x.name), { size: "s", busy: F.busy[x.name], cls: "btn-says" });   // E203d: the word while it installs, not only a spinner
   };
   const row = (x, inBrowse) => h("li", { class: "lr", "data-key": x.name },
     h("div", { class: "lr-in mod-row" },
       h("b", { class: "mod-name" }, x.repo ? h("a", { href: x.repo, target: "_blank", rel: "noreferrer noopener" }, x.name) : x.name),
       h("span", { class: "muted mod-about" },
         h("span", { class: "mod-line" }, h("span", { class: "mod-one" }, about(x)), infoButton("About " + x.name, about(x))),
+        (x.skills || []).length ? h("span", { class: "mod-skills", "data-key": "skills" }, (x.skills.length === 1 ? "Brings the skill " : "Brings the skills "), x.skills.map((k, i) => [i ? ", " : null, h("b", { title: k.about || null }, k.name)]), x.skills.length === 1 && x.skills[0].about ? ": " + x.skills[0].about : null) : null,   // E203d: what a module adds, in the word the chat apps use
         x.source === "own" ? h("span", { class: "mod-where" }, WHERE[x.where] || WHERE.local) : null),
       end(x, inBrowse)));
   const list = (rows, inBrowse) => h("ul", { class: "list" }, rows.map(x => row(x, inBrowse)));
+  // E203f: every skill in one place, the way the chat apps list skills: what it is for, which module brings it, and a switch for an
+  // installed one (off takes it out of the agents' skills folder and keeps the module; /api/module skill-off|skill-on, dash.py skill_switch).
+  const flip = async (x, k, on) => {
+    const key = x.name + "/" + k.name; F.busy[key] = true; ctx.update();
+    try { await post("/api/module", { do: on ? "skill-on" : "skill-off", name: x.name, skill: k.name }); say("mods", on ? `The ${k.name} skill is on: agents can use it from their next run.` : `The ${k.name} skill is off: agents won't use it from their next run. The ${x.name} module stays added.`, "good"); }
+    catch (e) { say("mods", e.message, "bad"); }
+    delete F.busy[key]; await loadMods(ctx);
+  };
+  const skillRow = (x, k) => h("li", { class: "lr", "data-key": "skill:" + k.name, "data-off": k.off ? "" : null },
+    h("div", { class: "lr-in mod-row" },
+      h("b", { class: "mod-name" }, k.name),
+      h("span", { class: "muted mod-about" },
+        h("span", { class: "mod-line" }, h("span", { class: "mod-one" }, k.about || "A skill your agents can use.")),
+        h("span", { class: "mod-where" }, (x.state === "installed" ? "From the " : "Comes with the ") + x.name + " module" + (x.state === "installed" ? "" : ", not added yet"))),
+      x.state === "installed"
+        ? h("label", { class: "mod-sw" }, h("input", { type: "checkbox", role: "switch", class: "switch", checked: !k.off, disabled: !!F.busy[x.name + "/" + k.name], "aria-label": (k.off ? "Turn on " : "Turn off ") + k.name, onchange: (e, n) => flip(x, k, n.checked) }), k.off ? "Off" : "On")
+        : button(F.busy[x.name] ? "Adding…" : "Add", () => act("add", x.name), { size: "s", busy: F.busy[x.name], cls: "btn-says" })));
   const group = (key, title, note, ...body) => h("div", { class: "mod-group", "data-group": key }, h("h3", { class: "mod-gt" }, title, note ? h("span", { class: "mod-gn" }, note) : null), body);
   // A link to one module's row (#settings/modules/<name>, F.goRow from render): once the list is read, open the full list if the row
   // is only there, and scroll the row into view, so a link to the Slack row shows its "Set up" with no press.
@@ -749,9 +768,11 @@ function modulesSection(ctx) {
   const shelves = () => {
     const pub = F.mods.filter(x => x.source !== "own"), own = F.mods.filter(x => x.source === "own");
     const have = pub.filter(x => x.state === "installed"), rec = pub.filter(x => x.recommended && x.state !== "installed");
-    const q = (F.modQ || "").trim().toLowerCase(), shown = pub.filter(x => !q || (x.name + " " + x.about).toLowerCase().includes(q));
+    const q = (F.modQ || "").trim().toLowerCase(), shown = pub.filter(x => !q || (x.name + " " + x.about + " " + (x.skills || []).map(k => k.name + " " + k.about).join(" ")).toLowerCase().includes(q));
+    const skills = F.mods.flatMap(x => (x.skills || []).map(k => [x, k])).sort((a, b) => (b[0].state === "installed") - (a[0].state === "installed") || a[1].name.localeCompare(b[1].name));
     return [
       group("installed", "Installed", null, have.length || own.length ? [have.length ? list(have) : null, own.length ? list(own) : null] : empty("None installed yet.")),
+      skills.length ? group("skills", "Skills", "what your agents know how to do; turn one off to keep agents from using it", h("ul", { class: "list" }, skills.map(([x, k]) => skillRow(x, k)))) : null,
       group("available", "Available", null,
         rec.length ? list(rec) : h("p", { class: "muted mod-none" }, "You have everything we recommend."),
         h("div", { class: "lr-more" }, button(F.browse ? "Hide the full list" : `Browse all ${pub.length} public modules`, () => { F.browse = !F.browse; ctx.update(); }, { size: "s", kind: "quiet" })),
@@ -764,7 +785,7 @@ function modulesSection(ctx) {
         h("p", { class: "muted mod-none" }, "A module's code runs with the same rights as your agents, so only add ones you trust.")),
     ];
   };
-  return section({ title: "Modules", level: 1, note: "optional tools your agents can use" },
+  return section({ title: "Modules", level: 1, note: "tools and skills your agents can use" },
     F.mods == null ? (F.modsErr ? [empty(`Couldn't read the modules: ${F.modsErr}`, { kind: "error" }), button("Try again", () => { F.modsErr = null; ctx.update(); return loadMods(ctx); }, { size: "s" })] : empty("Reading…", { kind: "loading" })) : [F.modsErr ? staleNote("Couldn't refresh the modules, so this shows what it read last. It keeps trying.") : null, F.mods.length ? shelves() : empty("No modules listed.")],
     F.slack ? slackSetup(ctx) : null,
     msg("mods"));

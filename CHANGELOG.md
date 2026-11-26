@@ -12,6 +12,7 @@ Web pages and documents in the side panel have a Comment mode: press **Comment**
 
 - The website's Download page now links the Hive's GitHub repo and shows a picture when its link is shared.
 - The website build now checks that every page links the Hive's GitHub repo.
+- The website's home page now tells search engines it is the Hive's site and where its GitHub repo is.
 
 ## Scrolling past pages and drawings in a chat
 
