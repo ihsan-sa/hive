@@ -1,14 +1,24 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>Download Hive</title>
+<meta name="description" content="Download the Hive desktop app for Windows, Mac or Linux: one file, double-click, and a hive of agents that builds your projects runs on your own computer.">
+<link rel="canonical" href="https://hivelab.ca/download/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="The Hive">
+<meta property="og:title" content="Download Hive">
+<meta property="og:description" content="The Hive desktop app for Windows, Mac or Linux: one file, double-click, and a hive of agents that builds your projects runs on your own computer.">
+<meta property="og:url" content="https://hivelab.ca/download/">
+<meta property="og:image" content="https://hivelab.ca/img/card.png">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <style>
 body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem}
 .btn{display:block;padding:.8rem 1rem;margin:.5rem 0;border:1px solid #888;border-radius:8px;text-decoration:none;color:inherit}
 .btn.pick{background:#1a56db;color:#fff;border-color:#1a56db}
 details{margin:1rem 0}
+@media (max-width:480px){header>a:first-child{flex-basis:100%}}
 </style>
-<header style="display:flex;flex-wrap:wrap;gap:1rem;align-items:center;padding:.5rem 0 1rem;border-bottom:1px solid #8884;font-size:15px"><a href="/" style="font-weight:600;color:inherit;text-decoration:none;margin-right:auto">The Hive</a><a href="/">Home</a><a href="/results/">Results</a><a href="/blog/">Blog</a><a href="https://docs.hivelab.ca">Docs</a></header>
+<header style="display:flex;flex-wrap:wrap;gap:.5rem .9rem;align-items:center;padding:.5rem 0 1rem;border-bottom:1px solid #8884;font-size:15px"><a href="/" style="font-weight:600;color:inherit;text-decoration:none;margin-right:auto">The Hive</a><a href="/">Home</a><a href="/results/">Results</a><a href="/blog/">Blog</a><a href="https://docs.hivelab.ca">Docs</a><a href="https://github.com/ihsan-sa/hive" target="_blank" rel="noopener">GitHub</a></header>
 <h1>Download Hive</h1>
 <p>One file, double-click, and you are in the Hive. The terminal install line still works too: <code>curl -fsSL https://hivelab.ca/install.sh | sh</code> on Linux, <code>irm https://hivelab.ca/install.ps1 | iex</code> in Windows PowerShell, <code>curl -fsSL https://hivelab.ca/install-mac.sh | sh</code> on a Mac.</p>
 <div id="buttons">
@@ -38,6 +48,7 @@ details{margin:1rem 0}
 <li id="update-linux"><b>Linux:</b> double-click the new .deb, or run <code>sudo apt install ./Hive-linux-amd64.deb</code>, over the old one (on Fedora the new .rpm, or <code>sudo dnf install ./Hive-linux-x86_64.rpm</code>). An open Hive keeps working; the next time you open it, it is the new one.</li>
 </ul>
 <p>Nothing is lost either way: your Hive and its chats live on your machine, not in the app.</p>
+<p>The Hive is open source (MIT). Code, issues and every release: <a href="https://github.com/ihsan-sa/hive">github.com/ihsan-sa/hive</a> (a star there helps others find it).</p>
 <script>
 function detectOS(ua, platform) {
   ua = String(ua || ''); platform = String(platform || '');

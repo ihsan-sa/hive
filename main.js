@@ -210,6 +210,10 @@ function create() {
     wc.on('will-navigate', nav);
     wc.on('will-redirect', nav);
     wc.on('did-create-window', w => guard(w.webContents));
+    wc.on('context-menu', (_e, p) => {
+      const items = lib.contextItems(p).map(k => k === 'copyLink' ? { label: 'Copy link', click: () => clipboard.writeText(p.linkURL) } : { role: k });
+      if (items.length) Menu.buildFromTemplate(items).popup({ window: BrowserWindow.fromWebContents(wc) || win });
+    });
   };
   guard(win.webContents);
   // No menu on Windows and Linux, so the keys a View menu would give: zoom, and reload (only while the Hive shows).

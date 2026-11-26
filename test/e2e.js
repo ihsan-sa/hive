@@ -179,6 +179,25 @@ const title = page => page.locator('#title').textContent();
   const geo = await page.evaluate(() => new Promise(r => navigator.geolocation.getCurrentPosition(() => r('allowed'), e => r(e.code === 1 ? 'denied' : 'error ' + e.code), { timeout: 5000 })));
   assert.strictEqual(geo, 'denied', 'location is refused');
   console.log('ok permissions');
+  // Right-click on a link: the app shows its own menu (Electron has none), and "Copy link" puts the address on the clipboard.
+  // Menu.popup is wrapped to see what it pops; only Linux also draws it (a Mac or Windows menu holds the app until someone closes it).
+  await app.evaluate(({ Menu, clipboard }) => {
+    clipboard.writeText('');
+    const real = Menu.prototype.popup;
+    Menu.prototype.popup = function (o) {
+      global.popped = this;
+      if (process.platform !== 'linux') return;
+      real.call(this, o); setTimeout(() => this.closePopup(), 500);
+    };
+  });
+  await page.locator('#out').click({ button: 'right' });
+  let menu = null;
+  for (let i = 0; i < 50 && !menu; i++) { await new Promise(r => setTimeout(r, 200)); menu = await app.evaluate(() => global.popped ? global.popped.items.map(m => m.label) : null); }
+  assert.deepStrictEqual(menu, ['Copy link'], 'right-click on a link pops the menu');
+  const link = await app.evaluate(({ clipboard }) => { global.popped.items[0].click(); return clipboard.readText(); });
+  assert.strictEqual(link, 'https://example.com/', '"Copy link" copies the link');
+  assert.strictEqual(new URL(page.url()).port, String(port), 'the right-click did not follow the link');
+  console.log('ok context menu');
   // A file link on the Hive page saves into the Downloads folder (twice: the second gets a new name), and the window stays on the page.
   await page.evaluate(() => { document.querySelector('#dl').click(); });
   const dl = path.join(home, 'Downloads');

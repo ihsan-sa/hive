@@ -118,6 +118,14 @@ console.log(`ok ${n} tests`);
   assert.strictEqual(k('r'), null); assert.strictEqual(k('-', { control: true, alt: true }), null);
   assert.strictEqual(lib.shortcut({ type: 'keyUp', key: 'r', control: true }), null);
   console.log('ok shortcuts logic');
+t('right-click menu: link, box, selection', () => {
+  assert.deepStrictEqual(lib.contextItems({ linkURL: 'https://auth.openai.com/codex/device', selectionText: '' }), ['copyLink']);
+  assert.deepStrictEqual(lib.contextItems({ linkURL: 'javascript:alert(1)', selectionText: 'x' }), ['copy']);
+  assert.deepStrictEqual(lib.contextItems({ isEditable: true, selectionText: '' }), ['cut', 'copy', 'paste', 'selectAll']);
+  assert.deepStrictEqual(lib.contextItems({ selectionText: 'ABCD-EFGH' }), ['copy']);
+  assert.deepStrictEqual(lib.contextItems({ selectionText: '  ' }), []);
+  console.log('ok right-click menu logic');
+});
   const scr = [{ x: 0, y: 0, width: 1920, height: 1080 }];
   assert.deepStrictEqual(lib.windowState({ x: 10, y: 20, width: 900, height: 700 }, scr), { width: 900, height: 700, x: 10, y: 20 });
   assert.deepStrictEqual(lib.windowState({ x: 5000, y: 20, width: 900, height: 700 }, scr), { width: 900, height: 700 }, 'off every screen: size only');

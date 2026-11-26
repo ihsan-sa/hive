@@ -50,7 +50,9 @@ console.log('ok page: Windows, Mac (Apple chip or Intel) and Linux each get thei
 
 {
   const html = require('fs').readFileSync(require('path').join(__dirname, '../page/download.html'), 'utf8');
-  assert(!/ihsan/.test(html), 'the page names the site by its real name');
+  // the old site name (ihsan.cc) only redirects; the repo link (github.com/ihsan-sa/hive) is wanted, as on every hivelab.ca page
+  assert(!/ihsan\.cc/.test(html), 'the page names the site by its real name');
+  assert(html.includes('https://github.com/ihsan-sa/hive'), 'the page links the repo');
   for (const f of ['install.sh', 'install.ps1', 'install-mac.sh']) assert(html.includes('https://hivelab.ca/' + f), f + ' line');
   console.log('ok page install lines');
 }

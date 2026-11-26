@@ -196,4 +196,14 @@ function newerApp(mine, text) {
 // The page's #update part says how to update on each system; the update notice opens there.
 const downloadPage = part => SITE + '/download' + (part ? '#' + part : '');
 
-module.exports = { newerApp, downloadPage, downloadPath, appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };
+// The right-click menu: with no menu Electron shows none, so selected text, a sign-in link or a box couldn't be copied with the mouse.
+// Returns the items to show for a context-menu event's params: 'copyLink' for a web link, the edit roles for a box, 'copy' for selected text.
+function contextItems(p) {
+  const out = [];
+  if (/^https?:\/\//i.test(p.linkURL || '')) out.push('copyLink');
+  if (p.isEditable) out.push('cut', 'copy', 'paste', 'selectAll');
+  else if ((p.selectionText || '').trim()) out.push('copy');
+  return out;
+}
+
+module.exports = { newerApp, contextItems, downloadPage, downloadPath, appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };
