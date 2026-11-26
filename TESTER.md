@@ -2,7 +2,7 @@
 
 You need: a Windows 10/11 PC or a Mac (macOS 13 or newer), an internet connection, and about 15 minutes. Nothing you do
 here touches your own files: the Hive runs in its own Linux system (Windows: WSL 2; Mac: a small virtual machine).
-Please use the download you were handed, not the terminal install line.
+Get the download from https://hivelab.ca/download/ (or use the one you were handed), not the terminal install line.
 
 ## Steps
 1. Download the file for your system (`Hive-Setup.exe`; on a Mac, `Hive-mac-arm64.zip` if Apple menu, About This Mac shows "Chip Apple M…", or `Hive-mac-x64.zip` if it shows an Intel processor).
@@ -14,6 +14,10 @@ Please use the download you were handed, not the terminal install line.
 4. Wait. It prints what it is doing. The first install takes about 2 to 12 minutes.
 5. When it finishes the Hive's start page should open in the same window. Close the window, open Hive again from the
    Start menu / Applications: it should open straight to the Hive, without the install step.
+6. The update notice (only if you were handed an older app on purpose, or a newer one comes out while you test): within
+   a minute of opening, the window shows "A newer Hive app (…) is available" at the bottom, and a system notice "A newer
+   Hive app is available" appears (Windows: bottom right; Mac: top right). On a Mac, check System Settings,
+   Notifications, Hive: is "Allow notifications" on, and did macOS ask you about it?
 
 ## Please report (one message is enough)
 - Your system: Windows version or macOS version, and (Mac) Apple silicon or Intel.
@@ -21,5 +25,6 @@ Please use the download you were handed, not the terminal install line.
 - How long the install took, and whether it asked for a restart.
 - Anything confusing, even if it worked.
 - Did the second opening go straight to the Hive?
+- (If you did step 6) Did the system notice appear, and on a Mac what does System Settings, Notifications, Hive say?
 
 If it gets stuck, the window has a **Close** button and a **Try again** / **Repair** button; tell us which you pressed.
