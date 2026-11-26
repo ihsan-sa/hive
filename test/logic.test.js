@@ -194,3 +194,123 @@ t('right-click menu: link, box, selection', () => {
   assert.ok(sh.status === 0 || /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|audit endpoint|network/i.test(sh.stderr + sh.stdout), 'no high-severity advisory in what ships: ' + sh.stdout);
   console.log('ok no runtime deps');
 }
+
+// ---- Many Hives, step 1 (DESIGN-many-hives.md) ----
+{
+  const { parseHives, stringifyHives } = require('../lib');
+  const id1 = 'a1b2c3d4e5f60718', id2 = '0123456789abcdef';
+  assert.deepStrictEqual(parseHives(null).hives, [], 'no file: first run');
+  assert.ok(!parseHives(null).error);
+  assert.ok(parseHives('{not json').error, 'broken file says so');
+  assert.ok(parseHives('{"hives":{}}').error, 'hives must be a list');
+  assert.ok(/newer app/.test(parseHives('{"v":2,"hives":[]}').error), 'a newer file is left alone');
+  const text = JSON.stringify({ v: 1, theme: 'dark', hives: [
+    { id: id2, kind: 'remote', url: 'https://h2.example.cc/login#SECRETKEY?x', name: '', order: 2, pinned: true },
+    { id: id1, kind: 'local', user: 'hive', name: 'Home', order: 1, lastOpened: 5 },
+    { id: id1, kind: 'local', user: 'other', order: 3 },                 // the same id twice: the second is dropped
+    { id: 'XYZ', kind: 'local', user: 'hive' },                          // bad id
+    { id: 'ffffffffffffffff', kind: 'remote', url: 'http://h2.example.cc' }, // plain http off this computer
+    { id: 'eeeeeeeeeeeeeeee', kind: 'local', user: 'Root;rm' },           // not a user name
+    { id: 'dddddddddddddddd', kind: 'ssh', url: 'https://x.cc' },          // unknown kind
+  ] });
+  const p = parseHives(text);
+  assert.strictEqual(p.dropped, 5);
+  assert.deepStrictEqual(p.hives.map(h => h.id), [id1, id2], 'sorted by order');
+  assert.strictEqual(p.hives[1].url, 'https://h2.example.cc/', 'no key, no query, no /login kept');
+  assert.strictEqual(p.hives[1].name, 'h2.example.cc', 'a remote Hive with no name is called by its host');
+  assert.strictEqual(p.hives[1].pinned, true, 'unknown fields are kept');
+  const back = stringifyHives(p);
+  assert.ok(!/SECRETKEY/.test(back), 'the key is never written');
+  const again = parseHives(back);
+  assert.deepStrictEqual(again.hives, p.hives, 'round trip');
+  assert.strictEqual(again.extra.theme, 'dark', 'unknown top-level fields are kept');
+  assert.strictEqual(JSON.parse(back).v, 1);
+  const named = parseHives(JSON.stringify({ v: 1, hives: [{ id: id1, kind: 'local', user: 'hive', name: 'a\u0007b\nc' }] }));
+  assert.strictEqual(named.hives[0].name, 'abc', 'no control characters in a name');
+  console.log('ok hives list');
+}
+{
+  const { addressRule } = require('../lib');
+  const ok = u => addressRule(u).ok, url = u => addressRule(u).url;
+  assert.strictEqual(url('https://h2.ihsan.cc'), 'https://h2.ihsan.cc/');
+  assert.strictEqual(url('  https://h2.ihsan.cc/login#abc  '), 'https://h2.ihsan.cc/');
+  assert.strictEqual(url('https://h2.ihsan.cc:8443/hive/?k=1#x'), 'https://h2.ihsan.cc:8443/hive/');
+  for (const u of ['http://127.0.0.1:8077', 'http://127.5.6.7:1', 'http://[::1]:8077/']) assert.ok(ok(u), u);
+  for (const u of ['http://localhost:8077', 'http://192.168.1.5:8077', 'http://h2.ihsan.cc', 'http://127.0.0.1.evil.cc',
+    'http://127.0.0.256', 'http://[::ffff:127.0.0.1]', 'ftp://h2.ihsan.cc', 'file:///etc/passwd', 'javascript:alert(1)',
+    'https://user:pw@h2.ihsan.cc', 'https://user@h2.ihsan.cc', 'h2.ihsan.cc', '', 'not a url']) assert.ok(!ok(u), u);
+  assert.ok(/https/.test(addressRule('http://h2.ihsan.cc').why), 'says why');
+  console.log('ok address rule');
+}
+{
+  const { sameHive, proofString } = require('../lib');
+  const base = 'https://h2.ihsan.cc/';
+  assert.ok(sameHive('https://h2.ihsan.cc/api/x?y', base));
+  assert.ok(sameHive('https://H2.IHSAN.CC:443/', base), 'case and the default port');
+  for (const u of ['https://evil.h2.ihsan.cc/', 'https://h2.ihsan.cc.evil.cc/', 'http://h2.ihsan.cc/', 'https://h2.ihsan.cc:8443/', 'https://ihsan.cc/', 'garbage'])
+    assert.ok(!sameHive(u, base), u);
+  assert.ok(sameHive('http://127.0.0.1:8077/x', 'http://127.0.0.1:8077/') && !sameHive('http://127.0.0.1:8078/', 'http://127.0.0.1:8077/'), 'port counts');
+  assert.strictEqual(proofString('https://h2.ihsan.cc', 'n1'), 'proof:https://h2.ihsan.cc:n1');
+  assert.notStrictEqual(proofString('http://127.0.0.1:8077', 'n1'), proofString('http://127.0.0.1:8078', 'n1'));
+  console.log('ok same hive');
+}
+{
+  const { hiveUserName, newId } = require('../lib');
+  for (const n of ['hive', 'work', 'hive-2', 'a', 'w' + '1'.repeat(20)]) assert.strictEqual(hiveUserName(n, []), null, n);
+  for (const n of ['', 'Hive', '2hive', 'hive_2', 'hive-', 'w' + '1'.repeat(21), 'a b', 'root', 'www-data', 'systemd-x', 'lima', 'docker', '../x', 'x;rm'])
+    assert.ok(hiveUserName(n, []), n);
+  assert.ok(/already/.test(hiveUserName('work', ['hive', 'work'])));
+  const id = newId([]);
+  assert.ok(/^[a-f0-9]{16}$/.test(id));
+  let calls = 0;
+  const rand = () => Buffer.from(calls++ ? '0102030405060708' : 'a1b2c3d4e5f60718', 'hex');
+  assert.strictEqual(newId(['a1b2c3d4e5f60718'], rand), '0102030405060708', 'skips an id already used');
+  assert.throws(() => newId(['a1b2c3d4e5f60718'], () => Buffer.from('a1b2c3d4e5f60718', 'hex')));
+  console.log('ok hive user name');
+}
+{
+  const { windowsState, windowState } = require('../lib');
+  const screens = [{ x: 0, y: 0, width: 1920, height: 1080 }];
+  const old = { x: 10, y: 20, width: 1200, height: 800, maximized: true };
+  assert.deepStrictEqual(windowsState(old, screens, ['a1b2c3d4e5f60718']), [{ hive: null, rect: windowState(old, screens) }], 'the old single window opens on the local Hive');
+  assert.deepStrictEqual(windowsState(null, screens), [{ hive: null, rect: null }], 'nothing saved: one window');
+  assert.deepStrictEqual(windowsState('junk', screens), [{ hive: null, rect: null }]);
+  const saved = { v: 1, windows: [
+    { hive: 'a1b2c3d4e5f60718', x: 0, y: 0, width: 900, height: 700 },
+    { hive: 'gone000000000000', x: 5000, y: 5000, width: 900, height: 700 },
+    null,
+  ] };
+  const got = windowsState(saved, screens, ['a1b2c3d4e5f60718']);
+  assert.strictEqual(got.length, 2);
+  assert.strictEqual(got[0].hive, 'a1b2c3d4e5f60718');
+  assert.deepStrictEqual(got[0].rect, { width: 900, height: 700, x: 0, y: 0 });
+  assert.strictEqual(got[1].hive, null, 'a removed Hive opens as the local one');
+  assert.deepStrictEqual(got[1].rect, { width: 900, height: 700 }, 'off every screen: size kept, place dropped');
+  const many = { v: 1, windows: Array.from({ length: 30 }, () => ({ width: 900, height: 700 })) };
+  assert.strictEqual(windowsState(many, screens).length, 12, 'at most 12 windows come back');
+  console.log('ok window state old shape');
+}
+{
+  const { redact } = require('../lib');
+  assert.strictEqual(redact('open https://h2.ihsan.cc/login#SECRETKEY12345 now'), 'open https://h2.ihsan.cc/login#… now');
+  assert.strictEqual(redact('open http://[::1]:8077/login/#SECRETKEY12345'), 'open http://[::1]:8077/login/#…');
+  console.log('ok redact remote key');
+}
+{
+  const { linkMenu, browserLabel } = require('../lib');
+  const where = u => u.startsWith('https://h2.ihsan.cc/') ? 'this' : u.startsWith('http://127.0.0.1:8077/') ? 'hive' : 'outside';
+  assert.deepStrictEqual(linkMenu({ linkURL: 'https://h2.ihsan.cc/files/a.pdf' }, where), ['openWindow', 'openBrowser', 'saveLink', 'copyLink']);
+  assert.deepStrictEqual(linkMenu({ linkURL: 'http://127.0.0.1:8077/#t' }, where), ['openWindow', 'openBrowser', 'copyLink'], 'another Hive: no save through this one');
+  assert.deepStrictEqual(linkMenu({ linkURL: 'https://example.com/' }, where), ['openBrowser', 'copyLink']);
+  assert.deepStrictEqual(linkMenu({ linkURL: 'javascript:alert(1)', selectionText: 'x' }, where), ['copy'], 'no menu for a script link');
+  assert.deepStrictEqual(linkMenu({ linkURL: 'https://example.com/', mediaType: 'image', srcURL: 'https://h2.ihsan.cc/i.png' }, where),
+    ['openBrowser', 'copyLink', '-', 'copyImage', 'saveImage']);
+  assert.deepStrictEqual(linkMenu({ mediaType: 'image', srcURL: 'https://cdn.example.com/i.png' }, where), ['copyImage']);
+  assert.deepStrictEqual(linkMenu({ isEditable: true }, where), ['cut', 'copy', 'paste', 'selectAll']);
+  assert.deepStrictEqual(linkMenu({ selectionText: '  ' }, where), []);
+  assert.strictEqual(browserLabel('Google Chrome'), 'Open link in Google Chrome');
+  assert.strictEqual(browserLabel('firefox.desktop'), 'Open link in firefox');
+  assert.strictEqual(browserLabel(''), 'Open link in your browser');
+  assert.strictEqual(browserLabel('x'.repeat(80)), 'Open link in your browser');
+  console.log('ok link menu');
+}

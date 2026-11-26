@@ -123,7 +123,7 @@ function sameApp(u, base) {
 // The address is the key to the Hive, so it never goes on the screen or in a log.
 function redact(text) {
   return String(text)
-    .replace(/(https?:\/\/(?:localhost|127\.0\.0\.1):\d+\/login#)\S+/g, '$1…')
+    .replace(/(https?:\/\/[^\s\/#]+\/login\/?#)\S+/g, '$1…')
     .replace(/((?:key|token|secret|password|authorization)["']?\s*[:=]\s*(?:bearer\s+)?["']?)[A-Za-z0-9_\-.~+\/]{8,}=*/gi, '$1…');
 }
 // Installers draw progress with carriage returns and colour codes; the screen wants plain lines.
@@ -206,4 +206,127 @@ function contextItems(p) {
   return out;
 }
 
-module.exports = { newerApp, contextItems, downloadPage, downloadPath, appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };
+
+// ---- Many Hives (DESIGN-many-hives.md, step 1): plain logic, not used by main.js yet. ----
+
+// Where a Hive may live. https anywhere; plain http only on a literal loopback address (127.0.0.0/8 or ::1), since
+// on any other network the key and the cookie would cross it in the clear. No user:password@ in the address.
+// Returns { ok, url, why }: url is the address cut to what is stored (origin and path, no query, no #key).
+function addressRule(text) {
+  let u;
+  try { u = new URL(String(text).trim()); } catch { return { ok: false, why: "That isn't a web address." }; }
+  if (u.username || u.password) return { ok: false, why: 'An address with a name and password in it is not accepted.' };
+  if (!u.hostname) return { ok: false, why: "That isn't a web address." };
+  if (u.protocol === 'http:') {
+    if (!loopbackHost(u.hostname)) return { ok: false, why: 'Plain http is only for this computer (127.0.0.1). Use the https:// address.' };
+  } else if (u.protocol !== 'https:') return { ok: false, why: 'Only https:// addresses (or http:// on this computer).' };
+  u.hash = ''; u.search = '';
+  if (/\/login\/?$/.test(u.pathname)) u.pathname = '/';
+  return { ok: true, url: u.href };
+}
+function loopbackHost(h) {
+  if (h === '[::1]') return true;
+  const m = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  return !!m && m.slice(1).every(x => Number(x) <= 255);
+}
+// Same Hive: the same scheme, host and port as the Hive's own address, exactly (no subdomains, no other port).
+function sameHive(u, base) {
+  try { return new URL(u).origin === new URL(base).origin; } catch { return false; }
+}
+// A Hive's id: 16 random hex, never one already used.
+function newId(used = [], rand = n => require('crypto').randomBytes(n)) {
+  const seen = new Set(used);
+  for (let i = 0; i < 100; i++) { const id = rand(8).toString('hex'); if (/^[a-f0-9]{16}$/.test(id) && !seen.has(id)) return id; }
+  throw new Error('no free id');
+}
+// The Linux user name for a new local Hive: lower-case letters, digits and -, starting with a letter, at most 21
+// long, not a name the system already uses or keeps for itself. Returns null when it's fine, else why not.
+const RESERVED_USERS = new Set(['root', 'daemon', 'bin', 'sys', 'sync', 'games', 'man', 'lp', 'mail', 'news', 'uucp', 'proxy',
+  'www-data', 'backup', 'list', 'irc', 'gnats', 'nobody', 'nogroup', 'messagebus', 'syslog', 'ubuntu', 'admin', 'sudo', 'lima', 'docker']);
+function hiveUserName(name, taken = []) {
+  const n = String(name);
+  if (!/^[a-z][a-z0-9-]{0,20}$/.test(n)) return 'Use lower-case letters, digits and -, starting with a letter, at most 21 long.';
+  if (n.endsWith('-')) return "It can't end with -.";
+  if (RESERVED_USERS.has(n) || /^systemd-/.test(n)) return 'That name belongs to the system.';
+  if (taken.includes(n)) return 'There is already a user with that name.';
+  return null;
+}
+// One saved Hive, or null if it can't be trusted. Unknown fields are kept, so an older app keeps what a newer one wrote.
+function validHive(h) {
+  if (!h || typeof h !== 'object' || Array.isArray(h)) return null;
+  if (typeof h.id !== 'string' || !/^[a-f0-9]{16}$/.test(h.id)) return null;
+  const name = typeof h.name === 'string' ? h.name.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60) : '';
+  const out = { ...h, name };
+  if (h.kind === 'remote') {
+    const a = addressRule(h.url);
+    if (!a.ok) return null;
+    out.url = a.url;
+    if (!name) out.name = new URL(a.url).hostname;
+  } else if (h.kind === 'local') {
+    if (typeof h.user !== 'string' || !/^[a-z_][a-z0-9_-]{0,31}$/.test(h.user)) return null;
+    if (!name) out.name = h.user === 'hive' ? 'Hive' : h.user;
+  } else return null;
+  out.order = Number.isFinite(h.order) ? h.order : 0;
+  if (h.lastOpened !== undefined && !Number.isFinite(h.lastOpened)) delete out.lastOpened;
+  return out;
+}
+// hives.json as read. A missing file means the first run (only the local Hive); a file that can't be read gives
+// { error } and an empty list, and the caller keeps the file rather than writing over it.
+function parseHives(text) {
+  if (text === null || text === undefined) return { v: 1, hives: [], extra: {} };
+  let d;
+  try { d = JSON.parse(String(text)); } catch { return { v: 1, hives: [], extra: {}, error: "The list of Hives couldn't be read." }; }
+  if (!d || typeof d !== 'object' || !Array.isArray(d.hives)) return { v: 1, hives: [], extra: {}, error: "The list of Hives couldn't be read." };
+  if (d.v !== 1) return { v: d.v, hives: [], extra: {}, error: 'The list of Hives was written by a newer app. Update the app to see it.' };
+  const { v, hives, ...extra } = d;
+  const ids = new Set(), list = [];
+  let dropped = 0;
+  for (const h of hives) { const x = validHive(h); if (!x || ids.has(x.id)) { dropped++; continue; } ids.add(x.id); list.push(x); }
+  list.sort((a, b) => a.order - b.order);
+  return { v: 1, hives: list, extra, dropped };
+}
+function stringifyHives(state) {
+  const hives = (state.hives || []).map(validHive).filter(Boolean);
+  return JSON.stringify({ ...(state.extra || {}), v: 1, hives }, null, 1) + '\n';
+}
+// The open windows, as saved. The old file was one rectangle ({x, y, width, height, maximized}): it becomes one window
+// on the local Hive. The new one is { v: 1, windows: [{ hive, x, y, width, height, maximized }] }. A window whose Hive
+// is gone opens on the local Hive; at most 12 come back; with none, one window opens.
+function windowsState(saved, displays, ids = []) {
+  const known = new Set(ids);
+  const list = saved && typeof saved === 'object' && Array.isArray(saved.windows) ? saved.windows : saved && typeof saved === 'object' && 'width' in saved ? [saved] : [];
+  const out = [];
+  for (const w of list.slice(0, 12)) {
+    if (!w || typeof w !== 'object') continue;
+    out.push({ hive: typeof w.hive === 'string' && known.has(w.hive) ? w.hive : null, rect: windowState(w, displays) });
+  }
+  return out.length ? out : [{ hive: null, rect: null }];
+}
+// The right-click menu once there are many Hives (DESIGN-many-hives.md, "Open in new tab"). where(url) says where a URL
+// points: 'this' (this window's Hive), 'hive' (another Hive in the list) or 'outside'. Returns item names in order; '-'
+// separates groups. Saving goes only through this Hive's own session, so only this Hive's files are offered.
+function linkMenu(p, where) {
+  const web = u => /^https?:\/\//i.test(u || '');
+  const groups = [];
+  if (web(p.linkURL)) {
+    const w = where(p.linkURL), g = [];
+    if (w === 'this' || w === 'hive') g.push('openWindow');
+    g.push('openBrowser');
+    if (w === 'this') g.push('saveLink');
+    g.push('copyLink');
+    groups.push(g);
+  }
+  if (p.mediaType === 'image' && web(p.srcURL)) groups.push(where(p.srcURL) === 'this' ? ['copyImage', 'saveImage'] : ['copyImage']);
+  const edit = p.isEditable ? ['cut', 'copy', 'paste', 'selectAll'] : (p.selectionText || '').trim() ? ['copy'] : [];
+  if (edit.length) groups.push(edit);
+  return groups.flatMap((g, i) => i ? ['-', ...g] : g);
+}
+// The menu's words for opening a link outside: the default browser's own name when the system gives one.
+function browserLabel(name) {
+  const n = String(name || '').replace(/\.(app|exe|desktop)$/i, '').replace(/[\u0000-\u001f]/g, '').trim();
+  return n && n.length <= 40 ? `Open link in ${n}` : 'Open link in your browser';
+}
+// The proof a Hive gives that it holds the key, tied to the whole origin (scheme, host and port) as well as the moment.
+function proofString(origin, nonce) { return `proof:${origin}:${nonce}`; }
+
+module.exports = { linkMenu, browserLabel, addressRule, sameHive, newId, hiveUserName, validHive, parseHives, stringifyHives, windowsState, proofString, newerApp, contextItems, downloadPage, downloadPath, appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };

@@ -209,6 +209,43 @@ const title = page => page.locator('#title').textContent();
   assert.ok(fs.existsSync(path.join(dl, 'notes (1).txt')), 'a second download keeps the first');
   assert.ok(page.url().startsWith(`http://127.0.0.1:${port}/`), 'the window stayed on the Hive page');
   console.log('ok download');
+  // Sessions (DESIGN-many-hives.md R1, R11): the local Hive keeps the default session, so a sign-in made before the update stays.
+  const parts = await app.evaluate(({ webContents, session }, port) => webContents.getAllWebContents()
+    .filter(w => w.getURL().startsWith(`http://127.0.0.1:${port}/`)).map(w => w.session === session.defaultSession), port);
+  assert.ok(parts.length && parts.every(Boolean), 'the local Hive is in the default session: ' + parts);
+  console.log('ok local keeps default session');
+  // A session the app didn't set up refuses everything, even for the Hive's own address: a notification and a download.
+  const fresh = await app.evaluate(async ({ BrowserWindow }, port) => {
+    const w = new BrowserWindow({ show: false, webPreferences: { partition: 'persist:e2e-fresh', sandbox: true, contextIsolation: true } });
+    try {
+      await w.loadURL(`http://127.0.0.1:${port}/thread`);
+      const perm = await w.webContents.executeJavaScript('Notification.requestPermission()');
+      const got = await new Promise(res => {
+        w.webContents.session.once('will-download', (_e, item) => setTimeout(() => res(item.getState()), 500));   // the app's own handler ran first
+        w.webContents.downloadURL(`http://127.0.0.1:${port}/file.txt`);
+        setTimeout(() => res('no answer'), 5000);
+      });
+      return { perm, got };
+    } finally { w.destroy(); }
+  }, port);
+  assert.deepStrictEqual(fresh, { perm: 'denied', got: 'cancelled' }, 'a fresh partition denies');
+  console.log('ok fresh partition denies');
+  // A certificate nothing trusts is refused, with no way past it, and the refusal is in the log.
+  const tls = require('https').createServer({ key: fs.readFileSync(path.join(__dirname, 'selfsigned.pem')), cert: fs.readFileSync(path.join(__dirname, 'selfsigned.pem')) },
+    (_q, r) => r.end('<h1 id="bad">should not load</h1>'));
+  await new Promise(r => tls.listen(0, '127.0.0.1', r));
+  const certAt = `https://127.0.0.1:${tls.address().port}/`;
+  const certGot = await app.evaluate(async ({ BrowserWindow }, u) => {
+    const w = new BrowserWindow({ show: false });
+    try { await w.loadURL(u); return 'loaded ' + await w.webContents.executeJavaScript('document.body.innerText'); }
+    catch (e) { return String(e.code || e.message); } finally { w.destroy(); }
+  }, certAt);
+  tls.close();
+  assert.ok(/CERT/.test(certGot), 'a self-signed https page is refused: ' + certGot);
+  const userData = await app.evaluate(({ app }) => app.getPath('userData'));
+  const certLog = fs.readFileSync(path.join(userData, 'app.log'), 'utf8');
+  assert.ok(certLog.includes('certificate refused ' + certAt), 'the refusal is in the log');
+  console.log('ok cert refused');
   await app.close();
 
   // Second start: straight in, no setup.

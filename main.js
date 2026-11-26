@@ -8,6 +8,8 @@ const fs = require('fs');
 const lib = require('./lib');
 
 let win = null, hiveUrl = null, child = null, kept = false, fails = 0, newer = null, shown = null;   // shown: the update notification, kept so its click still arrives
+// The one local Hive, for now (DESIGN-many-hives.md step 2): its rules read its address as it is at the moment of asking.
+const local = { id: 'local', kind: 'local', first: true, url: () => hiveUrl };
 const logFile = () => path.join(app.getPath('userData'), 'app.log');
 const log = t => lib.appendLog(logFile(), t);
 const setupFile = path.join(__dirname, 'setup.html');
@@ -194,9 +196,10 @@ function create() {
   win.on('close', () => { clearTimeout(tick); saveState(win); });
   win.on('closed', () => { win = null; });
   // Links that leave the Hive's own app open in the person's browser; the window itself only ever shows the Hive or the setup screen.
-  const stays = u => (hiveUrl && lib.sameApp(u, hiveUrl));
-  // The same rules for the main window, for a window the web app opens, and for where a server sends either of them on.
-  const guard = wc => {
+  // The same rules for the main window, for a window the web app opens, and for where a server sends either of them on. Each
+  // guard is bound to its own Hive, not to whichever Hive the window shows now (DESIGN-many-hives.md R12).
+  const guard = (wc, hive) => {
+    const stays = u => { const at = hive.url(); return !!at && lib.sameApp(u, at); };
     wc.setWindowOpenHandler(({ url }) => {
       if (stays(url)) return { action: 'allow', overrideBrowserWindowOptions: { autoHideMenuBar: true, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, devTools: !app.isPackaged } } };
       external(url);
@@ -209,13 +212,13 @@ function create() {
     };
     wc.on('will-navigate', nav);
     wc.on('will-redirect', nav);
-    wc.on('did-create-window', w => guard(w.webContents));
+    wc.on('did-create-window', w => guard(w.webContents, hive));
     wc.on('context-menu', (_e, p) => {
       const items = lib.contextItems(p).map(k => k === 'copyLink' ? { label: 'Copy link', click: () => clipboard.writeText(p.linkURL) } : { role: k });
       if (items.length) Menu.buildFromTemplate(items).popup({ window: BrowserWindow.fromWebContents(wc) || win });
     });
   };
-  guard(win.webContents);
+  guard(win.webContents, local);
   // No menu on Windows and Linux, so the keys a View menu would give: zoom, and reload (only while the Hive shows).
   if (process.platform !== 'darwin') win.webContents.on('before-input-event', (e, input) => {
     const a = lib.shortcut(input), wc = win.webContents;
@@ -234,24 +237,43 @@ function create() {
   open();
 }
 
-// Microphone (calls), notifications and the clipboard, for the Hive's own app only.
-function permissions() {
+// Every session is set up before anything loads in it (DESIGN-many-hives.md R1). sessionFor(hive) gives that Hive its own
+// rules: the microphone (calls), notifications and the clipboard for its own pages only, and its files saved to Downloads.
+// Any session it didn't set up (one Electron or a page makes on its own) refuses every permission and every download.
+const PERMS = ['media', 'notifications', 'clipboard-read', 'clipboard-sanitized-write', 'fullscreen'];
+const setUp = new WeakSet();
+app.on('session-created', s => {
+  s.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
+  s.setPermissionCheckHandler(() => false);
+  s.on('will-download', (_e, item) => { if (!setUp.has(s)) item.cancel(); });
+});
+function sessionFor(hive) {
+  // The first local Hive keeps the default session, so today's people keep their sign-in and the page's stored state (R11).
+  const s = hive.first ? session.defaultSession : session.fromPartition('persist:hive-' + hive.id);
+  if (setUp.has(s)) return s;
   const ok = (wc, perm, origin) => {
-    const u = origin || (wc && wc.getURL()) || '';
-    return !!hiveUrl && lib.sameApp(u, hiveUrl) && ['media', 'notifications', 'clipboard-read', 'clipboard-sanitized-write', 'fullscreen'].includes(perm);
+    const at = hive.url(), u = origin || (wc && wc.getURL()) || '';
+    return !!at && lib.sameApp(u, at) && PERMS.includes(perm);
   };
-  session.defaultSession.setPermissionRequestHandler((wc, perm, cb, d) => cb(ok(wc, perm, d && d.requestingUrl)));
-  session.defaultSession.setPermissionCheckHandler((wc, perm, origin) => ok(wc, perm, origin));
+  s.setPermissionRequestHandler((wc, perm, cb, d) => cb(ok(wc, perm, d && d.requestingUrl)));
+  s.setPermissionCheckHandler((wc, perm, origin) => ok(wc, perm, origin));
   // A file the Hive page offers is saved to Downloads under its own name, with no dialog and nothing opened in the window.
-  session.defaultSession.on('will-download', (_e, item, wc) => {
+  s.on('will-download', (_e, item) => {
+    const at = hive.url();
+    if (!at || !lib.sameApp(item.getURL(), at)) return item.cancel();
     const dir = (process.env.HIVE_APP_TEST && process.env.HIVE_APP_DOWNLOADS) || app.getPath('downloads');
     try { fs.mkdirSync(dir, { recursive: true }); } catch { }
-    if (!hiveUrl || !lib.sameApp(item.getURL(), hiveUrl)) return item.cancel();
     const dest = lib.downloadPath(dir, item.getFilename(), fs.existsSync);
     item.setSavePath(dest);
     log('download ' + path.basename(dest));
   });
+  setUp.add(s);
+  return s;
 }
+// A certificate the system doesn't trust is refused, with no "continue anyway" (R2), and no client certificate is ever
+// sent (R3): Electron would otherwise pick the first one in the store by itself.
+app.on('certificate-error', (_e, _wc, url, err, _cert, cb) => { log('certificate refused ' + lib.redact(String(url).split(/[?#]/)[0]) + ': ' + err); cb(false); });
+app.on('select-client-certificate', (e, _wc, _url, _list, cb) => { e.preventDefault(); cb(); });
 
 const fromSetup = e => e.senderFrame && isSetupUrl(e.senderFrame.url) && win && e.sender === win.webContents;
 ipcMain.on('install', (e, accept) => { if (fromSetup(e)) install(accept); });
@@ -275,7 +297,7 @@ else {
   app.whenReady().then(() => {
     if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
     else Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }])); // no View menu: its Reload would skip our guard
-    permissions(); create(); checkNewer();
+    sessionFor(local); create(); checkNewer();
     app.on('activate', () => { if (!win) create(); });
   });
   // Closing the window closes the app. The Hive itself keeps running in the background, as it does without the app.
