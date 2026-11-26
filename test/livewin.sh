@@ -16,7 +16,7 @@ curl -fsSL -A "$UA" "$SITE/download" | grep -q 'href="/downloads/Hive-Setup.exe"
 curl -fsSL -A "$UA" -o "$D/Hive-Setup.exe" "$SITE/downloads/Hive-Setup.exe" || { echo "FAILED live download win32: the download failed"; exit 1; }
 curl -fsSL -A "$UA" -o "$W/SHA256SUMS" "$SITE/downloads/SHA256SUMS" || { echo "FAILED live download win32: no SHA256SUMS"; exit 1; }
 want=$(awk '$2=="Hive-Setup.exe" || $2=="*Hive-Setup.exe" {print $1}' "$W/SHA256SUMS")
-got=$(sha256sum "$D/Hive-Setup.exe" | cut -d' ' -f1)
+got=$(sha256sum < "$D/Hive-Setup.exe" | cut -d' ' -f1)
 [ -n "$want" ] && [ "$got" = "$want" ] || { echo "FAILED live download win32: sum $got, SHA256SUMS says '$want'"; exit 1; }
 size=$(wc -c < "$D/Hive-Setup.exe" | tr -d ' ')
 HIVE_EXPECT_VERSION=$V node test/setupexe.js "$D/Hive-Setup.exe" > "$W/out" 2>&1; rc=$?; cat "$W/out"
