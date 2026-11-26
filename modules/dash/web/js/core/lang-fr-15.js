@@ -1,6 +1,9 @@
 // fr: the words Spanish has in lang-es-4 (focus making, rename, retire), lang-es-19 and -20 (ink: pen toolbar, writing
 // sheets, where ink shows) and lang-es-21 (skills in Settings, a reply's tool and skill lines, the stop words) that French
 // lacked; drive_app_lang_fr found them in English (product-test part 3 by day, 2026-11-26). Exact English keys.
+// E203n: the Stop and send receipt (ui/message.js); rcA names the agent inside it, rcC the same at the start of a line
+const rcA = a => /^the agent$/i.test(a) ? "l'agent" : a.replace(/\bAgent ([A-Z]{1,2})\b/g, "Agent $1").replace(/ and /g, " et ");
+const rcC = a => { const w = rcA(a); return w.charAt(0).toUpperCase() + w.slice(1); };
 const SELF = {
   // es-4: focuses
   "New focus": "Nouveau focus",
@@ -116,9 +119,14 @@ const SELF = {
   "You added it on this Hive, so this deletes its file too. Agents stop using it from their next run.": "Vous l'avez ajoutée sur ce Hive, donc cela supprime aussi son fichier. Les agents cessent de l'utiliser dès leur prochaine exécution.",
   "your skills are under Skills": "vos compétences sont dans Compétences",
   "Stop and send": "Arrêter et envoyer",
-  "Stopped and sent": "Arrêté et envoyé",
   "Send waits for the current step to end. Stop and send tries to cut that step short.": "Envoyer attend la fin de l’étape en cours. « Arrêter et envoyer » tente d’écourter cette étape.",
   __patterns: [
+    [/^Interrupt sent · asking (.+) to stop its step$/, (_, a) => `Interruption envoyée · demande à ${rcA(a)} d’arrêter son étape`],
+    [/^Sent · asking (.+) to stop its step$/, (_, a) => `Envoyé · demande à ${rcA(a)} d’arrêter son étape`],
+    [/^(.+?) stopped its step · it reads this now$/, (_, a) => `${rcC(a)} a arrêté son étape · lit ceci maintenant`],
+    [/^Sent · (.+) reads it when its current step ends$/, (_, a) => `Envoyé · ${rcA(a)} le lira à la fin de son étape en cours`],
+    [/^Read · (.+?) stopped its step at (.+)$/, (_, a, t) => `Lu · ${rcA(a)} a arrêté son étape à ${t}`],
+    [/^Read · (.+?) stopped its step$/, (_, a) => `Lu · ${rcA(a)} a arrêté son étape`],
     [/^Stop .+ now and send this, without waiting for its step to end$/, () => "L'arrêter maintenant et envoyer ceci, sans attendre la fin de son étape"],],
 };
 export default SELF;

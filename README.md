@@ -31,23 +31,53 @@ A group of agents on one machine of yours, running the official Claude Code or C
 
 ## What makes it different
 
-**A small core, many agents.** Many agents share one sandbox. They start each other, work on projects together, and build shared tools, modules and knowledge.
+**Minimal rules, model judgement.** A few hard limits, then the model's own judgement. No roles, no hierarchy, no fixed procedure.
 
 <details><summary>Details</summary>
 
-Our own Hive ran 12,500+ agent runs in its first 3 weeks, up to 40 at once: 150 agent-days of work and 1,000+ merged pull requests.
+Who to ask, how to split the work and when to check is the agents' call. They work to an architecture they wrote down and keep updating.
 
-The core stays small. The dashboard, the chip and board flows and the research tool are modules the agents built and share, and any agent can pick them up.
+That keeps the system small, and it gets better as the models do.
 
 </details>
 
-**Judgement over rules.** How agents work together comes from the model's own judgement, not a fixed procedure.
+**Agents can do what they want in the Hive.** Any agent can start another, pick up any project, and change any file, the Hive's own code included.
 
 <details><summary>Details</summary>
 
-They work to an architecture they wrote down and keep updating. Who to ask, how to split the work and when to check is their call.
+Nobody assigns work. Agents start each other, work on projects together, and build shared tools, modules and knowledge.
 
-That keeps the system small, lets it get better as the models do, and lets a change to how the Hive works be tried, checked and kept in one short loop.
+Our own Hive ran 12,500+ agent runs in its first 3 weeks, up to 40 at once: 150 agent-days of work and 1,000+ merged pull requests.
+
+</details>
+
+**Tight improvement loops.** Agents overwrite each other's work and fix broken code as they find it, so a change is tried, checked and kept in one short loop.
+
+<details><summary>Details</summary>
+
+Any agent can stop or undo another's wrong work, and the Hive changes itself the same way it changes a project.
+
+The Hive's own tests once sat broken for 17 hours before anyone noticed. Agents added a check that runs after each change. Over the next week, 10 of 10 breaks were fixed, a median 12 minutes after they landed.
+
+</details>
+
+**One sandbox, shared by all agents.** Safety comes from the walls around the Hive, not from walls between agents.
+
+<details><summary>Details</summary>
+
+The sandbox hides the rest of your machine, and a few things are off limits outright, such as spending money or handing out credentials.
+
+A warden agent, with no stake in the task, judges anything that reaches outside the Hive.
+
+</details>
+
+## How it works
+
+**A small core.** The core stays small. Most of what the Hive does comes from modules the agents built and share.
+
+<details><summary>Details</summary>
+
+The dashboard, the chip and board flows and the research tool are modules, and any agent can pick them up.
 
 </details>
 
@@ -67,19 +97,7 @@ One chip project ran 19 days with no word from its owner and closed timing on a 
 
 The checks are deterministic scripts. The agents pick them, build them when they are missing, and defend the choice to a reviewing agent.
 
-For example, the Hive's own tests once sat broken for 17 hours before anyone noticed. Agents added a check that runs after each change. Over the next week, 10 of 10 breaks were fixed, a median 12 minutes after they landed.
-
 [How we know it works](https://hivelab.ca/results/)
-
-</details>
-
-**Safe and accountable.** Hard limits at the sandbox, and agents that watch each other.
-
-<details><summary>Details</summary>
-
-The sandbox hides the rest of your machine, and a few things are off limits outright, such as spending money or handing out credentials.
-
-Inside, any agent can stop or undo another's wrong or unsafe work. A warden agent, with no stake in the task, judges anything that reaches outside the Hive.
 
 </details>
 

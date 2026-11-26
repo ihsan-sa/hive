@@ -468,6 +468,8 @@ export default {
     [/^Summary by (.+)$/, "$1による要約"],
     [new RegExp(`^(.+) wrote back ${AGO}$`), (_, n, t) => `${who(n)}が${ago(t)}返信しました`],
     [new RegExp(`^(.+) wrote last, ${AGO}(?:; (.+) picked it up and (wrote nothing back|has written nothing back yet))?$`), (_, n, t, a, y) => `最後のメッセージは${nm(n)}、${when(t)}${a ? `。${LOW[a] || who(a)}が受け取りましたが、${y[0] === "w" ? "返信はありません" : "まだ返信していません"}` : ""}`],
+    // a finished chat's head: an agent has the last word (threadStand case 7, E203n)
+    [/^(just now|\d+(?:[.,]\d)?[smhd] ago), from (.+)$/, (_, t, n) => `${when(t)}、${LOW[n] || nm(n)}から`],
     [/^(.+) picked it up and has written nothing back yet$/, (_, n) => `${who(n)}が受け取りましたが、まだ返信していません`],
     [/^(.+) waits for your answer$/, (_, n) => `${who(n)}があなたの返答を待っています`],
     [/^(.+) stopped answering$/, (_, n) => `${who(n)}が応答を停止しました`],

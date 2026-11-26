@@ -673,7 +673,7 @@ export default {
     [/^Added to by (.+)$/, "$1 ने जोड़ा"],
     [/^Renamed from (.+)$/, "पहले का नाम $1"],
     [/^Moved to (.+)$/, "$1 में ले जाया गया"],
-    [/^Read (.+)$/, "$1 पढ़ें"],
+    [/^Read (?!· )(.+)$/, "$1 पढ़ें"],
     [/^No backup commit from (.+) to (.+): not recorded$/, "$1 से $2 तक कोई बैकअप कमिट नहीं: दर्ज नहीं"],
     // E18l: a message's name for screen readers and a chart mark's title: who, then the date (already in the chosen language).
     [/^You, (\d+(?:[.,]\d)?[smhd]) ago: (.+)$/s, "आप, $1 पहले: $2"],

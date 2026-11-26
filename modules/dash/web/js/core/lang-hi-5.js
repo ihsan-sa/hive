@@ -470,6 +470,8 @@ export default {
     [/^Summary by (.+)$/, "$1 द्वारा सारांश"],
     [new RegExp(`^(.+) wrote back ${AGO}$`), (_, n, t) => `${ne(n)} ${when(t)} जवाब दिया`],
     [new RegExp(`^(.+) wrote last, ${AGO}(?:; (.+) picked it up and (wrote nothing back|has written nothing back yet))?$`), (_, n, t, a, y) => `आख़िरी संदेश: ${nm(n)}, ${when(t)}${a ? `; ${LOW[a] || who(a)} ने इसे उठाया और ${y[0] === "w" ? "कोई जवाब नहीं लिखा" : "अभी तक कोई जवाब नहीं लिखा"}` : ""}`],
+    // a finished chat's head: an agent has the last word (threadStand case 7, E203n)
+    [/^(just now|\d+(?:[.,]\d)?[smhd] ago), from (.+)$/, (_, t, n) => `${when(t)}, ${LOW[n] || nm(n)} से`],
     [/^(.+) picked it up and has written nothing back yet$/, (_, n) => `${ne(n)} इसे उठाया और अभी तक कोई जवाब नहीं लिखा`],
     [/^(.+) waits for your answer$/, (_, n) => `${who(n)} आपके जवाब की प्रतीक्षा में है`],
     [/^(.+) stopped answering$/, (_, n) => `${who(n)} ने जवाब देना बंद कर दिया`],

@@ -655,6 +655,7 @@ def open_steps(out):
     return list(calls.values())
 
 INTERRUPT_MIN_S = 5  # a command younger than this ends on its own about as soon: let it
+INTERRUPT_END_S = 3  # how long a signalled command has to exit before "stopped" can no longer be said of it
 
 # A foreground loop that only waits: `until …; sleep`, `while …; do sleep`. Posts reach a run only when a tool call ends, so the
 # person's "stop the print asap" sat 200 s behind aca94's `until … sleep 20` (112600330ff4, D16): the starter ends such a loop for
@@ -686,7 +687,8 @@ def interrupt_step(name, post_id=None, only=None, min_s=None):
     does, so the hook hands the post over now (the call ends as a failure, and PostToolUseFailure runs inbox.py) instead of
     after it. Only when it can be done cleanly: one open step, and it is a Bash call in the foreground, with exactly one shell
     of that shape under the claude process that is no background shell (each of those is named in the stream by its task
-    id). That shell and everything under it get SIGTERM, nothing harder, so a command can tidy up. Anything else (a file
+    id). That shell and everything under it get SIGTERM, nothing harder, so a command can tidy up; it counts as stopped only once
+    all of them have exited (the page's receipt quotes this), else it was only asked to. Anything else (a file
     edit, a web fetch, a subagent, several shells) is left to end on its own. Returns what it did, in a few words."""
     try: rec = json.loads((RUN / f"{name}.json").read_text())
     except (OSError, ValueError): return "no run record"
@@ -724,9 +726,17 @@ def interrupt_step(name, post_id=None, only=None, min_s=None):
     q, age = shells[0]
     if age < (INTERRUPT_MIN_S if min_s is None else min_s): return "the command just started"
     if only is not None and not only_sleeping(q): return "the loop is not sleeping now"
-    for k in reversed(tree_of(q)):
+    tree = tree_of(q)
+    for k in reversed(tree):
         try: os.kill(k, signal.SIGTERM)
         except OSError: pass
+    def runs(k):
+        try: return Path(f"/proc/{k}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+        except (OSError, IndexError): return False
+    end = time.monotonic() + INTERRUPT_END_S
+    while any(runs(k) for k in tree):
+        if time.monotonic() >= end: return "asked the command to stop"
+        time.sleep(0.1)
     return "stopped the running command"
 
 def stop_wait_loops(st):
@@ -2115,6 +2125,15 @@ def person_choice_note(posts):
             "they can undo, or take their words as given and go on, then show it and say in one line what you'd change on their word. "
             "Ask back only for what only they have (their own facts, money, an account).")
 
+def first_line_note(posts):
+    """improve-survey 11-26 (a1b7b): of the 31 waits over 120 s for a reply to the person in 11-19..26 (one per reply), 13 were runs
+    woken within 30 s that then worked 2 to 6 min before their first post in the thread; orientation's "post one line first" sits deep
+    in the system prompt and was not followed. Said at the top of the waking prompt, only when the person wrote a waking post."""
+    if not any(str(p.get("from", "")).lower() == "person" for p in posts): return ""
+    return (" If answering the person takes more than about two minutes of work (reading files, running checks, building), first post one "
+            "line in their thread saying what you are taking and when to expect the result, then do the work: they chase after a minute "
+            "of silence. An answer you can give from what you know or one quick look needs no such line.")
+
 SHORT_ASK = re.compile(r"\b(in (a|one|two|three|a couple of) (few )?(lines?|sentences?|words)|in a few lines|briefly|short answer|in short|tl;?dr|quick(ly)? explain|one[- ]liner|keep it (short|brief))\b", re.I)
 
 def short_ask_note(posts):
@@ -2424,7 +2443,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
         if str(first.get("from", "")).lower() == "person":   # R46: "He said yes to $150" in a new thread got a question back (aadf9, 11-13)
             prompt += ("If it reads as the next step of an earlier chat, find that chat (`hive search`, `hive read --since 2d`) and act on the best match, "
                        "saying which one; ask only when nothing matches. ")
-    if not resume: prompt += person_choice_note(posts) + short_ask_note(posts)
+    if not resume: prompt += first_line_note(posts) + person_choice_note(posts) + short_ask_note(posts)
     if heir_of:
         prompt += (f" You are a new agent taking over from @{heir_of['name']}, which isn't being brought back because {heir_of['why']}. You have none of its memory. "
                    f"Its stream log, if a detail isn't in the thread or on disk, is {heir_of['out']}: search it, don't read it whole.")
@@ -2441,7 +2460,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
                   # posted a wait, or answered a different question (a732a, a81d2, a87dc), or said done without checking (a38af).
                   "Do what that post asks first, in its thread, before your own rung or wait: answer its question, or do its work, "
                   "or say plainly why you can't. Check before you say something is done."
-                  + reply_back_note(name, posts) + person_choice_note(posts) + short_ask_note(posts))
+                  + reply_back_note(name, posts) + first_line_note(posts) + person_choice_note(posts) + short_ask_note(posts))
     elif resume and woken and any(p.get("supersede") for p in woken["posts"]):
         sup = [p for p in woken["posts"] if p.get("supersede")]; other = [p for p in woken["posts"] if not p.get("supersede")]
         new = "; ".join(f"{p['id']} in thread {p.get('thread', p['id'])}" for p in sup)

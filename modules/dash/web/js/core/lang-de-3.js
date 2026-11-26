@@ -671,7 +671,7 @@ export default {
     [/^Added to by (.+)$/, "Ergänzt von $1"],
     [/^Renamed from (.+)$/, "Umbenannt von $1"],
     [/^Moved to (.+)$/, "Verschoben nach $1"],
-    [/^Read (.+)$/, "$1 lesen"],
+    [/^Read (?!· )(.+)$/, "$1 lesen"],
     [/^No backup commit from (.+) to (.+): not recorded$/, "Keine Sicherung von $1 bis $2: nicht aufgezeichnet"],
     // E18l: a message's name for screen readers and a chart mark's title: who, then the date (already in the chosen language).
     [/^You, (\d+(?:[.,]\d)?[smhd]) ago: (.+)$/s, "Du, vor $1: $2"],

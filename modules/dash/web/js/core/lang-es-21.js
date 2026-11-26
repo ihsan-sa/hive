@@ -1,5 +1,9 @@
 // es: the skills words in Settings (settings.js modules and connectors), a reply's tool and skill lines (message.js),
 // and the stop words (actions.js, model.js). Exact English keys.
+// E203n: the Stop and send receipt (ui/message.js); rcA names the agent inside it, rcC the same at the start of a line
+const rcA = a => /^the agent$/i.test(a) ? "el agente" : a.replace(/\bAgent ([A-Z]{1,2})\b/g, "Agente $1").replace(/ and /g, " y ");
+const rcC = a => { const w = rcA(a); return w.charAt(0).toUpperCase() + w.slice(1); };
+const to = w => w.startsWith("el ") ? "al " + w.slice(3) : "a " + w;
 const SELF = {
   "A skill your agents can use.": "Una habilidad que tus agentes pueden usar.",
   "Adding…": "Añadiendo…",
@@ -36,9 +40,14 @@ const SELF = {
   "You added it on this Hive, so this deletes its file too. Agents stop using it from their next run.": "La añadiste en este Hive, así que esto también borra su archivo. Los agentes dejan de usarla desde su próxima ejecución.",
   "your skills are under Skills": "tus habilidades están en Habilidades",
   "Stop and send": "Parar y enviar",
-  "Stopped and sent": "Parado y enviado",
   "Send waits for the current step to end. Stop and send tries to cut that step short.": "Enviar espera a que termine el paso actual. Parar y enviar intenta cortar ese paso.",
   __patterns: [
+    [/^Interrupt sent · asking (.+) to stop its step$/, (_, a) => `Interrupción enviada · pidiendo ${to(rcA(a))} que pare su paso`],
+    [/^Sent · asking (.+) to stop its step$/, (_, a) => `Enviado · pidiendo ${to(rcA(a))} que pare su paso`],
+    [/^(.+?) stopped its step · it reads this now$/, (_, a) => `${rcC(a)} paró su paso · lo lee ahora`],
+    [/^Sent · (.+) reads it when its current step ends$/, (_, a) => `Enviado · ${rcA(a)} lo lee cuando termine su paso actual`],
+    [/^Read · (.+?) stopped its step at (.+)$/, (_, a, t) => `Leído · ${rcA(a)} paró su paso a las ${t}`],
+    [/^Read · (.+?) stopped its step$/, (_, a) => `Leído · ${rcA(a)} paró su paso`],
     [/^Stop .+ now and send this, without waiting for its step to end$/, () => "Pararlo ya y enviar esto, sin esperar a que termine su paso"],
   ],
 };

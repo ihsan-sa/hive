@@ -70,7 +70,7 @@ export function delivery(p, m) {
     return { key: "seen", tone: "good", text: t ? `Reached ${m} · ${clock(t)}` : `Reached ${m}`, who: m, t };
   }
   // The Interrupt button's post: the starter stops a long command the agent is waiting on, so it reads this at once.
-  if (p.interrupt && isRunning(m)) return { key: "interrupt", tone: "info", text: `Interrupt sent · ${m} gets it now`, who: m };
+  if (p.interrupt && isRunning(m)) return { key: "interrupt", tone: "info", text: `Interrupt sent · asking ${m} to stop its step`, who: m };
   // A running agent gets the post from its hook after its current step, even while the starter also holds it for the next start.
   if (isRunning(m)) return { key: "waiting", tone: "quiet", text: `Sent · reaches ${m} after its current step`, who: m };
   // held for a run stopped at a usage limit: it reads this when that run carries on, which can be days away (a model's own share), so the receipt
@@ -92,7 +92,7 @@ const RMARK = { seen: "✓", interrupt: "!", waiting: "…", queued: "…", unse
 // The person's newest post in each thread carries its receipt even once seen; older ones only while not seen.
 let lastMine = { ver: -1, by: {} };
 function isLastMine(p) {
-  if (lastMine.ver !== S.ver) { lastMine = { ver: S.ver, by: {} }; for (const x of S.posts) if (OUTSIDE.has(x.from)) lastMine.by[x.th] = x.id; }
+  if (lastMine.ver !== S.ver) { lastMine = { ver: S.ver, by: {} }; for (const x of S.posts) if (OUTSIDE.has(x.from) && !x.retry_of) lastMine.by[x.th] = x.id; }   // a Retry draws no message of its own, so the receipt stays where it was
   return lastMine.by[p.th] === p.id;
 }
 /** The receipt under your own message: one status line, in words. Always returns the element, empty when there's nothing to say.
@@ -118,15 +118,18 @@ export function messageReceipt(p) {
   const top = ds.reduce((a, d) => RANK[d.key] < RANK[a.key] ? d : a), same = ds.filter(d => d.key === top.key && d.who).map(d => d.who);
   const app = S.app && S.app.app, X = names((same.length ? same : [top.who || "the agent"]).map(n => app && isAgent(n) ? inConversation(p.th, () => agentLabel(n)) : n));   // E10: no agent code in the app look
   el.dataset.key = top.key;
-  if (top.key === "interrupt") { el.dataset.tone = "info"; el.append(icon("stop"), h("span", null, `Interrupting ${X} · it reads this, and anything queued, once its step stops`)); }
+  // A Stop and send has one status line, this one, and says "stopped" only when the starter's log says a step was stopped.
+  const cut = p.interrupt ? S.cut[p.id] : null, stopped = !!cut && cut.did === "stopped the running command";
+  if (top.key === "interrupt") { el.dataset.tone = "info"; el.dataset.int = "";
+    el.append(icon("stop"), h("span", null, !cut ? `Sent · asking ${X} to stop its step` : stopped ? `${capFirst(X)} stopped its step · it reads this now` : `Sent · ${X} reads it when its current step ends`)); }
   else if (top.key === "unseen") { el.dataset.tone = "bad"; el.append(h("span", { class: "st", "data-tone": "bad", "aria-hidden": "true" }), h("span", null, top.who ? `Hasn't reached ${X}` : top.text)); }
   else if (top.key === "queued") {   // a held message names its agent as the rest do (X: no code in the app look) and, when its run is paused at a limit, when it reads it (HA-16)
     const at = same.length < 2 && top.at, words = !top.start ? top.text : top.held ? (at ? `Waiting for ${X} · it reads this after ${stamp(at)}` : `Waiting for ${X} · it reads this when ${X} ${same.length > 1 ? "are" : "is"} free`) : `Waiting for ${X} to start`;
     el.dataset.tone = "warn"; if (at) el.dataset.at = String(at); el.append(h("span", { class: "st", "data-tone": "warn", "aria-hidden": "true" }), h("span", null, words)); }
   else if (top.key === "waiting") { el.dataset.tone = "warn"; el.append(h("span", { class: "st", "data-tone": "warn", "aria-hidden": "true" }), h("span", null, `Queued · ${X} reads it after its current step`)); }
-  else if (p.interrupt) {
-    const t = (DELIV.at[top.who] && DELIV.at[top.who].get(p.id)) || top.t || 0;
-    el.append(icon("stop"), h("span", null, `Interrupted ${X} · it stopped its step${t ? " at " + clock(t) : ""}`));
+  else if (stopped) {
+    const t = cut.t || 0; el.dataset.int = "";
+    el.append(icon("stop"), h("span", null, `Read · ${X} stopped its step${t ? " at " + clock(t) : ""}`));
   } else if (last || all) {
     const t = same.length === 1 && top.t;
     el.append(icon("check"), h("span", null, /started on it|took it for/.test(top.text) ? top.text : app ? "Read" : `Read by ${X}`), t ? h("span", { class: "msg-st-t" }, "· " + clock(t)) : "");   // append(null) would write "null"
@@ -535,7 +538,6 @@ function appMessage(p, opts) {
     "data-state": kind === "me" && p.interrupt ? "interrupt" : null, "data-asks": asks ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
     msgAvatar(p, kind),
     h("div", { class: "msg-c" },
-      kind === "me" && p.interrupt ? h("span", { class: "msg-mark" }, icon("stop"), "Stopped and sent") : null,
       messageHead(p, { ...opts, asks }),
       relayLine(p),
       p.reply_to ? quote(p) : null,

@@ -672,7 +672,7 @@ export default {
     [/^Added to by (.+)$/, "$1 が追記"],
     [/^Renamed from (.+)$/, "$1 から名前変更"],
     [/^Moved to (.+)$/, "$1 に移動"],
-    [/^Read (.+)$/, "$1 を読む"],
+    [/^Read (?!· )(.+)$/, "$1 を読む"],
     [/^No backup commit from (.+) to (.+): not recorded$/, "$1 から $2 までバックアップのコミットなし: 記録なし"],
     // a message's name for screen readers and a chart mark's title: who, then the date
     [/^You, (\d+(?:[.,]\d)?[smhd]) ago: (.+)$/s, (_, t, x) => `あなた、${agoJa(t)}: ${x}`],

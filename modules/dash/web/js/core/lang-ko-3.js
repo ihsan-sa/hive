@@ -675,7 +675,7 @@ export default {
     [/^Added to by (.+)$/, "$1이(가) 추가함"],
     [/^Renamed from (.+)$/, "$1에서 이름이 바뀜"],
     [/^Moved to (.+)$/, "$1(으)로 이동됨"],
-    [/^Read (.+)$/, "$1 읽기"],
+    [/^Read (?!· )(.+)$/, "$1 읽기"],
     [/^No backup commit from (.+) to (.+): not recorded$/, "$1부터 $2까지 백업 커밋 없음: 기록 없음"],
     // a message's name for screen readers and a chart mark's title: who, then the date (already in the chosen language).
     [/^You, (\d+(?:[.,]\d)?[smhd]) ago: (.+)$/s, (_, t, x) => `나, ${agoKo(t)}: ${x}`],

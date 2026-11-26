@@ -672,7 +672,7 @@ export default {
     [/^Added to by (.+)$/, "Integrata da $1"],
     [/^Renamed from (.+)$/, "Rinominata da $1"],
     [/^Moved to (.+)$/, "Spostata in $1"],
-    [/^Read (.+)$/, "Leggi $1"],
+    [/^Read (?!· )(.+)$/, "Leggi $1"],
     [/^No backup commit from (.+) to (.+): not recorded$/, "Nessun commit di backup da $1 a $2: non registrato"],
     // E18l: a message's name for screen readers and a chart mark's title: who, then the date (already in the chosen language).
     [/^You, (\d+(?:[.,]\d)?[smhd]) ago: (.+)$/s, "Tu, $1 fa: $2"],
