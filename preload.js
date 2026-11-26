@@ -7,6 +7,8 @@ if (location.protocol === 'file:') contextBridge.exposeInMainWorld('hive', {
   version: ipcRenderer.sendSync('version'),
   quit: () => ipcRenderer.send('quit'),
   download: () => ipcRenderer.send('download'),
+  rosetta: ipcRenderer.sendSync('rosetta'),
+  chipDownload: () => ipcRenderer.send('chip-download'),
   askNewer: () => ipcRenderer.send('newer?'),
   on: (name, fn) => ipcRenderer.on(name, (_e, ...a) => fn(...a)),
 });

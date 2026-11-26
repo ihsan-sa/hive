@@ -255,6 +255,10 @@ ipcMain.on('retry', e => { if (fromSetup(e)) open(); });
 ipcMain.on('copy', (e, text) => { if (fromSetup(e)) clipboard.writeText(lib.redact(text).slice(0, 200000) + '\n\nApp log (latest):\n' + lib.tailLog(logFile())); });
 ipcMain.on('version', e => { e.returnValue = fromSetup(e) ? app.getVersion() : ''; });
 ipcMain.on('download', e => { if (fromSetup(e)) external(lib.downloadPage('update')); });   // the setup screen's "newer app" link
+// The Intel app on an Apple chip Mac runs under Rosetta: it works, but its first start is slower (96 s against 3 s on the
+// runner), so the setup screen says the Apple chip download is there and links to the download page.
+ipcMain.on('rosetta', e => { e.returnValue = fromSetup(e) && process.platform === 'darwin' && !!app.runningUnderARM64Translation; });
+ipcMain.on('chip-download', e => { if (fromSetup(e)) external(lib.downloadPage()); });
 // The setup screen asks once its listener is up, so a notice that arrived while the page was loading isn't lost.
 ipcMain.on('newer?', e => { if (fromSetup(e) && newer) e.sender.send('newer', newer); });
 ipcMain.on('quit', e => { if (fromSetup(e)) app.quit(); });

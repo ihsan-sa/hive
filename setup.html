@@ -59,6 +59,11 @@ function show(state, p) {
   $('title').focus();   // a screen change moves the reader to the new heading; Tab then reaches the buttons
 }
 $('ver').textContent = 'Hive app ' + hive.version;
+if (hive.rosetta) {   // the Intel app on an Apple chip Mac
+  const b = document.createElement('button'); b.id = 'rosetta'; b.className = 'link';
+  b.textContent = 'This Mac has an Apple chip: the Apple chip download opens faster'; b.onclick = () => hive.chipDownload();
+  $('ver').append(' · ', b);
+}
 hive.on('state', show);
 hive.on('newer', v => {
   if ($('newer')) return;

@@ -30,6 +30,8 @@ const hiveUrl = /^http:\/\/(localhost|127\.0\.0\.1):\d+\//;
 // The app opens the Hive at /login#key, which signs in and goes on; only a page past /login is the Hive signed in.
 const signedIn = u => hiveUrl.test(u) && !/^http:\/\/[^/]+\/login\b/.test(u);
 const wantSetup = process.env.HIVE_DL_EXPECT === 'setup';
+// HIVE_DL_ROSETTA=1: the Intel zip on an Apple chip Mac, whose setup screen must say the Apple chip download opens faster.
+const wantRosetta = process.env.HIVE_DL_ROSETTA === '1';
 if (newer && (!fs.existsSync(newer) || !newVersion)) { console.error('usage: node test/macdl.js OLD.zip [NEW.zip NEW-VERSION]'); process.exit(2); }
 // Unpacked as the browser leaves it (the download mark on every file), then dragged into Applications (a move keeps the mark).
 function download(file) {
@@ -62,12 +64,17 @@ async function open(shot) {
     if ((wantSetup ? t === 'Set up the Hive' || hiveUrl.test(at) : signedIn(at)) || Date.now() > end) break;
     await sleep(500);
   }
+  const rosetta = await app.evaluate(({ app: a }) => !!a.runningUnderARM64Translation).catch(() => null);
+  const line = await page.evaluate(() => document.querySelector('#rosetta')?.textContent || '').catch(() => '');
+  console.log(`mac rosetta: runningUnderARM64Translation is ${rosetta}; ${line ? `setup line: "${line}"` : 'no setup line'}`);
+  const rosettaFail = rosetta !== wantRosetta ? `the app says runningUnderARM64Translation is ${rosetta}, not ${wantRosetta}`
+    : wantSetup && !!line !== wantRosetta ? (line ? `the setup screen says "${line}" on a Mac where the app is native` : 'the setup screen under Rosetta has no line about the Apple chip download') : '';
   fs.mkdirSync('test/shots', { recursive: true });
   await page.screenshot({ path: `test/shots/${shot}.png` }).catch(() => { });
   const fail = wantSetup ? (hiveUrl.test(at) ? `the app from ${dest} opened a Hive page (${at}) on a machine with no Hive`
-      : t !== 'Set up the Hive' ? `the app from ${dest} never showed its setup screen (at "${at}", "${t}")` : '')
+      : t !== 'Set up the Hive' ? `the app from ${dest} never showed its setup screen (at "${at}", "${t}")` : rosettaFail)
     : !signedIn(at) ? `the app from ${dest} never reached the Hive signed in (at "${at}", "${t}"); is the Hive from test/real.js there?`
-    : sawSetup ? `the app from ${dest} showed the setup screen ("${t}") before the Hive` : '';
+    : sawSetup ? `the app from ${dest} showed the setup screen ("${t}") before the Hive` : rosettaFail;
   if (fail) { await app.close().catch(() => { }); throw new Error(fail); }
   const name = await page.title().catch(() => '');
   return { app, at: wantSetup ? `its setup screen ("${t}"; no Hive on this machine)` : `straight to the Hive at ${at} (${name})` };
