@@ -37,7 +37,7 @@ export default {
   "Only the last 7 days are listed. Show every conversation.": "최근 7일만 표시하고 있습니다. 모든 대화 보기.",
   "Drag to resize, or click to widen a step (from the widest it goes back to the narrowest); double-click resets": "드래그하면 크기가 바뀌고, 클릭하면 한 단계씩 넓어집니다(가장 넓으면 가장 좁은 크기로 돌아갑니다). 더블클릭하면 초기화됩니다.",
   "Resize the conversation list": "대화 목록 크기 조절",
-  "Pin, mark important, archive": "고정, 중요 표시, 보관",
+  "Pin, mark important, move, archive": "고정, 중요 표시, 이동, 보관",
   "Actions for this conversation": "이 대화의 작업",
   "done": "완료",
   "not picked up": "미처리",

@@ -2702,6 +2702,9 @@ BROKEN = re.compile(r"object file \S+ is empty|could not parse HEAD|bad (tree )?
 UNREADABLE = re.compile(r"unable to index file '(.+?)'")
 RACY = re.compile(r"File exists|unable to stat|unstable object source data|Changes not staged|no changes added|unable to index file|failed to insert into database|error: open\(")
 git_fsync, backup_seen = [], []
+# A repack's memory, bounded: 2 threads x 256 MB of delta window plus 128 MB of cache. Unbounded (a thread per core, no window cap),
+# git's own gc after a backup commit took 8.5 GB over board.jsonl's versions and stalled the machine for an hour (11252356ad8b).
+PACK_LIMIT = ["-c", "pack.threads=2", "-c", "pack.windowMemory=256m", "-c", "pack.deltaCacheSize=128m"]
 
 def home_git(*args, input=None):
     """git in ~, made to flush each object it writes to disk. Git doesn't by default: after a power cut the newest objects came back
@@ -2713,7 +2716,7 @@ def home_git(*args, input=None):
         git_fsync[:] = (["-c", "core.fsync=committed", "-c", "core.fsyncMethod=batch"] if v >= (2, 37) else ["-c", "core.fsync=committed"]
                         if v >= (2, 36) else ["-c", "core.fsyncObjectFiles=true"])  # batch: one flush for a whole `git add`
     sb = box()
-    cmd = ["git", *(["-c", "diff.ignoreSubmodules=all", "-c", "core.fsmonitor=false"] if sb else []), *git_fsync, *args]
+    cmd = ["git", *(["-c", "diff.ignoreSubmodules=all", "-c", "core.fsmonitor=false"] if sb else []), *git_fsync, *PACK_LIMIT, *args]
     try: return subprocess.run(cmd, cwd=HOME, capture_output=True, text=True, errors="replace", input=input,
                                env={**os.environ, "GIT_NO_LAZY_FETCH": "1"} if sb else None)
     except OSError as e: return subprocess.CompletedProcess(cmd, 127, "", str(e))

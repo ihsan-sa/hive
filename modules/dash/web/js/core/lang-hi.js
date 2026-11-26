@@ -37,7 +37,7 @@ export default {
   "Only the last 7 days are listed. Show every conversation.": "केवल पिछले 7 दिन दिखाए गए हैं। सभी बातचीतें दिखाएँ।",
   "Drag to resize, or click to widen a step (from the widest it goes back to the narrowest); double-click resets": "आकार बदलने के लिए खींचें, या एक कदम चौड़ा करने के लिए क्लिक करें (सबसे चौड़े से यह सबसे संकरे पर लौट आता है); डबल-क्लिक से रीसेट होता है",
   "Resize the conversation list": "बातचीत सूची का आकार बदलें",
-  "Pin, mark important, archive": "पिन करें, महत्वपूर्ण चिह्नित करें, संग्रहित करें",
+  "Pin, mark important, move, archive": "पिन करें, महत्वपूर्ण चिह्नित करें, ले जाएँ, संग्रहित करें",
   "Actions for this conversation": "इस बातचीत की क्रियाएँ",
   "done": "पूर्ण",
   "not picked up": "अभी शुरू नहीं हुआ",

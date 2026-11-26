@@ -24,6 +24,15 @@ die() { echo "hive: $*" >&2; exit 1; }
 # A stop inside the VM's own install is asked about by that install when it has a terminal, which the VM has not; then this asks, and sends the same fixed words. Wrong OS, an unknown option, sudo and the test-build gate are refusals, not failures: they offer nothing.
 REPORT_URL="${HIVE_SHARE_URL:-https://hive-reports.ihsan.cc/v1/report}"
 STOP=""; WHY=""
+# Why the VM didn't start, in Lima's own words: the last error or fatal lines of its log (JSON or key=value), at most two, cut short.
+# limactl itself says only "exiting, status=..."; the cause, such as "Virtualization is not available on this hardware", is in this file.
+vm_why() {
+  [ -r "$1" ] || return 0
+  w=$(grep -E '"level":"(error|fatal)"|level=(error|fatal)' "$1" 2>/dev/null | grep -v 'exiting, status=' | tail -n 2)
+  [ -n "$w" ] || w=$(grep -v '^[[:space:]]*$' "$1" 2>/dev/null | tail -n 1)
+  [ -z "$w" ] || printf '%s\n' "$w" | sed -E -e 's/.*"msg":"(([^"\\]|\\.)*)".*/\1/' -e 's/.*msg="(([^"\\]|\\.)*)".*/\1/' -e 's/\\"/"/g' \
+    | cut -c 1-300 | sed 's/^/hive: Lima says: /' >&2
+}
 stage() { STOP=$1; WHY=$2; }
 stop_report() {
   rc=$1
@@ -302,7 +311,7 @@ main() {
   fi
   stage vm-start "starting the VM failed"
   [ "$("$L" list "$VM" --format '{{.Status}}' 2>/dev/null)" = Running ] || "$L" start --tty=false "$VM" \
-    || die "the VM didn't start. Its log is in $LIMA_HOME/$VM/ha.stderr.log"
+    || { vm_why "$LIMA_HOME/$VM/ha.stderr.log"; die "the VM didn't start. Its log is in $LIMA_HOME/$VM/ha.stderr.log"; }
 
   # The normal Linux install, as root in the VM. Run again, it updates.
   stage vm-install "the install in the VM failed"

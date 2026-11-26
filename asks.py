@@ -13,7 +13,7 @@ direction: never done, listed by `hive asks directions`, and written to ~/kb/dir
   hive asks own ID [--owner NAME]           you (or NAME) are on it
   hive asks done ID --evidence POSTID [--why ...] [--left STEP]   finished, and the thread says so; --left gives a step still owed by the person its own row
   hive asks hold|person|drop ID --why ...   held by kb/priorities.md | waits on the person | withdrawn or merged
-  hive asks reopen ID --why ...             the hold or wait is over: open again, for someone to own (check lists set-aside asks whose reason may have lapsed)
+  hive asks reopen ID [--owner NAME] --why  the hold or wait is over: open again, for someone to own (owned at once with --owner) (check lists set-aside asks whose reason may have lapsed)
   hive asks show ID
   hive asks directions [--write]            standing guidance; --write refreshes ~/kb/direction.md
   hive asks reconcile [IDS] [--all]         a model reads the thread of each open ask that agents have posted in since the last run and
@@ -248,7 +248,7 @@ def cmd_check(a):
     if lapsed:
         groups = {}
         for e, w in lapsed: groups.setdefault(w, []).append(e)
-        print(f"\n{len(lapsed)} set-aside asks whose reason may have lapsed (read `kb/priorities.md` and the thread; `reopen ID --why` if the hold is over, `hold|person ID --why` again to refresh it):")
+        print(f"\n{len(lapsed)} set-aside asks whose reason may have lapsed (read `kb/priorities.md` and the thread; `reopen ID --why` if the hold is over, with `--owner NAME` when an agent is on it, `hold|person ID --why` again to refresh it):")
         for w, es in groups.items():
             print(f"  {w}:")
             for e in es[:a.limit]: print("  " + fmt(e))
@@ -330,8 +330,10 @@ def cmd_drop(a): need_why(a); set_status(a.id, "dropped", why=a.why); print(f"{a
 def cmd_reopen(a):
     need_why(a)
     if ledger().get(a.id, {}).get("status") not in WAITING: sys.exit(f"{a.id} is not held or waiting on the person: `own` it or `done` it")
+    if getattr(a, "owner", None):  # the reopener names who works it: owned in one row, not open-then-own (12 of 18 reopens 11-19..26 did it in two, and the gap tripped asks_unowned twice)
+        r = set_status(a.id, "owned", owner=a.owner.lstrip("@"), why=a.why); print(f"{a.id}: open again and owned by {r['owner']} ({a.why})"); return
     append(LEDGER, {"id": a.id, "at": iso(), "by": me(), "status": "open", "why": a.why, "owner": None})  # the old owner released it when it was set aside
-    print(f"{a.id}: open again ({a.why}), nobody's until someone owns it")
+    print(f"{a.id}: open again ({a.why}), nobody's until someone owns it (`--owner NAME` when an agent is on it)")
 def need_why(a):
     if not a.why: sys.exit("Say why: --why ...")
 
@@ -763,6 +765,7 @@ def main(argv=None):
     p = sp.add_parser("done"); p.add_argument("id"); p.add_argument("--evidence"); p.add_argument("--why", default=""); p.add_argument("--left", help="a step still owed by the person: gets its own row"); p.set_defaults(f=cmd_done)
     for name, f in (("hold", cmd_hold), ("person", cmd_person), ("drop", cmd_drop), ("reopen", cmd_reopen)):
         p = sp.add_parser(name); p.add_argument("id"); p.add_argument("--why", default=""); p.set_defaults(f=f)
+        if name == "reopen": p.add_argument("--owner", help="the agent working it now: reopen straight to owned")
     p = sp.add_parser("directions"); p.add_argument("--write", action="store_true"); p.set_defaults(f=cmd_directions)
     p = sp.add_parser("extract"); p.add_argument("--all", action="store_true"); p.add_argument("--model", default="sonnet"); p.add_argument("--dry", action="store_true"); p.add_argument("--limit", type=int, default=0, help="batches to run, 0 = all"); p.set_defaults(f=cmd_extract)
     p = sp.add_parser("reconcile", help="a model reads each open ask's thread and marks what agents delivered (done with evidence), own, or waits on the person")

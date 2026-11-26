@@ -37,7 +37,7 @@ export default {
   "Only the last 7 days are listed. Show every conversation.": "Seuls les 7 derniers jours sont listés. Afficher toutes les conversations.",
   "Drag to resize": "Fais glisser pour redimensionner",
   "Resize the conversation list": "Redimensionner la liste des conversations",
-  "Pin, mark important, archive": "Épingler, marquer comme important, archiver",
+  "Pin, mark important, move, archive": "Épingler, marquer important, déplacer, archiver",
   "Actions for this conversation": "Actions pour cette conversation",
   "done": "terminé",
   // top bar
