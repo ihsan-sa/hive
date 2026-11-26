@@ -141,6 +141,15 @@ jobs:
         if: matrix.os == 'macos-15'
         timeout-minutes: 15
         run: bash test/livemac.sh
+      # The same for the Intel Mac link, Hive-mac-x64.zip: here the real install above is running, so the live app must go
+      # straight to the Hive, not its setup screen. Read, not red, like the other steps that lean on the real install; the
+      # same name rule holds.
+      - name: the public download link, as an Intel Mac person clicks it
+        if: matrix.os == 'macos-15-intel'
+        continue-on-error: true
+        timeout-minutes: 15
+        env: { HIVE_LIVE_EXPECT: hive }
+        run: bash test/livemac.sh Hive-mac-x64.zip
       # The README's "Remove it" steps, run after the real install: nothing of the Hive may be left.
       - if: runner.os == 'Linux'
         run: HIVE_APP_REAL=1 node test/remove.js
