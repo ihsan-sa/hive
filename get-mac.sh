@@ -179,6 +179,18 @@ case "${1:-}" in
       *) echo "hive vm start, stop or status: the Linux VM the Hive runs in." ;;
     esac
     ;;
+  shell)
+    # hive shell [NAME]: a terminal in a Hive's home as its user; this command's own Hive when no name is given.
+    u=${2:-$HU}
+    case $u in ''|-*|*[!a-z0-9_-]*) u=root ;; esac
+    if [ $# -gt 2 ] || [ "$u" = root ] || [ ${#u} -gt 32 ]; then
+      echo "usage: ${0##*/} shell [NAME], with NAME a Hive's user name (not root)" >&2; exit 2
+    fi
+    up
+    # The VM's own user may sudo (a Hive's user may not); sudo -iu gives that Hive's login shell, in its home.
+    # shellcheck disable=SC2016  # these expand in the VM
+    exec "$L" shell --workdir / hive sh -c 'n=$(id -u "$1" 2>/dev/null) || { echo "There is no Hive called $1 here." >&2; exit 1; }; [ "$n" -ge 1000 ] && [ "$n" != 65534 ] || { echo "$1 is a system user, not a Hive." >&2; exit 1; }; exec sudo -iu "$1"' _ "$u"
+    ;;
   open)
     up; a=$(address)
     case "$a" in http://localhost*|http://127.0.0.1*) ;; *) echo "hive: no address yet. Try: hive web" >&2; exit 1 ;; esac

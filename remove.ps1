@@ -68,7 +68,7 @@ function Uninstall-Hive {
 
   # Others stay: end this one's processes, delete its user and home, and take off its own command (and, for hive, its icons).
   if ($others.Count) {
-    As-Root "u=$hu; loginctl disable-linger `$u 2>/dev/null; loginctl terminate-user `$u 2>/dev/null; pkill -KILL -u `$u 2>/dev/null; sleep 1; userdel -r `$u 2>/dev/null; ! id `$u >/dev/null 2>&1" | Out-Null
+    As-Root "u=$hu; loginctl disable-linger `$u 2>/dev/null; loginctl terminate-user `$u 2>/dev/null; pkill -KILL -u `$u 2>/dev/null; sleep 1; userdel -r `$u 2>/dev/null; sed -i /^`$u\ /d /var/lib/hive/ports 2>/dev/null; ! id `$u >/dev/null 2>&1" | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Host "Couldn't delete the Hive $hu (code $LASTEXITCODE). Its processes may still run; try again in a minute."; return }
     Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $bin "$cmdName.cmd")
     if ($hu -eq 'hive') {

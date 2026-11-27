@@ -105,13 +105,18 @@ def connect():
 def walk():
     for src, root, _ in ROOTS:
         base = os.path.join(H, root); skip = SKIP_MODULE if src == "moddocs" else SKIP_PROJECT; copy = {}  # dir -> (clone top, live module)
+        readme_only = set()
         for d, sub, files in os.walk(base):
             if src == "projects":
                 live = module_of(d, sub + files)
                 copy[d] = (d, live) if live else copy.get(os.path.dirname(d), (None, None))
-            if src == "moddocs" and d == base:  # only the public modules, each a clone of its own repo: not the Hive's private ones, which hold copies of core
-                sub[:] = [s for s in sub if not os.path.islink(os.path.join(d, s)) and module_of(os.path.join(d, s), os.listdir(os.path.join(d, s))) == os.path.realpath(os.path.join(d, s))]
+            if src == "moddocs" and d == base:  # all docs of the public modules, each a clone of its own repo; of the Hive's private ones, which hold copies of core, only the README
+                pub = lambda s: module_of(os.path.join(d, s), os.listdir(os.path.join(d, s))) == os.path.realpath(os.path.join(d, s))
+                sub[:] = [s for s in sub if not os.path.islink(os.path.join(d, s)) and (pub(s) or os.path.isfile(os.path.join(d, s, "README.md")))]
+                readme_only = {os.path.join(d, s) for s in sub if not pub(s)}
                 files = []
+            elif src == "moddocs" and d in readme_only:  # a private module: its README is its front page (K108: 73 of 87 were unfindable)
+                sub[:] = []; files = [f for f in files if f == "README.md"]
             sub[:] = [s for s in sub if s not in SKIP_DIR and not s.startswith(".") and not skip.search(os.path.relpath(os.path.join(d, s), H) + "/")
                       and not (src == "kb" and SKIP_DRAFTS.search(os.path.relpath(os.path.join(d, s), H)))]
             top, live = copy.get(d, (None, None))

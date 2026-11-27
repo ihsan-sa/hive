@@ -35,6 +35,8 @@ def live_runs():
 
 AGENT = __import__("re").compile(r"a[0-9a-f]{4}")
 def is_agent(who): return bool(AGENT.fullmatch(str(who or "").lower()))
+WARDEN = __import__("re").compile(r"w[0-9a-f]{4}")   # starter.WARDEN: hex, so a code like we406 is a warden. The Stop hook asks no warden for a card
+def is_warden(who): return bool(WARDEN.fullmatch(str(who or "").lower()))
 
 def runlog(name):
     """Where to read why: the agent's newest Claude transcript (from ~/run/NAME.json) and its newest session output file."""
@@ -102,7 +104,7 @@ def due(since, t=None, posts=None, live=None, held=None, hold=None):
     for f in st["foci"]:
         ths = {th for th, fid in st["tags"].items() if fid == f["id"]} | {x for x in (f.get("thread"), f["id"]) if x}
         ths = {x for x in ths if not fc.asked_only(x)}
-        rt, p = fc.newest_result(ths, posts)
+        rt, p = fc.newest_result(ths, [x for x in posts if not is_warden(x.get("from"))])   # a warden's ruling owes the card nothing: inbox.focus_nudge never asks one
         s = f.get("summary"); sat = float(s.get("at") or 0) if s else 0; hk = "focus:" + f["id"]; hs = min(since, held.get(hk, since))
         if p and p.get("via") != "relay" and rt >= hs and t - rt >= GRACE_S and rt - sat > SUMMARY_SLACK_S:  # a starter relay of a run that ended without posting comes after its Stop: no check could have asked (a77d0, ac623 on 11-19)  # a summary written just before the result post (the Stop nudge order) is current
             if going([p], hs): hold[hk] = hs; continue   # the result's agent is still in the run that posted it: its Stop asks for the card

@@ -377,6 +377,7 @@ export default {
   "This takes it off hold. The keeper may start work on it again.": "Esto lo saca de la espera. El cuidador puede volver a empezar a trabajar en ello.",
   "Save the page": "Guardar la página",
   "Not saved": "No se guardó",
+  "Not shared.": "No se compartió.",
   "Include pictures and small text files you were sent": "Incluir las imágenes y los archivos de texto pequeños que te enviaron",
   "Messages on the page": "Mensajes en la página",
   "It signs out of that ChatGPT account here; runs move to the other Codex logins.": "Cierra la sesión de esa cuenta de ChatGPT aquí; las ejecuciones pasan a las otras cuentas de Codex.",

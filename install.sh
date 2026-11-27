@@ -5,9 +5,94 @@
 set -eu
 die() { echo "hive install: $*" >&2; exit 1; }
 CORE="$(cd "$(dirname "$0")" && pwd)"; SERVICE=1
+# Each Hive's port, picked under a lock and kept in a list only root can write, so two installs at once get two ports,
+# a rerun keeps its own, and no Hive's port (running or stopped) goes to another. The ports Hives already hold count too.
+pick_port() {  # user home; prints the port
+  python3 -I - "$1" "$2" "${HIVE_PORTS:-/var/lib/hive/ports}" <<'PICK'
+import fcntl, json, os, pwd, socket, sys
+u, home, f = sys.argv[1:4]
+os.makedirs(os.path.dirname(f), mode=0o755, exist_ok=True)
+def held(h):
+    try: return int(json.load(open(os.path.join(h, ".hive", "web.json")))["port"])
+    except (OSError, ValueError, KeyError, TypeError): return None
+def free(p):
+    with socket.socket() as s:
+        try: s.bind(("127.0.0.1", p)); return True
+        except OSError: return False
+with open(f + ".lock", "a") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    try: given = {w[0]: int(w[1]) for w in (l.split() for l in open(f)) if len(w) == 2 and w[1].isdigit()}
+    except OSError: given = {}
+    taken = {p for k, p in given.items() if k != u}
+    for e in pwd.getpwall():
+        if e.pw_name != u and e.pw_name not in given and (p := held(e.pw_dir)): taken.add(p)
+    mine = given.get(u) or held(home)
+    port = mine if mine and mine not in taken else next((p for p in range(8077, 8177) if p not in taken and free(p)), None)
+    if port is None: sys.exit("hive install: all 100 ports (8077-8176) are given to Hives here")
+    given[u] = port
+    t = f"{f}.{os.getpid()}"
+    with open(t, "w") as o: o.write("".join(f"{k} {v}\n" for k, v in sorted(given.items())))
+    os.chmod(t, 0o644); os.replace(t, f)
+print(port)
+PICK
+}
+admin_tool() {  # prints hive-admin, which root runs, so it's written from this file and never from a Hive's home
+cat <<'ADMIN'
+#!/usr/bin/env python3
+"""hive-admin list [--json]: the Hives in this Linux, for the app's manager. Run as root (it reads every Hive's home).
+A Hive is a user whose home holds .hive-installed, or one given a port (an install under way). Each: user, home, port,
+version (the release it runs), state (running: its web app answers; stopped; installing) and update (installed tag,
+newest release seen, failed releases it skips, last error, from the Hive's .hive/update.json). Nothing here is written."""
+import json, os, pwd, socket, stat, sys
+PORTS = os.environ.get("HIVE_PORTS", "/var/lib/hive/ports")
+def users():
+    f = os.environ.get("HIVE_ADMIN_PASSWD")  # the tests' stand-in for the passwd database
+    if not f: return [(e.pw_name, e.pw_dir) for e in pwd.getpwall()]
+    return [(w[0], w[5]) for w in (l.rstrip("\n").split(":") for l in open(f)) if len(w) >= 6]
+def readjson(path):  # a Hive's own file: no links followed, a small cap, and anything odd reads as nothing
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode): return {}
+            d = json.loads(f.read(65536))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError): return {}
+def answers(port):
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1): return True
+    except OSError: return False
+def text(v): return v if isinstance(v, str) and len(v) < 2000 else None
+def hives():
+    try: given = {w[0]: int(w[1]) for w in (l.split() for l in open(PORTS)) if len(w) == 2 and w[1].isdigit()}
+    except OSError: given = {}
+    out = []
+    for u, home in users():
+        installed = os.path.isfile(os.path.join(home, ".hive-installed"))
+        if not installed and u not in given: continue
+        web, up = readjson(os.path.join(home, ".hive", "web.json")), readjson(os.path.join(home, ".hive", "update.json"))
+        port = given.get(u) or (web.get("port") if type(web.get("port")) is int else None)
+        failed = [t for t in up.get("failed", []) if text(t)] if isinstance(up.get("failed"), list) else []
+        state = "installing" if not installed else "running" if port and answers(port) else "stopped"
+        out.append({"user": u, "home": home, "port": port, "version": text(up.get("tag")), "state": state,
+                    "update": {"tag": text(up.get("tag")), "newest": text(up.get("newest")), "failed": failed, "error": text(up.get("error")),
+                               "checked": up.get("checked") if type(up.get("checked")) in (int, float) else None}})
+    return sorted(out, key=lambda h: (h["port"] is None, h["port"] or 0, h["user"]))
+a = sys.argv[1:]
+if a[:1] != ["list"] or a[1:] not in ([], ["--json"]): sys.exit("usage: hive-admin list [--json]")
+hs = hives()
+if a[1:] == ["--json"]: print(json.dumps({"v": 1, "hives": hs}, indent=1))
+else:
+    for h in hs: print(f"{h['user']}\t{h['port'] or '-'}\t{h['state']}\t{h['version'] or '-'}\t{h['home']}")
+    if not hs: print("No Hives here.")
+ADMIN
+}
+[ "${1:-}" != --port ] || { pick_port "$2" "$3"; exit; }   # the tests' way in
+[ "${1:-}" != --admin-tool ] || { admin_tool; exit; }
 if [ "$(id -u)" = 0 ]; then
   U="${1:-hive}"
   command -v git >/dev/null && command -v python3 >/dev/null && command -v curl >/dev/null || die "install git, python3 and curl first"
+  # hive-admin lists the Hives here for the app's manager: root-owned, rewritten on every run so a rerun updates it.
+  admin_tool > /usr/local/sbin/hive-admin.$$ && chmod 755 /usr/local/sbin/hive-admin.$$ && mv -f /usr/local/sbin/hive-admin.$$ /usr/local/sbin/hive-admin || die "couldn't write /usr/local/sbin/hive-admin"
   id "$U" >/dev/null 2>&1 && [ -e "$(eval echo "~$U")/.hive-installed" ] && { echo "$U already has it: sudo -iu $U, then git -C ~/core pull"; exit 0; }
   new=""; id "$U" >/dev/null 2>&1 || { useradd -m -s /bin/bash "$U"; new=1; }
   H="$(eval echo "~$U")"
@@ -27,7 +112,8 @@ if [ "$(id -u)" = 0 ]; then
     echo "Claude Code didn't install (try $i of 3). Trying again in $((i * i * 10))s."; sleep "${HIVE_RETRY_WAIT:-$((i * i * 10))}"
   done
   echo "Claude Code is in place. The Hive's install isn't finished yet, so keep this window open..."
-  P=""; [ -z "${HIVE_PLAIN:-}" ] || P="HIVE_PLAIN=1 "
+  PORT=$(pick_port "$U" "$H") || die "couldn't give $U a port; rerun this"
+  P="HIVE_PORT=$PORT "; [ -z "${HIVE_PLAIN:-}" ] || P="${P}HIVE_PLAIN=1 "
   case "${HIVE_SERVER:-}" in 0|1) P="${P}HIVE_SERVER=$HIVE_SERVER ";; esac
   [ "${HIVE_VOICE:-}" != 0 ] || P="${P}HIVE_VOICE=0 "   # su - clears the environment, and the Mac rig skips the voice build with this
   su - "$U" -c "$P"'PATH="$HOME/.local/bin:$PATH" XDG_RUNTIME_DIR=/run/user/$(id -u) ~/core/install.sh' \

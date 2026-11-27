@@ -121,6 +121,8 @@ main() {
     $ROOT chown -R "$(id -u):$(id -g)" "$K"
   fi
   $ROOT userdel -r "$U" 2>/dev/null || die "couldn't delete $U; check for its processes and run: sudo userdel -r $U"
+  PL="${HIVE_PORTS:-/var/lib/hive/ports}"   # give its port back, under the lock install.sh takes
+  ! $ROOT test -f "$PL" || $ROOT flock "$PL.lock" sed -i "/^$U /d" "$PL" 2>/dev/null || true
   launcher_gone
   echo "Removed."
   [ -z "$K" ] || echo "Kept in $K: $(keep_words)."

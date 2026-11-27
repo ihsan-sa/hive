@@ -1956,6 +1956,7 @@ def projects():
     res = []
     boxed = SETTINGS.exists()
     for d in sorted(PROJECTS.glob("*/")):
+        if not PROJ_NAME.fullmatch(d.name): continue   # .import-NAME-PID is a zip still unpacking: its git is nobody's yet
         head = ""
         for fn in ("goals.md", "README.md"):
             if boxed:
@@ -3343,11 +3344,11 @@ FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcoun
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
 GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read", "/api/ran": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/work-tiers": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/subagents": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
-           "/api/config": "config", "/api/export": "config", "/api/modules": "modules", "/api/connectors": "modules", "/api/shops": "logins", "/api/mcp-url": "modules", "/api/mcp-try": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
+           "/api/config": "config", "/api/export": "config", "/api/project-job": "config", "/api/project-job/file": "config", "/api/modules": "modules", "/api/connectors": "modules", "/api/shops": "logins", "/api/mcp-url": "modules", "/api/mcp-try": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/buy": "logins", "/api/orders": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/shop-signin": "logins", "/api/shop-signin/frame": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/kb/wipe": "files", "/api/kb/copies": "files", "/api/progress": "read", "/api/checklist": "read", "/api/goals": "read", "/api/box-sent": "post", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files", "/api/docs": "files", "/api/docs/doc": "files", "/api/docs/page": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/kb/wipe": "files", "/api/kb/putback": "files", "/api/docs/notes": "files", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/side-ask": "post", "/api/door": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/default-model": "config", "/api/starter": "config",
+            "/api/post": "post", "/api/side-ask": "post", "/api/door": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/project-job": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/default-model": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/mcp-url": "modules", "/api/mcp-try": "modules", "/api/voice": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/kb/save": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/buy": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/shop-signin": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/mcp-url", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
@@ -5393,6 +5394,112 @@ def export_zip(out):
         z.writestr("README.txt", f"Your chats, exported {now}. One folder per chat: chat.md is the chat as plain text, oldest message first, with its files beside it."
                    + (" memory.md holds what your chats remember about you (Settings › Everyday › Memory)." if mem is not None else "") + "\n\n" + "\n".join(index) + "\n")
 
+
+
+# hive-app 7e2 (DESIGN-many-hives.md): Settings › Projects. One project out as a zip to the browser's Downloads, or one brought in from a zip,
+# on hive export / hive import (core/projmove.py, which makes every check). Each runs as a job the page asks after: a big project can take longer
+# than one request may last through the tunnel (100 s), and only one runs at a time.
+PROJ_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")   # projmove's NAME
+PROJ_OUT = STATE / "project-exports"
+PROJ_JOBS, PROJ_LOCK = {}, threading.Lock()
+PROJ_KEEP = 3600       # a finished export can be downloaded again for an hour, then its zip goes
+PROJ_TIMEOUT = 3 * 3600
+PROJ_FRESH = []        # set by serve: what to call when a project came in, so the projects list reads it at once
+
+
+def proj_sweep():
+    """Forget jobs finished over an hour ago, with their zips, and any zip folder a dash that stopped left behind. Under PROJ_LOCK."""
+    for k, j in list(PROJ_JOBS.items()):
+        if j["state"] != "running" and time.time() - j.get("end", time.time()) > PROJ_KEEP:
+            del PROJ_JOBS[k]
+            if j.get("dir"): shutil.rmtree(j["dir"], ignore_errors=True)
+    try: kept = [x for x in PROJ_OUT.iterdir() if x.name not in PROJ_JOBS]
+    except OSError: kept = []
+    for x in kept: shutil.rmtree(x, ignore_errors=True)
+
+
+def proj_view(j):
+    return {k: j[k] for k in ("id", "do", "state", "error", "name", "lines", "file", "size", "t") if k in j}
+
+
+def proj_run(j, cmd, after=None):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, env=child_env(), cwd=str(HOME), timeout=PROJ_TIMEOUT, stdin=subprocess.DEVNULL)
+        out = [ln for ln in r.stdout.splitlines() if ln.strip()]
+        if r.returncode or not out:
+            err = (r.stderr.strip().splitlines() or ["it stopped without saying why"])[-1]
+            j.update(state="failed", error=short(re.sub(r"^hive (export|import): ", "", err).replace(str(HOME), "~"), 400))
+        elif j["do"] == "export":
+            z = Path(out[-1])
+            if z.parent != j["dir"] or z.is_symlink() or not z.is_file(): raise OSError("the export didn't make its zip")
+            j.update(state="done", lines=out[:-1], file=z.name, size=z.stat().st_size, path=z)
+        else:
+            j.update(state="done", lines=out[:-1], name=Path(out[-1]).name)
+            for fn in PROJ_FRESH: fn()
+    except subprocess.TimeoutExpired: j.update(state="failed", error=f"it took over {PROJ_TIMEOUT // 3600} hours and was stopped")
+    except (OSError, ValueError) as e: j.update(state="failed", error=short(str(e).replace(str(HOME), "~"), 400))
+    finally:
+        if after: after()
+        j["end"] = time.time()
+        if j["state"] == "running": j.update(state="failed", error="it stopped without saying why")
+        if j["state"] != "done" and j.get("dir"): shutil.rmtree(j["dir"], ignore_errors=True)
+
+
+def proj_start(d):
+    """POST /api/project-job {do: "export", name} or {do: "import", ref (from /api/upload), as}: starts the job, returns it.
+    An import refused before it starts drops its upload too: the page sends the zip again with each try."""
+    try: return proj_start1(d)
+    except ValueError:
+        m = UPLOAD_REF.fullmatch(d.get("ref")) if d.get("do") == "import" and isinstance(d.get("ref"), str) else None
+        if m: shutil.rmtree(INCOMING / m.group(1), ignore_errors=True)
+        raise
+
+
+def proj_sweeper():
+    """Every ten minutes: an export nobody came back for goes after its hour, even if nobody asks about jobs again."""
+    while True:
+        time.sleep(600)
+        with PROJ_LOCK: proj_sweep()
+
+
+def proj_start1(d):
+    do = d.get("do")
+    if do not in ("export", "import"): raise ValueError("do: export or import")
+    with PROJ_LOCK:
+        proj_sweep()
+        if any(j["state"] == "running" for j in PROJ_JOBS.values()): raise ValueError("a project is already being exported or brought in; try again when it's done")
+        jid = secrets.token_hex(8)
+        j = {"id": jid, "do": do, "state": "running", "t": time.time()}
+        if do == "export":
+            name = d.get("name")
+            if not isinstance(name, str) or not PROJ_NAME.fullmatch(name) or (PROJECTS / name).is_symlink() or not (PROJECTS / name).is_dir():
+                raise ValueError("there's no project by that name")
+            PROJ_OUT.mkdir(parents=True, exist_ok=True, mode=0o700)
+            j.update(name=name, dir=PROJ_OUT / jid); j["dir"].mkdir(mode=0o700)
+            cmd, after = [str(HIVE_BIN), "export", name, "--to", str(j["dir"])], None
+        else:
+            ref, new = d.get("ref"), d.get("as") or None
+            m = UPLOAD_REF.fullmatch(ref) if isinstance(ref, str) else None
+            if not m: raise ValueError("send the zip first (/api/upload)")
+            up = INCOMING / m.group(1)
+            z = up / m.group(2)
+            if z.is_symlink() or not z.is_file(): raise ValueError("that upload isn't here any more; send the zip again")
+            if new is not None and (not isinstance(new, str) or not PROJ_NAME.fullmatch(new) or new.endswith(".lock")):
+                raise ValueError("a project name is letters, digits and . _ - (up to 64), starting with a letter or digit")
+            cmd = [str(HIVE_BIN), "import", str(z)] + (["--as", new] if new else [])
+            after = lambda: shutil.rmtree(up, ignore_errors=True)   # the upload is used once, whatever happened
+            if new: j["name"] = new
+        PROJ_JOBS[jid] = j
+    threading.Thread(target=proj_run, args=(j, cmd, after), daemon=True).start()
+    return proj_view(j)
+
+
+def proj_job(jid):
+    with PROJ_LOCK:
+        proj_sweep()
+        j = PROJ_JOBS.get(jid) if isinstance(jid, str) else None
+        if not j: raise KeyError(jid)
+        return j
 
 # The hive's name and logo, from Settings. Only how this app looks: nothing else reads them, and agents keep their names.
 BRAND = STATE / "brand.json"
@@ -7925,6 +8032,8 @@ def serve(port):
     threading.Thread(target=kb_index_warm, daemon=True).start()
     threading.Thread(target=sync_accounts, daemon=True).start()  # an account already signed in before the app first ran; does nothing without settings.json
     live_c, proj_c, usage_c, jobs_c = Cached(live, 1), CachedStale(projects, 60), Cached(usage.view, 2), Cached(Jobs().view, 2)
+    PROJ_FRESH[:] = [lambda: setattr(proj_c, "t", 0)]   # a project brought in (7e2): the next list reads the truth
+    threading.Thread(target=proj_sweeper, daemon=True).start()
     deliv_c = Cached(delivered_view, 2.5)
     # Both run hundreds of git calls or the ladder's checks: seconds inside this busy process, so a page gets the last answer while a new one is read.
     def _goals():   # the home page's Goals list (goals_view.py): this machine's file, loaded by path; the release leaves it out, so no list shows there
@@ -8274,7 +8383,7 @@ def serve(port):
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
             elif u.path == "/api/brand/logo":
                 self.send_logo()
-            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/connectors", "/api/mcp-try", "/api/shops", "/api/voice", "/api/signin", "/api/plans", "/api/secrets", "/api/slack-door", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/buy", "/api/orders", "/api/accounts", "/api/design", "/api/shop-signin", "/api/shop-signin/frame", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history", "/api/mail", "/api/export") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/connectors", "/api/mcp-try", "/api/shops", "/api/voice", "/api/signin", "/api/plans", "/api/secrets", "/api/slack-door", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/buy", "/api/orders", "/api/accounts", "/api/design", "/api/shop-signin", "/api/shop-signin/frame", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history", "/api/mail", "/api/export", "/api/project-job", "/api/project-job/file") and self.route == "open":
                 self.send_error(404)
             elif u.path == "/api/kb/home":
                 self.send(json.dumps(kb_home()).encode(), J)
@@ -8352,6 +8461,23 @@ def serve(port):
                     self.send_header("Cache-Control", "no-store")
                     self.end_headers()
                     shutil.copyfileobj(t, self.wfile)
+            elif u.path in ("/api/project-job", "/api/project-job/file"):   # hive-app 7e2: a project export or import the page started
+                try: j = proj_job(q.get("id", [""])[0])
+                except KeyError: return self.deny(404, "that export or import is over; start it again")
+                if u.path == "/api/project-job": return self.send(json.dumps(proj_view(j)).encode(), J)
+                if j["do"] != "export" or j["state"] != "done": return self.deny(409, "that export isn't ready")
+                try: f = os.fdopen(os.open(j["path"], os.O_RDONLY | os.O_NOFOLLOW), "rb")
+                except OSError: return self.deny(404, "that export's zip is gone; export it again")
+                with f:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/zip")
+                    self.send_header("Content-Length", str(os.fstat(f.fileno()).st_size))
+                    self.send_header("Content-Disposition", f'attachment; filename="{j["file"]}"')   # NAME-YYYYmmdd-HHMMSS.zip, from projmove's safe name
+                    self.send_header("Content-Security-Policy", "sandbox; default-src 'none'")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    shutil.copyfileobj(f, self.wfile)
             elif u.path == "/api/update":
                 self.send(json.dumps(update_view()).encode(), J)
             elif u.path == "/api/modules":
@@ -8553,6 +8679,9 @@ def serve(port):
             if u.path == "/api/tip-dismiss":
                 try: return self.send(json.dumps(tip_dismiss(d)).encode(), J)
                 except ValueError as e: return self.deny(400, str(e))
+            if u.path == "/api/project-job":
+                try: return self.send(json.dumps(proj_start(d)).encode(), J)
+                except ValueError as e: return self.deny(409 if "already" in str(e) else 400, str(e))
             if u.path == "/api/share-build":
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)

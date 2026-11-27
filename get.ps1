@@ -236,7 +236,24 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
   $cmdFile = Join-Path $bin "$cmdName.cmd"
   # One command name can't serve two Hives (users work and hive-work would both make hive-work).
   if ((Test-Path $cmdFile) -and -not (Select-String -Quiet -SimpleMatch -Pattern " -u $hu " -Path $cmdFile)) { Fail "$cmdFile already opens another Hive, so I left it. Pick another HIVE_USER."; return }
-  Set-Content -Encoding ASCII $cmdFile "@wsl.exe -d $distro -u $hu --cd ~ -- bash -lc `"hive %*`""
+  # hive ARGS runs in the Hive as its user; hive shell [NAME] is a terminal in a Hive's home as its user (this one's when no name is given).
+  # The first " -u NAME " in the file is this command's Hive: remove.ps1 reads it, so the shell line quotes its user.
+  $cmdText = (@(
+    '@echo off', 'setlocal',
+    'if /i "%~1"=="shell" goto shell',
+    'wsl.exe -d {0} -u {1} --cd ~ -- bash -lc "hive %*"',
+    'exit /b %errorlevel%',
+    ':shell',
+    'if not "%~3"=="" goto usage',
+    'if "%~2"=="" (set "u={1}") else (set "u=%~2")',
+    'if /i "%u%"=="root" goto usage',
+    'wsl.exe -d {0} -u "%u%" --cd ~',
+    'exit /b %errorlevel%',
+    ':usage',
+    'echo usage: %~n0 shell [NAME], with NAME a Hive''s user name, not root 1>&2',
+    'exit /b 2'
+  ) -join "`r`n") -f $distro, $hu
+  [IO.File]::WriteAllText($cmdFile, $cmdText + "`r`n", [Text.Encoding]::ASCII)
   try {
     $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
     $raw = [string]$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')

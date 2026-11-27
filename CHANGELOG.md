@@ -4,6 +4,19 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## More than one Hive on a machine
+
+Put `HIVE_USER=name` in front of the Windows or Mac install line to add a second Hive beside the first, with its own command (`hive-name`). The first Hive is left as it was. The same word in front of the uninstall line removes just that Hive, after saying how many the system holds; the system goes with its last one. Each Hive's port is picked under a lock and kept in a list only root writes, so two Hives installed at the same time get two ports, a reinstall keeps its own, and removing a Hive gives its port back. As root, `hive-admin list` shows every Hive on the machine, with its user, port, version, whether it is running, and its update state (`--json`). The [install page](docs/install.md) has the lines to run.
+
+## Move a project between Hives
+
+`hive export NAME` saves a project as one zip with its git history, and `hive import ZIP` brings it in on another Hive without overwriting anything. Hooks and commands in its git settings are left out.
+
+## Smaller fixes, 2026-11-27
+
+- Stop and send keeps the stopped step in its place in long chats, shows it as soon as the step stops, and no longer holds up other agents while it waits for the step to end.
+- A failed record of a stopped step no longer runs twice or holds up a restart.
+
 ## Stop a tool you're trying
 
 A tool you run under **Try your own tools** now has a **Stop** button while it runs. It ends the tool and the programs it started; what it already changed stays changed. With the sandbox off, a program the tool starts in a session of its own can outlive it.

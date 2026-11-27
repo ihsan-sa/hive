@@ -527,6 +527,7 @@ export default {
   "This takes it off hold. The keeper may start work on it again.": "यह इसे रोक से हटाता है। प्रबंधक इस पर फिर काम शुरू कर सकता है।",
   "Save the page": "पेज सहेजें",
   "Not saved": "सहेजा नहीं गया",
+  "Not shared.": "साझा नहीं किया गया।",
   "Include pictures and small text files you were sent": "आपको भेजे गए चित्र और छोटी टेक्स्ट फ़ाइलें शामिल करें",
   "Messages on the page": "पेज पर संदेश",
   "It signs out of that ChatGPT account here; runs move to the other Codex logins.": "यह यहाँ उस ChatGPT खाते से साइन आउट कर देता है; रन दूसरे Codex लॉगिन पर चले जाते हैं।",

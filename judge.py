@@ -40,6 +40,23 @@ PERSON_WAIT = re.compile(r"^\W*(?:when |once |after |until )?(?:the )?person(?:'
                          r"|\bthe person's [\w -]{0,30}?\b(?:reply|replies|answer|pick|picks|decision|approval|comments?|comment round|confirmation)\b", re.I)
 def awaits_person(step): return bool(PERSON_WAIT.search(re.split(r";|\.\s|,\s*then\b", str(step or ""), maxsplit=1)[0]))
 
+# a step that is only to mark asks in the register, which the case cannot show as marked (11-26: k3140 was closed 28 s before the judge asked for it)
+MARK_ASK = re.compile(r"^\W*(?:mark\b|(?:run |close )?`?hive asks (?:done|drop|hold|person)\b|close (?:the )?ask\b)", re.I)
+def asks_closed(step, items=None):
+    """True when the step is to mark asks and every ask it names is already closed in the register."""
+    ids = set(re.findall(r"\bk\d{3,6}\b", str(step or "")))
+    if not ids or not MARK_ASK.search(str(step)): return False
+    try:
+        if items is None: items = G.asks_module().ledger()
+        still = {e.get("id") for e in G.asks_module().open_items(items)}
+        return all(i in items and i not in still for i in ids)
+    except Exception: return False
+
+def asked_since(posts, name, since):
+    """The first post after the run's last one that names this agent, or None: that post wakes the agent by itself, so the judge has nothing to add."""
+    at = re.compile(rf"(?<![\w`])@{re.escape(name)}(?![\w-])", re.I)
+    return next((p for p in posts if (C.epoch(p.get("at")) or 0) > since and str(p.get("from", "")).lower() != name and at.search(str(p.get("text", "")))), None)
+
 def now(): return dt.datetime.now(dt.timezone.utc)
 def day_of(ts): return dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d")   # the host's day, the clock post ids (and so rung ticks) are written in
 
@@ -348,6 +365,10 @@ def run(snap, model=None, asker=ask):
     if v["verdict"] == "wait" and v.get("until"):   # the minutes come from the named time, not the model's sums (11-20: a gate 16 h off and a reminder 15 h off were both woken in under 2 h)
         e["model_minutes"] = v["minutes"]; v["minutes"] = e["minutes"] = max(10, round((v["until"] - t) / 60) + 10); e["until"] = utc(v["until"])
     if v["verdict"] == "wait" and awaits_person(v["step"]): e.update(model_verdict="wait", verdict="blocked", person_wait=True); v["verdict"] = "blocked"
+    if v["verdict"] in ("wait", "continue"):   # looked up after the model's answer, so what happened during the call counts too
+        newer = asked_since(scan_board(thread)[0], name, case["since"])   # 11-26: the person asked a176a for drafts while it was being judged
+        why_not = {"asked_again": newer.get("id")} if newer else {"asks_closed": True} if asks_closed(v["step"]) else None
+        if why_not: e.update(model_verdict=v["verdict"], verdict="done", **why_not); v["verdict"] = "done"
     wake_at = t + v["minutes"] * 60
     if v["verdict"] == "wait" and v["minutes"] > MAX_WAIT_MIN: e.update(long_wait=True, model_verdict="wait", verdict="done")   # the prompt says answer done; the code makes it so
     elif v["verdict"] == "wait" and any(d <= wake_at for d, _ in pending_reminders(name, thread, t)): e["reminder_set"] = True   # rule 5: a reminder wakes it first

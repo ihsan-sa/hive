@@ -28,6 +28,12 @@ export async function shareDialog(th) {
       h("div", { class: "sh-list", tabindex: "0", "aria-label": "Messages on the page" }, rows)],
     onOk: async () => {
       const r = await post("/api/share-build", { thread: th, remove: [...gone], files: withFiles.checked });
+      // A phone hands the file to its share sheet (Messages, Mail, Files); a computer, or a phone that says no, saves it to downloads.
+      const file = typeof File === "function" ? new File([r.html], r.name, { type: "text/html" }) : null;
+      if (file && matchMedia("(pointer: coarse)").matches && navigator.canShare?.({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: r.name }); return `Shared ${r.name}. It is a single page that works offline.`; }
+        catch (e) { if (e?.name === "AbortError") return "Not shared."; }
+      }
       const u = URL.createObjectURL(new Blob([r.html], { type: "text/html;charset=utf-8" }));
       const a = h("a", { href: u, download: r.name }); document.body.append(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(u), 5000);
