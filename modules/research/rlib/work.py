@@ -1194,6 +1194,7 @@ def thin_signal_why(r, page_text="", page_title="", must=()):
 
 
 SIGNAL_MARK = "the signal is marked down: "
+FRAMING_NOTE = re.compile(re.escape(SIGNAL_MARK) + r"its AI words are the (?:publisher|writer)'s framing[^;]*(?:; (?:the page is not the organisation's own|none of the \d+ quotes? of theirs)[^;]*)?")   # narration_own_words_why's marks, whose "; " note_items splits: a third party's narration, which its organisation's own copy of the story may lift (own_copy)
 POINTER = re.compile(r"\b(?:article|story|interview|feature|piece|podcast|episode|video|newsroom|op-ed|q&a)\b[^.!?]{0,160}?\b(?:featuring|features|featured|with|quoting|quotes)\b", re.I)
 PRINTED_URL = re.compile(r"https?://[^\s<>\"')\]]+")
 def pointer_url(sig, text):
@@ -1384,7 +1385,7 @@ def signal_date_from(r, case):
     if near_day: return f"{how}, {where}; the page prints {near_day}, a day {'after' if near_day > sd else 'before'} (a time zone apart)"
     return f"{how}, {where}; not printed on the page"
 
-HUNT_SPEC_KEYS = frozenset("fresher_signal org_signal_shapes goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms head_terms allow_org_signal allow_weak_org_signal roster_verifies person_signal held_signal official_recheck sources read_per_search skip_hosts allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words signal_kinds menu_statement unit_signal unit_events org_news_signal people_first".split())
+HUNT_SPEC_KEYS = frozenset("fresher_signal org_signal_shapes goal orgs discover target per_org must roles exclude_roles role_focus org_pattern domains angles site_terms head_terms allow_org_signal allow_weak_org_signal roster_verifies person_signal held_signal official_recheck sources read_per_search skip_hosts allow_secondary pages allow_page_signal max_age_years max_seconds workers stale_days out function_words signal_kinds menu_statement unit_signal unit_events org_news_signal people_first discover_variants".split())
 
 
 HEADLINE_VERB = re.compile(r"\b(?:Expands|Launches|Announces|Receives|Wins|Opens|Partners|Celebrates|Hosts|Unveils|Offers|Adds|Joins|Awards|Welcomes|Honors|Signs|Approves|Plans|Seeks|Cuts|Raises|Earns|Debuts|Introduces|Selects|Appoints|Hires|Names|Breaks|Boosts|Makes|Takes|Gets|Says|Calls|Visits|Tours|Funds|Backs|Unveiled|Announced|Launched|Expanded|Awarded)\b")
@@ -1562,7 +1563,7 @@ class Hunt:
         for k in ("target", "per_org", "workers", "max_seconds", "read_per_search", "stale_days", "max_age_years"):
             v = spec.get(k)
             if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float))): raise ValueError(f"spec {k} must be a number, not {v!r}")
-        for k in ("allow_secondary", "allow_page_signal"):
+        for k in ("allow_secondary", "allow_page_signal", "discover_variants"):
             if k in spec and not isinstance(spec[k], bool): raise ValueError(f"spec {k} must be true or false, not {spec[k]!r}")
         if spec.get("goal") is not None and not isinstance(spec["goal"], str): raise ValueError(f"spec goal must be a sentence of text, not {type(spec['goal']).__name__}")
         if spec.get("out") is not None and not isinstance(spec["out"], str): raise ValueError(f"spec out must be a folder path (text), not {type(spec['out']).__name__}")
@@ -1817,14 +1818,58 @@ class Hunt:
             page = signal_page_of(r, self.case)
             if id(r) in listed and (said := [x for x in note_items(r.get("note")) if x.startswith(TITLE_NOTE)]) and (now := signal_title_note(r, page, r.get("organisation") or "")) not in said:   # a note an older reading wrote goes when today's reads otherwise: Spaulding's said "... development who joined UTAA in 2021" (fnwords155 review)
                 r["note"] = "; ".join(x for x in note_items(r.get("note")) if not x.startswith(TITLE_NOTE)) + (f"; {now}" if now else "")
-            if r.get("check_status") != "verified" or id(r) not in listed: continue
-            why = signal_title_why(r, page, r.get("organisation") or "") or passing_signal_why(r, page, self.must) or narration_own_words_why(r, page, self.must, self.signal_on_own_site(r)) or stale_narration_why(r, page, self.must)
+            if id(r) not in listed: continue
+            held = r.get("check_status") == "partial" and bool(FRAMING_NOTE.search(str(r.get("note") or "")))   # marked on an earlier run: nothing rechecks a partial row
+            if r.get("check_status") != "verified" and not held: continue
+            why = "" if held else self.signal_why(r, page)
+            if (held or FRAMING_NOTE.match(why)) and not r.get("own_copy_tried") and not self.signal_on_own_site(r) and (pg := self.own_copy(r, page)):
+                page, r["check_status"] = pg, "verified"
+                r["note"] = "; ".join(x for x in note_items(FRAMING_NOTE.sub("", str(r.get("note") or ""))) if x.strip())
+                why = self.signal_why(r, page)
+            elif held: continue
             if not why:
                 if (said := signal_title_note(r, page, r.get("organisation") or "")) and said not in str(r.get("note") or ""): r["note"] = "; ".join(x for x in (r.get("note"), said) if x)
                 continue
             r["check_status"] = "partial"
             if why not in str(r.get("note") or ""): r["note"] = "; ".join(x for x in (r.get("note"), why) if x)
             self.log(f"  ~ {r['name']} ({r['organisation']}): partial, {why[len(SIGNAL_MARK):]}")
+
+    def signal_why(self, r, page):
+        return signal_title_why(r, page, r.get("organisation") or "") or passing_signal_why(r, page, self.must) or narration_own_words_why(r, page, self.must, self.signal_on_own_site(r)) or stale_narration_why(r, page, self.must)
+
+    def own_copy(self, r, page):
+        """The organisation's own copy of the story a row's signal page republished, or None. Petrosian's signal was the Edinburg Advocate's copy of South Texas College's news story, marked down as the publisher's framing (fnwords156), while fnwords155 had cited news.southtexascollege.edu's. One `site:` search of the organisation's site for the story's title (the publisher's " - The Edinburg Advocate" cut off); the first official hit of the same title (of up to three) that names the person and carries their signal, or a sentence of theirs with a `must` word, becomes the signal. A failed search leaves the row untried, for the next run."""
+        org = r.get("organisation") or ""
+        title = re.split(r"\s+[-\u2013\u2014|]\s+", str(page.get("title") or "").strip())[0].strip()
+        site = own_site(org, people.domain_of(r.get("source_url") or ""))
+        if not org or not site or len(title.split()) < 4 or time.monotonic() >= self.deadline + self.FRESHER_GRACE: return None
+        key = lambda t: " ".join(re.findall(r"[a-z0-9]+", fold(t).lower()))
+        q = f'site:{site} "{title}"'
+        try: hits, errs = self.search(q, n=5, only=self.site_sources())
+        except Exception: return None
+        if not hits and errs: return None
+        r["own_copy_tried"] = "yes"
+        old = stored_signal_url(r) or r.get("signal_url") or ""
+        doms = self.domains if (self.domains.get(org) or self.domains.get(people.org_core(org))) else {**self.domains, org: site}
+        near, sig = people.name_regex(r.get("name") or ""), " ".join(str(r.get("signal") or "").split())
+        read = 0
+        for h in hits:
+            if read >= 3 or time.monotonic() >= self.deadline + self.FRESHER_GRACE: break
+            if h["url"].rstrip("/") == old.rstrip("/") or not people.official(org, h["url"], doms) or not key(h.get("title") or "").startswith(key(title)): continue
+            read += 1
+            pg = fetcher.fetch(h["url"], self.case)
+            if pg.get("status") != "ok": continue
+            url = pg.get("final_url") or pg["url"]
+            text = " ".join(str(pg.get("text") or "").split())
+            if not people.official(org, url, doms, pg.get("text")) or not key(pg.get("title") or "").startswith(key(title)) or not near.search(fold(text)): continue
+            ex = sig if sig and fold(sig) in fold(text) else self.own_sentence(pg["text"], r["name"], org, self.must)
+            if not ex: continue
+            r.update(signal=ex, signal_url=url, signal_date=self.signal_when(pg, url, r["name"]) or r.get("signal_date") or "")
+            keep = [x for x in note_items(r.get("note")) if x and not x.startswith("the person's own signal is from")]
+            r["note"] = "; ".join(keep + [f"the person's own signal is from {url} (the organisation's own copy of the story at {old})"])
+            self.log(f"  own copy: {r['name']} ({org}) — {url} (was {old})")
+            return pg
+        return None
 
     def hold_thin(self):
         """A row listed this run on a thin signal (thin_signal_why) is held, as a stored one is on the next reload: the last pass of a case would otherwise list it."""
@@ -3630,12 +3675,12 @@ class Hunt:
         """The sources a site: search asks: those of this hunt's that answer site: queries, or all of them when it has none."""
         return [x for x in self.sources if x in self.SITE_SOURCES] or list(self.sources)
 
-    def search(self, q, n, twice=False, only=None, deep=False):
+    def search(self, q, n, twice=False, only=None, deep=False, wait=False):
         """engines.search over this hunt's sources (with twice, ddg is asked twice and its answers unioned: see engines.ddg_twice), dropping for the rest of the run a source that has failed its first DEAD_AFTER calls while another answered: bing_news failed 237 of 242 calls in fnwords55, 3.4 s each, inside every search's wait. A source never drops while nobody answers (the network is down, not the source), nor if it is the last."""
         srcs = list(only or self.sources)
         asked = [("ddg_deep" if deep else "ddg_twice" if twice else x) if x == "ddg" else x for x in srcs]   # deep: ddg's next pages too (discovery)
         late = []
-        hits, errs = engines.search(q, asked, n=n, case=self.case, grace=None if deep else self.ENGINE_GRACE, late=late)   # ddg's next pages take seconds more, and the grace would cut discovery's deep answer off
+        hits, errs = engines.search(q, asked, n=n, case=self.case, grace=None if deep or wait else self.ENGINE_GRACE, late=late)   # no grace when deep (ddg's next pages take seconds more, and the grace would cut discovery's deep answer off) or wait (a people-first search needs every engine's answer: see people_first)
         errs = {("ddg" if k in ("ddg_twice", "ddg_deep") else k): v for k, v in errs.items()}   # tallied, dropped and reported as the ddg it is
         late = {("ddg" if k in ("ddg_twice", "ddg_deep") else k) for k in late}
         with self.tally_lock:
@@ -3786,6 +3831,19 @@ class Hunt:
         self._save()
 
     DISCOVER_N = 40   # hits a discovery search asks each engine for, with ddg's next pages (engines.ddg_deep): at 15, the same two queries named 21 to 31 organisations a run over fnwords150 to fnwords153, from a union of 41, and the verified count moved with them (10, 9, 9, 8)
+    DISCOVER_SWAPS = ((r"\bworkforce\b(?!\s+development)", "career services"), (r"\bcareer readiness\b", "workforce development"), (r"\bcareer services\b", "workforce development"), (r"\bworkforce development\b", "career services"))
+    def discover_queries(self):
+        """The spec's discovery searches, each followed by its variants: the query with its careers wording put as workforce and its workforce wording as career services (DISCOVER_SWAPS, one swap a variant). Two queries alone named 47 organisations in fnwords155 and 32 in fnwords156 as the engines' answers moved; on Nov 27 the two variants of fnwords156's pair named 41 organisations the pair did not (14 and 22 from the pair, 11 and 30 from the variants). `discover_variants: false` asks the spec's queries alone."""
+        qs = [q for q in self.s.get("discover") or [] if isinstance(q, str)]
+        if self.s.get("discover_variants", True) is False: return list(qs)
+        out = []
+        for q in qs:
+            if q not in out: out.append(q)
+            for pat, rep in self.DISCOVER_SWAPS:
+                v = re.sub(pat, rep, q, count=1, flags=re.I)
+                if v != q and v not in out and v not in qs: out.append(v)
+        return out
+
     def discover(self, q):
         """New organisations from a discovery search: names in result titles and snippets."""
         if ("(discover)", q) in self.tried: return 0
@@ -3915,7 +3973,7 @@ class Hunt:
         """One people-first search: each careers head a hit names, with the college they are named at, is weighed as from that college's angle; the college must have a .edu site of its own (US colleges), and official_recheck then confirms the person there."""
         angle = "(people) " + q
         if ("(people)", q) in self.tried: return 0
-        hits, errs = self.search(q, n=15)
+        hits, errs = self.search(q, n=15, wait=True)   # every engine, no grace: in fnwords156, bing and ddg answered "career services" director "artificial intelligence" said 5 and 6 s after Google News, past the 4 s grace, and the search read Google News's 13 hits alone; the Cedarville story both put first (a verified row in fnwords155) was never read. 24 such searches a run, so the wait is small
         for s, e in errs.items(): self.errors[f"{s}: {e[:70]}"] += 1
         if len(errs) >= len(self.sources):
             self.failed.add(("(people)", q)); return 0
@@ -3992,7 +4050,7 @@ class Hunt:
         return n
 
     def run(self):
-        discover = list(self.s.get("discover", []))
+        discover = self.discover_queries()
         workers = self.workers
         self.live0 = sum(engines.LIVE.values())
         self.prune_discovered()

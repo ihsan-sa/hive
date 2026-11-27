@@ -157,7 +157,9 @@ Your old folder is still at $OLD_ROOT. Delete it when you're happy."; fi
     [ -z "$sb" ] || said="${said:+$said
 }$sb"
   fi
-  if [ -n "$INSIDE" ]; then [ -z "$said" ] || printf '%s\n' "$said" | sed 's/^/NOTE: /'; return 0; fi
+  # Inside, a rerun's line (already here) goes up as a note, so the Windows or Mac installer shows it too.
+  if [ -n "$INSIDE" ]; then [ -n "${2:-}" ] || said="$1${said:+
+$said}"; [ -z "$said" ] || printf '%s\n' "$said" | sed 's/^/NOTE: /'; return 0; fi
   [ -z "$said" ] || printf '%s\n' "$said"
   if [ "$OWN" = 1 ]; then web="hive web"; term="hive"; else web="sudo -iu $U hive web"; term="sudo -iu $U hive"; fi
   addr=$(in_hive 'hive web 2>/dev/null' </dev/null | sed -n '/^http/{p;q;}')
