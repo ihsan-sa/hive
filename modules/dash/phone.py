@@ -1,7 +1,9 @@
 """Phone alerts: one line to the person's phone through ntfy when an agent has posted to them, even with the page closed.
 Off until the person turns it on in Settings. This is an outbound call to a third party (ntfy.sh, no account), so what leaves is
 deliberately small: a line saying something is waiting, the Hive's own address if it has one, and a long random topic that is the only
-secret. Never a post's words, its author or its thread: anyone who learns the topic can read what is sent to it.
+secret. Never a post's author or its thread, and a post's words only when the person turns on "Show the first line" (E208): then the
+alert carries the first line of the newest reply, so it shows on the phone's lock screen and passes through ntfy.sh, and Settings says so.
+Anyone who learns the topic can read what is sent to it.
 No imports from dash.py: the page reads and writes the state through the functions here, and tests run it with a fake send."""
 from datetime import datetime, timezone
 import json, os, secrets, tempfile, time, urllib.request
@@ -13,6 +15,7 @@ RUN_LINE = "A run you started has finished."
 GRACE = 20       # seconds a post must go unread before it is worth a ping: someone looking at the page has already seen it
 GAP = 60         # seconds between pings; a burst of posts is one ping
 CLICK_OK = ("http://", "https://")
+PREVIEW = 140    # characters of a reply's first line, when the person has asked for it
 
 
 def _now(): return time.time()
@@ -24,6 +27,24 @@ def _epoch(at):
         d = datetime.fromisoformat(str(at))
         return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp()
     except ValueError: return 0.0
+
+
+def first_line(text):
+    """The first line a person would read in a reply: no code fences, headings, emphasis, link targets or leading @names; one line, capped."""
+    import re
+    fence = False
+    for raw in str(text or "").splitlines():
+        t = raw.strip()
+        if t.startswith(("```", "~~~")): fence = not fence; continue
+        if fence or not t or t in ("---", "***"): continue
+        t = re.sub(r"^(#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)", "", t)
+        t = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", t)
+        t = re.sub(r"(\*\*|__|\*|`|~~)", "", t)
+        t = re.sub(r"^(@[\w-]+[,:]?(\s+|$))+", "", t)
+        t = " ".join(t.split())
+        if not t: continue
+        return t if len(t) <= PREVIEW else t[:PREVIEW - 1].rstrip() + "…"
+    return ""
 
 
 def http_send(url, headers, body, timeout=15):
@@ -53,7 +74,7 @@ class PhoneAlert:
         """What Settings shows. The topic is shown only while on: it is the only secret."""
         v = self._read(); on = v.get("on") is True and bool(v.get("topic"))
         return {"on": on, "server": SERVER, "line": LINE, "topic": v.get("topic") if on else None,
-                "subscribe": f"{SERVER}/{v['topic']}" if on else None, "runs": v.get("runs") is True, "link": v.get("link") or None, "error": v.get("error") or None}
+                "subscribe": f"{SERVER}/{v['topic']}" if on else None, "runs": v.get("runs") is True, "preview": v.get("preview") is True, "link": v.get("link") or None, "error": v.get("error") or None}
 
     # --- switches ---
     def set_on(self, on, link=None, latest=""):
@@ -77,6 +98,11 @@ class PhoneAlert:
         v = self._read()
         if on is True: v["runs_seen"] = max(str(v.get("runs_seen") or ""), str(latest or ""))
         v["runs"] = on is True
+        self._write(v); return self.view()
+
+    def set_preview(self, on):
+        """Carry the newest reply's first line in the alert (it shows on the lock screen). Off until the person turns it on."""
+        v = self._read(); v["preview"] = on is True
         self._write(v); return self.view()
 
     def tick_runs(self, ends):
@@ -120,7 +146,12 @@ class PhoneAlert:
             if not due: return False
         v["seen"] = max(str(p["at"]) for p in due)   # what came after stays for the next ping
         self.last_sent = self.now()   # a failure waits out the gap too
-        try: self._push(v, "Hive"); v.pop("error", None)
+        line = LINE
+        if v.get("preview") is True:
+            newest = max(due, key=lambda p: str(p.get("at") or ""))
+            first = first_line(newest.get("text"))
+            if first: line = first + (f" (and {len(due) - 1} more)" if len(due) > 1 else "")
+        try: self._push(v, "Hive", line); v.pop("error", None)
         except Exception as e: v["error"] = "Couldn't reach ntfy: " + str(e)[:120]
         self._write(v); return "error" not in v
 

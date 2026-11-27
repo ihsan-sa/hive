@@ -23,14 +23,27 @@ LEDGER, SNAPS, LOG, BOARD = HOME / "improvements.jsonl", HOME / "progress.jsonl"
 CORE, STATE, PROJECTS = HOME / "core", HOME / ".hive", HOME / "projects"
 Hive = next((CORE / n for n in ("hive", "hive") if (CORE / n).exists()), CORE / "hive")  # an installed Hive's CLI is called hive
 RSI_LEDGER = PROJECTS / "rsi-loop" / "ledger.jsonl"
-VERDICTS = ("held", "reverted", "inconclusive", "reverted-candidate", "unjudgeable", "expired", "inseparable")  # reverted-candidate is the script's
+VERDICTS = ("held", "reverted", "inconclusive", "reverted-candidate", "unjudgeable", "expired", "inseparable", "level")  # reverted-candidate is the script's
 # R47c: the closing verdicts end a row that can have no verdict, never by its owner, and the lab's index counts them apart:
 # unjudgeable: no number for this change exists (a still-landed row with no check); expired: its case came up too few times by the
 # revisit to read (a count and where it was counted). Neither replaces a held or reverted reading, and unjudgeable not an inconclusive one.
 # inseparable (rsi-lab goals.md rung 198, 11-26): a row whose number is shared and can never be read apart from the rows it shares
 # it with: one of them landed within INSEPARABLE_H of it (no window holds it alone), or one of them read reverted (the move is theirs
 # too). Never credited, counted apart with the closings, the fresh reading in --why.
-CLOSING = ("unjudgeable", "expired", "inseparable")
+# level (rung 207, a4418's ruling 11270730c516): a non-owner's fresh reading of the row's own number sits inside a stated noise band of
+# its logged baseline (and of a window before landing, if the --why cites one), so the change didn't reach its expect. It closes the row,
+# is never credited, counts as not-held (beside reverted) in held_share, and is refused on a row with no expect or one marked a reading.
+CLOSING = ("unjudgeable", "expired", "inseparable", "level")
+LEVEL_HOW = re.compile(r"\b(?:sd|s\.d\.|stdev|std|spread|range|count|n\s*=\s*\d+|\d+\s+(?:readings?|reads|samples|cases|items|pages|runs|rows|posts))\b", re.I)
+LEVEL_PRE = re.compile(r"\bpre-?landing\b|\bbefore (?:it |the change )?land", re.I)
+
+def level_want(e):
+    """The way row e's number should move: its want, else what its expect says (>= 50, below live), else None."""
+    if e.get("want") in ("up", "down"): return e["want"]
+    x = str(e.get("expect") or "")
+    up = re.search(r">|\b(?:above|over|at least|up|rises?|more|higher|increases?)\b", x, re.I)
+    down = re.search(r"<|\b(?:below|under|at most|down|falls?|fewer|less|lower|decreases?)\b", x, re.I)
+    return "up" if up and not down else "down" if down and not up else None
 INSEPARABLE_H = 6
 REAL = ("held", "reverted", "reverted-candidate")
 # R47e: a row that reads a number and changes nothing (a daily reading: i0233, i0240, i0292, i0296; no where, no commit) is no change
@@ -592,10 +605,36 @@ def cmd_judge(a):
                     if score(base, n[0], e["want"], e.get("band")) == "reverted-candidate":
                         sys.exit(f"hive improve judge: {a.id}'s own check reads {e['want']}: {e['before']:g} -> {n[0]:g} now, the wrong way. That is a reading, not a row with none: "
                                  f"judge it reverted (hive improve judge {a.id} reverted --why ...), never inseparable.")
+        if a.verdict == "level":  # rung 207 (a4418, 11270730c516): conditions 2-6; 1 (non-owner, revisit due, three a day) is the closing's own
+            if e.get("kind") == READING: sys.exit(f"hive improve judge: {a.id} was marked a reading ({e.get('reading_by')}), so it owes no verdict; level is for a change.")
+            if not e.get("expect"): sys.exit(f"hive improve judge: {a.id} has no expect on the record; level says a change didn't reach its expect, so a row with none can't take it.")
+            if None in (a.now, a.before, a.band) or a.band <= 0:
+                sys.exit("hive improve judge: level needs --now N (the fresh reading), --before N (the row's logged baseline) and --band N (the noise band, above 0).")
+            logged = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", str(e.get("baseline") or ""))] + ([float(e["before"])] if isinstance(e.get("before"), (int, float)) else [])
+            if not logged: sys.exit(f"hive improve judge: {a.id} has no baseline number on the record, so there is no before to be level with.")
+            if not any(abs(a.before - x) < 1e-9 for x in logged):
+                sys.exit(f"hive improve judge: --before {a.before:g} is not {a.id}'s logged baseline ({e.get('baseline') or e.get('before')}); level reads against the baseline it was logged with.")
+            want = level_want(e)
+            if not want: sys.exit(f"hive improve judge: {a.id}'s expect ({e['expect']}) names no way for the number to move, so up or down can't be told apart from level.")
+            if not (src and LEVEL_HOW.search(a.why)):
+                sys.exit("hive improve judge: level needs --why to say how the band was set (the spread: sd or range over N readings, or the set's count) and where the reading is (a file path or a post id).")
+            if LEVEL_PRE.search(a.why) and a.pre is None:
+                sys.exit("hive improve judge: --why cites a window before landing, so give its level with --pre N: the reading has to be level against it too.")
+            for name, b in [("its logged baseline", a.before)] + ([("the window before landing", a.pre)] if a.pre is not None else []):
+                gain = (a.now - b) if want == "up" else (b - a.now)
+                if gain < -a.band:
+                    sys.exit(f"hive improve judge: {a.id} reads {a.now:g} against {name} {b:g}, {abs(a.now - b):g} the wrong way ({want} wanted), beyond the band {a.band:g}. "
+                             f"That is a reading: judge it reverted (hive improve judge {a.id} reverted --why ...), never level.")
+                if gain > a.band:
+                    sys.exit(f"hive improve judge: {a.id} reads {a.now:g} against {name} {b:g}, {abs(a.now - b):g} the right way ({want} wanted), beyond the band {a.band:g}. "
+                             f"That is a reading: judge it held (hive improve judge {a.id} held --why ...), not level.")
+            a.why += (f"; level: reads {a.now:g} against its logged baseline {a.before:g}" + (f" and {a.pre:g} before landing" if a.pre is not None else "")
+                      + f", band {a.band:g}, {want} wanted; expect: {e['expect']}")
         day = (now() - dt.timedelta(hours=24)).isoformat()
         mine24 = [r["judge"] for r in jsonl(LEDGER) if r.get("judge") and r.get("by") == me and r.get("verdict") in CLOSING and str(r.get("at", "")) >= day]
         if len(mine24) >= 3: sys.exit(f"hive improve judge: you closed {', '.join(mine24)} in the last 24 h; three a day is the most one judge closes. Ask another agent.")
         w = []  # the case not coming up for this row says nothing about the rows it shares a number with
+    if a.verdict != "level" and any(x is not None for x in (a.now, a.before, a.band, a.pre)): sys.exit("hive improve judge: --now/--before/--band/--pre are a level closing's reading.")
     if a.base and not a.apart: sys.exit("hive improve judge: --base is the baseline window for an --apart reading; give both.")
     if a.apart:  # R25 (meta-reflect): a window after e landed and before any row it shares a number with: only e was live, so the number is e's own
         def ts(x):  # times as times: as strings, 2026-02-03T00:00 sorted before the 2026-02-03T00:00:00 it equals (R47c)
@@ -642,6 +681,7 @@ def cmd_judge(a):
     if w: print(f"judged with {', '.join(w)}: they share a number, so this verdict is recorded for each of them.")
     print(f"{a.id}: {a.verdict}. " + ("Now revert it (or confirm it was) and say so in its thread." if a.verdict == "reverted" else
                                        "Set a later revisit with hive improve log if the number needs more time." if a.verdict == "inconclusive" else
+                                       "Closed level: never credited, counted as not-held beside reverted, and apart from what is owed." if a.verdict == "level" else
                                        "Closed with no verdict: the lab's index counts it apart from held and reverted." if a.verdict in CLOSING else "Kept."))
 
 def table(rows, cols):
@@ -658,6 +698,7 @@ def cmd_reading(a):
     if e.get("by") == me: sys.exit(f"hive improve reading: {a.id} was logged by you; a reading takes it out of what is owed, so ask an agent that didn't.")
     if e.get("kind") == READING: sys.exit(f"hive improve reading: {a.id} is already a reading ({e.get('reading_by')}).")
     if e.get("status") in REAL: sys.exit(f"hive improve reading: {a.id} reads {e['status']}; a verdict stands, nothing to take out.")
+    if e.get("status") == "level": sys.exit(f"hive improve reading: {a.id} was closed level ({e.get('judged_by')}), a reading of its change against its expect; it is no reading row.")
     if e.get("where") or e.get("commit"): sys.exit(f"hive improve reading: {a.id} changed {e.get('where') or e.get('commit')}, so it is a change, not a reading.")
     if not re.search(r"\b[0-9a-f]{12}\b|[\w.~-]+/[\w./-]+|\b[\w-]+\.(?:jsonl|json|md|py|log)\b|\bi\d{4}\b", a.why or ""):
         sys.exit("hive improve reading: --why must say what number it read and for what (a row id, a file path or a post id).")
@@ -703,7 +744,7 @@ def cmd_list(a):
                  "status": "landed", "revisit": min(x.get("revisit") or "9999" for x in g),
                  "what": " | ".join(x.get("what", "")[:70 // len(g) + 10] for x in g), "measure": g[0].get("measure", "")[:50], "with": ""} for g in groups]
     else:
-        rows = [{"id": e["id"], "at": e.get("at", "")[:10], "by": e.get("by"), "status": e.get("status"), "revisit": e.get("revisit", ""),
+        rows = [{"id": e["id"], "at": e.get("at", "")[:10], "by": e.get("by"), "status": str(e.get("status")) + (f" (expect: {str(e.get('expect'))[:40]})" if e.get("status") == "level" else ""), "revisit": e.get("revisit", ""),
                  "what": e.get("what", "")[:70], "measure": e.get("measure", "")[:50], "with": ",".join(judged_with(items, e))}
                 for e in sorted(rows, key=lambda e: e.get("at", ""))]
     table(rows, ["id", "at", "by", "status", "revisit", "what", "measure"] + (["with"] if any(r["with"] for r in rows) else []))
@@ -1236,8 +1277,11 @@ def main(argv=None):
     p.add_argument("--also", action="append", help="ids of open landings on the same number, judged together with this one at the revisit (silences the overlap warning)")
     p.add_argument("--split", metavar="HOW", help="the --check counts only this change's own cases, though its measure names a number other landings share: say how (its rows, runs, path). Its verdict is then not made inconclusive by the overlap; a check identical to another open row's is refused")
     p.set_defaults(f=cmd_log)
-    p = sp.add_parser("judge", help="judge a landed change on its revisit date: ID held|reverted|inconclusive --why 'the number vs baseline'; expired (its case never came up) or unjudgeable (no number exists) close it with no verdict, never by its owner")
-    p.add_argument("id"); p.add_argument("verdict", choices=VERDICTS); p.add_argument("--why", default=""); p.add_argument("--self", action="store_true"); p.add_argument("--apart", help="FROM..TO (ISO): the number was read over a window when only this row was live, after it landed and before every row it shares a number with; a held then stays held")
+    p = sp.add_parser("judge", help="judge a landed change on its revisit date: ID held|reverted|inconclusive --why 'the number vs baseline'; expired (its case never came up) or unjudgeable (no number exists) close it with no verdict, never by its owner; level (a non-owner's fresh reading inside a stated band of the logged baseline, the row has an expect): --now N --before N --band N [--pre N]")
+    p.add_argument("id"); p.add_argument("verdict", choices=VERDICTS); p.add_argument("--why", default=""); p.add_argument("--self", action="store_true")
+    p.add_argument("--now", type=float, help="level: the fresh reading of the row's own number"); p.add_argument("--before", type=float, help="level: the row's logged baseline")
+    p.add_argument("--band", type=float, help="level: the noise band, set from a stated spread or count in --why"); p.add_argument("--pre", type=float, help="level: the number over a window before landing, when --why cites one")
+    p.add_argument("--apart", help="FROM..TO (ISO): the number was read over a window when only this row was live, after it landed and before every row it shares a number with; a held then stays held")
     p.add_argument("--base", help="BFROM..BTO (ISO; a time with no zone is UTC), with --apart: the baseline window, ending within the hour before this row landed, with --apart starting within the hour after, the two within a fifth of each other in length; a row it shares a number with that landed a whole window before BFROM (and was never read as reverted) is live in both, so it doesn't block. --why gives the number over each"); p.set_defaults(f=cmd_judge)
     p = sp.add_parser("reading", help="mark a row that read a number and changed nothing (no --where, no --commit) as a reading, not owed a verdict; never by its owner: ID --why 'what it read, for what'")
     p.add_argument("id"); p.add_argument("--why", required=True); p.set_defaults(f=cmd_reading)

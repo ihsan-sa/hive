@@ -44,6 +44,20 @@ SKIP_PROJECT = re.compile(r"^projects/(rsi-loop/arms|hive-meta/interp/goals-hist
 # Agents' clones of a module under projects/ mostly hold older copies of those same files, so a clone's file that the live module
 # also has is left out when it has the same text or isn't newer; a newer, different one stays (a doc fixed on a branch not merged
 # yet), and so does what only the clone has (a report, a block's notes). On 2026-11-11 that left out 529 of 531 copies, 6 ms a search. Thread 11102350839c.
+# A site export under projects/ (projects/ui-redesign/*/export/) is build output of core: a file there that core also has is a stale copy whose
+# image links differ, so it never folds into core's passage. K120 (aff07, 2026-11-27): 89 of 7110 top-12 slots over 595 ruler questions.
+EXPORT_COPY = re.compile(r"^projects/.+?/export/(.+)$")
+# A release build (core/dist/export.sh's output: its root holds hive-starter.service) also copies core/dist/X, core/dist/repo/X
+# (README, CHANGELOG, SECURITY...), modules/NAME/X and modules/hive-extras/ (as modules/extras/); those are build output too, and
+# core/dist's own pages are indexed in their place. K122 (aff07, 2026-11-27): 58 of 7110 top-12 slots, 5 frozen copies each.
+def export_copy(rel):
+    m = EXPORT_COPY.match(rel)
+    if not m: return False
+    x = m.group(1)
+    if os.path.isfile(os.path.join(H, "core", x)): return True
+    if not os.path.isfile(os.path.join(H, rel[:-len(x)], "hive-starter.service")): return False
+    srcs = [f"core/dist/{x}", f"core/dist/repo/{x}"] + ([x] if x.startswith("modules/") else []) + ([f"modules/hive-extras/{x[len('modules/extras/'):]}"] if x.startswith("modules/extras/") else [])
+    return any(os.path.isfile(os.path.join(H, s)) for s in srcs)
 SKIP_MODULE = re.compile(r"^modules/(_notes|[^/]+/(tests?|corpus|pinned|fixtures|vendor|third_party))(/|$)")
 _clone = {}
 def module_of(d, entries):
@@ -116,8 +130,10 @@ def walk():
                 readme_only = {os.path.join(d, s) for s in sub if not pub(s)}
                 files = []
             elif src == "moddocs" and d in readme_only:  # a private module: its README is its front page (K108: 73 of 87 were unfindable)
-                sub[:] = []; files = [f for f in files if f == "README.md"]
-            sub[:] = [s for s in sub if s not in SKIP_DIR and not s.startswith(".") and not skip.search(os.path.relpath(os.path.join(d, s), H) + "/")
+                sub[:] = [s for s in sub if s == "docs"]; files = [f for f in files if f == "README.md"]
+            elif src == "moddocs" and os.path.dirname(d) in readme_only and os.path.basename(d) == "docs":  # and its docs/*.md, which are its own,
+                sub[:] = []  # not copies of core (K118, aff07 2026-11-27: printer's docs/a1-mini-relay.md holds the unattended-print rule, e3's gold)
+            sub[:] = [s for s in sub if (s not in SKIP_DIR or (src == "core" and d == base and s == "dist")) and not s.startswith(".") and not (src == "core" and d == os.path.join(base, "dist") and s == "site") and not skip.search(os.path.relpath(os.path.join(d, s), H) + "/")
                       and not (src == "kb" and SKIP_DRAFTS.search(os.path.relpath(os.path.join(d, s), H)))]
             top, live = copy.get(d, (None, None))
             for f in files:
@@ -125,6 +141,7 @@ def walk():
                 if not TEXT.search(f) or SKIP_FILE.search(rel) or skip.search(rel): continue
                 if src in ("core", "projects", "moddocs") and not PROJECT_ONLY.search(f): continue
                 if live and stale_copy(p, os.path.join(live, os.path.relpath(p, top))): continue
+                if src == "projects" and export_copy(rel): continue  # a site or release build of core (K121, K122)
                 yield src, p, rel
     # The person's memory (core/memory.py, Settings › Everyday › Memory) is part of the KB too, so `kb find` and recall reach
     # what they told their chats (the person, thread 11250922a4e4, 2026-11-25: "anything about me should just end up in the KB").

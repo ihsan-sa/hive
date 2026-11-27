@@ -5116,7 +5116,7 @@ def mark_read(ids=None):
     return len(new)
 
 
-# ---------- phone alerts (phone.py): a contentless ntfy line when a post for the person goes unread ----------
+# ---------- phone alerts (phone.py): an ntfy line, with no words from the reply unless the person turns that on when a post for the person goes unread ----------
 def _phone():
     spec = importlib.util.spec_from_file_location("hive_phone", Path(__file__).resolve().with_name("phone.py")); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
     return m
@@ -5141,8 +5141,9 @@ def phone_do(what, headers):
     if what in ("runs-on", "runs-off"):
         ends = _phone().person_run_ends(jlines(LOG, 512 * 1024))
         return PHONE.set_runs(what == "runs-on", latest=max((str(e.get("at") or "") for e in ends), default=""))
+    if what in ("preview-on", "preview-off"): return PHONE.set_preview(what == "preview-on")   # E208
     if what == "test": PHONE.test(); return {**PHONE.view(), "tested": True}
-    raise ValueError("on, off, test, topic, runs-on or runs-off")
+    raise ValueError("on, off, test, topic, runs-on, runs-off, preview-on or preview-off")
 
 
 # ---------- Web Push (module conn-webpush): the browser list and its checks live there. An install without that module has no such switch ----------
@@ -8303,6 +8304,7 @@ def serve(port):
             if self.route in ("local", "tailnet"): info["phone_link"] = phone_qr(web)   # E122: the QR code in Settings › This device; not to an outside visitor, who may be a friend and needn't learn the other names
             if self.route != "open" and "logins" in self.can and orders_installed(): info["orders"] = True   # the Orders page (views/orders.js)
             if self.route != "open" and install_id(): info["install"] = install_id()   # the report module's install code, shown at the foot of Settings so the owner can match this Hive to its reports
+            if self.route != "open": info["who"] = hashlib.sha256(f"{self.route}\n{self.email}".encode()).hexdigest()[:16]   # E207: tags the chats a phone keeps for offline reading; the copy goes when a different sign-in reads this device
             if self.route != "open": info["default_model"] = default_model(); info["voice"] = voice_ready(); info["phone"] = phone_ready() and "post" in self.can
             if self.route != "open" and "post" in self.can and word_shell(): info["word_shell"] = word_shell()
             if self.route != "open" and "post" in self.can and word_shell("word_card"): info["word_card"] = word_shell("word_card")   # root's approval card (k2992)

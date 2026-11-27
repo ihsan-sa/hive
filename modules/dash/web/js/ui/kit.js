@@ -5,6 +5,7 @@ import { status as st } from "../core/status.js";
 import { labelCodes } from "../core/model.js";
 import { icon } from "./icons.js";
 import { showTip, hideTip } from "./tip.js";
+import { forget as forgetKept } from "../core/offline.js";
 export { icon };
 
 /** Page header: the answer first. {title, lead, tone, meta:[...], actions, after, state:{tone,text}, subnav}
@@ -114,7 +115,7 @@ export function meter({ value, stop, tone, label }) {
 /** Getting full mode back takes a fresh Access sign-in, and Access's logout URL ends on its own "logged out" page with no way back.
  * So end the session in the background and reload, which lands on the sign-in page. The link's href stays as the fallback. */
 export function signInAgain(e) {
-  e.preventDefault();
+  e.preventDefault(); forgetKept();   // E207: the chats kept for offline reading go with the sign-in
   fetch("/cdn-cgi/access/logout", { credentials: "same-origin" }).catch(() => null).finally(() => location.reload());
 }
 

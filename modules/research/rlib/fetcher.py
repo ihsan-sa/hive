@@ -1,6 +1,6 @@
 """Read a page by whichever honest route works: plain request, then a real browser, then the Internet Archive's copy.
 It goes no further than that: no proxies or challenge solving. A page it can't read comes back as blocked, never as content."""
-import json, re, shutil, subprocess, tempfile, threading, unicodedata, urllib.parse
+import datetime as dt, html.parser, json, re, shutil, subprocess, tempfile, threading, unicodedata, urllib.parse
 from . import net, pdfboxes
 from .extract import domain_of, parse_date, parse_html
 from .store import now
@@ -121,6 +121,26 @@ def _archive(url):
     return _ok(url, snap, "archive", 200, parsed, snapshot=when), ""
 
 
+def archive_before(url, day):
+    """(text, YYYY-MM-DD) of the Wayback copy of url saved nearest before `day` (an ISO date), or (None, why): the copy a page's last edit is compared with (Kaylor's Boise State guide, edited 2026-06-01, against its copy of 2026-01-12: fnwords157 review)."""
+    try: before = (dt.date.fromisoformat(str(day)[:10]) - dt.timedelta(days=1)).strftime("%Y%m%d")
+    except ValueError: return None, "no day"
+    r = net.get(ARCHIVE + "/wayback/available?url=" + urllib.parse.quote(url, safe="") + "&timestamp=" + before)
+    if r.error or r.status != 200: return None, r.error or f"HTTP {r.status}"
+    try: snap = json.loads(r.body)["archived_snapshots"]["closest"]
+    except (ValueError, KeyError, TypeError): return None, "no copy"
+    if not snap.get("available") or str(snap.get("status")) != "200": return None, "no copy"
+    ts = str(snap["timestamp"])
+    when = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
+    if when >= str(day)[:10]: return None, f"no copy before {str(day)[:10]} (nearest {when})"   # the API gives the nearest copy either side
+    raw = re.sub(r"(/web/\d+)/", r"\1id_/", re.sub(r"^http:", "https:", snap["url"]), count=1)
+    g = net.get(raw)
+    if g.error or g.status != 200: return None, g.error or f"HTTP {g.status}"
+    parsed = parse_html(g.text, url)
+    if len(parsed["text"]) < THIN or _looks_blocked(parsed): return None, "the copy has no text"
+    return parsed["text"], when
+
+
 NEEDS_BROWSER = ("news.google.com",)
 REDIRECTORS = ("news.google.com",)   # hosts whose links lead to another site's article: the page is saved under the publisher's address too
 
@@ -198,6 +218,44 @@ def script_roster(url):
             except ValueError: break
         return api, pairs
     return "", []
+
+class _Forms(html.parser.HTMLParser):
+    """The <form>s of a page: [(action, method, [(tag, type, name, value)])]."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True); self.forms, self.cur = [], None
+    def handle_starttag(self, tag, attrs):
+        a = {k: (v or "") for k, v in attrs}
+        if tag == "form": self.cur = (a.get("action", ""), (a.get("method") or "get").lower(), []); self.forms.append(self.cur)
+        elif self.cur and tag in ("input", "select", "textarea"): self.cur[2].append((tag, (a.get("type") or ("text" if tag == "input" else tag)).lower(), a.get("name", ""), a.get("value", "")))
+    def handle_endtag(self, tag):
+        if tag == "form": self.cur = None
+
+
+def directory_form(url):
+    """(action URL, the text field's name, [(hidden name, value)]) of the search form a staff directory keeps for itself, or None. The form asks by GET for the page's own address (not the site's /search), and has one text field; its hidden fields go with every query, its drop-downs are left at all. Madison College's directory prints no one until it is asked: `/about/directory?name_title=career` lists its Director, Career & Employment Services, and Houston CC's profile listing wants `?keywords=workforce&showall=1` (fnwords157, 6z12x)."""
+    r = net.get(url)
+    if r.error or r.status != 200 or not r.text: return None
+    base = r.url or url
+    here = urllib.parse.urlsplit(base)
+    p = _Forms()
+    try: p.feed(r.text)
+    except Exception: return None
+    for action, method, fields in p.forms:
+        act = urllib.parse.urljoin(base, action or base)
+        a = urllib.parse.urlsplit(act)
+        if method != "get" or (a.hostname or "").lower() != (here.hostname or "").lower() or a.path.rstrip("/") != here.path.rstrip("/"): continue
+        text = [n for t, ty, n, v in fields if t in ("input", "textarea") and ty in ("text", "search", "textarea") and n]
+        if len(text) != 1: continue
+        hidden = [(n, v) for t, ty, n, v in fields if t == "input" and ty == "hidden" and n]
+        return urllib.parse.urlunsplit((a.scheme, a.netloc, a.path, "", "")), text[0], hidden
+    return None
+
+
+def form_query(form, word):
+    """The address a directory form asks for one word."""
+    action, field, hidden = form
+    return action + "?" + urllib.parse.urlencode([(field, word)] + list(hidden))
+
 
 LAST = threading.local()   # LAST.route: how this thread's last fetch ended: saved (from the case), direct, browser, archive, blocked or refused. A hunt splits its page-read seconds by it
 

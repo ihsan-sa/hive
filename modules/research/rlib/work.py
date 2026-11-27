@@ -561,6 +561,17 @@ def signal_page_edited(r, case):
     return d if late and d <= dt.date.today().isoformat() else ""   # within EDIT_AFTER_DAYS of the signal the "edit" is the page's own putting-up: Hammond's Bentley story, signal 2025-05-21, shown date 2025-05-22, last modified 2025-05-23 (fnwords144 review)
 
 
+def ai_lines(text, must):
+    """The page's sentences that name a `must` term, folded and with their spacing collapsed: what an edit to a unit's AI page is compared on."""
+    has = lambda t: any(people.term_regex(m).search(t) for m in must or ())
+    return {f for line in str(text or "").splitlines() for s in people._sentences(" ".join(line.split())) if (f := " ".join(fold(s).split()).strip(" .!?")) and has(f)}   # line by line: a menu word on the line above runs into the first sentence
+
+def edit_changed_ai(live, old, must):
+    """True when an edit added or changed a sentence on AI: the live page has an AI sentence the older copy lacks. A page whose AI lines are the same after its last edit (a menu, a footer, a date) is as old as it was."""
+    now = ai_lines(live, must)
+    return bool(now - ai_lines(old, must)) if now and old else False
+
+
 EVENT_AFTER = re.compile(r"\b(?:\d{1,2}(?::\d\d)?\s*[ap]\.?\s?m\b|registration|register|venue|location|ballroom|auditorium|doors open)", re.I)
 EVENT_DATE_NOTE = "the signal page gives no date it was posted; the event it announces is on "
 def event_date(page, url, d):
@@ -1032,7 +1043,21 @@ def signal_kind(signal, source_url=""):
 
 LISTED_KINDS = ("publication", "unit", "paraphrase", "narration", "organisation")   # labels the CSV gives a row the hunt took as a statement; signal_kinds still filters on signal_kind
 SAID = r"(?:said|says|noted|notes|explained|explains|added|adds|stated|states|told|shared|shares|believes|believe)"
-def listed_kind(r):
+def ai_outside_quotes(sig, must):
+    """True when a signal quotes the person, no quoted span names AI, and the words outside the quotes do: the writer's sentence about them, joined to a quote of theirs on something else. Spaulding's signal joins "Since COVID, people are stepping back and considering work/ life balance," to "She is also taking note of the advancements in AI ..." (fnwords157 review, row 15)."""
+    sig = str(sig or "")
+    if not must or not (m0 := QUOTE_MARK.search(sig)): return False
+    if m0.group() == "\u201d" or (m0.group() == '"' and m0.start() and not sig[m0.start() - 1].isspace() and not sig[m0.end():m0.end() + 1].isalnum()): sig = '"' + sig   # the quote began before the signal: Heiser's ends 'exposed to AI," said Evan Heiser' (6z12v reload)
+    spans = list(re.finditer(r"[\"\u201c]([^\"\u201c\u201d]{10,})(?:[\"\u201d]|$)", sig))
+    if not spans: return False
+    has = lambda t: any(people.term_regex(m).search(fold(t)) for m in must)
+    if any(has(m.group(1)) for m in spans): return False
+    rest, at = [], 0
+    for m in spans: rest.append(sig[at:m.start()]); at = m.end()
+    rest.append(sig[at:])
+    return has(" ".join(rest))
+
+def listed_kind(r, must=None):
     """The kind a row's CSV line shows: signal_kind, narrowed when the hunt took a signal as a statement that isn't the person speaking. `publication` is their own article named by its byline ("... Workforce Development Lens by Ian Roark"); `unit` is the story's line about their office (UNIT_LINE); `paraphrase` is the reporter's words for what they said, with no quotation marks ("... Anahid Petrosian, Ph.D., said for the last two years, STC has invested ..."). All three were labelled statement on CONFIRMED rows in fnwords133-134 (reviews)."""
     k = signal_kind(r.get("signal"), r.get("source_url"))
     sig = str(r.get("signal") or "")
@@ -1047,6 +1072,7 @@ def listed_kind(r):
     if interview_intro(sig, r.get("name")): return "narration"
     if paraphrased(sig, r.get("name")): return "paraphrase"
     if narrated(sig, r.get("name")): return "narration"
+    if ai_outside_quotes(sig, must): return "narration"
     return k
 
 
@@ -1264,15 +1290,26 @@ def narration_own_words_why(r, page, must, own=True):
 
 
 TITLE_NOTE = "its signal page gives them as "
-def signal_title_note(r, page, org=""):
-    """A note, not a mark-down, when a verified row's own signal page gives the person a title with another unit word than the title on the page that verifies the row: STC's news story gives Petrosian "Vice President and Provost of Academic Affairs and Economic Development", her staff page "... Academic Affairs and Workforce Innovation", and the reviewer read the staff title as a careers post the story does not give (fnwords148 review). Posts that share no unit word are signal_title_why's, which marks the row partial."""
-    if not stored_signal_url(r) or not page.get("text"): return ""
+LINKED_TITLE_NOTE = "a page its signal page links ("
+TITLE_NOTES = (TITLE_NOTE, LINKED_TITLE_NOTE)
+def signal_title_note(r, page, org="", case=None):
+    """A note, not a mark-down, when a verified row's own signal page gives the person a title with another unit word than the title on the page that verifies the row: STC's news story gives Petrosian "Vice President and Provost of Academic Affairs and Economic Development", her staff page "... Academic Affairs and Workforce Innovation", and the reviewer read the staff title as a careers post the story does not give (fnwords148 review). Posts that share no unit word are signal_title_why's, which marks the row partial.
+    Failing that, a page of the same site that the signal page links and the case holds, when it gives them such a title: WFU's "Leading Voices" profile of Chan links its April News story, which calls him "Vice President for Innovation and Career Development"; his row was verified on the profile, and nothing said so (fnwords157 review, row 9)."""
+    if not page or not page.get("text"): return ""
     name = r.get("name") or ""
-    given = people.title_before(page["text"], name) or people.title_given(page["text"], name)
-    if not given: return ""
     stem = lambda t: {w[:5] for w in people.unit_words(t, org or r.get("organisation") or "")}
-    if not stem(given) - stem(str(r.get("title") or "")): return ""
-    return f"{TITLE_NOTE}{given[:90]}, not the title on the page that verifies the row"
+    other = lambda text: (g if (g := people.title_before(text, name) or people.title_given(text, name)) and stem(g) - stem(str(r.get("title") or "")) else "")
+    if stored_signal_url(r) and (given := other(page["text"])): return f"{TITLE_NOTE}{given[:90]}, not the title on the page that verifies the row"
+    if not case: return ""
+    here = page.get("final_url") or page.get("url") or ""
+    site = registrable(domain_of(here))
+    skip = {u.rstrip("/") for u in (here, page.get("url") or "", r.get("source_url") or "") if u}
+    for l in page.get("links") or []:
+        href = (l[0] if isinstance(l, (list, tuple)) else l.get("url", "")) if l else ""
+        if not href or href.rstrip("/") in skip or registrable(domain_of(href)) != site: continue
+        lp = case.page_at(href)
+        if lp and lp.get("status") == "ok" and (given := other(lp.get("text") or "")): return f"{LINKED_TITLE_NOTE}{href}) gives them as {given[:90]}, not the title on the page that verifies the row"
+    return ""
 
 
 AI_PEER = r"(?:technology|technologies|tech|tools?|automation|data|analytics|digital|innovation|software|platforms?|virtual reality|vr|ar|robotics|machine learning)"
@@ -1364,7 +1401,8 @@ def signal_date_from(r, case):
     own = not stored_signal_url(r)
     if not page: return "its page is not in the case"
     shown = date_printed(page.get("text"), sd)
-    if page.get("date_from") == "event" and str(page.get("date") or "")[:10] == sd: how = SHOWN_ON_PAGE["event"]   # before published: an event page's published field holds its event day, and Mitchell's 2024-09-25 read "published date (metadata)" though the page's datePublished is 2024-07-30 (fnwords147 review)
+    if (ed := str(r.get("signal_edit") or "").split()) and len(ed) == 2 and ed[0] == sd: how = f"its page's last edit (metadata), which changed its AI lines since the archived copy of {ed[1]}" + (f"; first published {str(page.get('published'))[:10]}" if page.get("published") else "")   # Kaylor's (stored_signal_edits)
+    elif page.get("date_from") == "event" and str(page.get("date") or "")[:10] == sd: how = SHOWN_ON_PAGE["event"]   # before published: an event page's published field holds its event day, and Mitchell's 2024-09-25 read "published date (metadata)" though the page's datePublished is 2024-07-30 (fnwords147 review)
     elif str(page.get("published") or "")[:10] == sd: how = "its page's published date (metadata)"
     elif str(page.get("date") or "")[:10] == sd: how = SHOWN_ON_PAGE.get(page.get("date_from") or "", "its page's date")
     elif extract.url_date(url) == sd: how = "its address"
@@ -1816,8 +1854,8 @@ class Hunt:
         listed = {id(r) for r in self.leads.values()}
         for r in list(self.leads.values()) + list(self.near.values()):
             page = signal_page_of(r, self.case)
-            if id(r) in listed and (said := [x for x in note_items(r.get("note")) if x.startswith(TITLE_NOTE)]) and (now := signal_title_note(r, page, r.get("organisation") or "")) not in said:   # a note an older reading wrote goes when today's reads otherwise: Spaulding's said "... development who joined UTAA in 2021" (fnwords155 review)
-                r["note"] = "; ".join(x for x in note_items(r.get("note")) if not x.startswith(TITLE_NOTE)) + (f"; {now}" if now else "")
+            if id(r) in listed and (said := [x for x in note_items(r.get("note")) if x.startswith(TITLE_NOTES)]) and (now := signal_title_note(r, page, r.get("organisation") or "", self.case)) not in said:   # a note an older reading wrote goes when today's reads otherwise: Spaulding's said "... development who joined UTAA in 2021" (fnwords155 review)
+                r["note"] = "; ".join(x for x in note_items(r.get("note")) if not x.startswith(TITLE_NOTES)) + (f"; {now}" if now else "")
             if id(r) not in listed: continue
             held = r.get("check_status") == "partial" and bool(FRAMING_NOTE.search(str(r.get("note") or "")))   # marked on an earlier run: nothing rechecks a partial row
             if r.get("check_status") != "verified" and not held: continue
@@ -1828,7 +1866,7 @@ class Hunt:
                 why = self.signal_why(r, page)
             elif held: continue
             if not why:
-                if (said := signal_title_note(r, page, r.get("organisation") or "")) and said not in str(r.get("note") or ""): r["note"] = "; ".join(x for x in (r.get("note"), said) if x)
+                if (said := signal_title_note(r, page, r.get("organisation") or "", self.case)) and said not in str(r.get("note") or ""): r["note"] = "; ".join(x for x in (r.get("note"), said) if x)
                 continue
             r["check_status"] = "partial"
             if why not in str(r.get("note") or ""): r["note"] = "; ".join(x for x in (r.get("note"), why) if x)
@@ -2882,6 +2920,37 @@ class Hunt:
         return False
 
     FRESHER_GRACE = 60.0   # seconds stored_fresher_signals may run past the pass's deadline: the end-of-run call came after fnwords152's p2 ran out of time, and its one search (bing_web, 17 s) and up to four page reads fit in this; passes.sh's timeout leaves 300 s over max_seconds
+    EDIT_OLD_NOTES = ("its organisation signal is from ", OLD_SIGNAL)
+    def stored_signal_edits(self):
+        """A listed row on an organisation signal whose page was last modified a month or more after it was put up, and within a year of the row's reading, is dated by that edit when a Wayback copy saved before the edit shows its AI lines changed: Boise State's AI career guide, Kaylor's unit's, was put up 2024-08-26 and edited 2026-06-01, and the reviewer read the edited guide as her unit's current AI work (fnwords157 review, row 17). Without a copy that shows it, the page keeps its first date: an edit can be a menu or a footer, and Glover's UF page dated by its edit was a fault (fnwords134 review). Each row is checked once (edit_checked)."""
+        if not self.case or not self.must: return 0
+        n = 0
+        for r in self.leads.values():
+            if not str(r.get("signal") or "").startswith("(the organisation's") or r.get("edit_checked"): continue
+            url = stored_signal_url(r) or r.get("signal_url") or r.get("source_url") or ""
+            page = self.case.page_at(url) or {}
+            first = str(r.get("signal_date") or "")[:10] or signal_page_date(page, url)   # a stored organisation signal's date is filled in by report: Kaylor's row held none
+            if not (d := signal_page_edited(dict(r, signal_date=first), self.case)): continue
+            try: recent = (dt.date.fromisoformat(str(r.get("read_on") or "")[:10]) - dt.date.fromisoformat(d)).days <= 365
+            except ValueError: continue
+            if not recent: continue
+            r["edit_checked"] = "yes"
+            old_text, copy_day = fetcher.archive_before(url, d)
+            if not old_text:
+                self.log(f"  . {r['name']} ({r['organisation']}): signal page edited {d}, no archived copy to compare ({copy_day})")
+                continue
+            if not edit_changed_ai(page.get("text"), old_text, self.must):
+                self.log(f"  . {r['name']} ({r['organisation']}): signal page edited {d}, its AI lines are those of the copy of {copy_day}")
+                continue
+            old = first
+            r["signal_edit"], r["signal_date"] = f"{d} {copy_day}", d
+            keep = [x for x in note_items(r.get("note")) if x and not x.startswith(SIGNAL_MARK + "it is the organisation's signal, not theirs") and not (old and x.startswith(self.EDIT_OLD_NOTES) and old in x) and not re.match(r"a search of \S+ for their unit's news found none", x)]
+            r["note"] = "; ".join(keep)
+            if r.get("check_status") == "partial" and not any(x.startswith((SIGNAL_MARK, THIN_SIGNAL)) for x in keep): r["check_status"] = "verified"
+            self.log(f"  + {r['name']} ({r['organisation']}): signal dated {d}, its page's last edit, which changed its AI lines since the archived copy of {copy_day}")
+            n += 1
+        return n
+
     def stored_fresher_signals(self):
         """Verified rows whose own signal is older than FRESH_SINCE get fresher_signal, and rows on an organisation signal over a year old get fresher_org_signal, side by side, with at least FRESHER_GRACE seconds before the deadline (put back after). A search the deadline still cuts is asked again on the next run (search_cut)."""
         todo = [r for r in self.leads.values() if self.fresher_due(r)]
@@ -2975,16 +3044,34 @@ class Hunt:
                 and bool(self.held_queries(r)) and self.good_role(r.get("title", "")) and self.room_for(r["organisation"], r.get("title", "")))
 
     def held_queries(self, r):
-        """The searches for a held head: their name and the shortest must word on the organisation's site, then on the whole web. fnwords112's held heads, 49 of 146: the person_signal query (name, organisation, 'artificial intelligence') found 0, these two 3 (hop 4 of chain 112310401a21)."""
+        """The searches for a held head, as text: see held_plan."""
+        return [q for q, _state, _w in self.held_plan(r)]
+
+    @staticmethod
+    def short_name(name):
+        """First and last name of a printed name with three parts or more ("Drew Woodrow Thurman" -> "Drew Thurman"), or "": Houston's directory prints the middle name he doesn't go by, and the full name found only namesakes (6z12z). Not when a middle part is a lowercase particle ("Maria de la Cruz")."""
+        toks = people.clean_name(name).split()
+        if len(toks) < 3 or any(t[:1].islower() for t in toks[1:]): return ""
+        return f"{toks[0]} {toks[-1]}"
+
+    def held_plan(self, r):
+        """The searches for a held head, as (query, the held_signal_tried mark once it has run, the must word): their name and the shortest must word on the organisation's site, then on the whole web, then the longest must word on the web; for a name printed with three parts, the same again for first + last name. fnwords112's held heads, 49 of 146: the person_signal query (name, organisation, 'artificial intelligence') found 0, the first two 3 (hop 4 of chain 112310401a21).
+        Marks: "yes" the first two full-name queries done, "2" all the full-name ones, "3" the first + last ones too."""
         org, nm = r["organisation"], people.clean_name(r["name"])
-        w = min(self.must, key=len)
+        w, long = min(self.must, key=len), max(self.must, key=len)
         d = self.domains.get(org) or self.domains.get(people.org_core(org)) or self.learned.get(org)
         d = d[0] if isinstance(d, (list, tuple)) and d else d
         if not (isinstance(d, str) and d) and people.official(org, r.get("source_url", ""), self.domains): d = own_site(org, domain_of(r.get("source_url", "")))
-        tried, long = r.get("held_signal_tried"), max(self.must, key=len)
-        if tried == "yes": return [f"{nm} {long}"] if long != w else []   # a row searched before the third query was added gets only that one
-        if tried: return []
-        return ([f"site:{d} {nm} {w}"] if isinstance(d, str) and d else []) + [f"{nm} {w}"] + ([f"{nm} {long}"] if long != w else [])   # then the longest word on the whole web: "Molly Dodge AI" never found her House testimony, which "Molly Dodge artificial intelligence" did (fnwords148 review)
+        def plan(n):
+            return ([(f"site:{d} {n} {w}", w)] if isinstance(d, str) and d else []) + [(f"{n} {w}", w)] + ([(f"{n} {long}", long)] if long != w else [])   # then the longest word on the whole web: "Molly Dodge AI" never found her House testimony, which "Molly Dodge artificial intelligence" did (fnwords148 review)
+        full = [(q, "2" if long != w and x == long else "yes", x) for q, x in plan(nm)]
+        sn = self.short_name(nm)
+        short = [(q, "3" if i == len(plan(sn)) - 1 else "2", x) for i, (q, x) in enumerate(plan(sn))] if sn else []
+        tried = r.get("held_signal_tried")
+        if not tried: return full + short
+        if tried == "yes": return [x for x in full if x[1] == "2"] + short   # a row searched before the third query was added gets only that one
+        if tried == "2": return short
+        return []
 
     @side_search("held signal")
     def held_signal(self, r):
@@ -2992,10 +3079,10 @@ class Hunt:
         name, org = r["name"], r["organisation"]
         near = people.name_regex(name)
         own = {r.get("source_url", "").rstrip("/")}
-        qs = self.held_queries(r)
-        for i, q in enumerate(qs):
+        qs = self.held_plan(r)
+        for q, mark, word in qs:
             if time.monotonic() >= self.deadline: break
-            r["held_signal_tried"] = "2" if i == len(qs) - 1 and q.endswith(" " + max(self.must, key=len)) and max(self.must, key=len) != min(self.must, key=len) else "yes"  # only once searched: fnwords113's sweep reached 57 searches for 93 heads and marked all 93 tried, so a rerun would skip the rest. "yes" is the first two queries done, "2" the third, with the longest must word, too
+            r["held_signal_tried"] = mark   # only once searched: fnwords113's sweep reached 57 searches for 93 heads and marked all 93 tried, so a rerun would skip the rest (see held_plan for the marks)
             with self.save_lock: self.held_signal_searches += 1
             hits, _ = self.search(q, n=8)
             read = 0
@@ -3011,7 +3098,7 @@ class Hunt:
                 if not (people.official(org, url, self.domains, pg["text"]) or people.names_org(org, pg["text"])): continue  # a namesake at another place
                 if gone_live(pg, h["url"]): continue
                 ex = self.own_sentence(pg["text"], name, org, self.must)
-                if ex and not self.searched_signal_why(pg, url, ex, r): return url, ex, self.signal_when(pg, url, name), q.rsplit(people.clean_name(name), 1)[-1].strip()
+                if ex and not self.searched_signal_why(pg, url, ex, r): return url, ex, self.signal_when(pg, url, name), word
         return "", "", "", ""
 
     def held_signals(self):
@@ -3049,7 +3136,7 @@ class Hunt:
     def stored_official_rechecks(self):
         """Stored rows whose signal is the person's own but whose page is another site's, or too old to show the post is still held, get one search on the organisation's site, side by side. A near miss confirmed there comes back to the list."""
         if self.s.get("official_recheck") is False: return
-        lead = [r for r in self.leads.values() if r.get("check_status") != "verified" and r.get("signal_near_person") == "yes" and (not r.get("official_recheck_tried") or self.unit_retry(r) or self.named_retry(r) or self.script_retry(r)) and SIGNAL_MARK not in str(r.get("note") or "")]   # a row mark_signals made partial is verified on its page: a recheck would only undo the mark
+        lead = [r for r in self.leads.values() if r.get("check_status") != "verified" and r.get("signal_near_person") == "yes" and (not r.get("official_recheck_tried") or self.unit_retry(r) or self.named_retry(r) or self.script_retry(r) or self.label_retry(r)) and SIGNAL_MARK not in str(r.get("note") or "")]   # a row mark_signals made partial is verified on its page: a recheck would only undo the mark
         near = [(k, r) for k, r in self.near.items() if r.get("check_status") != "verified" and r.get("signal_near_person") == "yes" and not r.get("official_recheck_tried") and str(r.get("note", "")).startswith("not listed: the page is from")]
         if not lead and not near: return
         t0 = time.monotonic()
@@ -3075,6 +3162,12 @@ class Hunt:
         """A stored row rechecked before rechecks read the staff list a page draws by script gets one more try, marked so it gets no other (fnwords155: Purdue CCO's meet-the-staff page, read in Andrade's recheck, names no one in its text). Its search and pages are in the case."""
         if row.get("script_recheck_tried"): return False
         row["script_recheck_tried"] = "yes"
+        return True
+
+    def label_retry(self, row):
+        """A stored row rechecked before a profile card's pronouns line ("Pronouns:" / "He/Him/His") was read as a label between the name and the post gets one more try, marked so it gets no other (fnwords157: WMU's profile page for Heiser read partial). Its search and pages are in the case."""
+        if row.get("label_recheck_tried"): return False
+        row["label_recheck_tried"] = "yes"
         return True
 
     STAFF_WORDS = re.compile(r"staff|people|directory|personnel|team|our-?people", re.I)
@@ -3498,7 +3591,105 @@ class Hunt:
             self.leads[k] = row
             got += 1
             self.log(f"  + {per['name']} — {per['title'][:70]} ({org}) [{res['status']}]")
+        if not got and is_official: got += self.follow_held(org, page)
         return got
+
+    DIRECTORY_PAGE = re.compile(r"director(?:y|ies)|staff|profile|people|personnel", re.I)
+    LEADER_LINK = re.compile(r"(?:the\s+)?(?:president'?s\s+)?(?:senior\s+(?:management|leadership|administration)(?:\s+team)?|cabinet|(?:executive|college|district)\s+(?:leadership\s+)?(?:team|cabinet|council|leadership)|leadership\s+(?:team|council|cabinet))", re.I)
+    FORM_PAGES = 5   # result pages read per word: Houston CC's "workforce" gives 3, and Thurman is on the third
+
+    def follow_held(self, org, page):
+        """Rows from the staff pages an official page holds back, while the organisation has no lead: a staff directory's own GET form, asked for the spec's first two role_focus words (with the result pages it links, up to FORM_PAGES), and a same-site link whose words name a senior-management team or cabinet. The case stored Madison College's and Houston CC's directories as their empty forms, and Broward's leadership page without its "Senior Management Team" page, where its VP for Workforce Education is (fnwords157, 6z12x)."""
+        if getattr(self, "_in_staff", False) or self.org_count(org) or not self.wants_more(org) or time.monotonic() >= self.deadline: return 0
+        here = page.get("final_url") or page["url"]
+        done = self.__dict__.setdefault("_held_read", set())
+        if here in done: return 0
+        done.add(here)
+        urls = []
+        site = registrable(domain_of(here))
+        for u, t in page.get("links") or []:
+            if self.LEADER_LINK.fullmatch(" ".join(str(t).split()).strip(" .")) and registrable(domain_of(u)) == site and u.split("#")[0].rstrip("/") != here.rstrip("/") and u not in urls: urls.append(u)
+        urls = urls[:2]
+        form = None
+        if self.role_focus and self.DIRECTORY_PAGE.search(f"{urllib.parse.urlsplit(here).path} {page.get('title') or ''}"):
+            try: form = fetcher.directory_form(here)
+            except Exception: form = None   # one bad page never ends a run
+        got = 0
+        def read(u, why):
+            nonlocal got
+            if u in done or time.monotonic() >= self.deadline: return None
+            done.add(u)
+            p = fetcher.fetch(u, self.case)
+            self.log(f"  {why}: {u}")
+            self._in_staff = True
+            try: got += self.weigh(org, p, "(staff link) " + u)
+            finally: self._in_staff = False
+            return p
+        for u in urls:
+            if self.org_count(org): return got
+            read(u, "its leadership link")
+        for w in (self.role_focus[:2] if form else []):
+            if self.org_count(org): break
+            q = fetcher.form_query(form, w)
+            p = read(q, f"its directory asked for {w!r}")
+            if not p or p.get("status") != "ok": continue
+            # The pager shows "2 3 … 16": read the lowest page not yet read, taking the pager links of each page read, so page 4 follows page 3.
+            more, seen = {}, {1}
+            for _ in range(self.FORM_PAGES - 1):
+                for u, _t in p.get("links") or []:
+                    sp = urllib.parse.urlsplit(u)
+                    qs = dict(urllib.parse.parse_qsl(sp.query))
+                    if sp.path.rstrip("/") == urllib.parse.urlsplit(form[0]).path.rstrip("/") and fold(qs.get(form[1], "")) == fold(w) and str(qs.get("page", "")).isdigit() and int(qs["page"]) > 1: more.setdefault(int(qs["page"]), u)
+                left = sorted(set(more) - seen)
+                if not left or self.org_count(org): break
+                seen.add(left[0])
+                p = read(more[left[0]], f"its directory's page {left[0]} for {w!r}")
+                if not p or p.get("status") != "ok": break
+        return got
+
+    HELD_FOLLOW_PAGES = 3   # stored pages per organisation: Madison's directory and its cabinet page, Broward's leadership page
+
+    def held_follow_pages(self, org):
+        """The stored official pages stored_held_follows reads for an organisation, as (url, page), best first: a page whose address names a directory (no query: not one person's profile), then one linking a senior-management team, then one only its title calls a staff page; on the college's main site before a subdomain's (libguides, myec), the shorter address first. Leadership links first put Madison's directory fourth, after three pages linking its cabinet, and directory paths first put Broward's leadership page fourth, after three directories with neither form nor link: so the best of each kind comes first, and a page linking only leadership pages an earlier one links is dropped (6z12y)."""
+        pages = []
+        for pg in self.org_pages(org):
+            u = pg.get("final_url") or pg["url"]
+            if pg.get("status") != "ok" or ("(held follow)", u) in self.tried or JOB_BOARD.search(domain_of(u)): continue
+            if not (people.official(org, u, self.domains, pg.get("text"), pg.get("title")) or self.on_known_site(org, pg)): continue
+            sp = urllib.parse.urlsplit(u)
+            folder = 0 if self.role_focus and not sp.query and self.DIRECTORY_PAGE.search(sp.path) else 2 if self.role_focus and not sp.query and self.DIRECTORY_PAGE.search(pg.get("title") or "") else None
+            leader = any(self.LEADER_LINK.fullmatch(" ".join(str(t).split()).strip(" .")) for _u, t in pg.get("links") or [])
+            rank = 0 if folder == 0 else 1 if leader else folder
+            if rank is None: continue
+            host = domain_of(u)
+            pages.append(((rank, host.split(".")[0] not in ("www", registrable(host).split(".")[0]), len(sp.path), u), u, pg))
+        pages.sort(key=lambda x: x[0])
+        site = lambda u: registrable(domain_of(u))
+        targets = lambda u, pg: {v.split("#")[0].rstrip("/") for v, t in pg.get("links") or [] if self.LEADER_LINK.fullmatch(" ".join(str(t).split()).strip(" .")) and site(v) == site(u) and v.split("#")[0].rstrip("/") != u.rstrip("/")}
+        first = [x for x in (next((x for x in pages if x[0][0] == 0), None), next((x for x in pages if x[0][0] == 1), None)) if x]   # the best of each kind first: three directory paths put Broward's leadership page fourth (6z12y)
+        out, seen = [], set()
+        for k, u, pg in first + [x for x in pages if x not in first]:
+            t = targets(u, pg)
+            if k[0] == 1 and t and t <= seen: continue   # a second page linking the same cabinet adds nothing
+            seen |= t
+            out.append((u, pg))
+        return out
+
+    def stored_held_follows(self):
+        """follow_held on the stored pages of an organisation with no lead: a reload sends no search, so no page was read and the staff pages a directory's form or a leadership link holds back were never reached. fnwords157's reload after 6z12x read none of Madison's, Houston's or Broward's (6z12y). A stored page that is a directory (no query: not one person's profile) or links a senior-management team, up to HELD_FOLLOW_PAGES an organisation, each once a case."""
+        t0, n, read = time.monotonic(), 0, 0
+        for org in self.orgs:
+            if time.monotonic() >= self.deadline: break
+            if self.org_count(org) or not self.wants_more(org): continue
+            pages = self.held_follow_pages(org)
+            for u, pg in pages[:self.HELD_FOLLOW_PAGES]:
+                if self.org_count(org) or time.monotonic() >= self.deadline: break
+                with self.save_lock: self.tried.add(("(held follow)", u))
+                read += 1
+                n += self.follow_held(org, pg)
+        if read: self.log(f"held follow: read the directory forms and leadership links of {read} stored pages of organisations with no lead, {n} rows listed ({time.monotonic() - t0:.0f}s)")
+        if read: self._save()
+        return n
 
     def on_known_site(self, org, page):
         """The site the hunt already took as this organisation's own (learned from an official page, or found for its `site:` searches) when the spec gave none, if this page is on it; else "".
@@ -3561,7 +3752,7 @@ class Hunt:
     @side_search("official recheck")
     def official_recheck(self, row, org):
         """A lead read on another site, or on a page too old to show the post is still held, gets one search for the person on the organisation's own domain; it is upgraded when `check` verifies them there, and keeps its quote as the signal."""
-        row["official_recheck_tried"] = row["named_recheck_tried"] = row["script_recheck_tried"] = "yes"
+        row["official_recheck_tried"] = row["named_recheck_tried"] = row["script_recheck_tried"] = row["label_recheck_tried"] = "yes"
         if self.s.get("official_recheck") is False:
             d = self.domains.get(org) or self.domains.get(people.org_core(org)) or self.learned.get(org)
             d = d[0] if isinstance(d, (list, tuple)) and d else d
@@ -4060,12 +4251,14 @@ class Hunt:
         if self.stored_event_dates(): self._save()
         self.stored_official_rechecks()
         self.stored_menu_statements()
+        self.stored_held_follows()
         self.stored_unit_signals()
         self.stored_unit_events()
         self.stored_own_signals()
         if self.stored_readmits(): self._save()
         self.stored_departures()
         self.stored_person_signals()
+        if self.stored_signal_edits(): self._save()
         self.stored_fresher_signals()
         engine_secs0, rows0, side0 = dict(engines.SECS), len(self.log_rows), dict(self.side_secs)
         end, reserve = self.deadline, (min(300.0, 0.2 * float(self.s.get("max_seconds", 1800))) if self.must and self.s.get("held_signal") is not False else 0.0)
@@ -4087,6 +4280,7 @@ class Hunt:
         self.case_rechecks()
         self.finish_menu_rows()
         if len(self.leads) < self.target: self.held_signals()
+        if self.stored_signal_edits(): self._save()
         self.stored_fresher_signals()   # rows this run found: a one-pass case gets the search too
         self.hold_thin()
         self.follow_pointers()
@@ -4174,7 +4368,7 @@ class Hunt:
             if r.get("signal") and not str(r["signal"]).startswith("("): r["signal"] = without_trailing_narration(r["signal"])
             if r.get("signal") and not str(r["signal"]).startswith("("): r["signal"] = strip_speaker(r["signal"], r.get("name"))   # stored before the strip (fnwords125)
             if r.get("note"): r["note"] = "; ".join(x for x in note_items(r["note"]) if not ((m := STALE_PAGE_NOTE.fullmatch(x)) and m.group(1) not in (str(r.get("page_date") or "")[:10], str(r.get("signal_date") or "")[:10])))   # a date of a page the row no longer rests on: Dranka's note kept "the page is dated 2018-05-19: may be out of date" from the listing it was first read on, after his row moved to his directory page and his article of 2026-05-19 (fnwords136 review)
-            r["signal_kind"] = listed_kind(r)
+            r["signal_kind"] = listed_kind(r, self.must)
             r["title"] = title_without_org(r.get("title"), r.get("organisation"))
             if r.get("note"): r["note"] = "; ".join(x for x in note_items(r["note"]) if x.count(")") <= x.count("("))   # a tail a split note left behind ("its page is a staff or bio page)", Castonguay, fnwords135)
             if r["signal_kind"] == "statement" and r.get("signal_near_person") != "yes" and (om := re.match(r"\(the organisation's, from (\S+)\)", str(r.get("signal") or ""))):

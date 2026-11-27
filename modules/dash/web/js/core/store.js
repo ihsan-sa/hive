@@ -2,6 +2,7 @@
 // (from an offset), so each poll does work in proportion to what is new.
 import { now } from "./format.js";
 import { signPost } from "./sign.js";
+import { keptCopy, forget as forgetKept, setOwner } from "./offline.js";
 
 export const OUTSIDE = new Set(["person", "hives"]);
 export const SYS = new Set(["starter", "dash", "anon", "all", "400", "mention", "name"]);
@@ -25,7 +26,8 @@ const prefKey = k => (document.body.classList.contains("dt-page") ? "tv:" : "") 
 export const onTV = () => document.body.classList.contains("dt-page");
 export function getPref(k, dflt) { try { const v = localStorage.getItem(prefKey(k)); return v == null ? dflt : JSON.parse(v); } catch (e) { return dflt; } }
 export const setPref = (k, v) => localStorage.setItem(prefKey(k), JSON.stringify(v));
-export const can = c => !S.app.can || S.app.can.includes(c);
+// Showing the chats kept on this device (S.offline, E207): reading only, since nothing could reach the Hive.
+export const can = c => (!S.offline || c === "read") && (!S.app.can || S.app.can.includes(c));
 // What the server says it has of the features designed ahead of it (/api/app "features"): stop, helper, knowledge, slack-door.
 // A feature it doesn't list stays out of the app, so nobody meets a button that can't work. The preview shim lists them all.
 export const built = f => (S.app.features || []).includes(f);
@@ -223,6 +225,7 @@ export async function poll() {
     S.pending = Object.fromEntries(l.pending.map(p => [p.name, p]));
     const runSig = [...S.running.keys()].sort().join();
     const changed = b.items.length || lg.items.length || runSig !== S.runSig; S.runSig = runSig;
+    if (S.offline) leaveOffline();   // a read worked: the kept copy goes, and this first read (from=0) fills the board as on any first load
     S.logOff = lg.offset; S.off = b.offset;
     const older = S.boardStart == null && b.start > 0, olderLog = S.logStart == null && lg.start > 0; if (S.boardStart == null) S.boardStart = b.start || 0; if (S.logStart == null) S.logStart = lg.start || 0;
     if (S.logStart && logHeld) logHeld.push(...lg.items);
@@ -233,8 +236,25 @@ export async function poll() {
     if (changed) S.ver++;
     S.fresh = now(); S.failed = false; S.failWhy = null; S.signedOut = false;
     emit({ live: true, posts: b.items, log: lg.items });
-  } catch (e) { S.failed = true; S.failWhy = failWords(e); S.signedOut = !!e.unreached && await signInLapsed(); emit({ failed: true }); }
+  } catch (e) { S.failed = true; S.failWhy = failWords(e); S.signedOut = !!e.unreached && await signInLapsed(); if (S.signedOut) forgetKept(); else if (e.unreached || [502, 503, 504, 530].includes(e.status)) enterOffline(); emit({ failed: true }); }   // 502/530 too: the tunnel answers but the Hive behind it doesn't
   finally { polling = false; }
+}
+/** No answer at all and nothing read on this load (E207): draw the chats this device last read, from offline.js, read only. */
+function enterOffline() {
+  if (S.offline || S.posts.length || S.live) return;
+  const c = keptCopy(); if (!c) return;
+  const was = [{ ...S.threadNames }, { ...S.threadMeta }, { ...S.threadStatus }];
+  try { drawKept(c); } catch (e) { console.warn(e); leaveOffline(); S.live = null; [S.threadNames, S.threadMeta, S.threadStatus] = was; forgetKept(); }
+}
+function drawKept(c) {
+  const rows = c.threads.slice().reverse();
+  for (const r of rows) { const m = r.meta || {}; if (m.name) S.threadNames[r.th] = m.name; if (m.meta) S.threadMeta[r.th] = m.meta; if (m.status) S.threadStatus[r.th] = m.status; }
+  ingestBoard(rows.flatMap(r => r.posts).sort((a, b) => Date.parse(a.at) - Date.parse(b.at)));
+  S.offline = c.saved || Date.now(); S.live = { agents: [], pending: [], signin: [], offline: true }; S.history = true; S.ver++;
+  emit({ live: true, offline: true });
+}
+function leaveOffline() {
+  S.posts = []; S.byId = {}; S.threads = new Map(); S.ledger = S.ledger.filter(r => !r.b); S.history = false; S.offline = 0; S.off = 0; S.boardStart = null;
 }
 export async function pollUsage() {
   // After the first read only the session files that changed come (?since=, delta: true; ~2 MB a read otherwise). The files object
@@ -273,7 +293,7 @@ export async function loadHelpers(running) {
   } catch (e) { return S[running ? "helpersLive" : "helpers"]; }
 }
 export async function loadApp() {
-  try { const v = await jget("/api/app"); const was = JSON.stringify(S.app); Object.assign(S.app, v); delete S.app.pending; try { localStorage.setItem("appRoute", S.app.app ? "1" : "0"); } catch (e) {} if (JSON.stringify(S.app) !== was) emit({ app: true }); } catch (e) {}
+  try { const v = await jget("/api/app"); const was = JSON.stringify(S.app); Object.assign(S.app, v); delete S.app.pending; setOwner(v.who || "route:" + v.route); try { localStorage.setItem("appRoute", S.app.app ? "1" : "0"); } catch (e) {} if (JSON.stringify(S.app) !== was) emit({ app: true }); } catch (e) {}
 }
 /** Readable names for number threads, from the Slack mirror's indexer. Display only: the board and every link keep the id. */
 export async function loadThreadNames() {

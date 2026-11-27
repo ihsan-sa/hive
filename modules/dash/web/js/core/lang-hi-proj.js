@@ -1,6 +1,16 @@
 // hi: Settings › Projects, export a project and bring one in (settings.js projectsBlock, projJob); product-test rung, 2026-11-27.
 // Exact English keys; the patterns are the status lines with a project or file name in them.
 const W = {
+  // E207: the line in a conversation's reply place while it shows the copy kept on this device (views/comms.js readOnly)
+  "Offline. This is the copy kept on this device, read only; replies need a connection.": "ऑफ़लाइन। यह इस डिवाइस पर रखी गई कॉपी है, सिर्फ़ पढ़ने के लिए; जवाब देने के लिए कनेक्शन चाहिए।",
+  "Showing the chats this device last read. Trying again every few seconds.": "इस डिवाइस पर आख़िरी बार पढ़ी गई चैट दिखाई जा रही हैं। हर कुछ सेकंड में फिर कोशिश हो रही है।",
+  "On, with the first line of each reply. It shows on your phone's lock screen and passes through ntfy.sh, a public service. Anyone who learns the topic below can read those lines, so keep it to yourself.": "चालू, हर जवाब की पहली पंक्ति के साथ। यह आपके फ़ोन की लॉक स्क्रीन पर दिखती है और ntfy.sh से होकर जाती है, जो एक सार्वजनिक सेवा है। नीचे दिया विषय जिसे भी पता हो, वह ये पंक्तियाँ पढ़ सकता है, इसलिए इसे अपने तक रखें।",
+  "Show the reply's first line in the alert": "अलर्ट में जवाब की पहली पंक्ति दिखाएँ",
+  "Hide the reply's first line": "जवाब की पहली पंक्ति छिपाएँ",
+  "The alerts now carry the reply's first line.": "अब अलर्ट में जवाब की पहली पंक्ति आती है।",
+  "The alerts no longer carry any words from a reply.": "अब अलर्ट में जवाब का कोई शब्द नहीं आता।",
+  "Off: the alert only says something is waiting, so nothing from a reply shows on the lock screen.": "बंद: अलर्ट बस इतना कहता है कि कुछ इंतज़ार कर रहा है, इसलिए लॉक स्क्रीन पर जवाब का कुछ नहीं दिखता।",
+  "Anyone who can see your phone's lock screen can read that line.": "जो भी आपके फ़ोन की लॉक स्क्रीन देख सकता है, वह यह पंक्ति पढ़ सकता है।",
   "it stopped without saying why": "यह बिना कारण बताए रुक गया",
   "your Hive restarted while this ran; start it again": "इसके चलते समय आपका Hive फिर से शुरू हुआ; इसे फिर से शुरू करें",
   "this sign-in can't follow it any more (full access ended after a while idle); it goes on running on your Hive, so sign in again and look in Projects": "यह साइन-इन अब इसे नहीं देख सकता (कुछ देर कोई गतिविधि न होने पर पूरी पहुँच खत्म हो गई); यह आपके Hive पर चलता रहता है, इसलिए फिर से साइन इन करें और प्रोजेक्ट में देखें",

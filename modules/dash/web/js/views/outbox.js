@@ -85,7 +85,7 @@ function itemBlock(d, ctx) {
     d.note ? row("Note", d.note) : null,
     checks.length ? row("Checks", ...checks.map(([k, v]) => h("div", null, `${k}: ${v}`))) : null,
     d.root && (d.root.why || d.root.state) ? row("Root", `${d.root.state || ""}${d.root.why ? ": " + d.root.why : ""}${d.root.at ? " (" + when(d.root.at) + ")" : ""}`) : null,
-    d.thread ? row("Thread", h("a", { href: threadHref(d.thread) }, d.thread)) : null,
+    d.thread ? row("Thread", h("a", { class: "ob-th", href: threadHref(d.thread) }, d.thread)) : null,
     d.why ? h("p", { class: "rc-buy-fine" }, d.why) : null,
     acts.length || told ? h("div", { class: "rc-buy-act" }, h("span", { class: "rc-buy-note", role: "status" }, told || ""), ...acts) : null));
 }

@@ -19,7 +19,8 @@ function Install-Hive {
   $bin = Join-Path $base 'bin'
   New-Item -ItemType Directory -Force $base | Out-Null
   # What the commands print goes here, and shows only if one fails. The address never does: it's the key.
-  $log = Join-Path $base 'install.log'
+  # One log per Hive: two Hives installed at once both truncated and appended one shared log, and the second stopped on a locked file.
+  $log = Join-Path $base $(if ($cmdName -eq 'hive') { 'install.log' } else { "install-$cmdName.log" })
   [IO.File]::WriteAllText($log, '')
 
   # Runs a script as root in the Hive system. Base64, so neither Windows nor wsl.exe can mangle its quotes or line ends.

@@ -36,6 +36,7 @@ import { pickBar, onPick } from "../ui/pick.js";
 import { when } from "../ui/when.js";
 import { loadTiers, focusTierChip, threadTierChip, pauseOf, askPause, pausedStrip } from "../ui/worktiers.js";
 import { downloadMarkdown, printScript } from "../ui/export.js";
+import { remember as keepForOffline } from "../core/offline.js";
 import { shareDialog } from "../ui/share.js";
 import { pinned, important, faded, meta as tmeta, archived, setMeta, renameDialog, openCard, openFor, doneFor, markSeen, threadCrumb, titleExtras } from "../ui/threadmeta.js";
 import { callFor, hangUp } from "../ui/phone.js";
@@ -423,11 +424,11 @@ function syncDrafts(c, box) {
   const sig = ds.map(a => a.name + ":" + (a.draft ? a.draft.text.length : "-") + ":" + (a.steps || []).map(s => (s.running ? "r" : "d") + (s.out || "").length).join("/")).join();
   // E203o: steps with no reply being written sit where they happened: above the first message the person sent after the newest of them started,
   // on the board or still on its way (L.out)
-  const mine = (S.threads.get(th)?.posts || []).filter(p => p.from === "person"), sending = outFor(th).some(x => x.state !== "failed");
+  const mine = (S.threads.get(th)?.posts || []).filter(p => p.from === "person"), sending = outFor(th).filter(x => x.state !== "failed");
   const above = ds.map(a => {
     const t = !a.draft && a.steps.at(-1).t; if (!t) return null;
     for (const p of mine) { const el = p.t > t * 1e3 + 999 && box.querySelector(`:scope > [data-key="${CSS.escape(p.id)}"]`); if (el) return el; }
-    return sending ? L.out : null;
+    return sending.some(x => x.t > t * 1e3 + 999) ? L.out : null;   // a send still on its way only if it, too, came after the steps started
   });
   const full = sig + "|" + above.map(el => el && (el.dataset.key || "out")).join();
   // placed groups stay put while nothing but other placed groups sits between each and its message (a message appended since would)
@@ -1967,6 +1968,7 @@ export default {
     if (!S.live) return h("div", { class: "page" }, S.failed ? empty("Couldn't read the conversations. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     const cv = conversation(ctx.arg);
     if (cv.thread && cv.thread !== opened) { opened = cv.thread; apiPost("/api/opened", { thread: cv.thread }).catch(() => {}); }   // R107: the open beacon, once per thread open, no UI, no retry
+    if (cv.thread && !S.offline) keepForOffline(cv.thread, S.threads.get(cv.thread), { name: S.threadNames[cv.thread], meta: S.threadMeta[cv.thread], status: S.threadStatus[cv.thread] });   // E207: what this device read, for opening it with no connection
     return frame(ctx, cv);
   },
 };
@@ -2052,6 +2054,7 @@ function frame(ctx, c, pane) {
 /** The read-only footer: a lock, one sentence, and (in the developer look, which has no strip) the thread's live agents inline, no actions. */
 function readOnly(th) {
   const run = app() ? [] : (S.live ? S.live.agents : []).filter(a => a.thread === th && a.alive);
+  if (S.offline) return h("div", { class: "cm-ro", "data-key": "ro-off", role: "status" }, icon("lock"), h("span", null, "Offline. This is the copy kept on this device, read only; replies need a connection."));   // E207
   return h("div", { class: "cm-ro", "data-key": "ro" }, icon("lock"), h("span", null, "Read-only here. This address can't post."),
     run.length ? h("span", { class: "cm-ro-a" }, run.map(a => { const d = a.doing && app() ? (ownStep(a.doing) ? "" : plainStep(a.doing)) : a.doing; return h("span", { class: "cm-ro-l", "data-key": a.name, title: d || null }, statusDot(agentState(a).key), agentRef(a.name), d ? h("span", { class: "meta" }, short(d, 48)) : null); })) : null);
 }

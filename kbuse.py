@@ -339,6 +339,7 @@ def runs_observable(t0, t1):
     return pct(a, b)
 
 BULK, BULK_S = 15, 600   # this many logged searches by one agent inside ten minutes is a replay or a probe of the search, not use (2026-11-11: of 144 agents, 141 never passed 10; the other three ran 19, 29 and 206)
+CLUSTER_S = 60   # finds by one agent each this close to the one before are one search, reworded: hive-meta K110 found 36% of finds in such clusters, read 38% per find but 69% per cluster
 BATCH, BATCH_S = 5, 10   # this many inside ten seconds is one command looping over a list of queries (a check that notes are findable), not a search an agent reads: 2026-11-18..21 two such checks were 17 of 22 unread long note finds (projects/hive-meta/continuity.md R22h)
 def bulk(rs):
     """ids of the searches made in a burst no agent at work makes. A replay that forgot HIVE_KB_TEST=1 otherwise counts as hundreds of searches nobody read:
@@ -386,17 +387,24 @@ def numbers(t0, t1, rs=None):
     rep = repeats(rs); burst = bulk(rs) | set(rep)
     for i, first in rep.items():
         if i in followed: followed.setdefault(first, set()).update(followed[i])
-    logged = [r for r in finds if r.get("id") and r.get("shown") and not r.get("filtered") and not r.get("tester") and r["id"] not in burst]
+    logged = [r for r in finds if r.get("id") and r.get("agent") and r.get("shown") and not r.get("filtered") and not r.get("tester") and r["id"] not in burst]   # no agent: a script outside any run, whose reads no hook can credit (hive-meta K110: 22 of 451 in 7 d, one loop at 3 s a query on 11-26, all unread)
     recalls = [r for r in win if r.get("recall") and r.get("id") and r.get("agent") and not r.get("neighbours")]
     pointers = [(r["id"], p) for r in recalls for p, _ in r.get("shown", [])]
     opened = sum(1 for i, p in pointers if any(x == p or x == needle(p) or x.endswith("/" + needle(p)) for x in followed.get(i, ())))
     live = [(r["id"], p) for r in win if r.get("neighbours") and r.get("id") and r.get("agent") for p, _ in r.get("shown", [])]   # neighbours.py: counted apart, so the note pointers' baseline stays comparable
     live_read = sum(1 for i, p in live if p in followed.get(i, ()))
     fr = sum(1 for r in logged if r["id"] in followed)
+    def sec(a): return calendar.timegm(time.strptime(a[:19], "%Y-%m-%dT%H:%M:%S"))
+    chain, searches, sread = {}, 0, 0   # find_search_read_pct: a cluster counts once, read if any of its finds was (K112)
+    for r in sorted(logged, key=lambda r: r["at"]):
+        t = sec(r["at"]); c = chain.get(r["agent"])
+        if c and t - c[0] <= CLUSTER_S: c[0] = t; c[1] = c[1] or r["id"] in followed; continue
+        if c: sread += c[1]
+        searches += 1; chain[r["agent"]] = [t, r["id"] in followed]
+    sread += sum(c[1] for c in chain.values())
     by = {}   # dead find (projects/rsi-lab/kb_measure.py finds): counted, no read, and the same agent searched again within 10 min (one of its next 3 searches)
     for r in finds:
         if r.get("id") and r.get("agent"): by.setdefault(r["agent"], []).append(r)
-    def sec(a): return calendar.timegm(time.strptime(a[:19], "%Y-%m-%dT%H:%M:%S"))
     again = set()
     for L in by.values():
         for i, r in enumerate(L):
@@ -415,6 +423,7 @@ def numbers(t0, t1, rs=None):
     nb = [r for r in logged if any(not p.startswith("board:") for p, _ in r["shown"])]   # finds that showed a note or file; board snippets answer in place (find-follow-by-source.md)
     nbr = sum(1 for r in nb if r["id"] in followed)
     return {"finds": len(finds), "finds_logged": len(logged), "finds_bulk": sum(1 for r in finds if r.get("id") in burst), "finds_read": fr, "find_read_pct": pct(fr, len(logged)), "finds_dead": dead, "find_dead_pct": pct(dead, len(logged)),
+            "searches": searches, "searches_read": sread, "find_search_read_pct": pct(sread, searches),
             "finds_unread": len(logged) - fr, "finds_other_way": oth, "finds_unread_hooked": unread_hooked, "find_other_way_pct": pct(oth, unread_hooked), "finds_other_topic": oth_topic, "finds_unread_qhooked": unread_qhooked, "find_other_topic_pct": pct(oth_topic, unread_qhooked),
             "finds_nb": len(nb), "finds_nb_read": nbr, "find_nb_read_pct": pct(nbr, len(nb)),
             "finds_read_8": sum(1 for r in logged if r["id"] in near), "find_read_8_pct": pct(sum(1 for r in logged if r["id"] in near), len(logged)),
@@ -470,6 +479,7 @@ def report():
         out += [f"{name}: {x['finds']} finds; of {x['finds_logged']} logged with results, {x['finds_read']} ({p(x['find_read_pct'])}) with an observed read of a shown result in 10 min, {x['finds_read_8']} ({p(x['find_read_8_pct'])}) in 8 tool calls",
                 f"  {x['finds_other_way']} of {x['finds_unread_hooked']} unread finds since the hook ({p(x['find_other_way_pct'])}) followed within {OTHER_CALLS} calls by a grep, gh, hive search or a read outside the shown paths (hand-read 2026-11-19: 6 of 13, 46%)",
                 f"  {x['finds_other_topic']} of {x['finds_unread_qhooked']} unread finds since the topic hook ({p(x['find_other_topic_pct'])}) followed that way by a lookup naming a query word (hand-read 2026-11-23: 7 of 10 replaced the find)",
+                f"  counted per search (one agent's finds {CLUSTER_S} s or less apart are one, read if any was): {x['searches_read']} of {x['searches']} ({p(x['find_search_read_pct'])})",
                 f"  without board-only finds: {x['finds_nb_read']} of {x['finds_nb']} ({p(x['find_nb_read_pct'])}) read",
                 f"  {x['recalls']} recall injections, {x['recalls_opened']} ({p(x['recall_opened_pct'])}) with a pointer read or opened; {x['pointers_opened']} of {x['pointers']} pointers ({p(x['pointer_opened_pct'])})",
                 f"  {x['neighbour_pointers']} live-neighbour pointers, {x['neighbour_pointers_read']} ({p(x['neighbour_read_pct'])}) with the thread read",
