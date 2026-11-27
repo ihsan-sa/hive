@@ -70,8 +70,8 @@ Check "neither took the first Hive's port" ($p2 -ne $p1 -and $p3 -ne $p1)
 Check 'first Hive port unchanged' ((Port 'hive') -eq $p1)
 # The first Hive is live and may post on its own board meanwhile: the lines it had stay as they were.
 Check 'first Hive board unchanged' ((((InU 'root' "head -c $b1 /home/hive/board.jsonl | sha256sum") -join '') -replace ' .*', '') -eq $s1)
-Check 'hive-work answers' ((Code $p2) -match '^[234]')
-Check 'hive-two answers' ((Code $p3) -match '^[234]')
+Check 'hive-work answers' ($p2 -and (Code $p2) -match '^[234]')
+Check 'hive-two answers' ($p3 -and (Code $p3) -match '^[234]')
 Check 'hive still answers' ((Code $p1) -match '^[234]')
 Check 'one Linux system' (@((& wsl.exe -l -q) -replace "`0", '' | Where-Object { $_ -match '^Hive' }).Count -eq 1)
 $al = @(InU 'root' 'A=$(command -v hive-admin || command -v h2-admin) && "$A" list')
@@ -130,7 +130,7 @@ Check 'hive user gone' (-not ((& wsl.exe -d Hive -u root -- id hive 2>&1) -match
 Check 'hive.cmd gone' (-not (Test-Path (Join-Path $bin 'hive.cmd')))
 Check 'hive-work.cmd stays' (Test-Path (Join-Path $bin 'hive-work.cmd'))
 Check 'hive-work port unchanged' ((Port 'hive-work') -eq $p2)
-Check 'hive-work answers right after' ((Code $p2) -match '^[234]')
+Check 'hive-work answers right after' ($p2 -and (Code $p2) -match '^[234]')
 
 Head 'ten idle minutes, then hive-work still answers'
 Start-Sleep 600
