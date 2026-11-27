@@ -24,7 +24,7 @@ export async function inkPack(th, sids) {
     let shot = null;
     try { shot = /^m-/.test(sid) ? await msgShot(th, sid, p) : sid === "board" ? await boardShot(th, sid, p) : await sheetShot(th, sid, p); }
     catch (e) { console.warn("ink snapshot", sid, e); }
-    const json = { v: 1, sheet: sid, title: shot ? shot.title : p.title || null, h: shot ? shot.h : p.h || null, strokes: p.strokes, erase: p.erase };
+    const json = { v: 1, sheet: sid, title: shot ? shot.title : p.title || null, h: shot ? shot.h : p.h || null, strokes: p.strokes.map(({ at, ...x }) => x), erase: p.erase };   // at: over.js, this page only
     files.push(new File([JSON.stringify(json)], `ink-${sid}.json`, { type: "application/json" }));
     if (shot && shot.png) files.push(new File([shot.png], `ink-${sid}.png`, { type: "image/png" }));
     lines.push(shot ? shot.line : `✎ Drew on ${sid} (${plural(p.strokes.length, "stroke")}).`);

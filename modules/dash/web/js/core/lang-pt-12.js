@@ -147,6 +147,8 @@ const SELF = {
   "Draw anywhere in the chat · circle something to ask about it": "Desenhe em qualquer lugar do chat · circule algo para perguntar sobre isso",
   "Eraser": "Borracha",
   "Erasing, not sent yet": "Apagando, ainda não enviado",
+  "Hide drawings on messages": "Ocultar desenhos nas mensagens",
+  "Show drawings on messages": "Mostrar desenhos nas mensagens",
   "Highlighter": "Marca-texto",
   "Ink discarded": "Tinta descartada",
   "Ink on a message": "Tinta em uma mensagem",

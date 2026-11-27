@@ -9,6 +9,8 @@ const SELF = {
   "Draw anywhere in the chat · circle something to ask about it": "Dibuja en cualquier parte del chat · rodea algo para preguntar por ello",
   "Eraser": "Borrador",
   "Erasing, not sent yet": "Borrando, aún no se ha enviado",
+  "Hide drawings on messages": "Ocultar los dibujos de los mensajes",
+  "Show drawings on messages": "Mostrar los dibujos de los mensajes",
   "Highlighter": "Resaltador",
   "Ink discarded": "Tinta descartada",
   "Ink on a message": "Tinta en un mensaje",

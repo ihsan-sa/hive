@@ -699,8 +699,11 @@ export function postKind(p) {
   if (p.lv !== undefined) return p.lv;
   if (p.th === SIDE_THREAD) return p.lv = 0;
   if (p.from === "person" || p.men.includes("person") || p.stopped) return p.lv = SHOW.you;   // E203c: the line saying the person stopped a run is theirs to see
-  if (SYS.has(p.from) || OPS.has(p.from) || isWarden(p.from) || HOUSE.has(p.th)) return p.lv = SHOW.comms;
+  if (SYS.has(p.from) || OPS.has(p.from) || HOUSE.has(p.th)) return p.lv = SHOW.comms;
   if (p.men.some(m => m !== p.from && !OUTSIDE.has(m))) return p.lv = SHOW.comms;
+  // A warden run the person goes on talking to (we406, thread 11241110ade5) answers them like any agent: its replies were Behind the scenes, so with that off
+  // they were typed out as drafts and then vanished (the person, 11261959d0d0). Its rulings and notes to agents stay Behind the scenes.
+  if (isWarden(p.from)) return p.lv = answersPerson(p) ? SHOW.you : SHOW.comms;
   if (isScript(p.from)) return FOR_YOU.test(p.text || "") || (p.reply_to && S.byId[p.reply_to]?.from === "person") ? SHOW.you : SHOW.comms;   // not kept in p.lv: a named agent is only known once its first start has loaded
   return p.lv = answersPerson(p) ? SHOW.you : SHOW.updates;
 }

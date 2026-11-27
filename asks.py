@@ -478,9 +478,11 @@ def login_dir(skip=()):
     if ok: return min(ok)[2]
     return os.environ.get("CLAUDE_CONFIG_DIR") or str(HOME / ".claude")
 
-LIMITED = re.compile(r"hit your .*limit|usage limit|rate.?limit|resets \d|not logged in|run /login", re.I)
+# the sign-in half is starter.AUTH_TEXT's words: an expired login on an installed Hive failed its hourly asks unit (2026-11-26)
+LIMITED = re.compile(r"hit your .*limit|usage limit|rate.?limit|resets \d|not logged in|login expired|run /login|"
+                     r"failed to authenticate|authentication_(failed|error)|invalid api key|oauth token (has|is|was)", re.I)
 class Limited(RuntimeError):
-    """The login is at its limit or missing: nothing was read, the cursor stays, the next timer run retries. Not a failure of the unit."""
+    """The login is at its limit, missing or rejected: nothing was read, the cursor stays, the next timer run retries. Not a failure of the unit."""
 
 def ask_model(prompt, model, timeout=900):
     tmp = HOME / ".cache" / "hive-tmp"; tmp.mkdir(parents=True, exist_ok=True)
@@ -773,6 +775,6 @@ def main(argv=None):
     p.add_argument("--model", default="sonnet"); p.add_argument("--dry", action="store_true"); p.add_argument("--chars", type=int, default=9000); p.set_defaults(f=cmd_reconcile)
     a = ap.parse_args(argv)
     try: a.f(a)
-    except Limited as e: print(f"login at its limit or missing, nothing changed; the next run retries: {e}")   # exit 0: a wait, not a failed unit
+    except Limited as e: print(f"login at its limit, missing or rejected, nothing changed; the next run retries: {e}")   # exit 0: a wait, not a failed unit
 
 if __name__ == "__main__": main()

@@ -202,6 +202,10 @@ hive tier [list|set X N|unset X|stop N PCT|pause N...|all [--except X...] --unti
 
 hive away [--since 12h] [--full] [--json]: while you were away: a 15-line brief of what was made, decided, needs you and broke; --full for all of it
 
+## hive mcp
+
+hive mcp new|tools|call|connect|disconnect|list|guide: your own MCP tools (a stdio server in ~/projects/mcp): make one, start it and call a tool, then connect it so the next agent run has it. The page: hive mcp guide (core/mcptool.py)
+
 ## hive help
 
 hive help [TOPIC]: the on-demand parts of the orientation (board, agents, hive, core, h4, find): run with no topic for the list

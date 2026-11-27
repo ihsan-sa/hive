@@ -4103,6 +4103,14 @@ a.rc-buy-url{display:inline-block;min-height:24px;line-height:24px}   /* a link 
 button.rc-buy-open{border:0;font:inherit;font-weight:600;cursor:pointer}
 button.rc-buy-open:disabled{opacity:.6;cursor:progress}
 .rc-buy-note{color:var(--ink-3);font-size:var(--fs-meta)}
+/* shop before payment (we406's 11262030fe53): the shops compared, best first, and the ways on when the best can't take Link */
+.rc-buy-shops,.rc-buy-ways{margin:0;padding-left:1.2em}
+.rc-buy-shops>li+li,.rc-buy-ways>li+li{margin-top:var(--s2)}
+.rc-buy-shops a{display:inline-block;min-height:24px;line-height:24px}
+.rc-buy-best::marker{font-weight:700}
+.rc-buy-nolink{color:var(--warn-ink)}
+.rc-out-body{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--fs-meta);line-height:1.5;max-height:28rem;overflow:auto}   /* outward card: the whole email, line breaks kept */
+.rc-out .rc-buy-act{justify-content:space-between}
 
 /* Design 1125 §7, consumer Now: the row that waits on the person is tinted and carries Answer, which stays shown (Stop still shows on hover, above) */
 :root:not([data-dev]) .nowtbl>.tb>.tr[data-state=asks]{background:var(--accent-bg)}
@@ -4298,6 +4306,11 @@ body:has(.ink-bubble) .msg-tools{visibility:hidden}
 .ink-pen{gap:6px}
 .ink-pen[aria-pressed=true]{background:var(--accent-bg);color:var(--accent-ink);box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--accent) 50%,transparent)}
 .ink-pen kbd{padding:0 4px;border:1px solid var(--line);border-radius:4px;font:10px/15px var(--font);color:var(--ink-3)}
+/* beside it: hide the drawings on messages. The button shows the state it is in (an open eye, a struck one) */
+.ink-eye[hidden]{display:none}
+.ink-eye:not([data-off]) .ic+.ic,.ink-eye[data-off] .ic:first-child{display:none}
+.ink-eye[data-off]{background:var(--tint);color:var(--ink)}
+body[data-ink-off] svg.ink-mark:not(.ink-live){display:none}
 /* the pen-on strip over the top of the messages: the tool row, then what the pointer does now */
 .ink-on{position:absolute;left:0;right:0;top:0;z-index:4;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px 12px;padding:6px 10px;background:color-mix(in oklab,var(--accent-bg) 92%,transparent);backdrop-filter:blur(6px);color:var(--accent-ink);font-size:var(--fs-meta);border-bottom:1px solid color-mix(in oklab,var(--accent) 25%,transparent)}
 .ink-on .ink-tb{background:var(--surface)}

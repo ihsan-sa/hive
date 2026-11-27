@@ -3,9 +3,14 @@
 const STATUS = {
   created: ["waiting", "Waiting for Link"], pending_approval: ["waiting", "Waiting in Link"], requires_action: ["waiting", "Waiting in Link"],
   approved: ["good", "Approved"], succeeded: ["good", "Approved"], done: ["good", "Bought"],
+  choose: ["waiting", "Choose a way"],
   denied: ["bad", "Declined"], expired: ["off", "Expired"], canceled: ["off", "Canceled"], failed: ["bad", "Failed"],
 };
 const SYM = { usd: "$", cad: "CA$", eur: "€", gbp: "£" };
+// How each compared shop takes payment (buy.py PAYS): only "link" can be paid with a Link one-time card
+const PAYS = { link: "Takes Link", invoice: "Invoice only", bank: "Bank transfer only", po: "Purchase order only",
+  quote: "Quote first", "no-one-time-card": "Refuses one-time cards" };
+const WAYS = new Set(["link", "quote", "self"]);
 const str = (v, n = 400) => typeof v === "string" ? v.slice(0, n) : "";
 const int = v => Number.isInteger(v) && v >= 0 && v < 1e9 ? v : null;
 
@@ -59,6 +64,15 @@ export function parseBuy(code, now = Date.now()) {
   const parts = shipping != null || tax != null ? [
     ...(shipping != null ? [["Shipping", money(shipping, cur)]] : []), ...(tax != null ? [["Tax", money(tax, cur)]] : []),
   ] : [];
+  // shop before payment (we406's 11262030fe53): the shops compared, best first, and on a choose card the three ways on
+  const shops = Array.isArray(j.shops) ? j.shops.slice(0, 4).map((x, i) => x && typeof x === "object" && str(x.name, 120) ? {
+    name: str(x.name, 120), url: safeUrl(x.url, true), total: int(x.total) != null ? money(int(x.total), cur) : "",
+    shipping: int(x.shipping) != null ? money(int(x.shipping), cur) : "", stock: str(x.stock, 80), arrives: str(x.arrives, 80),
+    pays: PAYS[x.pays] ? x.pays : "", paysLabel: PAYS[x.pays] || "Payment unknown", link: x.pays === "link", note: str(x.note, 200),
+    best: i === 0, chosen: str(x.name, 120).toLowerCase() === str(j.merchant, 120).toLowerCase(),
+  } : null).filter(Boolean) : [];
+  const ways = st === "choose" && Array.isArray(j.ways)
+    ? j.ways.slice(0, 3).filter(w => w && WAYS.has(w.way) && str(w.text, 400)).map(w => ({ way: w.way, text: str(w.text, 400) })) : [];
   const last4 = typeof j.last4 === "string" && /^\d{4}$/.test(j.last4) ? j.last4 : "";
   return {
     id: str(j.id, 80), status: st, tone, label, when, test: j.test === true,
@@ -68,5 +82,6 @@ export function parseBuy(code, now = Date.now()) {
     last4, approval: tone === "waiting" && !lapsed ? linkUrl(j.approval_url) : null,
     receipt: str(j.receipt, 300), recording: str(j.recording, 300), whyCancel: str(j.why_cancel, 300),
     renewable, renewedBy, renews: str(j.renews, 80),
+    shops, shopsWhy: str(j.shops_why, 500), ways, choose: st === "choose", chosen: /^[0-9a-f]{12}$/.test(str(j.chosen, 20)) ? j.chosen : "",
   };
 }

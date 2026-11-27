@@ -1224,7 +1224,7 @@ def kill_run(r):
     running, as they do when the starter reaps a run; they're reported, not touched. Returns what was killed and what's left."""
     name, pid = r["name"], r["pid"]
     # E203c: what it had run since its last post, read before the kill, so the chat keeps the step block under its "you stopped it" line
-    try: ran = ran_live(r.get("out"))
+    try: ran = ran_live(r.get("out"), who=name)
     except Exception: ran = {"steps": [], "more": 0}
     try: said = said_live(r.get("out"))   # E203g: and what it had started to write, which the chat apps keep after a stop
     except Exception: said = ""
@@ -1767,7 +1767,7 @@ def drafts_in(thread, steps=False):
         if not alive(r.get("pid")): continue
         d = activity(r.get("out"))["draft"]
         d = {**d, "thread": thread} if d and d["thread"] == thread else None   # a post with no --thread opens a new conversation: it is not a reply in the one the agent runs in (person 111311262b35)
-        ran = ran_live(r.get("out")) if steps and r.get("thread") == thread else {"steps": [], "more": 0}   # an agent running elsewhere that drafts a reply here has no steps here: the shape stays whole (KeyError 'more', 379 times in 14 days)
+        ran = ran_live(r.get("out"), who=r.get("name", f.stem)) if steps and r.get("thread") == thread else {"steps": [], "more": 0}   # an agent running elsewhere that drafts a reply here has no steps here: the shape stays whole (KeyError 'more', 379 times in 14 days)
         if d or ran["steps"]: got.append({"name": r.get("name", f.stem), "draft": d, **({"steps": ran["steps"], "more": ran.get("more", 0)} if steps else {})})
     return [g for g in got if g["draft"] or g.get("steps")] if steps else [g for g in got if g["draft"]]
 
@@ -2436,12 +2436,53 @@ def _ran_step(c):
     return None
 
 
+_cuts = [None, {}]   # ((mtime, size) of LOG, {interrupt post id: (agent, time its step was stopped)})
+
+
+def ran_cuts():
+    """E203n: the steps the person's Stop and send ended, from the starter's log. Only a step it saw stop counts."""
+    try: st = LOG.stat(); key = (str(LOG), st.st_mtime, st.st_size)
+    except OSError: return {}
+    if _cuts[0] != key:
+        got = {}
+        for e in jlines(LOG, 4 * 1024 * 1024):
+            if isinstance(e, dict) and e.get("event") == "interrupt" and e.get("did") == "stopped the running command" and e.get("post") and ts(e.get("at")):
+                got[e["post"]] = (str(e.get("name") or ""), ts(e["at"]))
+        _cuts[0], _cuts[1] = key, got
+    return _cuts[1]
+
+
+def _ran_after_cut(calls, who, until=None):
+    """CALLS without those a Stop and send already ended (they sit with the message that ended them), as of time UNTIL."""
+    t = max((c for n, c in ran_cuts().values() if n == who and (until is None or c <= until)), default=None)
+    return calls if t is None else [c for c in calls if c["t"] is None or c["t"] > t]
+
+
+def _ran_cut_steps(pid, limit):
+    """E203n: what the stopped agent ran since its last post, up to the stop that the person's post PID made."""
+    who, cut = ran_cuts()[pid]
+    if not AGENT_CODE.fullmatch(who.lower()): return {"steps": []}
+    try: fs = sorted((q for q in (HOME / "sessions").glob(who + "-*.jsonl") if q.stat().st_mtime >= cut - 5), key=lambda q: q.stat().st_mtime)[:4]
+    except OSError: return {"steps": []}
+    for q in fs:
+        v = _ran_parse(q)
+        if not v: continue
+        before = [i for i, c in enumerate(v["calls"]) if c["t"] is not None and c["t"] <= cut]
+        if not before: continue
+        start = max((i for i in v["posts"].values() if i <= before[-1]), default=-1) + 1
+        calls = _ran_after_cut(v["calls"][start:before[-1] + 1], who, cut - 0.001)
+        steps = [s for s in (_ran_step(c) for c in calls) if s]
+        if steps: return {"steps": steps[-limit:], "more": max(0, len(steps) - limit)}
+    return {"steps": []}
+
+
 def ran_for(pid, who=None, at=None, limit=30):
     """{"steps": [...], "more": N} for the code the run that wrote post PID ran before writing it; {"steps": []} when none or not found.
     WHO is the post's author (the board's word wins over the caller's), AT its time (a hint for which logs to look in)."""
     if not re.fullmatch(r"[0-9a-f]{12}", pid or ""): return {"steps": []}
     try: return json.loads((STATE / "stopped" / f"{pid}.json").read_text())   # E203c: a stop notice keeps the steps the run had taken (kill_run)
     except (OSError, ValueError): pass
+    if pid in ran_cuts(): return _ran_cut_steps(pid, limit)
     who = INDEX.authors.get(pid) or who or ""
     if not AGENT_CODE.fullmatch(who.lower()): return {"steps": []}
     try: fs = sorted((HOME / "sessions").glob(who + "-*.jsonl"), key=lambda q: q.stat().st_mtime)
@@ -2456,7 +2497,7 @@ def ran_for(pid, who=None, at=None, limit=30):
         v = _ran_parse(q)
         if not v or pid not in v["posts"]: continue
         end = v["posts"][pid]; start = max([i for i in v["posts"].values() if i < end], default=-1) + 1
-        steps = [s for s in (_ran_step(c) for c in v["calls"][start:end]) if s]
+        steps = [s for s in (_ran_step(c) for c in _ran_after_cut(v["calls"][start:end], who, v["calls"][end]["t"])) if s]
         return {"steps": steps[-limit:], "more": max(0, len(steps) - limit)}
     return {"steps": []}
 
@@ -2464,18 +2505,19 @@ def ran_for(pid, who=None, at=None, limit=30):
 _ran_live = {}   # out file -> ((mtime, size), result): the steps of a live run, kept until its log changes
 
 
-def ran_live(out, limit=30):
+def ran_live(out, limit=30, who=None):
     """E42b: {"steps": [...], "more": N} the code a live run has run since its last post (a step with no result yet is "running").
     The same calls, cut the same way, as the fold ran_for() gives the post it writes next, so what showed live is what stays."""
     p = Path(out or "")
-    try: st = p.stat(); key = (st.st_mtime, st.st_size)
+    who = who or p.name.split("-")[0]
+    try: st = p.stat(); key = (st.st_mtime, st.st_size, max((c for n, c in ran_cuts().values() if n == who), default=None))
     except OSError: return {"steps": [], "more": 0}
     hit = _ran_live.get(str(p))
     if hit and hit[0] == key: return hit[1]
     v = _ran_parse(p)
     if not v: return {"steps": [], "more": 0}
     start = max(v["posts"].values(), default=-1) + 1
-    steps = [s for s in (_ran_step(c) for c in v["calls"][start:]) if s]
+    steps = [s for s in (_ran_step(c) for c in _ran_after_cut(v["calls"][start:], who)) if s]
     r = {"steps": steps[-limit:], "more": max(0, len(steps) - limit)}
     if len(_ran_live) > 64: _ran_live.pop(next(iter(_ran_live)))
     _ran_live[str(p)] = (key, r)
@@ -6742,6 +6784,7 @@ def import_view():
     mcp = sorted(_person_mcp(ph))
     try: got = sorted(json.loads(MCP_COPY.read_text()).get("mcpServers") or {})
     except (OSError, ValueError, AttributeError): got = []
+    got = [n for n in got if n in mcp and n not in _mcp_urls() and n not in _mcp_own()]   # the ticks are the person's own servers: the page sends this list back
     have = _person_mcp(ph)  # names of the env/headers keys only, never their values: ticking copies those values into mcp.json in clear
     secrets_ = {n: sorted(str(k) for key in ("env", "headers") if isinstance(have[n], dict) and isinstance(have[n].get(key), dict) for k in have[n][key]) for n in mcp}
     return {"claude_md": {"found": bool(txt.strip()), "chars": len(txt), "preview": txt.strip()[:400], "copied": USER_INSTR.is_file()}, "mcp": mcp, "mcp_copied": got,
@@ -6764,7 +6807,9 @@ def do_import(d):
         if bad: raise ValueError("no such MCP server: " + ", ".join(bad))
         clash = [n for n in names if n in _mcp_urls()]
         if clash: raise ValueError("a connector added by address already has this name: " + ", ".join(clash))
-        _write_mcp({n: have[n] for n in names})   # the connectors added by address stay
+        clash = [n for n in names if n in _mcp_own()]
+        if clash: raise ValueError("a tool made here already has this name: " + ", ".join(clash))
+        _write_mcp({n: have[n] for n in names})   # the connectors added by address and the Hive's own tools stay
         if "claude_md" not in d: return import_view()
     if type(d.get("claude_md")) is not bool: raise ValueError("claude_md is true or false")
     if d["claude_md"]:
@@ -6795,14 +6840,24 @@ def _mcp_entry(s):
     return e
 
 
+def _mcp_current():
+    try: cur = json.loads(MCP_COPY.read_text()).get("mcpServers") or {}
+    except (OSError, ValueError, AttributeError): return {}
+    return cur if isinstance(cur, dict) else {}
+
+
+def _mcp_own():
+    """The Hive's own tools in mcp.json, written by `hive mcp connect` (core/mcptool.py own()): their server is under ~/mcp-tools."""
+    root = str(HOME / "mcp-tools") + os.sep
+    return {n: v for n, v in _mcp_current().items() if isinstance(v, dict) and isinstance(v.get("args"), list) and v["args"] and str(v["args"][-1]).startswith(root)}
+
+
 def _write_mcp(imports=None, urls=None):
-    """mcp.json = the ticked imports (None: those already in it) + the connectors added by address. Nothing left: no file."""
+    """mcp.json = the ticked imports (None: those already in it) + the Hive's own tools + the connectors added by address. Nothing left: no file."""
     urls = _mcp_urls() if urls is None else urls
-    if imports is None:
-        try: cur = json.loads(MCP_COPY.read_text()).get("mcpServers") or {}
-        except (OSError, ValueError, AttributeError): cur = {}
-        imports = {n: v for n, v in cur.items() if n not in urls and n not in _mcp_urls()} if isinstance(cur, dict) else {}
-    servers = {**imports, **{n: _mcp_entry(s) for n, s in urls.items()}}
+    own = _mcp_own()
+    if imports is None: imports = {n: v for n, v in _mcp_current().items() if n not in urls and n not in _mcp_urls()}
+    servers = {**imports, **own, **{n: _mcp_entry(s) for n, s in urls.items()}}
     if servers: write_text_private(MCP_COPY, json.dumps({"mcpServers": servers}, indent=1))
     else: MCP_COPY.unlink(missing_ok=True)
 
