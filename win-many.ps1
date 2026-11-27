@@ -1,4 +1,4 @@
-# Several Hives in the one Hive WSL system on a real Windows, in Windows PowerShell 5.1 (step 7 of hive-app DESIGN-many-hives.md).
+# Several Hives in the one Hive WSL system on a real Windows (two of them installed at the same time), in Windows PowerShell 5.1 (step 7 of hive-app DESIGN-many-hives.md).
 # Throwaway runner, no logins, public log: addresses are cut before they print.
 $env:WSL_UTF8 = '1'
 $env:HIVE_ACCEPT = '1'
@@ -13,16 +13,32 @@ function Code($p) { $c = '000'; foreach ($i in 1..20) { $c = & curl.exe -s -m 10
 function Mask($s) { ($s -replace 'login#\S*', 'login#...') }
 $raw = 'https://raw.githubusercontent.com/ihsan-sa/hive/test-many-cand'
 $real = irm "$raw/get.ps1"
+function Candidate-Text {
+  $c = $real.Replace("'/install.sh -o", "'/get.sh -o").Replace('HIVE_INSIDE=1 sh', 'HIVE_BRANCH=test-many-cand HIVE_INSIDE=1 sh')
+  $c -replace "\`$site = '[^']*'", "`$site = '$raw'"
+}
 function Run-Candidate($user) {
   if ($user) { $env:HIVE_USER = $user } else { Remove-Item Env:HIVE_USER -ErrorAction SilentlyContinue }
-  $c = $real.Replace("'/install.sh -o", "'/get.sh -o").Replace('HIVE_INSIDE=1 sh', 'HIVE_BRANCH=test-many-cand HIVE_INSIDE=1 sh')
-  $c = $c -replace "\`$site = '[^']*'", "`$site = '$raw'"
+  $c = Candidate-Text
   $log = Join-Path $env:TEMP ("run" + (Get-Random) + ".txt")
   Start-Transcript -Path $log | Out-Null
   $c | iex
   Stop-Transcript | Out-Null
   Remove-Item Env:HIVE_USER -ErrorAction SilentlyContinue
   return (Get-Content -Raw $log)
+}
+# The same line in a window of its own, as a person opening two at once would: its own PowerShell, with HIVE_USER set for it alone.
+function Start-Candidate($user) {
+  $log = Join-Path $env:TEMP "two-$user.txt"; $f = Join-Path $env:TEMP "two-$user.ps1"
+  [IO.File]::WriteAllText($f, "Start-Transcript -Path '$log' | Out-Null`r`n" + (Candidate-Text) + "`r`nStop-Transcript | Out-Null`r`n", (New-Object Text.UTF8Encoding $true))
+  $env:HIVE_USER = $user
+  $p = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $f -RedirectStandardOutput "$log.out" -RedirectStandardError "$log.err" -PassThru
+  Remove-Item Env:HIVE_USER
+  @{ p = $p; log = $log }
+}
+function Wait-Candidate($j) {
+  if (-not $j.p.WaitForExit(1800000)) { $j.p.Kill(); "  (gave up after 30 minutes)" | Out-Host }
+  ((Get-Content -Raw -ErrorAction SilentlyContinue $j.log), (Get-Content -Raw -ErrorAction SilentlyContinue "$($j.log).out"), (Get-Content -Raw -ErrorAction SilentlyContinue "$($j.log).err")) -join "`n"
 }
 $bin = Join-Path $env:LOCALAPPDATA 'Hive\bin'
 
@@ -40,20 +56,30 @@ InU 'hive' 'mkdir -p ~/projects/demo && cd ~/projects/demo && git init -q -b mai
 $b1 = ((& wsl.exe -d Hive -u root -- stat -c %s /home/hive/board.jsonl) -join '').Trim()
 $s1 = ((& wsl.exe -d Hive -u root -- sha256sum /home/hive/board.jsonl) -join '') -replace ' .*', ''
 
-Head 'a second Hive beside it'
-$t2 = Run-Candidate 'hive-work'
-Check 'hive-work installed' ($t2 -match 'http://localhost:\d+/login#')
+Head 'two more Hives installed at the same time'
+$ja = Start-Candidate 'hive-work'; $jb = Start-Candidate 'hive-two'
+$t2 = Wait-Candidate $ja; $tb = Wait-Candidate $jb
+Check 'hive-work installed (at the same time as hive-two)' ($t2 -match 'http://localhost:\d+/login#')
+Check 'hive-two installed (at the same time as hive-work)' ($tb -match 'http://localhost:\d+/login#')
 Check 'hive-work.cmd made' (Test-Path (Join-Path $bin 'hive-work.cmd'))
+Check 'hive-two.cmd made' (Test-Path (Join-Path $bin 'hive-two.cmd'))
 Check 'hive.cmd still opens hive' (Select-String -Quiet -SimpleMatch -Pattern ' -u hive ' -Path (Join-Path $bin 'hive.cmd'))
-$p2 = Port 'hive-work'; "ports: hive $p1, hive-work $p2"
-Check 'hive-work has its own port' ($p2 -and $p2 -ne $p1)
+$p2 = Port 'hive-work'; $p3 = Port 'hive-two'; "ports: hive $p1, hive-work $p2, hive-two $p3"
+Check 'two installs at once got different ports' ($p2 -and $p3 -and $p2 -ne $p3)
+Check "neither took the first Hive's port" ($p2 -ne $p1 -and $p3 -ne $p1)
 Check 'first Hive port unchanged' ((Port 'hive') -eq $p1)
 # The first Hive is live and may post on its own board meanwhile: the lines it had stay as they were.
 Check 'first Hive board unchanged' ((((InU 'root' "head -c $b1 /home/hive/board.jsonl | sha256sum") -join '') -replace ' .*', '') -eq $s1)
 Check 'hive-work answers' ((Code $p2) -match '^[234]')
+Check 'hive-two answers' ((Code $p3) -match '^[234]')
 Check 'hive still answers' ((Code $p1) -match '^[234]')
 Check 'one Linux system' (@((& wsl.exe -l -q) -replace "`0", '' | Where-Object { $_ -match '^Hive' }).Count -eq 1)
-$t2 -split "`n" | Select-Object -Last 12 | ForEach-Object { Mask $_ } | Out-Host
+$al = @(InU 'root' 'A=$(command -v hive-admin || command -v h2-admin) && "$A" list')
+$al | ForEach-Object { Mask "  admin: $_" } | Out-Host
+Check 'hive-admin list shows both' ((($al -join "`n") -match 'hive-work') -and (($al -join "`n") -match 'hive-two'))
+$n = @(([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') | Where-Object { $_ -eq $bin }).Count; "the Hive's bin is on the user PATH $n time(s)"
+'hive-work:'; $t2 -split "`n" | Select-Object -Last 10 | ForEach-Object { Mask $_ } | Out-Host
+'hive-two:'; $tb -split "`n" | Select-Object -Last 10 | ForEach-Object { Mask $_ } | Out-Host
 
 Head 'the same line again'
 # git as the Hive's user: root's git refuses another user's repo and prints nothing. rig/pin-release.sh says why the newest release is recorded first.

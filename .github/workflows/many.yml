@@ -60,4 +60,5 @@ jobs:
       if: always()
       timeout-minutes: 5
       run: |
+        { sleep 5; echo delete; sleep 5; } | HIVE_USER=hive-two HIVE_KEEP=none script -q /dev/null sh remove-mac.sh || true
         { sleep 5; echo delete; sleep 5; } | HIVE_USER=hive-work HIVE_KEEP=none script -q /dev/null sh remove-mac.sh || true
