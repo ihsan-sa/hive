@@ -61,14 +61,15 @@ def claude_update(st):
     except (OSError, subprocess.SubprocessError): pass
 
 SITE = os.environ.get("HIVE_SITE") or "https://hivelab.ca"
+LIMA = ("/usr/local/bin/lima-guestagent", "/mnt/lima-cidata")  # only the Mac line runs in Lima, the VM get-mac.sh makes
 def mac_pin(st):
-    """On a Mac Hive (~/.hive-host, from the installer), the highest release it may take, or None for no ceiling.
+    """On a Mac Hive (~/.hive-host from the installer, or Lima's guest agent for one from before the marker), the highest release it may take, or None for no ceiling.
     While the newest release went out without passing its macOS test, the release train names the last one that passed and
     the site publishes it as /mac-pin: get-mac.sh installs that tag, and this keeps the timer from climbing past it until the pin goes.
     A 404 or an answer that isn't a tag means no pin; when the site can't be reached the last pin seen still holds."""
-    try:
-        if (HOME / ".hive-host").read_text()[:16].strip() != "mac": return None
-    except OSError: return None
+    try: host = (HOME / ".hive-host").read_text()[:16].strip()
+    except OSError: host = "mac" if any(os.path.exists(p) for p in LIMA) else ""  # a Mac Hive from before the marker, told apart as report.py's host_family does
+    if host != "mac": return None
     try:
         with urllib.request.urlopen(SITE.rstrip("/") + "/mac-pin", timeout=15) as r: t = r.read(64).decode("utf-8", "replace").strip()
     except urllib.error.HTTPError as e: t = st.get("mac_pin", "") if e.code >= 500 else ""

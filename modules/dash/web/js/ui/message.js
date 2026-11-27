@@ -436,9 +436,9 @@ function unseenNote(ms) {
   return h("span", { class: "msg-r", "data-tone": "bad", title: said.map(m => `Hasn't reached ${m}`).join("\n") }, `${names} ${ms.length === 1 ? "hasn't" : "haven't"} seen this`);
 }
 /** The line above a message: author, who it went to, thread (outside a thread), who it woke, Reply, time. */
-export function messageHead(p, { showThread = true, mark, asks } = {}) {
+export function messageHead(p, { showThread = true, mark, asks, side } = {}) {
   if (!S.app.app) return devHead(p, showThread);
-  if (btwOpener(p)) return btwHead(p);
+  if (btwOpener(p) && !side) return btwHead(p);   // in its own side panel the first message is the person's question
   const mine = OUTSIDE.has(p.from) && p.from === "person";
   const woke = (S.woke[p.id] || []).filter(s => !p.men.includes(s.name) || !s.resumed), tos = p.men.filter(m => m !== "new" && m !== p.from);
   const toYou = tos.length === 1 && tos[0] === "person";
@@ -530,7 +530,7 @@ function appMessage(p, opts) {
     const lc = displayText(p).toLowerCase(), f = fold(displayText(p));
     if (f && ws.some(w => lc.includes(w)) && !ws.some(w => (f.head + f.tail).toLowerCase().includes(w))) OPEN.add(p.id);
   }
-  if (btwOpener(p)) return btwMessage(p, ws);
+  if (btwOpener(p) && !opts.side) return btwMessage(p, ws);
   const call = phoneCall(p); if (call) return call;
   if (p.stopped && p.from === "dash" && EDIT.id !== p.id) return stoppedMark(p, opts);
   if (EDIT.id !== p.id) { const ap = approvalLine(p); if (ap) return ap; }   // the person's yes:, yes, standing: or withdraw standing: as one line saying whether it counts
@@ -544,7 +544,7 @@ function appMessage(p, opts) {
     "data-state": kind === "me" && p.interrupt ? "interrupt" : null, "data-asks": asks ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
     msgAvatar(p, kind),
     // E203n: the steps a Stop and send ended stay with the message that ended them, above it and on the agent's side, where they happened
-    kind === "me" && p.interrupt && S.cut[p.id]?.did === "stopped the running command" ? h("div", { class: "msg-cutran", "data-key": "cutran" }, ranFold(p)) : null,
+    cutRan(p),
     h("div", { class: "msg-c" },
       messageHead(p, { ...opts, asks }),
       relayLine(p),
@@ -561,6 +561,11 @@ function appMessage(p, opts) {
       versionBar(p, opts),
       kind === "agent" && (asks || picked(p) === true || choiceOpen(p)) ? askActions(p) : null),
     simpleOn() ? null : msgTools(p, ws, opts));
+}
+
+/** E203n: the steps the message's Stop and send ended, or null. E203o: comms.js adds it to a message already drawn when the stop is logged. */
+export function cutRan(p) {
+  return p.from === "person" && p.interrupt && S.cut[p.id]?.did === "stopped the running command" ? h("div", { class: "msg-cutran", "data-key": "cutran" }, ranFold(p)) : null;
 }
 
 // ---- E12: edit a sent message, ask for another reply; the older versions stay behind the arrows ----

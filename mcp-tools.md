@@ -74,6 +74,20 @@ With `name=value` (it wins over the same name in `--args`), a value stays text w
 An error from the tool, a server that crashes or says nothing, and a wrong tool name each end with exit code 1 and say why,
 with the server's stderr when it ended or stopped answering. `--timeout SECONDS` (default 30) is the wait for each answer.
 
+## Trying it in Settings
+
+The person can run a connected tool without asking an agent: **Settings**, **Connectors**, **Try your own tools**.
+**See its tools** starts the server and lists them; **Try it** opens a form made from the tool's arguments; **Run it** shows the answer,
+or the error the tool raised. A saved file under `~/projects` or `~/files` named in the answer opens from there, and a picture shows under it.
+While it runs, **Stop** ends the tool and the programs it started; whatever it changed before then stays changed.
+
+- Only tools connected with `hive mcp connect` are listed. A service with a web address isn't.
+- Running one needs the full sign-in. With the sandbox on, the run is inside it. With it off, the tool can read the account's files and
+  sign-ins, and the page says so and asks first. There, a program the tool starts in a session of its own can outlive **Stop**.
+- Unless a tool marks itself as only reading (`readOnlyHint` in its `annotations`), each run asks to be confirmed.
+- What the form shows comes from your schema: describe each argument, give `examples` or a `default`, and give an array its `items` type
+  (a list of text or numbers is typed one per line, or as a JSON list).
+
 ## Connecting it
 
 `hive mcp connect dice` copies the folder into `~/mcp-tools/dice/` and adds it to `~/mcp.json`, the list every Claude run is started with.

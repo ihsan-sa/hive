@@ -25,7 +25,7 @@ import { heldRoom } from "../core/room.js";
 import { confirm as askDialog } from "../ui/dialog.js";
 import { bar as skBar, button, empty, icon, input, list, scrim, seg, skeleton, statusDot, statusWord } from "../ui/kit.js";
 import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
-import { message, messageHead, messageReceipt, localMessage, draftMessage, markWords, pollDelivered, marksSig, approvalLine, delivery, onJump, helperFolds, chatPages, pageEdit } from "../ui/message.js";
+import { message, messageHead, messageReceipt, localMessage, draftMessage, markWords, pollDelivered, marksSig, approvalLine, delivery, onJump, helperFolds, chatPages, pageEdit, cutRan } from "../ui/message.js";
 import { chatView } from "../rich/artifact.js";
 import { openSideList, sideChats, sync as scSync } from "../ui/sidechat.js";
 import { sync as inkSync } from "../ink/over.js";
@@ -97,7 +97,7 @@ const oops = (lead, e) => tr(lead) + " " + tr(String((e && e.message) || e || "t
 const tryMeta = (th, patch, ctx) => setMeta(th, patch).catch(e => { C.err = oops("Couldn't save that:", e); ctx.update(); });   // the error stays until its Close: no clock (WCAG 2.2.1)
 // What the message list holds. matched grows as posts arrive; pend is what sync() still has to append.
 const L = { key: null, src: null, seen: 0, matched: [], pend: [], evs: new Set(), rebuild: true, keep: false, shown: 0, day: "", prev: null, names: new Set(), opts: null,
-  box: null, out: null, jump: null, unseen: 0, outSig: "", ro: null, stuck: true, heads: "", near: new Set(), io: null, tl: null, tlSig: "", tlConv: null, saved: null, ctx: null, jumpTo: null, marked: "" };
+  box: null, out: null, jump: null, unseen: 0, outSig: "", ro: null, stuck: true, heads: "", near: new Set(), io: null, tl: null, tlSig: "", tlConv: null, saved: null, ctx: null, jumpTo: null, marked: "", early: [] };
 let qTimer = 0;
 onInbox(() => L.ctx && L.ctx.update());
 onMail(() => L.ctx && L.ctx.update());
@@ -372,7 +372,7 @@ function paint(box, ctx) {
     ...(shown.length && shownHeld(shown) ? [h("div", { class: "empty cm-held", "data-kind": "loading", role: "status", "aria-busy": "true" }, "Loading the conversation…")]
       : shown.length ? [...pageRows(shown), ...(L.opts.showThread ? [] : helperFolds(shown.at(-1).th, Infinity, L.helpers, L.opts))] : [empty(C.q ? "No messages match." : L.src.length && !simpleOn() ? (app() ? "Nothing here for you yet. The rest is agents talking among themselves: Show hidden, in the title's menu, shows it." : "Nothing here with what Show has on. Turn on Agent comms to see all the messages.") : "No messages yet.")]),
     L.out, L.drafts = h("div", { class: "cm-drafts", "data-key": "drafts", "aria-live": "polite" }), L.jump);
-  L.draftSig = "";
+  L.draftSig = ""; L.early = [];
 }
 function setJump() {
   if (!L.jump) return;
@@ -387,6 +387,9 @@ function flash(box, el) {
 }
 const jumpTo = id => {
   const p = S.byId[id], box = L.box; if (!p) return;
+  // a quote inside the side panel (ui/sidechat.js) is found there; the main conversation stays where it is
+  const there = btwParent(p.th) && document.querySelector(`.sc-log [data-key="${CSS.escape(id)}"]`);
+  if (there) { there.scrollIntoView({ block: "center" }); there.setAttribute("data-flash", ""); there.setAttribute("data-hl", ""); setTimeout(() => { there.removeAttribute("data-flash"); there.removeAttribute("data-hl"); }, 1800); return; }
   // from another page (Yours), or another conversation: open the post's conversation first; paint() finishes the jump
   if (!box || parse().id !== "comms" || !box.isConnected || (L.opts && conversation(L.ctx && L.ctx.arg).thread !== p.th)) { L.jumpTo = id; return go("comms", p.th); }
   const el = box.querySelector(`[data-key="${CSS.escape(id)}"]`);
@@ -418,9 +421,24 @@ function syncDrafts(c, box) {
     ...(S.live ? S.live.agents : []).filter(a => a.alive !== false && a.draft && a.draft.thread === th && !fast.some(f => f.name === a.name))]
     .map(a => posted(a) || (a.draft && !(maskFor(c) & SHOW.comms) && toAgents(a)) ? { ...a, draft: null } : a).filter(a => a.draft || (a.steps && a.steps.length));
   const sig = ds.map(a => a.name + ":" + (a.draft ? a.draft.text.length : "-") + ":" + (a.steps || []).map(s => (s.running ? "r" : "d") + (s.out || "").length).join("/")).join();
-  if (sig === L.draftSig) return;
-  const stick = atEnd(box) || L.stuck; L.draftSig = sig;
-  L.drafts.replaceChildren(...ds.map(a => inConversation(th, () => draftMessage(a))));   // the same scope as message(): a run still writing is named as its posts are
+  // E203o: steps with no reply being written sit where they happened: above the first message the person sent after the newest of them started,
+  // on the board or still on its way (L.out)
+  const mine = (S.threads.get(th)?.posts || []).filter(p => p.from === "person"), sending = outFor(th).some(x => x.state !== "failed");
+  const above = ds.map(a => {
+    const t = !a.draft && a.steps.at(-1).t; if (!t) return null;
+    for (const p of mine) { const el = p.t > t * 1e3 + 999 && box.querySelector(`:scope > [data-key="${CSS.escape(p.id)}"]`); if (el) return el; }
+    return sending ? L.out : null;
+  });
+  const full = sig + "|" + above.map(el => el && (el.dataset.key || "out")).join();
+  // placed groups stay put while nothing but other placed groups sits between each and its message (a message appended since would)
+  const kept = ([el, to]) => { let n = el.nextElementSibling; while (n && n !== to && n.matches('[data-key^="draft:"]')) n = n.nextElementSibling; return n === to; };
+  if (full === L.draftSig && L.early.every(kept)) return;
+  const stick = atEnd(box) || L.stuck; L.draftSig = full;
+  const els = ds.map(a => inConversation(th, () => draftMessage(a)));   // the same scope as message(): a run still writing is named as its posts are
+  for (const [el] of L.early) el.remove();
+  L.early = [];
+  L.drafts.replaceChildren(...els.filter((el, i) => !above[i]));
+  els.forEach((el, i) => { if (!above[i]) return; above[i].before(el); L.early.push([el, above[i]]); });
   if (stick) { box.scrollTop = box.scrollHeight; L.stuck = true; }
 }
 
@@ -550,6 +568,7 @@ function refreshHead(a) {
   const p = S.byId[a.getAttribute("data-key")]; if (!p) return;
   const ap = approvalLine(p);   // an approval line (rootword.js) is redrawn whole: what it says changes with root's record, and it may only now have become one
   if (ap || a.classList.contains("msg-appr")) { const n = ap || message(p, L.opts); n.dataset.show = a.dataset.show || ""; n._head = L.heads; const b = morph(a, n); b._head = L.heads; return; }
+  if (!a.querySelector(":scope > .msg-cutran")) { const n = cutRan(p), c = n && a.querySelector(":scope > .msg-c"); if (c) c.before(n); }   // E203o: the stopped step shows as soon as the stop is logged
   const hd = a.querySelector(":scope > .msg-h, :scope > .msg-c > .msg-h"), rc = a.querySelector(":scope > .msg-rc, :scope > .msg-c > .msg-rc");
   if (hd) morph(hd, L.opts.showThread === false ? inConversation(p.th, () => messageHead(p, L.opts)) : messageHead(p, L.opts));   // the same scope as message(), or a refresh renames the agent
   if (rc) morph(rc, messageReceipt(p));
@@ -1006,7 +1025,8 @@ function stripLines(th) {
     const s = agentState(a);
     if (simpleOn()) { if (!out.some(x => x.dataset.key === "run")) out.push(line("working", "Your Hive is working on it.", can("stop") ? stopButton("Stop this work", () => app() ? stopNow(a.name) : askStop(a.name)) : null, { key: "run", live: true })); continue; }
     // Closed it reads "a7c31 Editing fetch.py"; how long ago it was active shows only when open.
-    const step = a.doing && app() ? plainStep(a.doing) : a.doing;   // a bare command reads as plain words in the app look (a0ad9's re-check)
+    const ended = Object.values(S.cut).some(c => c.name === a.name && c.did === "stopped the running command" && c.t > a.last * 1e3);   // E203o: the stop is logged before the session says its step ended
+    const step = ended ? "" : a.doing && app() ? plainStep(a.doing) : a.doing;   // a bare command reads as plain words in the app look (a0ad9's re-check)
     // the step is the agent's own words (data-content, as in actions.js), and " · " is its own text node so the state after it translates whole
     const doing = step && !(app() && ownStep(a.doing)) ? h("span", { "data-content": "" }, step.charAt(0).toUpperCase() + step.slice(1)) : AGENT_WORDS[s.key] || s.text;   // E10: its own board commands are not a step to read
     out.push(line(s.key, [who(a.name), " ", doing, h("span", { class: "meta cm-line-m" }, " · ", s.key === "working" ? ago(a.last * 1e3) : s.text)],
@@ -1255,7 +1275,8 @@ function places() {
     can("read") ? link("Inbox", "inbox", href("inbox"), IB.unread || 0, "Every message agents sent you; the count is unread messages, not what waits on you", "unread") : null,
     can("files") ? link("Mail", "mail", href("mail"), MN.n, MN.n ? "Mail since you last opened it" : "Your mail") : null,
     link("Files", "file", href("made"), 0, "Files and links from your conversations"),
-    can("files") ? link("Documents", "doc", href("docs"), 0, "The library's PDFs: comment on one and an agent revises it") : null));
+    can("files") ? link("Documents", "doc", href("docs"), 0, "The library's PDFs: comment on one and an agent revises it") : null,
+    null));
 }
 TOPX.chat = () => app() ? places() : null;
 // The choices about the list, always open over it (the person, 110819287bb8, after 11071400de5b had put them behind one button):

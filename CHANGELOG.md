@@ -4,6 +4,14 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Stop a tool you're trying
+
+A tool you run under **Try your own tools** now has a **Stop** button while it runs. It ends the tool and the programs it started; what it already changed stays changed. With the sandbox off, a program the tool starts in a session of its own can outlive it.
+
+## Try your own tools in Settings
+
+A tool an agent made and connected can now be run by you: under **Settings**, **Connectors**, **Try your own tools**, pick it, fill in its form, press **Run it** and read the answer or its error. A file the answer saved opens from there. It needs the full sign-in; with the sandbox off the page warns that the tool can read your files and sign-ins, and a tool that doesn't say it only reads asks before it runs. Connectors with a web address aren't listed.
+
 ## Make your own MCP tools
 
 Agents can now build a tool of their own and connect it: `hive mcp new` makes a working MCP server (Python, no packages, no network port), `hive mcp tools` and `hive mcp call` try it, and `hive mcp connect` gives it to every agent run that starts afterwards. `hive mcp disconnect` takes it away. With the sandbox on, connecting is a step that runs outside it once it is allowed. `hive mcp guide` is the page. A tool can also say when to use it (`WHEN` in `server.py`), so a new chat picks it for an everyday ask.
@@ -14,6 +22,7 @@ Web pages and documents in the side panel have a Comment mode: press **Comment**
 
 ## Smaller fixes, 2026-11-26
 
+- With the sandbox on, `hive mcp list` inside it now says its list is the one from when that run started, and the tool guide (`hive mcp guide`) says to tell you only wording it has tested.
 - A chat an agent answered last now says "Replied" and how long ago at the top and in the sidebar, and the receipt lines after Stop and send are translated into the app's languages. The step that Stop and send cut short now sits with the message that stopped it, not under the answer.
 - Stop and send says a step stopped only once it has ended, shows one status line under your message, and the line over the message box lets go of the stopped step.
 - The README's top links now include the Download page and the Hard questions page.

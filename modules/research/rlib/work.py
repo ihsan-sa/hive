@@ -1232,14 +1232,18 @@ def own_quotes(text, name):
     return out
 
 
-def narration_own_words_why(r, page, must):
-    """Why a verified row whose signal is a channel's introduction to its interview (interview_intro) is marked partial, or '': the page quotes the person, and none of their quoted words names AI, so the AI tie is the writer's framing. Workshifter's "Bridging the Gap: Navigating the AI Revolution ..." put AI in its title and standfirst, and Bachert's own words were about robots and hands-on courses (fnwords150 review, WEAK). A page with none of their words quoted (her YouTube video's description, CONFIRMED in fnwords149) says nothing either way, so the row stands."""
+def narration_own_words_why(r, page, must, own=True):
+    """Why a verified row whose signal is the page's narration about the person (listed_kind `narration`: a channel's introduction to its interview, a profile, an event blurb) is marked partial, or '': nothing of theirs quoted on the page names AI, so the AI tie is the writer's framing.
+    On the organisation's own site (`own`) a narration with none of their words quoted stands: Chan's ai.wfu.edu profile, by Wake Forest's staff, is the organisation's signal and specific to him (fnwords153 review, CONFIRMED); there only an interview introduction whose quotes of them don't name AI is marked (Workshifter's "Bridging the Gap: Navigating the AI Revolution ...": Bachert's own words were about robots and hands-on courses, fnwords150 review, WEAK).
+    On a third party's page (YouTube, Workshifter) the narration is the publisher's framing whether or not it quotes them: Bachert's YouTube description, quoting nothing of hers, was rated WEAK in fnwords152's and fnwords153's reviews, against one CONFIRMED in fnwords149's (rung 6z12h)."""
     if not must or r.get("signal_near_person") != "yes" or not page.get("text"): return ""
-    if not interview_intro(str(r.get("signal") or ""), r.get("name")): return ""
+    intro = interview_intro(str(r.get("signal") or ""), r.get("name"))
+    if not intro and (own or listed_kind(r) != "narration"): return ""
     said = own_quotes(page["text"], r.get("name"))
-    if not said: return ""
     if any(people.term_regex(m).search(fold(q)) for q in said for m in must): return ""
-    return f"{SIGNAL_MARK}its AI words are the writer's framing of the interview; none of the {len(said)} quote{'s' if len(said) != 1 else ''} of theirs on the page names AI"
+    if said: return f"{SIGNAL_MARK}its AI words are the writer's framing{' of the interview' if intro else ''}; none of the {len(said)} quote{'s' if len(said) != 1 else ''} of theirs on the page names AI"
+    if not own: return f"{SIGNAL_MARK}its AI words are the publisher's framing; the page is not the organisation's own, and nothing of theirs quoted on it names AI"
+    return ""
 
 
 def signal_title_note(r, page, org=""):
@@ -1465,6 +1469,34 @@ def own_site(org, host):
     return sub + "." + reg if names(sub) and (not names(top) or sub not in top) else reg   # seaver.pepperdine.edu is Seaver College's, not all of pepperdine.edu (fnwords130)
 
 
+def story_url(url):
+    """A news story or blog post: a news path, a news or blog host, or a year in the path. An official recheck reads these after the site's staff pages: blogs.chapman.edu's five posts naming Dusserre came before Chapman's career-team page and used up the three reads, so he stayed a publisher's lead (fnwords153 review)."""
+    parts = urllib.parse.urlsplit(url or "")
+    return bool(NEWS_PAGE.search(parts.path or "")) or (parts.hostname or "").split(".")[0] in ("news", "newsroom", "blog", "blogs", "stories") or path_year(url) > 0
+
+
+UNIVERSITY_NAME = re.compile(r"(?:University of [A-Z][\w'.-]*(?:,? [A-Z][\w'.-]*){0,3}|[A-Z][\w'.-]*(?: [A-Z][\w'.-]*){0,3} University)")
+
+def site_label(d):
+    return re.sub(r"[^a-z0-9]", "", registrable(d or "").split(".")[0].lower())
+
+def unit_site(org, d):
+    """Is the site d a parent's that the organisation is part of? The org has no university in its name, and the site's label is no word of it and isn't spelled from its words: chapman.edu, Argyros College's site, is Chapman University's (fnwords153 review). hood.edu and templejc.edu-like labels the org spells, or a university's own name, are not."""
+    label = site_label(d)
+    if not label or len(label) < 4 or re.search(r"\buniversity\b", fold(org).lower()): return False
+    toks = re.findall(r"[a-z0-9]+", fold(org).lower())
+    return label not in toks and label != "".join(toks) and not label_names(org, registrable(d)) and not any(len(t) >= 4 and label.startswith(t) for t in toks if t not in people.ORG_NOISE)
+
+def parent_university(org, d, title):
+    """The university a sub-college is filed under: a part of the page title, between its separators, that is a university's whole name and holds the site's label ("About Us | Chapman University" on chapman.edu for Argyros College). "" when the org is not a unit of the site's university."""
+    if not unit_site(org, d): return ""
+    label = site_label(d)
+    for part in re.split(r"\s[-|\u2013\u2014:]\s", " ".join(str(title or "").split())):
+        part = part.strip()
+        if UNIVERSITY_NAME.fullmatch(part) and label in re.findall(r"[a-z0-9]+", fold(part).lower()): return part
+    return ""
+
+
 _PEOPLE_URL = PEOPLE_PAGE
 
 QUOTE_MARK = re.compile(r"[\"\u201c\u201d]")
@@ -1526,6 +1558,7 @@ class Hunt:
         named = spec.get("sources") or ["web"]
         # bing_web drives a browser: 17.1 s a call against 1.3 to 3.4 s for the other engines, so every hunt search waited on it, and in fnwords55 the 15 of its 1154 URLs no other engine found gave no lead. A spec that names it outright still gets it.
         self.sources = [x for x in engines.expand(named) if x != "bing_web" or "bing_web" in named]
+        self.sources0 = list(self.sources)   # before any is dropped: discovery is open again while ddg, its deep engine, has not answered it
         self.late_tally = {}   # source: searches that returned without waiting for it (ENGINE_GRACE)
         self.source_tally, self.tally_lock = {}, threading.Lock()   # source: [calls failed, calls answered] this run, for dropping a dead source
         self.domains = spec.get("domains") or {}
@@ -1734,12 +1767,12 @@ class Hunt:
         return n
 
     def mark_signals(self):
-        """A verified row whose own signal was said under another post (signal_title_why) or names AI only in passing (passing_signal_why), or is a writer's introduction to an interview whose quotes of them don't name AI (narration_own_words_why), is marked partial, kept on the list with the reason in its note (fnwords146 review: Rotyliano, WEAK)."""
+        """A verified row whose own signal was said under another post (signal_title_why) or names AI only in passing (passing_signal_why), or is the page's narration about them that nothing of theirs on it ties to AI, an interview's introduction anywhere or a third party's page (narration_own_words_why), is marked partial, kept on the list with the reason in its note (fnwords146 review: Rotyliano, WEAK)."""
         listed = {id(r) for r in self.leads.values()}
         for r in list(self.leads.values()) + list(self.near.values()):
             page = signal_page_of(r, self.case)
             if r.get("check_status") != "verified" or id(r) not in listed: continue
-            why = signal_title_why(r, page, r.get("organisation") or "") or passing_signal_why(r, page, self.must) or narration_own_words_why(r, page, self.must)
+            why = signal_title_why(r, page, r.get("organisation") or "") or passing_signal_why(r, page, self.must) or narration_own_words_why(r, page, self.must, self.signal_on_own_site(r))
             if not why:
                 if (said := signal_title_note(r, page, r.get("organisation") or "")) and said not in str(r.get("note") or ""): r["note"] = "; ".join(x for x in (r.get("note"), said) if x)
                 continue
@@ -2845,7 +2878,7 @@ class Hunt:
     def stored_official_rechecks(self):
         """Stored rows whose signal is the person's own but whose page is another site's, or too old to show the post is still held, get one search on the organisation's site, side by side. A near miss confirmed there comes back to the list."""
         if self.s.get("official_recheck") is False: return
-        lead = [r for r in self.leads.values() if r.get("check_status") != "verified" and r.get("signal_near_person") == "yes" and not r.get("official_recheck_tried") and SIGNAL_MARK not in str(r.get("note") or "")]   # a row mark_signals made partial is verified on its page: a recheck would only undo the mark
+        lead = [r for r in self.leads.values() if r.get("check_status") != "verified" and r.get("signal_near_person") == "yes" and (not r.get("official_recheck_tried") or self.unit_retry(r)) and SIGNAL_MARK not in str(r.get("note") or "")]   # a row mark_signals made partial is verified on its page: a recheck would only undo the mark
         near = [(k, r) for k, r in self.near.items() if r.get("check_status") != "verified" and r.get("signal_near_person") == "yes" and not r.get("official_recheck_tried") and str(r.get("note", "")).startswith("not listed: the page is from")]
         if not lead and not near: return
         t0 = time.monotonic()
@@ -2860,6 +2893,20 @@ class Hunt:
         self.recheck_stored()  # a confirmed row still has to pass the spec as it stands
         self.log(f"official recheck: searched the organisation's own site for {len(lead) + len(near)} stored rows whose signal is the person's own, verified {sum(ok)}, {back} of them back from the near misses ({time.monotonic() - t0:.0f}s, {self.domain_searches} domain searches)")
         self._save()
+
+    def unit_retry(self, row):
+        """A stored row of a sub-college, rechecked before rechecks read staff pages first and filed sub-colleges under their university, gets one more try, marked so it gets no other: its organisation's site is a parent's (unit_site) whose label the signal page prints as a word ("Chapman's Career and Professional Development team" for Argyros College's Dusserre, fnwords153 review)."""
+        if row.get("parent_recheck_tried"): return False
+        org = row.get("organisation", "")
+        if re.search(r"\buniversity\b", fold(org).lower()): return False
+        pg = self.case.page_at(row.get("signal_url") or row.get("source_url", ""))
+        if not pg or pg.get("status") != "ok": return False
+        d = self.org_domain(org)
+        if not d or not unit_site(org, d): return False
+        label = site_label(d)
+        if not re.search(r"\b" + re.escape(label) + r"\b", fold(pg.get("text") or "").lower()): return False
+        row["parent_recheck_tried"] = "yes"
+        return True
 
     def staff_links(self, page, n=2):
         """Up to n same-site links whose text says team or staff, best first: where a unit page keeps its people when it prints only a mailbox."""
@@ -3328,7 +3375,7 @@ class Hunt:
         try: hits, _ = self.search(q, n=6)
         except Exception: return False
         seen = 0
-        for h in hits:
+        for h in sorted(hits, key=lambda h: story_url(h["url"])):  # staff pages before stories, which seldom show the post is held now
             if h["url"] == row["source_url"] or not people.official(org, h["url"], doms): continue
             seen += 1
             if seen > 3: break
@@ -3353,6 +3400,10 @@ class Hunt:
                     row["signal_url"] = row.get("signal_url") or row["source_url"]
                     note += f"; the quote is from {row['signal_url']}" + (f", dated {row['page_date']}" if row.get("page_date") and row["signal_url"] == row["source_url"] else "")
                     if row["signal_url"] == row["source_url"] and not row.get("signal_date"): row["signal_date"] = row.get("page_date") or ""   # the quote's date goes with it: Arminio's WHIO quote (2026-10-07) kept an empty signal_date once his profile page (2026-07-30) became the source (fnwords119 review)
+                parent = parent_university(org, d, page.get("title")) if d else ""
+                if parent and fold(parent) != fold(org) and self.org_count(parent) < self.per_org:  # a sub-college is filed under the university whose site lists them (Dusserre under Chapman University, not "Argyros College": fnwords153 review)
+                    note += f"; filed under {parent}, whose site lists them (the signal names {org}, a part of it)"
+                    row["organisation"] = parent
                 with self.save_lock: self.official_upgrades += 1
                 row.update(title=title, official_site="yes", source_url=h["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status="verified", check_quote=res["quote"], note="; ".join(x for x in (note, row.get("note")) if x))
                 return True
@@ -3418,14 +3469,14 @@ class Hunt:
         """The sources a site: search asks: those of this hunt's that answer site: queries, or all of them when it has none."""
         return [x for x in self.sources if x in self.SITE_SOURCES] or list(self.sources)
 
-    def search(self, q, n, twice=False, only=None):
+    def search(self, q, n, twice=False, only=None, deep=False):
         """engines.search over this hunt's sources (with twice, ddg is asked twice and its answers unioned: see engines.ddg_twice), dropping for the rest of the run a source that has failed its first DEAD_AFTER calls while another answered: bing_news failed 237 of 242 calls in fnwords55, 3.4 s each, inside every search's wait. A source never drops while nobody answers (the network is down, not the source), nor if it is the last."""
         srcs = list(only or self.sources)
-        asked = ["ddg_twice" if twice and x == "ddg" else x for x in srcs]
+        asked = [("ddg_deep" if deep else "ddg_twice" if twice else x) if x == "ddg" else x for x in srcs]   # deep: ddg's next pages too (discovery)
         late = []
-        hits, errs = engines.search(q, asked, n=n, case=self.case, grace=self.ENGINE_GRACE, late=late)
-        errs = {("ddg" if k == "ddg_twice" else k): v for k, v in errs.items()}   # tallied, dropped and reported as the ddg it is
-        late = {("ddg" if k == "ddg_twice" else k) for k in late}
+        hits, errs = engines.search(q, asked, n=n, case=self.case, grace=None if deep else self.ENGINE_GRACE, late=late)   # ddg's next pages take seconds more, and the grace would cut discovery's deep answer off
+        errs = {("ddg" if k in ("ddg_twice", "ddg_deep") else k): v for k, v in errs.items()}   # tallied, dropped and reported as the ddg it is
+        late = {("ddg" if k in ("ddg_twice", "ddg_deep") else k) for k in late}
         with self.tally_lock:
             for x in late: self.late_tally[x] = self.late_tally.get(x, 0) + 1
             for x in srcs:
@@ -3573,10 +3624,11 @@ class Hunt:
         self.log_rows.append({"org": org, "angle": "(site) " + q, "hits": len(hits), "read": self.read, "found": found, **self.split_secs(t0, t_search, t_read), "read_routes": routes, "at": now()})
         self._save()
 
+    DISCOVER_N = 40   # hits a discovery search asks each engine for, with ddg's next pages (engines.ddg_deep): at 15, the same two queries named 21 to 31 organisations a run over fnwords150 to fnwords153, from a union of 41, and the verified count moved with them (10, 9, 9, 8)
     def discover(self, q):
         """New organisations from a discovery search: names in result titles and snippets."""
         if ("(discover)", q) in self.tried: return 0
-        hits, errs = self.search(q, n=15)
+        hits, errs = self.search(q, n=self.DISCOVER_N, deep=True)
         for s, e in errs.items(): self.errors[f"{s}: {e[:70]}"] += 1
         if len(errs) >= len(self.sources):
             self.failed.add(("(discover)", q))
@@ -3592,7 +3644,8 @@ class Hunt:
                 known.add(fold(o))
                 if (site := self.abroad(o)): self.left_out[o] = site; continue
                 fresh.append(o)
-        self.tried.add(("(discover)", q))
+        # ddg blocked (403) or dropped: fnwords154's p3 asked both queries then, bing and the news feeds named 7 new organisations (the probe before it, with ddg, 28), and ddg, back by p5, was never asked again. What answered stands; a later run asks again.
+        (self.failed if "ddg" in self.sources0 and ("ddg" in errs or "ddg" not in self.sources) else self.tried).add(("(discover)", q))
         self.discovered += fresh
         self.orgs += fresh
         self.log_rows.append({"org": "(discover)", "angle": q, "hits": len(hits), "read": 0, "found": len(fresh), "at": now()})

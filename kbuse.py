@@ -20,6 +20,16 @@ WRITES = re.compile(r"(?<![0-9&])>")
 OTHER_WAY, OTHER_CALLS = re.compile(r"(?:^|[|;&(\s])(?:rg|grep|egrep|fgrep|ag|gh)\s|\bh2\s+search\b"), 3   # a lookup another way: grep, gh, board search
 PIPE_FILTER = re.compile(r"\s*(?:rg|grep|egrep|fgrep|ag)\b")
 
+def own_step(path):
+    """a read that is the agent's own next step, not a look elsewhere for what the find missed: its scratch ($TMPDIR, /tmp,
+    ~/.cache), a file attached to a post (~/files/), or its own thread. K103 (hive-meta, 2026-11-26): these made about 1 in 10
+    other-way records. Live from 2026-11-27T03:52Z (core K104); records before it include them."""
+    if path.startswith("thread:"): t = woke_thread(); return bool(t) and path[7:] == t
+    tmp = os.environ.get("TMPDIR") or "/nonexistent-tmpdir"
+    if "$TMPDIR" in path or "${TMPDIR}" in path: return True
+    if path.startswith(H + "/"): return any(path.startswith(H + r) for r in ("/.cache/", "/files/"))   # a home under TMPDIR (the tests') is still judged by where in it
+    return any(path.startswith(r.rstrip("/") + "/") for r in (tmp, "/tmp"))
+
 def other_way(cmd):
     """cmd looks something up another way (OTHER_WAY), not counting a grep that only filters the output of the command before
     its pipe (`ps | grep pytest`, `git diff | grep x`, `kb drafts | grep -c`): K101 (hive-meta, 2026-11-26) found those were 5 of 10
@@ -175,7 +185,7 @@ def observe(who, p):
                 e["touched"].append(path); log({"touch": path, "find": e["id"], "calls": e["calls"], "tool": tool, "session": sid})
         if e["kind"] == "find" and 1 <= e["calls"] <= OTHER_CALLS and not e["touched"] and not e.get("other") and ok:   # an unread find, then within 3 calls a grep/gh/hive search, or a read of a path it didn't show
             cmd = inp.get("command") if tool == "Bash" and isinstance(inp.get("command"), str) else ""
-            if "kb find" not in cmd and "kb open" not in cmd and (other_way(cmd) or any(not shows(e, rp, lo, hi) for rp, lo, hi in reads)):
+            if "kb find" not in cmd and "kb open" not in cmd and (other_way(cmd) or any(not shows(e, rp, lo, hi) and not own_step(rp) for rp, lo, hi in reads)):
                 said = (cmd + " " + " ".join(rp for rp, _, _ in reads)).lower()   # K94 (hive-meta): how many of the find's query words the lookup names; 0 is likely the agent's next, unrelated step
                 e["other"] = True; log({"other": tool, "find": e["id"], "calls": e["calls"], "session": sid, "qhit": sum(1 for w in qwords(e.get("q")) if w in said)})
     for path, lo, hi in reads:

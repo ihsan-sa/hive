@@ -68,6 +68,7 @@ const P = {
   whiteboard: ["M4 5h16v11H4z", "M12 16v4", "M8 20h8", "M7.5 12.5c1.5-3 3-3 4.5-1s3 2 4.5-1.5"],
   inbox: ["M4 13l2.5-7h11L20 13v6H4v-6z", "M4 13h5l1 2h4l1-2h5"],
   mail: ["M4 6h16v12H4z", "M4 7l8 6 8-6"],
+  outbox: ["M4 13v6h16v-6", "M4 13h5l1 2h4l1-2h5", "M12 3v8", "M8.5 6.5L12 3l3.5 3.5"],   // the Outbox page: a tray with a letter going up
 };
 const NS = "http://www.w3.org/2000/svg";
 export function icon(name, { cls } = {}) {

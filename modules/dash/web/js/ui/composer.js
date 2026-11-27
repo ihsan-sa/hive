@@ -29,10 +29,23 @@ import { thumb as inkThumb, sheetTitle } from "../ink/sheet.js";
 
 // menu: which of the bar's menus is open (to | add | aa | model), or false. mode: thread → "interrupt" while armed.
 // sent: thread → the interrupt just sent there ({who, it, at, seen}), for the live line's stopping → reading → normal.
-const CP = { update: null, th: undefined, focus: false, ac: null, menu: false, drag: false, sig: "", hist: null, mode: {}, sent: {} };
+// Two boxes can be on screen: the conversation's and a side chat's (sidechat.js). th is the one in use (the @ list, menus and
+// history are its own); slot: which thread each place holds; md and sig are kept per thread. focus: true puts the cursor in the
+// conversation's box, a thread's key in that box.
+const CP = { update: null, side: null, th: undefined, slot: {}, focus: false, ac: null, menu: false, drag: false, sig: {}, md: new Set(), hist: null, mode: {}, sent: {} };
 // The secret box (the person, 11041306e4d2): a name and a hidden value saved straight to /api/secret. The value never enters the draft, the board or localStorage.
-const SB = { open: false, rows: [{ name: "", value: "" }], say: "", tone: null, busy: false, lost: false };
-const refresh = () => CP.update && CP.update();
+const SB = { th: null, open: false, rows: [{ name: "", value: "" }], say: "", tone: null, busy: false, lost: false };
+const refresh = () => { if (CP.update) CP.update(); if (CP.side) CP.side(); };
+/** What CP.focus holds to put the cursor in th's box: the side chat's if it is there, else the conversation's. */
+const aim = th => (th && CP.slot.side === th ? th : true);
+/** A new side chat's box has no thread yet: its draft and its messages on their way are kept under its conversation's. */
+export const sideKey = main => "side:" + main;
+const sideMain = th => (th && th.startsWith("side:") ? th.slice(5) : null);
+function use(th) { if (CP.th === th) return false; CP.th = th; CP.ac = null; CP.menu = false; CP.hist = null; return true; }
+/** The side chat's box is gone (the panel closed or shows something else): the keys act on the conversation's box again. */
+/** What goes after the words of a side chat's first message (the quoted post), said by the panel before it is sent. */
+export const sideTail = (key, tail, about) => SIDE.set(key, { tail, about });
+export function releaseSide() { CP.side = null; delete CP.slot.side; if (CP.slot.main !== undefined) use(CP.slot.main); }
 const IMGNAME = /\.(png|jpe?g|gif|webp)$/i;
 const size = n => (n >= 1048576 ? fix((n / 1048576), 1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
 
@@ -50,6 +63,12 @@ export function draft(th) {
   }
   if (!d.reply && d.replyId && S.byId[d.replyId]) d.reply = S.byId[d.replyId];
   return d;
+}
+/** What is typed under one key and not sent goes on under another: a new side chat's box, once its first message made the thread. */
+export function moveDraft(from, to) {
+  const a = draft(from); if (!a.text && !a.files.length && !a.quote) return;
+  const b = draft(to); Object.assign(b, { text: a.text, files: a.files, quote: a.quote, model: a.model, effort: a.effort }); keep(b);
+  Object.assign(a, { text: "", files: [], quote: null }); keep(a);
 }
 /** Is there unsent text left in this thread's composer (this browser only)? */
 export function hasDraft(th) {
@@ -80,6 +99,7 @@ window.addEventListener("storage", e => {
 /** Start a reply to a post from anywhere: opens its thread and puts the cursor in the composer. */
 export function replyTo(p) {
   const d = draft(p.th); d.reply = p; d.replyId = p.id; d.to = null; keep(d);
+  if (CP.slot.side === p.th && document.querySelector(".pv .cp")) { CP.focus = p.th; return refresh(); }   // a Reply in the side chat answers in its own box
   CP.focus = true; go("comms", p.th); refresh();
 }
 /** Esc: close the @ list or a menu, else leave interrupt mode, else drop a quote, else cancel a reply. True if it did something. */
@@ -94,11 +114,11 @@ export function cancelReply() {
 }
 export const focusComposer = () => { CP.focus = true; refresh(); };
 /** Put text in a thread's box (null: the home's) and the cursor after it, on the person's own click (Stuff to address's "Go through them with an agent"). Nothing is sent: they edit or send it. */
-export function prefill(th, text) { const d = draft(th); if (!d.text.trim()) { d.text = text; keep(d); } CP.focus = true; refresh(); }
+export function prefill(th, text) { const d = draft(th); if (!d.text.trim()) { d.text = text; keep(d); } CP.focus = aim(th); refresh(); }
 /** Address the next message in a thread to who (the To menu's choice) and put the cursor in the box. Nothing is typed for the person. */
 export function sayTo(th, who) {
   const d = draft(th); if (who) { d.to = who; keep(d); }
-  CP.focus = true; refresh();
+  CP.focus = aim(th); refresh();
 }
 /** Interrupt mode (R7 step 2): open th's conversation with the box armed to interrupt who. Nothing is sent until the person
  *  presses Interrupt (or Enter) there; Esc or × goes back to an ordinary message. From the Interrupt link and Agents › Now. */
@@ -106,16 +126,17 @@ export function armInterrupt(th, who) {
   if (!th) return;
   const d = draft(th);
   if (who && recipient(th).who !== who) { d.to = who; keep(d); }
-  CP.mode[th] = "interrupt"; CP.menu = false; CP.ac = null; CP.focus = true;
-  go("comms", th); refresh();
+  CP.mode[th] = "interrupt"; CP.menu = false; CP.ac = null; CP.focus = aim(th);
+  if (CP.slot.side !== th) go("comms", th);   // armed from the side chat's own box: the conversation stays
+  refresh();
 }
-function disarm(th) { if (!CP.mode[th]) return; delete CP.mode[th]; CP.focus = true; refresh(); }
+function disarm(th) { if (!CP.mode[th]) return; delete CP.mode[th]; CP.focus = th; refresh(); }
 
 /** Quote a piece of a message above a thread's box ("Ask about this", a summary's Reply) and put the cursor there.
  *  q: {who, where, text, code}. Only one quote at a time: a new one replaces it. The person's words stay as they are. */
 export function quoteRef(th, q) {
   const d = draft(th); d.quote = { who: q.who || "", where: q.where || "", text: String(q.text || ""), code: !!q.code }; keep(d);
-  CP.focus = true; refresh();
+  CP.focus = aim(th); refresh();   // a quote from the side chat goes to its box
 }
 const QMAX = 12;
 /** The quote as it goes on the board: "> who, where:" and at most QMAX quoted lines, before the person's words.
@@ -133,10 +154,10 @@ const QUOTE_HEAD = /^> [^\n]*:\n(?:>[^\n]*\n)*\n/;
 // The server's rule (person_post in dash.py, /api/target): a plain message wakes whoever posted last in the thread.
 // The person thinks of it as the agent they've been talking to, so that is the default here, and when the two differ
 // the message is sent with that name in front. Typing @name, replying, or choosing in the To menu overrides it.
-const TG = { key: null, v: {} };
+const TG = { asked: {}, v: {} };   // per thread: the conversation's box and a side chat's ask at once
 function serverWho(th) {
-  const k = th + "|" + S.ver;
-  if (TG.key !== k) { TG.key = k; jget("/api/target?thread=" + encodeURIComponent(th)).then(t => { TG.v[th] = t; refresh(); }).catch(() => {}); }
+  if (sideMain(th)) return null;   // a new side chat has no thread to ask about yet
+  if (TG.asked[th] !== S.ver) { TG.asked[th] = S.ver; jget("/api/target?thread=" + encodeURIComponent(th)).then(t => { TG.v[th] = t; refresh(); }).catch(() => {}); }
   return TG.v[th] || null;
 }
 const MODEL_WORDS = ["opus", "sonnet", "haiku", "fable", "astra"];
@@ -158,6 +179,7 @@ const named = (text, th) => { const w = namedWord(text, th); return w ? wordTarg
 /** {who: name | "new" | null, why: reply | named | chosen | partner | last | first, server: who the server would wake} */
 export function recipient(th) {
   if (!th) return { who: "new", why: "first" };
+  if (sideMain(th)) return { who: "new", why: "btw" };
   const d = draft(th), s = serverWho(th), sv = s && s.who;
   if (isBtw(d.text) || d.to === "btw") return { who: "new", why: "btw", server: sv };   // typed /btw, or "A new agent, on the side" in To
   if (d.reply) return { who: isAgent(d.reply.from) ? d.reply.from : sv, why: "reply", server: sv };
@@ -186,6 +208,8 @@ function wire(th, d, r) {
 /** "/btw question": a side question about this conversation, answered in its own side thread so this one's agent never sees it. */
 export const isBtw = t => /^\s*\/btw(\s|$)/i.test(t || "");
 
+const SIDE = new Map();   // a new side chat's key -> what goes after its question (the quote it is about, sidechat.js)
+
 // ---- messages on their way ----
 export const OUT = [];
 let lid = 0;
@@ -200,8 +224,8 @@ const CLAIM_MS = 60000;
 const readUnsent = () => { try { const v = JSON.parse(localStorage.getItem(UNSENT) || "[]"); return Array.isArray(v) ? v : []; } catch (e) { return []; } };
 const writeUnsent = v => { try { v.length ? localStorage.setItem(UNSENT, JSON.stringify(v)) : localStorage.removeItem(UNSENT); } catch (e) {} };
 const claimedElsewhere = x => !!x && !!x.by && x.by !== TAB && Date.now() - (x.at || 0) < CLAIM_MS;
-const pack = x => ({ uid: x.uid, th: x.th, text: x.text, wire: x.wire, reply: x.reply ? { id: x.reply.id, from: x.reply.from, text: x.reply.text, th: x.reply.th } : null,
-  quote: x.quote, to: x.to, name: x.name, model: x.model, effort: x.effort, focus: x.focus, t: x.t, err: x.err, refs: x.refs || null, lost: x.refs ? [] : x.files.map(f => f.name).concat(x.lost || []) });
+const pack = x => ({ uid: x.uid, th: x.th, shown: x.shown, text: x.text, wire: x.wire, reply: x.reply ? { id: x.reply.id, from: x.reply.from, text: x.reply.text, th: x.reply.th } : null,
+  quote: x.quote, about: x.about || null, to: x.to, name: x.name, model: x.model, effort: x.effort, focus: x.focus, t: x.t, err: x.err, refs: x.refs || null, lost: x.refs ? [] : x.files.map(f => f.name).concat(x.lost || []) });
 /** Write this tab's unsent messages, keeping the ones other tabs hold; gone: uids sent, discarded or taken back into a box here. */
 function saveUnsent(gone = []) {
   const mine = OUT.filter(x => x.state === "failed" || (x.tried && x.state === "sending")), here = new Set(OUT.map(x => x.uid));
@@ -232,16 +256,19 @@ async function deliver(it) {
   it.state = "sending"; it.err = ""; refresh();
   try {
     if (!it.refs) { it.uploading = it.files.length > 0; refresh(); const refs = []; for (const f of it.files) refs.push(await uploadFile(f.file)); it.refs = refs; it.uploading = false; }
-    const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null, effort: simpleOn() ? null : it.effort || null, quote: it.quote || null, ...(it.interrupt ? { interrupt: true } : {}), ...(!it.th && it.focus ? { focus: it.focus } : {}), ...(kindOf(it.wire)[0] ? { plain_word: true } : {}) });   // send() sent it here, not to the card, on purpose (no card for it): dash.py stale_word
+    const res = await post("/api/post", { text: it.wire, thread: sideMain(it.th) || it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null, effort: simpleOn() ? null : it.effort || null, quote: it.quote || null, ...(it.interrupt ? { interrupt: true } : {}), ...(!it.th && it.focus ? { focus: it.focus } : {}), ...(kindOf(it.wire)[0] ? { plain_word: true } : {}) });   // send() sent it here, not to the card, on purpose (no card for it): dash.py stale_word
     it.id = res.id; it.state = "sent"; const thr = it.th;
     if (!it.th && res.thread) { it.th = res.thread; go("comms", res.thread); loadApp(); }   // the server files it under the focus picked in the box (and the agent gets that group's instructions, E37); a failure leaves it in Misc, where the title menu can file it
-    else if (res.thread && res.thread !== it.th) { it.th = res.thread; it.aside = true; import("./sidechat.js").then(m => m.openSideChat(res.thread, { main: thr, pending: it.text.replace(/^\s*\/btw\s*/i, "") })); loadApp(); }   // /btw: it lives in the side thread, opened as a side chat beside this one (sidechat.js); stay here
+    else if (sideMain(thr) && res.thread) { it.th = res.thread; window.dispatchEvent(new CustomEvent("cp:side", { detail: { key: thr, thread: res.thread, uid: it.uid, about: it.about || null } })); loadApp(); }   // a new side chat: the panel goes on to its thread
+    else if (res.thread && res.thread !== it.th) { it.th = res.thread; it.aside = true; it.text = it.text.replace(/^\s*\/btw\s*/i, ""); import("./sidechat.js").then(m => m.openSideChat(res.thread, { main: thr })); loadApp(); }   // /btw: it lives in the side thread, opened as a side chat beside this one (sidechat.js); stay here
     poll();
   } catch (e) { it.state = "failed"; it.tried = true; it.err = simpleOn() && !/sign in/.test(e.message) ? "Check your connection, then try again." : e.message; it.uploading = false; }
   saveUnsent(); refresh();
 }
 function queue(th, d, r, interrupt = false) {
   const it = { lid: ++lid, uid: TAB + "-" + Date.now().toString(36) + "-" + lid, th: th || null, text: d.text, files: d.files, reply: d.reply, quote: d.quote || null, interrupt, to: th ? r.who : null, name: th ? null : d.name.trim() || null, wire: wire(th, d, r), model: d.model || null, effort: d.effort || null, focus: th ? null : d.focus || null, state: "sending", err: "", t: now() };
+  const main = sideMain(th);
+  if (main) { const s = SIDE.get(th) || {}; it.shown = d.text; it.tail = s.tail || ""; it.about = s.about || null; it.wire += it.tail; it.text = d.text; }
   OUT.push(it); deliver(it);
   return it;
 }
@@ -253,12 +280,12 @@ function send(th) {
   if (ink) { packInk(th, d); return; }
   if (d.text.trim() === "/67" && !d.files.length) { d.text = ""; keep(d); const el = field(th); if (el) el.value = ""; refresh(); sixSeven(); return; }
   if (!d.files.length && /^\/(party|bees|matrix|rave)$/.test(d.text.trim())) { const t = d.text.trim(); d.text = ""; keep(d); const el = field(th); if (el) el.value = ""; refresh(); eggRun(t); return; }   // easter egg, not sent
-  if (forCard(th, d.text, d.files)) {   // a yes: line: root's card shows it and Confirm there sends it (k2992); the draft stays until it did
+  if (!sideMain(th) && forCard(th, d.text, d.files)) {   // a yes: line: root's card shows it and Confirm there sends it (k2992); the draft stays until it did
     const why = cardWhy(d.text);   // what the card would refuse, said here in the box instead
     if (why) { d.err = why; d.cardErr = true; refresh(); return; }
     d.err = ""; d.cardErr = false; openApproval(th, d.text, true); return;
   }
-  const covers = replyWord(th, d);
+  const covers = !sideMain(th) && replyWord(th, d);
   if (covers) {   // "i approve this" to a post that asks for a yes: opens the card with that post's exact line (the person, 11250911be84)
     const why = cardWhy(covers);
     if (why) { d.err = why; refresh(); return; }
@@ -269,7 +296,7 @@ function send(th) {
   if (th) delete CP.mode[th];
   if (int) CP.sent[th] = { who: r.who, it, at: Date.now(), seen: 0 };
   Object.assign(d, { text: "", files: [], reply: null, replyId: null, quote: null, to: null, name: "", naming: false, err: "", model: "", effort: "", focus: "" }); keep(d);   // the focus resets: a new conversation starts with no focus (the person, 2026-11-08)
-  CP.ac = null; CP.menu = false; CP.hist = null; if (!SB.open) SB.say = "";
+  if (CP.th === th) { CP.ac = null; CP.menu = false; CP.hist = null; } if (!SB.open) SB.say = "";
   const el = field(th); if (el) { el.value = ""; el.focus(); }   // morph leaves a focused field alone, so clear it here
   refresh(); window.dispatchEvent(new CustomEvent("cp:sent", { detail: { th } }));
 }
@@ -316,12 +343,12 @@ function inkUndoChip(th) {
       window.dispatchEvent(new CustomEvent("ink:change", { detail: { th } })); refresh();
     } }, "Undo"));
 }
-addEventListener("ink:change", e => { const th = e.detail && e.detail.th; if (CP.update && document.querySelector(`.cp[data-key="${CSS.escape("cp:" + (th || ""))}"]`)) refresh(); });
+addEventListener("ink:change", e => { const th = e.detail && e.detail.th; if ((CP.update || CP.side) && document.querySelector(`.cp[data-key="${CSS.escape("cp:" + (th || ""))}"]`)) refresh(); });
 // Send work on a writing space (ink/sheet.js).
 addEventListener("ink:send", e => {
   const { th } = e.detail || {}; if (!th) return;
   if (!draft(th).text.trim()) { send(th); return; }   // Send work on a sheet: straight out, unless words wait in the box to go with it
-  CP.focus = true; refresh(); requestAnimationFrame(() => { const t = field(th); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } });
+  CP.focus = aim(th); refresh(); requestAnimationFrame(() => { const t = field(th); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } });
 });
 // Lists carry on (the person, 11040216f6f2): Enter at the end of "1. x" or "- x" starts the next item,
 // Enter on an empty item ends the list, and Enter anywhere else sends as before.
@@ -394,13 +421,13 @@ function mdLayer(text) {
  *  (same wrapped height as the box); otherwise the layer is dropped and the box shows its plain text, so it can never glitch. */
 function mdSync(n) {
   const tw = n.parentNode, bd = tw && tw.querySelector(".cp-bd"); if (!bd) return;
-  if (!n.value) { tw.removeAttribute("data-md"); bd.setAttribute("data-sig", ""); CP.md = false; return; }
+  if (!n.value) { tw.removeAttribute("data-md"); bd.setAttribute("data-sig", ""); CP.md.delete(mdKey(n)); return; }
   const fresh = bd.getAttribute("data-sig") !== n.value;
   if (fresh) { bd.replaceChildren(...mdLayer(n.value)); bd.setAttribute("data-sig", n.value); }
   // Reads that force a layout (computed style, widths, heights) run only when the text or the box's width changed:
   // typing and idle re-renders no longer reflow the whole page each time.
   const w = n.clientWidth, h = n.scrollHeight, key = w + "|" + h + "|" + n.className;
-  if (!fresh && bd.getAttribute("data-geo") === key) { if (CP.md) { tw.setAttribute("data-md", ""); bd.scrollTop = n.scrollTop; } return; }
+  if (!fresh && bd.getAttribute("data-geo") === key) { if (CP.md.has(mdKey(n))) { tw.setAttribute("data-md", ""); bd.scrollTop = n.scrollTop; } return; }
   tw.setAttribute("data-md", "");   // shown so it can be measured; dropped below if it doesn't line up
   if (bd.getAttribute("data-w") !== String(w) || !bd.style.font) {
     const c = getComputedStyle(n);
@@ -410,11 +437,13 @@ function mdSync(n) {
   const ok = Math.abs(bd.scrollHeight - h) <= 1;
   bd.setAttribute("data-geo", key);
   if (ok) bd.scrollTop = n.scrollTop;
-  if (!ok) tw.removeAttribute("data-md"); CP.md = ok;   // CP.md: a redraw keeps the attribute, so the text never flashes plain
+  if (!ok) tw.removeAttribute("data-md"); ok ? CP.md.add(mdKey(n)) : CP.md.delete(mdKey(n));   // CP.md: a redraw keeps the attribute, so the text never flashes plain
 }
 let mdRaf = 0;
+const mdWant = new Set();   // the boxes (by thread) waiting for that redraw
+const mdKey = n => { const k = (n.closest(".cp")?.getAttribute("data-key") || "").slice(3); return k === "(new)" ? null : k; };
 /** One layer redraw per frame, however many keys or re-renders asked for it. */
-function mdSoon(th) { if (mdRaf) return; mdRaf = requestAnimationFrame(() => { mdRaf = 0; const t = field(th); if (t) mdSync(t); }); }
+function mdSoon(th) { mdWant.add(th); if (mdRaf) return; mdRaf = requestAnimationFrame(() => { mdRaf = 0; for (const x of mdWant) { const t = field(x); if (t) mdSync(t); } mdWant.clear(); }); }
 /** Send a short message for the person from a button (Carry on, Answer). Shows like any other. */
 export function say(th, text, to) {
   const r = to ? { who: to, why: "chosen", server: (TG.v[th] || {}).who } : recipient(th);
@@ -443,7 +472,7 @@ export const actions = {
   edit: it => {
     const d = draft(it.th);
     d.text = d.text.trim() ? d.text + "\n\n" + it.text : it.text; d.files = d.files.concat(it.files); d.reply ||= it.reply; d.quote ||= it.quote; keep(d);
-    OUT.splice(OUT.indexOf(it), 1); saveUnsent([it.uid]); CP.focus = true; const el = field(it.th); if (el) el.value = d.text; refresh();
+    OUT.splice(OUT.indexOf(it), 1); saveUnsent([it.uid]); CP.focus = it.th || true; const el = field(it.th); if (el) el.value = d.text; refresh();
   },
   discard: it => { OUT.splice(OUT.indexOf(it), 1); saveUnsent([it.uid]); for (const f of it.files) if (f.url) URL.revokeObjectURL(f.url); refresh(); },
 };
@@ -512,7 +541,7 @@ async function dictate(th, blob) {
     else {
       d.text = d.text.trim() ? d.text.replace(/\s*$/, " ") + words : words; keep(d);
       const el = field(th); if (el) el.value = d.text;
-      CP.focus = true;
+      CP.focus = aim(th);
     }
   } catch (e) { d.err = `The words couldn't be made: ${e.message || e}`; }
   REC.busy = null; refresh();
@@ -616,11 +645,12 @@ if (typeof location !== "undefined" && /[?&]shared=/.test(location.search)) setT
 const hasFiles = e => e.dataTransfer && [...(e.dataTransfer.types || [])].includes("Files");
 /** Props for the element files can be dropped on (the whole conversation). */
 export function dropZone(th) {
+  const k = "cp:" + (th || "(new)"), on = () => CP.drag === k;
   return {
-    "data-drag": CP.drag ? "" : null,
-    ondragover: e => { if (!hasFiles(e)) return; e.preventDefault(); if (!CP.drag) { CP.drag = true; refresh(); } },
-    ondragleave: (e, n) => { if (CP.drag && !n.contains(e.relatedTarget)) { CP.drag = false; refresh(); } },
-    ondrop: e => { if (!hasFiles(e)) return; e.preventDefault(); CP.drag = false; addFiles(th, e.dataTransfer.files); CP.focus = true; refresh(); },
+    "data-drag": on() ? "" : null,
+    ondragover: e => { if (!hasFiles(e)) return; e.preventDefault(); if (!on()) { CP.drag = k; refresh(); } },
+    ondragleave: (e, n) => { if (on() && !n.contains(e.relatedTarget)) { CP.drag = false; refresh(); } },
+    ondrop: e => { if (!hasFiles(e)) return; e.preventDefault(); CP.drag = false; addFiles(th, e.dataTransfer.files); CP.focus = th || true; refresh(); },
   };
 }
 
@@ -1032,6 +1062,8 @@ export function shellHints(th) {
 
 /** The lock's click: open the secret box, or say why it can't open in limited mode. */
 function secretClick(th) {
+  if (SB.open && SB.th !== th) closeSecrets();
+  SB.th = th;
   if (SB.open && SB.lost) { dropSecrets(); return; }
   if (!can("secrets")) { SB.open = false; SB.tone = "bad"; SB.say = "Saving a secret needs full mode, which ends after 30 minutes without using the app. Press \"Limited · sign in for full\" at the top, then press the lock again."; refresh(); return; }
   if (SB.open) dropSecrets(); else openSecrets(th);
@@ -1051,7 +1083,7 @@ function addPop(th, d) {
       menuItem("Dictate", dict ? "Your words go in the box to edit" : why(false), then(() => recStart(th, "text")), { ic: "mic", key: "dictate", off: !dict }),
       menuItem("Voice memo", voice ? "Transcribed on this computer" : why(S.app && S.app.voice), then(() => recStart(th, "memo")), { ic: "mic", key: "voice", off: !voice }),
       menuItem("A secret", "Saved on this computer; only its name is posted", then(() => secretClick(th)), { ic: "lock", key: "secret", off: !secretsOn() }),
-      menuItem("Voice call", !call && !inCall() ? why(false) : th ? "A new agent picks up, reads this conversation and talks with you" : "Talk with the Hive", then(() => startCall(th ? { thread: th } : {})), { ic: "phone", key: "call", cls: "cp-call", off: !call }),
+      sideMain(th) || (th && CP.slot.side === th) ? null : menuItem("Voice call", !call && !inCall() ? why(false) : th ? "A new agent picks up, reads this conversation and talks with you" : "Talk with the Hive", then(() => startCall(th ? { thread: th } : {})), { ic: "phone", key: "call", cls: "cp-call", off: !call }),
       !th && !simpleOn() ? [menuSep("sep-n"), menuItem("Name it…", "Otherwise it is called by its first words", then(() => { d.naming = true; refresh(); queueMicrotask(() => document.querySelector(".cp-name")?.focus()); }), { ic: "edit", key: "name" })] : null,
       h("div", { class: "only-phone", "data-key": "ph", role: "presentation" }, menuSep("sep-t"),
         menuItem("Text size", null, () => { const i = SIZES.findIndex(s => s[0] === readScale()); setRead(SIZES[(i + 1) % SIZES.length][0]); }, { key: "size", right: sizeWord(), title: "Text size in conversations; press again for the next size" }))) : null);
@@ -1139,54 +1171,57 @@ function busyWho(th, r) { return th && !simpleOn() && r.who && r.who !== "new" &
 const waitsHere = (th, who) => { const st = threadState(th); return st.key === "asks" && st.who === who; };
 
 /** composer({thread, update, place}): thread null is new work. place: thread | home | start (only changes the wording). */
-export function composer({ thread, update, place = "thread", autofocus, top }) {
-  CP.update = update;
+export function composer({ thread, update, place = "thread", autofocus, top, placeholder, onEsc }) {
+  const side = place === "side", slot = side ? "side" : "main";
+  CP[side ? "side" : "update"] = update;
   const th = thread || null;
   // Framed by the word shell, this page keeps its own box (the person, 11250859f162: the shell's separate box lost the focus picker, file chips and
   // the home's top place). No .cp-shell stand-in is drawn, so tellShell reports col null and the shell hides its box.
-  if (CP.th !== th) { CP.th = th; CP.ac = null; CP.menu = false; CP.hist = null; }
+  if (CP.slot[slot] !== th) { CP.slot[slot] = th; use(th); }   // a box newly on screen is the one in use; then whichever was touched last (focusin, below)
   // k3014: with word_composer set, root's own box (framed, cross-origin) takes this place, so every message is signed as the person.
-  if (boxOrigin()) {
+  if (boxOrigin() && !side) {
     const d = draft(th);
     return rootBox({ thread: th, reply: d.reply ? d.reply.id : d.replyId, hints: shellHints(th), top, place,
       cb: { refresh, dropReply: () => { const x = draft(th); if (x.reply || x.replyId) { x.reply = null; x.replyId = null; keep(x); refresh(); } } } });
   }
   const d = draft(th), r = recipient(th), k = "cp:" + (th || "(new)"), ink = th ? inkPending(th) : null, inkx = th && INKX.has(th), empty = !d.text.trim() && !d.files.length && !ink;
-  if (CP.focus || autofocus === true) { CP.focus = false; queueMicrotask(() => { const t = field(th); if (t && document.activeElement !== t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }); }
+  if ((CP.focus === true && !side) || CP.focus === th && th || autofocus === true) { CP.focus = false; queueMicrotask(() => { const t = field(th); if (t && document.activeElement !== t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }); }
   mdSoon(th);   // after the render lands, so the layer copies the box's font and padding
   sawApproval(letGo);   // words that went out for approval and now show in their thread leave the box (the phone's return brings no ?approved)
-  CP.sig = (named(d.text, th) || "") + "|" + empty + "|" + isBtw(d.text) + "|" + forCard(th, d.text, d.files) + "|" + !!replyWord(th, d);
+  CP.sig[th] = (named(d.text, th) || "") + "|" + empty + "|" + isBtw(d.text) + "|" + forCard(th, d.text, d.files) + "|" + !!replyWord(th, d);
   const busy = busyWho(th, r);
   if (th && CP.mode[th] && !busy) delete CP.mode[th];   // the agent stopped (or the To changed): nothing left to interrupt
   const armed = !!(th && CP.mode[th] === "interrupt");
   const lw = busy || (th && CP.sent[th] && CP.sent[th].who), phase = th && lw ? livePhase(th, lw) : null;
-  const ph = armed ? (S.app && S.app.app ? "Tell it what to do instead…" : `Tell ${busy} what to do instead…`) : !th ? "Say what you want done" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who && !(S.app && S.app.app) ? `Reply to ${r.who}…` : "Reply…";   // the app look names no code in the box (E10)
+  const ph = !armed && placeholder ? placeholder : armed ? (S.app && S.app.app ? "Tell it what to do instead…" : `Tell ${busy} what to do instead…`) : !th ? "Say what you want done" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who && !(S.app && S.app.app) ? `Reply to ${r.who}…` : "Reply…";   // the app look names no code in the box (E10)
   // The names typed in the secret box before full mode ended come back, box open, after the sign-in (store.js keep); values never are kept.
   const back = kept("composer");
-  if (Array.isArray(back) && back.length && !SB.back && !SB.open && can("secrets")) { SB.back = true; SB.open = true; SB.rows = back.map(name => ({ name: String(name), value: "" })); SB.say = KEPT_NOTE + " Type each value again, then Save."; SB.tone = null; }
+  if (!side && Array.isArray(back) && back.length && !SB.back && !SB.open && can("secrets")) { SB.back = true; SB.th = th; SB.open = true; SB.rows = back.map(name => ({ name: String(name), value: "" })); SB.say = KEPT_NOTE + " Type each value again, then Save."; SB.tone = null; }
   const covers = replyWord(th, d), approve = forCard(th, d.text, d.files) || !!covers;   // Send becomes Approve on a yes: line, armed or not: it opens root's confirm card, and send() takes that path first
-  const sendWord = approve ? approveLabel(covers || d.text) : armed ? "Interrupt" : place === "thread" ? "Send" : "Start";
-  return h("div", { class: "cp", "data-key": k, "data-place": place, "data-mode": armed ? "interrupt" : null, "data-fmt": fmtOpen() ? "" : null, ...(th ? {} : dropZone(null)) },  // a thread's composer is inside its conversation's zone
+  const sendWord = approve ? approveLabel(covers || d.text) : armed ? "Interrupt" : place === "thread" || side ? "Send" : "Start";
+  const mine = CP.th === th, ac = mine ? CP.ac : null, menu = mine ? CP.menu : false, fresh = !!sideMain(th);   // fresh: a side chat not started yet
+  const held2 = CP.menu; if (!mine) CP.menu = false;   // the pop-ups read CP.menu: only the box in use draws them
+  const node = h("div", { class: "cp", "data-key": k, "data-place": place, "data-mode": armed ? "interrupt" : null, "data-fmt": fmtOpen() ? "" : null, onfocusin: () => { if (use(th)) refresh(); }, onpointerdown: () => { if (use(th)) refresh(); }, ...(th ? {} : dropZone(null)) },  // a thread's composer is inside its conversation's zone
     d.err ? h("p", { class: "cp-err", role: "alert", "data-key": "err" }, d.err) : null,
-    wordBoxPanel(th, update),
+    side ? null : wordBoxPanel(th, update),
     top || null,  // the conversation's status strip: a tab on the box's top edge
     // the strip already names a working agent and carries its Interrupt: the line over the box shows only an interrupt on its way.
     // An agent waiting on the person's answer isn't working: the question above already says so, and there is nothing to interrupt.
     // In the app look a Stop and send has one status line, the receipt under the message (message.js), so none is drawn here for it.
     (phase ? !(S.app && S.app.app) : busy && !(top && top.querySelector(`[data-key="run:${busy}"]`)) && !waitsHere(th, busy)) ? liveLine(th, lw, phase, armed) : null,
     h("div", { class: "cp-box", "data-key": "box" },
-      armed || d.reply || d.quote || d.files.length || ink || inkx || (SB.open && (can("secrets") || SB.lost)) || SB.say || (!th && d.naming) ? h("div", { class: "cp-top", "data-key": "top" },
+      armed || d.reply || d.quote || d.files.length || ink || inkx || (SB.th === th && (SB.open && (can("secrets") || SB.lost) || SB.say)) || (!th && d.naming) ? h("div", { class: "cp-top", "data-key": "top" },
         armed ? intNote(th, busy) : null,
         d.reply ? replyChip(d) : null,
         d.quote ? quoteChip(d) : null,
         ink || inkx ? h("div", { class: "ink-chips", "data-key": "inks" }, ink ? inkChip(th, d, ink) : inkUndoChip(th)) : null,
         d.files.length ? filesRow(th, d) : null,
-        SB.open && (can("secrets") || SB.lost) ? secretRow() : null,
-        SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,
+        SB.th === th && SB.open && (can("secrets") || SB.lost) ? secretRow() : null,
+        SB.th === th && SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,
         !th && d.naming ? h("div", { class: "cp-name-row", "data-key": "name" }, input({ class: "input cp-name", placeholder: "A short name, like fix-contact-form", "aria-label": "Name for this job", value: d.name, oninput: (e, n) => { d.name = n.value; keep(d); } })) : null) : null,
-      CP.ac ? h("div", { class: "cp-ac", role: "listbox", "aria-label": "Names", "data-key": "ac", ...(CP.ac.down ? { "data-down": "", style: `max-height:${CP.ac.room}px;overflow-y:auto` } : {}) }, acList(th)) : null,
+      ac ? h("div", { class: "cp-ac", role: "listbox", "aria-label": "Names", "data-key": "ac", ...(ac.down ? { "data-down": "", style: `max-height:${ac.room}px;overflow-y:auto` } : {}) }, acList(th)) : null,
       fmtOpen() ? fmtBar(th) : null,
-      h("div", { class: "cp-tw", "data-key": "tw", ...(CP.md ? { "data-md": "" } : {}) },
+      h("div", { class: "cp-tw", "data-key": "tw", ...(CP.md.has(th) ? { "data-md": "" } : {}) },
       // The layer carries the draft's own signature and nodes: with an empty one the morph wiped it on every re-render and the
       // next frame drew it back, a one-frame blank of the text under the box (drive_md caught it one run in six).
       // data-keep: morph stripped mdSync's font, width and geometry key each re-render, so until the next frame the layer sat at the
@@ -1198,10 +1233,10 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
           d.text = n.value; keep(d); CP.hist = null; mdSync(n);
           const moved = acCheck(n, th), sig = (named(d.text, th) || "") + "|" + (!d.text.trim() && !d.files.length) + "|" + isBtw(d.text) + "|" + forCard(th, d.text, d.files) + "|" + !!replyWord(th, d);
           if (d.cardErr) { const w = forCard(th, d.text, d.files) ? cardWhy(d.text) : ""; if (w !== d.err) { d.err = w; d.cardErr = !!w; refresh(); return; } }   // the approval's note follows the edit, and goes once it's fixed
-          if (moved || sig !== CP.sig) refresh();
+          if (moved || sig !== CP.sig[th]) refresh();
         },
         onkeydown: (e, n) => {
-          const a = CP.ac;
+          use(th); const a = CP.ac;
           if (a && a.none && e.key === "Tab" && !a.tabbed) { a.tabbed = true; e.preventDefault(); return; }   // held once, so a slip doesn't leave the box; the second Tab goes on (no keyboard trap)
           if (a && a.items.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); a.i = (a.i + (e.key === "ArrowDown" ? 1 : a.items.length - 1)) % a.items.length; refresh(); document.querySelector(".cp-ac [aria-selected=true]")?.scrollIntoView({ block: "nearest" }); return; }
           if (a && a.items.length && (e.key === "Enter" || e.key === "Tab") && !e.shiftKey) { e.preventDefault(); acPick(th, a.items[a.i].word); return; }
@@ -1210,7 +1245,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
             if (e.key === "Tab" && histTab(th, n)) { e.preventDefault(); return; }
           }
           if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) { const k = { b: "bold", i: "italic", e: "code", k: "link" }[e.key.toLowerCase()]; if (k) { e.preventDefault(); fmt(th, k); return; } }
-          if (e.key === "Escape") { if (REC.state && REC.th === th) { e.preventDefault(); recStop(false); return; } if (cancelReply()) { e.stopPropagation(); e.preventDefault(); } return; }
+          if (e.key === "Escape") { if (REC.state && REC.th === th) { e.preventDefault(); recStop(false); return; } if (cancelReply()) { e.stopPropagation(); e.preventDefault(); } else if (onEsc) { e.preventDefault(); e.stopPropagation(); onEsc(); } return; }
           if (e.key === "Enter" && e.shiftKey && !e.isComposing && listEnter(th, n)) { e.preventDefault(); return; }
           if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (e.ctrlKey || e.metaKey || !listEnter(th, n)) send(th); }
         },
@@ -1222,9 +1257,9 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
         simpleOn() ? null : aaPop(th),
         secretsOn() ? h("button", { type: "button", class: "btn cp-lock hide-phone", "data-kind": "icon", "data-size": "s", "aria-label": "Send a secret", title: "Send a secret: saved on this computer, only its name is posted", "aria-pressed": String(!!SB.open), onclick: () => secretClick(th) }, icon("lock")) : null,
         recBar(th),
-        wordBoxButton(update),
+        side ? null : wordBoxButton(update),
         h("div", { class: "cp-r", "data-key": "r" },
-          simpleOn() ? null : th ? h("div", { class: "pop cp-topop", "data-key": "to" }, toChip(th, r), CP.menu === "to" ? toMenu(th, r) : null)
+          simpleOn() || fresh ? null : th ? h("div", { class: "pop cp-topop", "data-key": "to" }, toChip(th, r), menu === "to" ? toMenu(th, r) : null)
             : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : null,
           !th && S.app && !simpleOn() ? focusPick(d) : null,
           simpleOn() ? null : modelPick(d, r, th),
@@ -1234,9 +1269,11 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
           busy && !empty && !armed && !approve && S.app && S.app.app ? stopSend(th, busy) : null,
           busy && empty && !armed && !approve && can("stop") && S.app && S.app.app ? sendStop(th, busy) : sendButton(sendWord, () => send(th), empty, approve ? (covers ? `${sendWord} (Enter). Opens a card that shows "${covers}", what the message you're answering asks. Confirm there sends it as your approval.` : `${sendWord} (Enter). Opens a card that shows these words; Confirm there sends them as your approval.`)
             : armed ? "Enter interrupts and sends · Esc cancels"
-            : busy ? `${sendWord} (Enter). ${Said(th, busy)} reads it after its current step` : `${sendWord} (Enter). Shift+Enter for a new line. Edit your last message from its Edit button.`, armed && !approve)))),
+            : busy ? `${sendWord} (Enter). ${Said(th, busy)} reads it after its current step` : side ? `${sendWord} (Enter). Shift+Enter for a new line.` : `${sendWord} (Enter). Shift+Enter for a new line. Edit your last message from its Edit button.`, armed && !approve)))),
     // E203l (the E203k reader): what each of the two does is on screen, not only in a tooltip a phone never shows
     busy && !empty && !armed && !approve && S.app && S.app.app ? h("p", { class: "cp-wait", "data-key": "wait" }, "Send waits for the current step to end. Stop and send tries to cut that step short.") : null);
+  CP.menu = held2;
+  return node;
 }
 function sendStop(th, who) {
   const b = button("Stop", () => stopNow(who), { kind: "primary", icon: "stop", cls: "cp-send cp-stop", title: `Stop ${said(th, who)} now. Type to send a message instead.` });

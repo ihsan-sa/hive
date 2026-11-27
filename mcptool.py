@@ -420,6 +420,61 @@ def cmd_guide(a):
     print((CORE / "mcp-tools.md").read_text().strip())
 
 
+# ---------- the try-it view in Settings (the dash runs outside any sandbox) ----------
+
+TRY_S, TRY_MAX = 60, 2 * 2**20   # seconds for each answer; bytes of output read back
+
+
+def connected():
+    """[{name, from}] of the tools connected with `connect`, for the dash."""
+    cur = read_servers(MCP_JSON)
+    return [{"name": n, "from": ((cur[n].get("env") or {}).get("HIVE_MCP_FROM") or "")} for n in sorted(cur) if own(cur[n])]
+
+
+def tryit(name, tool=None, args=None, stop=None):
+    """One run of a connected tool for the person: {"tools": [...]}, or with tool {"result": ...}; {"error": text} when it fails.
+    Setting stop (a threading.Event) ends the run early: {"error": ..., "stopped": True}.
+    It runs this file's own command in a process of its own, and on a sandboxed install that process is inside a sandbox like an agent's
+    (no Claude sign-in mounted): the tool's code never runs outside it."""
+    if name not in [c["name"] for c in connected()]: raise Bad("no connected tool has that name")
+    if tool is not None and (not isinstance(tool, str) or not tool or tool.startswith("-")): raise Bad("that isn't a tool's name")
+    cmd = [python(), "-I", str(CORE / "mcptool.py"), "tools" if tool is None else "call", "--connected", "--json", "--timeout", str(TRY_S)]
+    if tool is None: cmd += ["--", name]
+    else: cmd += ["--args", "-", "--", name, tool]
+    env = {"HOME": str(HOME), "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": os.environ.get("LANG", "C.UTF-8")}
+    if os.environ.get("TMPDIR"): env["TMPDIR"] = os.environ["TMPDIR"]
+    if boxed_install():
+        sys.path.insert(0, str(CORE)); import sandbox
+        why = "the sandbox isn't working here, and a tool is only run inside it"
+        if not sandbox.bwrap(): return {"error": why}
+        sandbox.ensure_broker()
+        cmd, env = sandbox.wrap(cmd, env, "tryit")
+        cmd.insert(cmd.index(sandbox.bwrap()) + 1, "--die-with-parent")   # unlike an agent, it ends with whoever asked
+        if not sandbox.ready("tryit"): return {"error": why}
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        p = subprocess.Popen(cmd, env=env, cwd=HOME, stdin=subprocess.PIPE, stdout=out, stderr=err, start_new_session=True)
+        data, end = json.dumps(args or {}).encode() if tool is not None else b"", time.monotonic() + 3 * TRY_S + 10
+        try:
+            while True:
+                if stop is not None and stop.is_set(): return {"error": "Stopped. It may have changed things before it stopped.", "stopped": True}
+                try: p.communicate(data, timeout=0.2); break
+                except subprocess.TimeoutExpired: data = None   # kept by communicate from the first call
+                if time.monotonic() > end: return {"error": f"no answer in {3 * TRY_S} s, so it was stopped"}
+        finally:
+            if p.poll() is None:   # cut short: asked first, so it can end the server, which has a process group of its own
+                try: os.killpg(p.pid, signal.SIGTERM); p.wait(5)
+                except (ProcessLookupError, PermissionError, subprocess.TimeoutExpired): pass
+            try: os.killpg(p.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError): pass
+            p.wait()
+        out.seek(0); got = out.read(TRY_MAX + 1)
+        err.seek(max(0, err.seek(0, 2) - 4000)); said = err.read().decode(errors="replace").strip()
+    if len(got) > TRY_MAX: return {"error": "the answer is too big to show here (over 2 MB). An agent can still use the tool."}
+    try: v = json.loads(got)
+    except ValueError: return {"error": re.sub(r"^hive mcp (tools|call): ", "", said) or f"the run ended with exit {p.returncode} and said nothing"}
+    return {"tools": v} if tool is None else {"result": v}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="hive mcp", description="Your own MCP tools: make one, try it, connect it to the agents. `hive mcp guide` is the page.")
     sp = ap.add_subparsers(dest="cmd", required=True)
@@ -441,6 +496,9 @@ def main(argv=None):
     if rest:   # name=value after a flag
         if a.cmd != "call" or any(r.startswith("-") for r in rest): ap.error("unrecognized arguments: " + " ".join(rest))
         a.pairs += rest
+    def ended(*_):   # asked to stop (a try-it run in Settings): leave through the `with` blocks, which end the server
+        signal.signal(signal.SIGTERM, signal.SIG_IGN); sys.exit(143)
+    signal.signal(signal.SIGTERM, ended)
     try: a.f(a)
     except Bad as e: sys.exit(f"hive mcp {a.cmd}: {e}")
     except OSError as e: sys.exit(f"hive mcp {a.cmd}: {e}")

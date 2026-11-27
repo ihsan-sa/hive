@@ -15,7 +15,7 @@ export const APP_NAV = {
   names: { now: "Now", agents: "All agents", made: "Files" },   // In the row, where the tab's own name would say the same thing twice.
   heads: { now: "Agents", usage: "This computer" },        // A group's heading in the More menu (moreGroups: the desktop "…" and the phone's sheet), where the tab's own name would mislead: Usage's other pages are about this machine.
   noRow: ["comms", "settings", "agent", "focus"],         // Full-height or already has its own side list: these pages show no row in their head. The tab stays lit.
-  belongs: { agent: "now", secrets: "settings", focus: "comms", needs: "comms", yours: "comms", inbox: "comms", mail: "comms", made: "comms", docs: "comms", kbtime: "knowledge" }, // Lights a tab without being a page in its row. Needs you is the home's line, a page behind it; a focus page is the home a level down. Chat's pages (Yours, Inbox, Mail, Files) are the foot of its side list, so no row repeats them (R6 review, finding 12). Knowledge over time is reached from Knowledge's Over time button, so Knowledge stays lit there, not More.
+  belongs: { agent: "now", secrets: "settings", focus: "comms", needs: "comms", yours: "comms", inbox: "comms", mail: "comms", outbox: "comms", made: "comms", docs: "comms", kbtime: "knowledge" }, // Lights a tab without being a page in its row. Needs you is the home's line, a page behind it; a focus page is the home a level down. Chat's pages (Yours, Inbox, Mail, Files) are the foot of its side list, so no row repeats them (R6 review, finding 12). Knowledge over time is reached from Knowledge's Over time button, so Knowledge stays lit there, not More.
   more: ["design"],                             // The Work page went (R5): the focus pages carry what it showed, Flow's lanes open its card.
   icons: ["settings"],                           // Main places drawn as an icon at the right of the bar, not as a word tab (redesign 2026-11-04).
 };
@@ -58,7 +58,7 @@ export function rowItems(row, nav, current, label) {
  *  Conversations (Chat's own pages), then each shown tab's row less what the bar already has, then the rest: tools (nav.more)
  *  join the last tab group (This computer), anything else on the bar's side ends under "More", the icons (Settings) last under a rule.
  *  bar: the ids already on the bar, left out. label(v) names a tab for its heading. */
-export const CHAT_PAGES = ["yours", "inbox", "made", "docs", "mail"];
+export const CHAT_PAGES = ["yours", "inbox", "made", "docs", "mail", "outbox"];
 export function moreGroups(views, nav, on, L, bar, label) {
   const by = new Map(views.map(v => [v.id, v])), shown = new Set([...L.main, ...L.icons].map(v => v.id)), used = new Set(bar);
   const pick = ids => ids.map(id => by.get(id)).filter(v => v && on(v) && !used.has(v.id) && used.add(v.id));

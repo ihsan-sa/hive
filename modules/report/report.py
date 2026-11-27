@@ -606,7 +606,7 @@ def bundle(yes=False):
     for n in ("log.jsonl", "board.jsonl"):
         try: parts[n] = scrub("".join(open(os.path.join(root, n), errors="replace").readlines()[-500:]))[-150000:]
         except OSError: pass
-    st = installed_state(); body = json.dumps({"install": st["install"], "version": version(), "type": "bundle", "files": parts}).encode()
+    st = installed_state(); body = json.dumps({"install": st["install"], "version": installed_version(), "type": "bundle", "files": parts}).encode()
     bd = os.path.join(rdir(), "bundles"); os.makedirs(bd, exist_ok=True)
     name = os.path.join(bd, time.strftime("%y%m%d-%H%M%S") + ".json")
     with open(name, "wb") as f: f.write(body)

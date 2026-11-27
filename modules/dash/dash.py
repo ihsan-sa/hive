@@ -2436,20 +2436,45 @@ def _ran_step(c):
     return None
 
 
-_cuts = [None, {}]   # ((mtime, size) of LOG, {interrupt post id: (agent, time its step was stopped)})
+_cuts = {"log": None, "ino": None, "pos": 0, "got": {}}   # the log read so far, and {interrupt post id: (agent, time its step was stopped)}
+_cuts_lock = threading.Lock()
 
 
 def ran_cuts():
-    """E203n: the steps the person's Stop and send ended, from the starter's log. Only a step it saw stop counts."""
-    try: st = LOG.stat(); key = (str(LOG), st.st_mtime, st.st_size)
-    except OSError: return {}
-    if _cuts[0] != key:
-        got = {}
-        for e in jlines(LOG, 4 * 1024 * 1024):
-            if isinstance(e, dict) and e.get("event") == "interrupt" and e.get("did") == "stopped the running command" and e.get("post") and ts(e.get("at")):
-                got[e["post"]] = (str(e.get("name") or ""), ts(e["at"]))
-        _cuts[0], _cuts[1] = key, got
-    return _cuts[1]
+    """E203n: the steps the person's Stop and send ended, from the starter's log. Only a step it saw stop counts.
+    E203o: each stop is saved (state/cuts.json) so its step keeps its place however far the log has grown, and only the lines
+    added since the last read are read."""
+    try: st = LOG.stat()
+    except OSError: st = None
+    with _cuts_lock:
+        c, saved = _cuts, STATE / "cuts.json"
+        if c["log"] != str(LOG):
+            d = jload(saved, {})
+            if not isinstance(d, dict) or d.get("log") != str(LOG): d = {}
+            c.update(log=str(LOG), ino=d.get("ino"), pos=d.get("pos") or 0, kept=d.get("pos") or 0, got={k: tuple(v) for k, v in (d.get("cuts") or {}).items()})
+        if st is None: return c["got"]
+        if st.st_ino != c["ino"] or st.st_size < c["pos"]: c.update(ino=st.st_ino, pos=0)   # a new or cut-down log: read it from the top; the stops already saved stay
+        if st.st_size == c["pos"]: return c["got"]
+        got, pos, rest = dict(c["got"]), c["pos"], b""
+        try:
+            with open(LOG, "rb") as fh:
+                fh.seek(pos)
+                while chunk := fh.read(4 * 1024 * 1024):
+                    *lines, rest = (rest + chunk).split(b"\n")
+                    for ln in lines:
+                        pos += len(ln) + 1
+                        if b'"interrupt"' not in ln: continue
+                        try: e = json.loads(ln)
+                        except ValueError: continue
+                        if isinstance(e, dict) and e.get("event") == "interrupt" and e.get("did") == "stopped the running command" and e.get("post") and ts(e.get("at")):
+                            got[str(e["post"])] = (str(e.get("name") or ""), ts(e["at"]))
+        except OSError: return c["got"]
+        new, c["pos"], c["got"] = got != c["got"] or pos - c.get("kept", 0) > 1024 * 1024, pos, got   # a half-written last line is left for the next read
+        if new:
+            try:
+                tmp = saved.with_name("cuts.json.tmp"); tmp.write_text(json.dumps({"log": c["log"], "ino": c["ino"], "pos": pos, "cuts": got})); os.replace(tmp, saved); c["kept"] = pos
+            except OSError: pass
+        return got
 
 
 def _ran_after_cut(calls, who, until=None):
@@ -3318,12 +3343,12 @@ FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcoun
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
 GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read", "/api/ran": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/work-tiers": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/subagents": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
-           "/api/config": "config", "/api/export": "config", "/api/modules": "modules", "/api/connectors": "modules", "/api/shops": "logins", "/api/mcp-url": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
+           "/api/config": "config", "/api/export": "config", "/api/modules": "modules", "/api/connectors": "modules", "/api/shops": "logins", "/api/mcp-url": "modules", "/api/mcp-try": "modules", "/api/voice": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/buy": "logins", "/api/orders": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/shop-signin": "logins", "/api/shop-signin/frame": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/kb/wipe": "files", "/api/kb/copies": "files", "/api/progress": "read", "/api/checklist": "read", "/api/goals": "read", "/api/box-sent": "post", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files", "/api/docs": "files", "/api/docs/doc": "files", "/api/docs/page": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/kb/wipe": "files", "/api/kb/putback": "files", "/api/docs/notes": "files", "/api/approval": "stop", "/api/tier": "tier", "/api/work-tiers": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/side-ask": "post", "/api/door": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/default-model": "config", "/api/starter": "config",
-            "/api/module": "modules", "/api/mcp-url": "modules", "/api/voice": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/kb/save": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
+            "/api/module": "modules", "/api/mcp-url": "modules", "/api/mcp-try": "modules", "/api/voice": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/kb/save": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/buy": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/shop-signin": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/mcp-url", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
 
@@ -3331,8 +3356,17 @@ GET_CAP["/api/tip"] = "read"
 POST_CAP["/api/tip-dismiss"] = "post"
 POST_CAP["/api/away-dismiss"] = "post"
 GET_CAP["/api/away-banner"] = "read"
+GET_CAP["/api/outbox"] = GET_CAP["/api/outbox/file"] = POST_CAP["/api/outbox"] = "files"   # the Outbox page (outbox.py): the owner's, like Mail
 
 _DOCS = []
+_OUTBOX = []
+def outbox_mod():
+    """outbox.py, loaded once: the Outbox page's view, thumbnails, Reject and Auto off (all through hive-out)."""
+    if not _OUTBOX:
+        spec = importlib.util.spec_from_file_location("h2_outbox", Path(__file__).resolve().with_name("outbox.py")); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); _OUTBOX.append(m)
+    return _OUTBOX[0]
+
+
 def docs_mod():
     """docs.py, loaded once: the Documents page's list, pages and notes."""
     if not _DOCS:
@@ -6899,6 +6933,64 @@ def _sandboxed():
     return v is not None and v.get("sandbox", "on") != "bare"
 
 
+MCP_TRIES = threading.BoundedSemaphore(2)   # each is a tool server of its own, for up to a few minutes
+
+
+def _mcptool():
+    sys.path.insert(0, str(HOME / "core")); import mcptool
+    return mcptool
+
+
+def mcp_try_view(may):
+    """GET /api/mcp-try: your own connected tool servers (`hive mcp connect`), for Settings › Connectors to try one. Runs nothing."""
+    try:
+        m = _mcptool(); tools = m.connected(); boxed = m.boxed_install()
+    except Exception as e:   # a Hive from before the command, or an mcp.json that doesn't parse
+        return {"tools": [], "may": may, "why": str(e)[:300] if (HOME / "core" / "mcptool.py").exists() else ""}
+    if not may: tools = [{"name": t["name"]} for t in tools]   # where its code is: for whoever may run it
+    else:
+        for t in tools:
+            if t.get("from", "").startswith(f"{HOME}/"): t["from"] = "~" + t["from"][len(str(HOME)):]
+    return {"tools": tools, "may": may, "sandboxed": boxed}
+
+
+MCP_RUNS, MCP_RUNS_LOCK = {}, threading.Lock()   # run id -> the Event that stops it; a stop that came before its call waits here, set
+
+
+def mcp_try_run(rid):
+    with MCP_RUNS_LOCK:
+        for old in [k for k, e in MCP_RUNS.items() if e.is_set() and k != rid][:-32]: del MCP_RUNS[old]
+        return MCP_RUNS.setdefault(rid, threading.Event())
+
+
+def mcp_try(d):
+    """POST /api/mcp-try {"do": "tools", "name"} or {"do": "call", "name", "tool", "args": {}, "run"?}; {"do": "stop", "run"} ends that call.
+    mcptool.tryit runs it, in the sandbox where there is one."""
+    rid = d.get("run")
+    if rid is not None and not (isinstance(rid, str) and re.fullmatch(r"[A-Za-z0-9-]{8,64}", rid)): raise ValueError("that isn't a run")
+    if d.get("do") == "stop":
+        if not rid: raise ValueError("stop needs the run")
+        mcp_try_run(rid).set()
+        return {"ok": True}
+    do, args = d.get("do"), d.get("args", {})
+    if do not in ("tools", "call") or not isinstance(d.get("name"), str): raise ValueError("do: tools or call, with a name")
+    if do == "call" and (not isinstance(d.get("tool"), str) or not d["tool"] or not isinstance(args, dict)): raise ValueError("a call needs a tool and an object of arguments")
+    try: m = _mcptool()
+    except ImportError: raise ValueError("no connected tool has that name")   # a Hive from before the command: nothing was ever connected
+    if not MCP_TRIES.acquire(blocking=False): raise ValueError("two tools are being tried already: wait for one to finish")
+    try:
+        t = time.monotonic()
+        stop = mcp_try_run(rid) if rid else None
+        if stop and stop.is_set(): res = {"error": "Stopped before it started.", "stopped": True}
+        else: res = m.tryit(d["name"], d["tool"] if do == "call" else None, args, **({"stop": stop} if stop else {}))
+        return {**res, "seconds": round(time.monotonic() - t, 1)}
+    except (m.Bad, OSError) as e: raise ValueError(str(e))
+    finally:
+        if rid:
+            with MCP_RUNS_LOCK: MCP_RUNS.pop(rid, None)
+        MCP_TRIES.release()
+
+
 def mcp_url_check(url):
     """An https address with a host, or plain http on this computer only (a test server, and only with the sandbox off). No user:password inside it."""
     if not isinstance(url, str) or not url.strip(): raise ValueError("paste the server's address")
@@ -8182,7 +8274,7 @@ def serve(port):
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
             elif u.path == "/api/brand/logo":
                 self.send_logo()
-            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/connectors", "/api/shops", "/api/voice", "/api/signin", "/api/plans", "/api/secrets", "/api/slack-door", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/buy", "/api/orders", "/api/accounts", "/api/design", "/api/shop-signin", "/api/shop-signin/frame", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history", "/api/mail", "/api/export") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/connectors", "/api/mcp-try", "/api/shops", "/api/voice", "/api/signin", "/api/plans", "/api/secrets", "/api/slack-door", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/buy", "/api/orders", "/api/accounts", "/api/design", "/api/shop-signin", "/api/shop-signin/frame", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history", "/api/mail", "/api/export") and self.route == "open":
                 self.send_error(404)
             elif u.path == "/api/kb/home":
                 self.send(json.dumps(kb_home()).encode(), J)
@@ -8207,6 +8299,13 @@ def serve(port):
                 self.send_kb_raw(q.get("path", [""])[0], q.get("view") == ["1"])
             elif u.path == "/api/mail":
                 self.send(json.dumps(mail_view()).encode(), J)
+            elif u.path in ("/api/outbox", "/api/outbox/file"):   # the Outbox page (outbox.py); never on the open dash
+                if self.route == "open": return self.send_error(404)
+                if u.path == "/api/outbox": return self.send(json.dumps(outbox_mod().view()).encode(), J)
+                try: data, ct = outbox_mod().thumb(q.get("id", [""])[0], q.get("n", [""])[0])
+                except ValueError as e: return self.deny(404, str(e))
+                except (OSError, subprocess.SubprocessError): return self.deny(502, "the file can't be read")
+                self.send(data, ct, cache="private, max-age=3600")
             elif u.path in ("/api/docs", "/api/docs/doc", "/api/docs/page"):   # Documents (docs.py): the library's PDFs with the person's notes
                 try:
                     if u.path == "/api/docs": self.send(json.dumps(docs_mod().documents()).encode(), J)
@@ -8258,11 +8357,14 @@ def serve(port):
             elif u.path == "/api/modules":
                 self.send(json.dumps(modules_view()).encode(), J)
             elif u.path == "/api/shops":   # read-only (shops.py): may start its own read-only sign-in checks in the background
-                self.send(json.dumps(_shops().view()).encode(), J)
+                f = Path(__file__).resolve().with_name("shops.py")   # this machine's shops (integrations step F); the release leaves it out
+                self.send(json.dumps(_shops().view() if f.exists() else {"rows": []}).encode(), J)
             elif u.path == "/api/connectors":   # read-only (CONNECTORS.md): there is no POST twin, and nothing here runs `conn`
                 self.send(json.dumps(connectors_view(fresh=q.get("fresh") == ["1"], secrets="secrets" in self.can)).encode(), J)
             elif u.path == "/api/mcp-url":
                 self.send(json.dumps(mcp_url_view()).encode(), J)
+            elif u.path == "/api/mcp-try":   # names only: running a tool is the POST
+                self.send(json.dumps(mcp_try_view(self.full_signin())).encode(), J)
             elif u.path == "/api/voice":
                 self.send(json.dumps(voice_view()).encode(), J)
             elif u.path == "/api/signin":
@@ -8404,7 +8506,7 @@ def serve(port):
                 if not 0 < n <= LOGO_MAX: return self.deny(413, "a logo can be up to 2 MB")
                 try: return self.send(json.dumps(set_logo(self.rfile.read(n))).encode(), "application/json")
                 except (ValueError, OSError) as e: return self.deny(400, str(e))
-            if not 0 < n < ({"/api/post": 2**20, "/api/feedback": 2**20, "/api/issue-link": 2**16, "/api/plan": 2**19, "/api/kb/save": 2**20, "/api/secret": 2**18, "/api/door": 2**18, "/api/focus": 2**15}.get(u.path) or (4096 if self.route != "open" else 1024)): return self.send_error(403)
+            if not 0 < n < ({"/api/post": 2**20, "/api/feedback": 2**20, "/api/issue-link": 2**16, "/api/plan": 2**19, "/api/kb/save": 2**20, "/api/secret": 2**18, "/api/door": 2**18, "/api/focus": 2**15, "/api/mcp-try": 2**17}.get(u.path) or (4096 if self.route != "open" else 1024)): return self.send_error(403)
             try: d = json.loads(self.rfile.read(n))
             except ValueError: return self.send_error(400)
             if not isinstance(d, dict): return self.send_error(400)
@@ -8434,6 +8536,11 @@ def serve(port):
                 except KeyError: return self.deny(404, "that isn't here, or isn't shown")
                 except ValueError as e: return self.deny(409 if str(e).startswith("this file changed") else 400, str(e))
                 except OSError as e: return self.deny(500, "couldn't write the file: " + (e.strerror or "error"))
+            if u.path == "/api/outbox":   # Reject and Auto off act at once; Approve and Auto on open root's card, never this route
+                if self.route == "open": return self.send_error(404)
+                try: return self.send(json.dumps(outbox_mod().act(d)).encode(), J)
+                except ValueError as e: return self.deny(400, str(e))
+                except (OSError, subprocess.SubprocessError): return self.deny(502, "hive-out couldn't run")
             if u.path == "/api/docs/notes":
                 try: return self.send(json.dumps(docs_mod().notes_do(d)).encode(), J)
                 except KeyError as e: return self.deny(404, str(e))
@@ -8450,7 +8557,7 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/default-model", "/api/starter", "/api/module", "/api/voice", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/mcp-url", "/api/signin-codex", "/api/account-key", "/api/design", "/api/shop-signin", "/api/brand", "/api/slack-door"):
+            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/default-model", "/api/starter", "/api/module", "/api/voice", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/mcp-url", "/api/mcp-try", "/api/signin-codex", "/api/account-key", "/api/design", "/api/shop-signin", "/api/brand", "/api/slack-door"):
                 try:
                     if u.path == "/api/post" and isinstance(d.get("page"), dict): res = page_edit_post(d.get("page"), d.get("thread"), limited="config" not in self.can)
                     elif u.path == "/api/post" and stale_word(d.get("text"), d.get("plain_word"), word_shell("word_card")): raise ValueError(STALE_WORD)
@@ -8490,6 +8597,9 @@ def serve(port):
                     elif u.path == "/api/settings": res = set_settings(d)
                     elif u.path == "/api/import": res = do_import(d)
                     elif u.path == "/api/mcp-url": res = mcp_oauth_start(d.get("name"), self.headers.get("Host")) if d.get("do") == "signin" else mcp_url_do(d)
+                    elif u.path == "/api/mcp-try":   # runs a connected tool's code with the person's arguments: their full sign-in only
+                        if not self.full_signin(): return self.deny(403, "trying a tool needs a full sign-in")
+                        res = mcp_try(d)
                     elif u.path == "/api/share-copy": res = share_copy()
                     elif u.path == "/api/share-pack": res = share_pack()
                     elif u.path == "/api/draft": res = draft_do(d)

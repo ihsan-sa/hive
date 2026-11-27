@@ -7,13 +7,13 @@
 // Where a mark sits is kept in this browser (localStorage "sc.anchors": the post, the offset and the words), and the first
 // message of the side thread carries the quote too, so another browser still shows the pin and the quote, finding the words again.
 import { h, tr, morph } from "../core/dom.js";
-import { S, post, poll, subscribe, can } from "../core/store.js";
+import { S, subscribe, can, jget, OUTSIDE } from "../core/store.js";
 import { threadHref } from "../core/router.js";
-import { displayText, chatText, btwText, btwParent, threadTitle } from "../core/model.js";
-import { ago, short, clock } from "../core/format.js";
+import { displayText, btwText, btwParent, threadTitle, postSource, inConversation } from "../core/model.js";
+import { ago, short, clock, dayName, now, MIN } from "../core/format.js";
 import { button, icon } from "./kit.js";
-import { markdown } from "./markdown.js";
-import { jump } from "./message.js";
+import { jump, message, messageHead, messageReceipt, localMessage, draftMessage, marksSig } from "./message.js";
+import { composer, sideKey, sideTail, releaseSide, outFor, outSig, actions, dropZone, moveDraft } from "./composer.js";
 import { openPreview, closePreview, previewKey, fullBtn } from "./preview.js";
 import { textOf, selected, askQuote } from "../rich/ask.js";
 
@@ -142,20 +142,13 @@ function quoteBlock(a) {
 }
 
 // ---- opening one in the side panel ----
-const PENDING = new Map();   // thread -> {q, n}: a message sent and not on the board yet (shown until the thread has more than n posts)
-const DRAFT = new Map();      // thread (or "new:" + main) -> what's typed and not sent
 const OPENQ = new Set();      // threads whose quote is shown in full
-const ERR = new Map();         // thread (or "new:" + main) -> why the last send failed
-const FLY = new Set();         // thread (or "new:" + main) -> a message on its way: one at a time, wherever the panel is
-/** The key a chat's draft, error and sending are kept under: a new side chat's is its conversation's, so each has its own. */
-const keyOf = it => (it.chat === "new" ? "new:" + it.main : it.chat);
 let FLASH = null;
 const itemOf = (th, main) => ({ chat: th, main, name: tr("Side chat") });
 
-/** Open side thread `th` of `main` in the side panel; `pending` is the question just sent, shown until the board has it. */
-export function openSideChat(th, { main = btwParent(th), pending } = {}) {
+/** Open side thread `th` of `main` in the side panel. */
+export function openSideChat(th, { main = btwParent(th) } = {}) {
   if (!main) return;
-  if (pending) PENDING.set(th, { q: pending, n: 0 });
   const kids = sideChats(main), items = kids.map(t => itemOf(t, main));
   let i = kids.indexOf(th);
   if (i < 0) { items.push(itemOf(th, main)); i = items.length - 1; }
@@ -171,39 +164,102 @@ export function newSideChat(main, anchor) {
 /** The list of main's side chats, with New side chat and Draw a box. */
 export function openSideList(main) { if (main) openPreview([{ chat: "list", main, name: tr("Side chats") }], 0); }
 
-let cur = null;   // {it, api, unsub, sig}
+let cur = null;   // {it, api, unsub, sig, nodes, fast}
 /** Draw item `it` in the panel (preview.js show): api is the panel's head, body, foot and what it can do. */
 export function showChat(it, api) {
-  if (cur && cur.unsub) cur.unsub();
-  cur = { it, api, sig: "" };
+  if (cur) drop();
+  cur = { it, api, sig: "", nodes: new Map(), drafts: null, fast: null };
   api.root.setAttribute("aria-label", tr(it.chat === "list" ? "Side chats" : "Side chat"));
-  if (it.chat === "list") { api.foot.hidden = true; api.foot.replaceChildren(); }
-  else { api.foot.hidden = false; api.foot.replaceChildren(footer(it)); }
-  api.body.replaceChildren(h("div", { class: "sc" }));
+  api.body.replaceChildren();
   api.body.scrollTop = 0;
+  api.foot.replaceChildren();
+  api.foot.hidden = it.chat === "list";
+  if (it.chat === "list") releaseSide();
   draw(true);
-  cur.unsub = subscribe(() => { if (!api.alive()) { stop(); return; } draw(); });
-  if (it.chat !== "list" && !matchMedia("(pointer:coarse)").matches) setTimeout(() => { const ta = api.foot.querySelector("textarea"); if (ta && api.alive()) ta.focus({ preventScroll: true }); }, 0);
+  const fine = !matchMedia("(pointer:coarse)").matches;
+  drawFoot(fine);
+  cur.unsub = subscribe(() => { if (!api.alive()) { stop(); return; } draw(); drawFoot(); });
   paint();
 }
-function stop() { if (cur && cur.unsub) cur.unsub(); cur = null; paint(); }
+function drop() { if (cur.unsub) cur.unsub(); clearTimeout(cur.fast); cur = null; }
+function stop() { if (cur) { drop(); releaseSide(); } paint(); }
+/** Where a chat's draft, files and messages on their way are kept: a new side chat's under its conversation's own key. */
+const chatKey = it => (it.chat === "new" ? sideKey(it.main) : it.chat);
+// The foot is the main chat's own prompt box (composer.js): attach, mention, model, Markdown, drafts and Send work as they do there.
+function drawFoot(focus) {
+  if (!cur || cur.it.chat === "list") return;
+  if (!cur.api.alive()) return stop();
+  const { it, api } = cur, kind = it.anchor ? it.anchor.kind : null;
+  if (it.chat === "new") sideTail(sideKey(it.main), quoteBlock(it.anchor), it.anchor || null);
+  const ph = it.chat !== "new" ? "Ask a follow-up…" : kind === "box" ? "Ask about what's in the box…" : kind === "text" ? "Ask about the highlighted text…" : kind === "msg" ? "Ask about this message…" : "Ask a side question…";
+  const mine = cur;
+  const node = composer({ thread: chatKey(it), update: () => { if (cur === mine) { draw(); drawFoot(); } }, place: "side", placeholder: ph, autofocus: !!focus, onEsc: closePreview });
+  if (api.foot.firstChild) morph(api.foot.firstChild, node); else api.foot.append(node);
+}
+// A new side chat's first message is on the board (composer.js sends it and says where): its mark is kept, wherever the
+// panel is by now, and a panel still showing it goes on to its thread.
+addEventListener("cp:side", e => {
+  const { key, thread, about: an } = e.detail || {};
+  if (an) { const { kind, post: pid, who, at, len, raw, box } = an; AN[thread] = { kind, post: pid, who, at, len, raw, box, t: Date.now() }; saveAnchors(); }
+  // Another new side chat opened meanwhile (about something else) stays as it is.
+  if (!cur || cur.it.chat !== "new" || key !== sideKey(cur.it.main) || JSON.stringify(cur.it.anchor || null) !== JSON.stringify(an || null)) { paint(); return; }
+  const it = cur.it, typing = cur.api.foot.contains(document.activeElement);
+  moveDraft(key, thread);
+  it.chat = thread; it.name = tr("Side chat");
+  cur.api.mark(); draw(true); drawFoot(typing); paint();
+});
 
 function draw(force) {
-  if (!cur || !cur.api.alive()) return stop();
+  if (!cur) return;
+  if (!cur.api.alive()) return stop();
   const { it, api } = cur;
-  const th = it.chat, d = th !== "new" && th !== "list" ? S.threads.get(th) : null, posts = d ? d.posts : [];
+  const th = it.chat, list = th === "list", d = !list && th !== "new" ? S.threads.get(th) : null, posts = d ? d.posts : [];
   const kids = sideChats(it.main);
-  const k = keyOf(it);
-  const sig = [th, posts.length, posts.length && posts.at(-1).id, posts.length && (posts.at(-1).text || "").length, PENDING.has(k), ERR.get(k) || "", FLY.has(k), OPENQ.has(th), kids.length, th === "list" ? kids.map(t => (S.threads.get(t) || { posts: [] }).posts.length).join() : ""].join("|");
+  const out = list ? "" : outSig(chatKey(it));
+  const ds = list || th === "new" ? [] : draftsOf(th, posts);
+  const sig = [th, S.ver, marksSig(), posts.length, posts.length && posts.at(-1).id, posts.length && (posts.at(-1).text || "").length, out, draftSig(ds), OPENQ.has(th), kids.length, list ? kids.map(t => (S.threads.get(t) || { posts: [] }).posts.length).join() : ""].join("|");
+  if (!list && th !== "new") watchDrafts(th);
   if (!force && sig === cur.sig) return;
   cur.sig = sig;
   api.head.replaceChildren(headOf(it, kids));
   const box = api.body, atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
-  const wrap = box.firstChild, next = th === "list" ? listOf(it, kids) : chatOf(it, posts);
-  if (wrap) morph(wrap, next); else box.append(next);
-  if (th !== "list" && (atEnd || force)) box.scrollTop = box.scrollHeight;
-  const send = api.foot.querySelector(".sc-send"); if (send) send.toggleAttribute("disabled", FLY.has(k));
-  const err = api.foot.querySelector(".sc-err"); if (err) { err.textContent = ERR.get(k) || ""; err.hidden = !ERR.get(k); }
+  if (list) { const next = listOf(it, kids); if (box.firstChild) morph(box.firstChild, next); else box.append(next); return; }
+  chatOf(it, posts, ds);
+  if (atEnd || force) box.scrollTop = box.scrollHeight;
+}
+
+// ---- a reply being written here, and the code its run has run, as under the main chat's messages (comms.js syncDrafts) ----
+const posted = (a, posts) => a.draft && posts.some(p => p.from === a.name && p.t > now() - 10 * MIN && String(p.text || "").includes(a.draft.text.trim().slice(0, 60)));
+function draftsOf(th, posts) {
+  const fast = cur.drafts && cur.drafts.th === th ? cur.drafts.ds : [];
+  return [...fast.map(f => ({ ...(S.running?.get(f.name) || {}), name: f.name, draft: f.draft, steps: f.steps || [], more: f.more || 0 })),
+    ...(S.live ? S.live.agents : []).filter(a => a.alive !== false && a.draft && a.draft.thread === th && !fast.some(f => f.name === a.name))]
+    .map(a => (posted(a, posts) ? { ...a, draft: null } : a)).filter(a => a.draft || (a.steps && a.steps.length));
+}
+const draftSig = ds => ds.map(a => a.name + ":" + (a.draft ? a.draft.text.length : "-") + ":" + (a.steps || []).map(s => (s.running ? "r" : "d") + (s.out || "").length).join("/")).join();
+/** While a question waits for its reply, a reply is being written or an agent works here, read just the drafts several times a second. */
+function watchDrafts(th) {
+  const mine = cur;
+  if (mine.fast || !can("read")) return;
+  const wait = () => {
+    if (cur !== mine || mine.it.chat !== th) return 0;
+    const ps = (S.threads.get(th) || { posts: [] }).posts, last = ps.at(-1);
+    if (last && last.from === "person" && last.t > now() - MIN) return 100;
+    if ((mine.drafts && mine.drafts.ds.some(x => x.draft)) || (S.live ? S.live.agents : []).some(a => a.alive !== false && a.draft && a.draft.thread === th)) return 200;
+    if ((S.live ? S.live.agents : []).some(a => a.alive !== false && a.thread === th) || (mine.drafts && mine.drafts.ds.length)) return 500;
+    return 0;
+  };
+  if (!wait()) { if (mine.drafts) { mine.drafts = null; queueMicrotask(() => { if (cur === mine) draw(); }); } return; }
+  const tick = async () => {
+    if (cur !== mine || mine.it.chat !== th) return;
+    if (!mine.api.alive()) return stop();
+    try { const ds = await jget("/api/drafts?steps=1&thread=" + encodeURIComponent(th)); if (cur !== mine || mine.it.chat !== th) return; mine.drafts = { th, ds: Array.isArray(ds) ? ds : [] }; draw(); } catch (e) { /* the 1.5 s poll still carries drafts */ }
+    if (cur !== mine) return;
+    const ms = wait();
+    if (ms) mine.fast = setTimeout(tick, ms);
+    else { mine.fast = null; mine.drafts = null; draw(); }
+  };
+  mine.fast = setTimeout(tick, 0);
 }
 
 function headOf(it, kids) {
@@ -227,17 +283,27 @@ function headOf(it, kids) {
       button("Close (Esc)", closePreview, { kind: "icon", icon: "close", size: "s", cls: "pv-x" })));
 }
 
-// The panel's body for one side chat: what it is about, then the messages.
-function chatOf(it, posts) {
+// The panel's body for one side chat: what it is about, then the messages, drawn as the main chat draws them (ui/message.js).
+const GROUP = 10 * MIN;
+const sameSource = (a, b) => { const x = postSource(a), y = postSource(b); return (x && x.name + x.how) === (y && y.name + y.how); };
+function chatOf(it, posts, ds) {
   const th = it.chat, f = th !== "new" ? firstOf(th) : null, a = th === "new" ? it.anchor : anchorOf(th);
   const quote = (f && f.quote) || (a && a.quote) || (a && a.raw) || "", kind = (f && f.kind) || (a && a.kind), postId = (f && f.post) || (a && a.post);
   const who = (f && f.who) || (a && a.who) || "";
-  const pk = keyOf(it), pend = PENDING.get(pk);
-  if (pend && posts.length > pend.n) PENDING.delete(pk);
-  const still = PENDING.get(pk), last = posts.at(-1);
   const long = quote.length > 280 || quote.split("\n").length > 4;
   const label = kind === "box" ? "In the box" : kind === "msg" ? "About" : kind === "text" ? "Highlighted" : null;
-  return h("div", { class: "sc" },
+  const key = chatKey(it), pend = outFor(key), box = cur.api.body;
+  let wrap = box.firstChild;
+  if (!wrap || wrap.dataset.key !== "sc:" + key) {
+    cur.nodes.clear();
+    wrap = h("div", { class: "sc", "data-key": "sc:" + key, ...dropZone(key) },
+      h("div", { class: "sc-top" }),
+      h("div", { class: "cm-msgs sc-msgs sc-log", role: "log", "aria-live": "polite", "aria-label": "Side chat messages" }),
+      h("div", { class: "sc-after" }));
+    box.replaceChildren(wrap);
+  }
+  const [top, log, after] = wrap.children;
+  morph(top, h("div", { class: "sc-top" },
     kind ? h("section", { class: "sc-about", "data-kind": kind, "data-key": "about", "data-open": OPENQ.has(th) ? "" : null },
       h("div", { class: "sc-about-h" },
         icon(kind === "box" ? "marquee" : kind === "msg" ? "chat" : "pin"),
@@ -245,75 +311,52 @@ function chatOf(it, posts) {
         postId ? h("button", { type: "button", class: "btn sc-show", "data-size": "s", "data-kind": "quiet", onclick: () => showInChat(th === "new" ? null : th, postId, a) }, "Show in chat") : null),
       quote ? h("blockquote", { class: "sc-q" }, kind === "msg" ? short(quote.replace(/\s+/g, " "), OPENQ.has(th) ? 600 : 200) : quote) : null,
       quote && long ? h("button", { type: "button", class: "sc-more", onclick: () => { OPENQ.has(th) ? OPENQ.delete(th) : OPENQ.add(th); draw(); } }, OPENQ.has(th) ? "Show less" : "Show all") : null)
-      : th === "new" ? h("section", { class: "sc-about", "data-kind": "all", "data-key": "about" }, h("div", { class: "sc-about-h" }, icon("chat"), h("span", null, "About this conversation as a whole"))) : null,
-    h("div", { class: "sc-log", role: "log", "aria-live": "polite", "aria-label": "Side chat messages", "data-key": "log:" + th },
-      posts.map((p, k) => bubble(p, k === 0 && f ? f.q : null)),
-      still ? h("div", { class: "sc-b", "data-me": "", "data-key": "pend", "data-pend": "" }, h("div", { class: "sc-bt" }, h("p", null, still.q)), h("span", { class: "meta sc-st" }, "Sending…")) : null,
-      (last && last.from === "person") || (still && th !== "new") || (still && !posts.length) ? h("p", { class: "sc-wait meta", "data-key": "wait" }, h("span", { class: "sc-dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")), "Thinking…") : null,
-      !posts.length && !still ? h("div", { class: "sc-empty", "data-key": "empty" },
-        h("p", null, kind ? "Ask anything about this part of the conversation." : "Ask anything about this conversation."),
-        h("p", { class: "meta" }, "A helper reads the conversation and answers here, so the main chat isn't interrupted. You can keep asking follow-ups.")) : null));
+      : th === "new" ? h("section", { class: "sc-about", "data-kind": "all", "data-key": "about" }, h("div", { class: "sc-about-h" }, icon("chat"), h("span", null, "About this conversation as a whole"))) : null));
+  logOf(log, th, posts, f, pend, ds);
+  const last = posts.at(-1), waiting = !ds.length && ((last && last.from === "person") || pend.some(x => x.state !== "failed"));
+  morph(after, h("div", { class: "sc-after" },
+    waiting ? h("p", { class: "sc-wait meta", "data-key": "wait" }, h("span", { class: "sc-dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")), "Thinking…") : null,
+    !posts.length && !pend.length ? h("div", { class: "sc-empty", "data-key": "empty" },
+      h("p", null, kind ? "Ask anything about this part of the conversation." : "Ask anything about this conversation."),
+      h("p", { class: "meta" }, "A helper reads the conversation and answers here, so the main chat isn't interrupted. You can keep asking follow-ups.")) : null));
 }
-function bubble(p, q) {
-  const me = p.from === "person";
-  return h("div", { class: "sc-b", "data-me": me ? "" : null, "data-key": p.id },
-    me ? null : h("span", { class: "sc-who" }, icon("chat"), p.from),
-    h("div", { class: "sc-bt md" }, me ? h("p", null, q != null ? q : btwText(displayText(p))) : markdown(chatText(p))),
-    h("span", { class: "meta sc-st", title: new Date(p.t).toLocaleString() }, clock(p.t)));
-}
-
-function footer(it) {
-  const kind = it.anchor ? it.anchor.kind : null;
-  const ph = it.chat !== "new" ? "Ask a follow-up…" : kind === "box" ? "Ask about what's in the box…" : kind === "text" ? "Ask about the highlighted text…" : kind === "msg" ? "Ask about this message…" : "Ask a side question…";
-  const fit = ta => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 180) + "px"; };
-  const ta = h("textarea", { class: "input sc-in", rows: 1, placeholder: ph, "aria-label": ph.replace("…", ""), enterkeyhint: "send",
-    oninput: (e, el) => { DRAFT.set(keyOf(it), el.value); fit(el); },
-    onkeydown: (e, el) => {
-      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(el); }
-      else if (e.key === "Escape" && !el.value) { e.preventDefault(); closePreview(); }
-    } });
-  ta.value = DRAFT.get(keyOf(it)) || "";
-  queueMicrotask(() => fit(ta));
-  return h("div", { class: "sc-f" },
-    h("p", { class: "sc-err", role: "alert", hidden: true }),
-    h("div", { class: "sc-row" }, ta,
-      button("Send (Enter)", () => send(ta), { kind: "icon", icon: "arrow-up", cls: "sc-send", tone: "accent" })),
-    h("p", { class: "meta sc-tip" }, it.chat === "new" ? "Enter sends · Shift+Enter for a new line · the main chat isn't interrupted" : "Enter sends · Shift+Enter for a new line"));
-}
-
-async function send(ta) {
-  if (!cur) return;
-  const it = cur.it, raw = ta.value, q = raw.trim(), k = keyOf(it);
-  if (!q || FLY.has(k)) return;   // one message at a time per side chat, even if the panel was closed and opened again meanwhile
-  const was = it.chat, d = was !== "new" ? S.threads.get(was) : null;
-  FLY.add(k); ERR.delete(k);
-  let nk = k;
-  try {
-    if (was === "new") {
-      PENDING.set(k, { q, n: 0 }); draw(true);
-      const res = await post("/api/post", { text: "/btw " + q + quoteBlock(it.anchor), thread: it.main });
-      if (!res || !res.thread) throw Error("the side chat didn't start; try again");
-      PENDING.delete(k);
-      if (it.anchor) { const { kind, post: pid, who, at, len, raw: words, box } = it.anchor; AN[res.thread] = { kind, post: pid, who, at, len, raw: words, box, t: Date.now() }; saveAnchors(); }
-      PENDING.set(res.thread, { q, n: 0 });
-      it.chat = res.thread; it.name = tr("Side chat"); nk = res.thread;
-      if (cur && cur.it === it) { cur.api.mark(); const ph = "Ask a follow-up…"; ta.placeholder = tr(ph); ta.setAttribute("aria-label", tr("Ask a follow-up")); const tip = cur.api.foot.querySelector(".sc-tip"); if (tip) tip.textContent = tr("Enter sends · Shift+Enter for a new line"); }
-    } else {
-      PENDING.set(k, { q, n: d ? d.posts.length : 0 }); draw(true);
-      await post("/api/post", { text: q, thread: was });
+/** The messages, then those on their way, then replies being written. A post's node stays (opened folds, a running page) while it says the same. */
+function logOf(log, th, posts, f, pend, ds) {
+  const want = [], keep = new Set();
+  let prev = null, day = null;
+  for (let k = 0; k < posts.length; k++) {
+    const p = posts[k];
+    if (p.ev) continue;
+    const d = dayName(p.t);
+    if (d !== day) { day = d; prev = null; const id = "d:" + d; let c = cur.nodes.get(id); if (!c) cur.nodes.set(id, c = { node: h("div", { class: "cm-day", "data-key": id }, h("span", null, d)) }); keep.add(id); want.push(c.node); }
+    // the first message is the question: its /btw and the quote under it are the card above
+    const shown = k === 0 && f ? { ...p, disp: f.q } : p;
+    const cont = !!prev && prev.from === p.from && !p.reply_to && p.t - prev.t < GROUP && prev.men.join() === p.men.join() && sameSource(prev, p);
+    prev = p;
+    const opts = { showThread: false, cont, side: true };
+    const sig = [(p.text || "").length, p.text === undefined ? "" : p.text.slice(-40), cont, (p.files || []).length, p.stopped || "", S.cut[p.id]?.did || "", shown.disp === undefined ? "" : shown.disp.length].join("|");
+    let c = cur.nodes.get(p.id);
+    if (!c) cur.nodes.set(p.id, c = { sig, node: message(shown, opts) });
+    else if (c.sig !== sig) { c.sig = sig; c.node = morph(c.node, message(shown, opts)); }
+    else if (OUTSIDE.has(p.from) || S.ver !== c.ver) {   // names and receipts change with no new post (comms.js refreshHead)
+      const head = c.node.querySelector(":scope > .msg-h, :scope > .msg-c > .msg-h"), rc = c.node.querySelector(":scope > .msg-rc, :scope > .msg-c > .msg-rc");
+      if (head) morph(head, inConversation(th, () => messageHead(shown, opts)));
+      if (rc && OUTSIDE.has(p.from)) morph(rc, messageReceipt(shown));
     }
-    // what was sent leaves the box; anything typed while it was sending stays
-    const now = DRAFT.has(k) ? DRAFT.get(k) : raw, rest = now.startsWith(raw) ? now.slice(raw.length).replace(/^\s+/, "") : now.trim() === q ? "" : now;
-    DRAFT.delete(k); if (rest) DRAFT.set(nk, rest);
-    if (ta.isConnected && cur && cur.it === it) { ta.value = rest; ta.style.height = "auto"; if (rest) ta.style.height = Math.min(ta.scrollHeight, 180) + "px"; }
-    poll();
-  } catch (e) {
-    PENDING.delete(k);
-    ERR.set(k, String(e && e.message || e));
+    c.ver = S.ver;
+    keep.add(p.id); want.push(c.node);
   }
-  FLY.delete(k);
-  if (cur) draw(true);
-  paint();
+  for (const x of pend) want.push(localMessage(x, actions));
+  for (const x of ds) want.push(inConversation(th, () => draftMessage(x)));
+  // lay them out in order, moving as little as can be: a moved node loses focus and a frame its page
+  const old = new Map([...log.children].filter(n => /^(local|draft):/.test(n.dataset.key || "")).map(n => [n.dataset.key, n]));
+  for (let i = 0; i < want.length; i++) {
+    const o = old.get(want[i].dataset.key);
+    if (o && o !== want[i]) want[i] = morph(o, want[i]);
+    if (log.children[i] !== want[i]) log.insertBefore(want[i], log.children[i] || null);
+  }
+  while (log.children.length > want.length) log.lastElementChild.remove();
+  for (const id of [...cur.nodes.keys()]) if (!keep.has(id)) cur.nodes.delete(id);
 }
 
 // The list of side chats: one row each, with New side chat and Draw a box above.
@@ -444,7 +487,7 @@ function watch() {
 }
 addEventListener("scroll", e => { if (e.target === document || (e.target.closest && e.target.closest("#main"))) paint(); }, { capture: true, passive: true });
 addEventListener("resize", () => { RCACHE.clear(); paint(); });
-addEventListener("previewchange", () => paint());
+addEventListener("previewchange", () => { if (cur && !cur.api.alive()) stop(); else paint(); });
 addEventListener("hashchange", () => { closeMenu(); stopBox(); paint(); });
 subscribe(() => paint());
 /** After the chat view renders (comms.js frame): watch its messages and draw the marks. */

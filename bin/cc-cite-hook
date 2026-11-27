@@ -12,6 +12,26 @@ POST = re.compile(r"\b(hive|hive)\s+post\b")
 WEB = re.compile(r"\b(curl|wget)\b[^|;&]*?https?://(?!(localhost|127\.[\d.]+|\[::1\]|0\.0\.0\.0)(?![\w.-]))", re.S)
 
 
+# A wait loop on `pgrep -f PATTERN` never ends: the shell running the loop has PATTERN in its own command line, so pgrep
+# always finds it. Known since 10-05 (kb/reaping.md) and still 2 of the 9 reaps on 11-26 (a5e17 `pgrep -f "c9_search.py
+# extract comparator"`, abb68 `pgrep -f "abb68-r1126c"`): each waited idle until the starter killed it 15 min later.
+# A bracket in the pattern (`[c]9_search`) can't match itself, so it passes.
+LOOPCOND = re.compile(r"\b(?:while|until)\b((?:(?!\bdo\b).)*?)\bdo\b", re.S)
+PGREPF = re.compile(r"\bpgrep\s+(?:-\w+\s+)*?-\w*f\w*\s+(?:-\w+\s+)*(?:\"([^\"]+)\"|'([^']+)'|([^\s;|&)'\"]+))")
+
+
+def self_wait(cmd):
+    """The pattern of a `while/until <pgrep -f PATTERN> ...; do` loop condition that would match its own shell, or None."""
+    cmd = cmd.replace("\\", "")  # `bash -c "while pgrep -f \"x\" ..."`: the escapes are not part of the pattern
+    for c in LOOPCOND.finditer(cmd):
+        if "<<" in cmd[:c.start()]: continue  # a loop in a heredoc (a script written to a file, `bash <<X`) is not on any argv
+        for m in PGREPF.finditer(c.group(1)):
+            pat = next(g for g in m.groups() if g)
+            # `^...` is anchored to the start of a command line, which for the loop's shell is bash, not the job
+            if not any(ch in pat for ch in "[$") and not pat.startswith("^"): return pat
+    return None
+
+
 # E47: a counted answer built on web reads must quote a page that states the count, or finish the tally with code.
 HEDGE = re.compile(r"\b(on my count|by my count|my (own )?(count|tally)|my rough count|a tie on my)\b|\b(about|roughly|around|approximately|nearly)\s+\d[\d,]*\s+(\w+\s+)?(each|laureates?|prizes?|winners?|people|countries|times|medals?|wins?|titles?)\b", re.I)
 
@@ -58,6 +78,12 @@ def main():
         d = json.load(sys.stdin)
         if d.get("tool_name") != "Bash": return 0
         cmd = (d.get("tool_input") or {}).get("command") or ""
+        if (pat := self_wait(cmd)):
+            r = once(cmd + "#selfwait", f"This loop waits on `pgrep -f {pat}`, but the shell running it has that text in its own command line, so pgrep always finds it "
+                     "and the loop never ends (the starter kills the idle wait after 15 min). Wait on the pid instead: `tail --pid=PID -f /dev/null`, "
+                     f"or put one letter of the pattern in brackets so it can't match itself: `pgrep -f '[{pat[0]}]{pat[1:]}'` (only if the plain text isn't elsewhere in the same command, as when it also starts the job). "
+                     "If you are sure it can't match itself, send the same command again and it goes through.")
+            if r: return r
         if not POST.search(cmd) or "--done-quiet" in cmd: return 0
         if SELFAUDIT.search(cmd):
             r = once(cmd + "#audit", "This post ends with a note about how you checked (\"didn't watch it play\", \"didn't open the pages\"). The reader takes it as your note to yourself. "

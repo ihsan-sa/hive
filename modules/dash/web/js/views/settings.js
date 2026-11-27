@@ -22,6 +22,7 @@ import { copyButton } from "../ui/refs.js";
 import { MODELS, POWER, accountsData, codexPart, forget, keysPart, loadPage, modelPart, pageData, powerPart, reading, rootNote, sandboxPart, sharePart } from "../ui/setup.js";
 import { forgetSecrets, secretParts, secretsLost } from "./secrets.js";
 import { kbWipeSection } from "../ui/kbwipe.js";
+import { tryBlock, loadTry, forgetTry } from "../ui/mcptry.js";
 
 // Everything the person is typing lives here, so a poll never loses it.
 // T: words typed here and not saved yet (the style, the Hive name). enter() clears F; T lasts the session, so coming back to Settings shows them
@@ -555,6 +556,7 @@ async function loadShops(ctx) {
 function shopsBlock() {
   if (!can("logins")) return null;
   const R = F.shops, here = ["127.0.0.1", "localhost"].includes(location.hostname);
+  if (R && !R.rows.length) return null;   // a Hive with no shops set up (the release has no shops.py): no block
   const row = x => {
     const [key, word] = SHOP_STATE[x.state] || SHOP_STATE.unknown;
     return h("li", { class: "lr conn-row", "data-key": x.id, "data-state": x.state },
@@ -576,6 +578,7 @@ async function loadConns(ctx, fresh) {
   try { F.conns = await jget("/api/connectors" + (fresh ? "?fresh=1" : "")); F.connsErr = null; } catch (e) { F.connsErr = e.message; }
   try { F.mcpUrls = await jget("/api/mcp-url"); } catch (e) { F.mcpUrls = null; }
   ctx.update();
+  await loadTry(ctx.update);
 }
 // A connector added by its address (E120a): a remote MCP server, as Claude's custom connectors. The list and mcp.json are dash.py's mcp_url_do;
 // the token goes into mcp.json for the agents and is never sent back, so a row says only that it has one.
@@ -700,7 +703,8 @@ function connectorsSection(ctx) {
     Buy && can("logins") ? Buy.sitesPart(ctx.update) : null,   // any site, signed in for `web` (ui/shop_signin.js sitesBlock)
     msg("conns"),   // above the list: after Add the line shows where the person is looking, not under 24 rows
     C == null ? (F.connsErr ? [empty(`Couldn't read the connectors: ${F.connsErr}`, { kind: "error" }), button("Try again", () => { F.connsErr = null; ctx.update(); return loadConns(ctx, true); }, { size: "s" })] : empty("Reading…", { kind: "loading" })) : body(),
-    mcpUrlBlock(ctx));
+    mcpUrlBlock(ctx),
+    tryBlock(ctx.update));
 }
 
 function modulesSection(ctx) {
@@ -977,7 +981,7 @@ export default {
   enter(ctx) { F.navShown = null; F.keysOpen = null; F.flash = {}; F.ed = null; F.lost = false; F.name = null; F.saved = null; if (!F.accessTyped) F.access = null;   /* unsaved access edits stay for the session (3.3.7) */ F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); loadConns(ctx); loadShops(ctx); readBuying(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
   },
   back(ctx) { loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); loadConns(ctx); loadShops(ctx); readBuying(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update); },   // what enter reads, without enter's clearing: what the person is typing stays
-  leave() { F.goTo = null; clearTimeout(shopTimer); shopTimer = null; F.shopTurn = (F.shopTurn || 0) + 1; F.shops = null; clearInterval(upTimer); upTimer = null; clearTimeout(voiceTimer); voiceTimer = null; forget(); forgetSecrets(); buyTurn++; if (Buy) Buy.forgetBuying(); F.connIn = {}; },   // tokens typed in Connectors but not saved don't outlive the screen
+  leave() { F.goTo = null; clearTimeout(shopTimer); shopTimer = null; F.shopTurn = (F.shopTurn || 0) + 1; F.shops = null; clearInterval(upTimer); upTimer = null; clearTimeout(voiceTimer); voiceTimer = null; forget(); forgetSecrets(); buyTurn++; if (Buy) Buy.forgetBuying(); F.connIn = {}; forgetTry(); },   // tokens typed in Connectors but not saved don't outlive the screen
   render(ctx) {
     if (S.app.can == null) return h("div", { class: "page", "data-width": "narrow" }, waiting(S.failed));   // /api/app hasn't answered: don't say "only in the app" yet
     if (!S.app.app) return h("div", { class: "page", "data-width": "narrow" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));
