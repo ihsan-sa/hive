@@ -58,6 +58,18 @@ const runInstaller = (file, args, label) => new Promise((resolve, reject) => {
 });
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const hiveProcs = () => { const out = ps(`Get-Process -Name Hive | Select-Object Id,Path | ConvertTo-Json -Compress`); if (!out) return []; const p = JSON.parse(out); return Array.isArray(p) ? p : [p]; };
+// A step that has not ended in s seconds fails, saying where it was and what was running (the Hive processes and the
+// app's two state files), instead of the job's silent 30-minute limit.
+const within = (what, p, s) => {
+  let t;
+  const late = new Promise((_, no) => { t = setTimeout(() => {
+    let procs, files = '';
+    try { procs = JSON.stringify(hiveProcs()); } catch (err) { procs = String(err.message || err); }
+    for (const f of ['hives.json', 'window-state.json']) { try { files += ` ${f}: ${fs.readFileSync(path.join(process.env.APPDATA || '', 'Hive', f), 'utf8').slice(0, 400)};`; } catch { files += ` no ${f};`; } }
+    no(new Error(`stuck for ${s} s at: ${what}; Hive processes: ${procs};${files}`));
+  }, s * 1000); });
+  return Promise.race([p, late]).finally(() => clearTimeout(t));
+};
 const entry = () => {
   const out = ps(`Get-ChildItem HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object { $_.DisplayName -like 'Hive*' -and $_.UninstallString } | Select-Object DisplayName,DisplayVersion,InstallLocation,UninstallString,DisplayIcon | ConvertTo-Json -Compress`);
   if (!out) return null;
@@ -93,10 +105,10 @@ async function ownPage(app) {
 }
 const frontPage = (app, at) => app.windows().find(p => at && p.url().split('#')[0] === at);
 async function openFromStart(start, shot) {
-  const app = await _electron.launch({ executablePath: start.Target, args: start.Args ? start.Args.split(/\s+/) : [], env: { ...process.env, HIVE_APP_TEST: '1' } });
+  const app = await within(`${shot}: starting ${start.Target}`, _electron.launch({ executablePath: start.Target, args: start.Args ? start.Args.split(/\s+/) : [], env: { ...process.env, HIVE_APP_TEST: '1' } }), 120);
   const page = await ownPage(app);
-  const where = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => (w.contentView.children.at(-1)?.webContents ?? w.webContents).getURL().split('#')[0])[0] || '').catch(() => '');
-  const title = () => page.evaluate(() => document.querySelector('#title')?.textContent || '').catch(() => '');
+  const where = () => within(`${shot}: asking the app what its window shows`, app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => (w.contentView.children.at(-1)?.webContents ?? w.webContents).getURL().split('#')[0])[0] || ''), 20).catch(() => '');
+  const title = () => within(`${shot}: reading the setup page's title`, page.evaluate(() => document.querySelector('#title')?.textContent || ''), 20).catch(() => '');
   const end = Date.now() + 4 * 60000; let at = '', t = '';
   for (;;) {
     at = await where(); t = await title();
@@ -104,9 +116,9 @@ async function openFromStart(start, shot) {
     await sleep(1000);
   }
   fs.mkdirSync('test/shots', { recursive: true });
-  await (frontPage(app, at) || page).screenshot({ path: `test/shots/${shot}-${process.arch}.png` }).catch(() => { });
+  await within(`${shot}: screenshot`, (frontPage(app, at) || page).screenshot({ path: `test/shots/${shot}-${process.arch}.png` }), 30).catch(() => { });
   const reached = hiveAt.test(at) ? `the Hive at ${at}` : t === 'Set up the Hive' ? 'the setup screen (no Hive on this machine)' : '';
-  if (!reached) { await app.close().catch(() => { }); throw new Error(`the installed app never showed the Hive or its setup screen (at "${at}", "${t}")`); }
+  if (!reached) { await within(`${shot}: closing the app`, app.close(), 60).catch(() => { }); throw new Error(`the installed app never showed the Hive or its setup screen (at "${at}", "${t}")`); }
   return { app, reached };
 }
 const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; return w ? w.getNormalBounds() : null; });
@@ -142,11 +154,11 @@ const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWin
   let kept = null;
   if (newer) {
     // The person moves and sizes the window; the app keeps that in its data folder when it closes.
-    await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setBounds({ x: 37, y: 23, width: 811, height: 577 }); });
+    await within('setupexe: moving and sizing the window', app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setBounds({ x: 37, y: 23, width: 811, height: 577 }); }), 30);
     await sleep(1500);
-    kept = await bounds(app);
+    kept = await within('setupexe: reading the window bounds', bounds(app), 30);
   }
-  await app.close();
+  await within('setupexe: closing the app', app.close(), 60);
   console.log(`ok setup-exe launch: the Start menu shortcut opens ${reached}`);
 
   if (newer) {
@@ -167,9 +179,9 @@ const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWin
     if (!start2) throw new Error('after the update, no Hive shortcut in the Start menu: ' + JSON.stringify(l2));
     for (const x of l2) if (real(x.Target) !== real(bin)) throw new Error(`after the update, ${x.Path} opens ${x.Target}, not the installed app`);
     ({ app, reached } = await openFromStart(start2, 'setupexe-update'));
-    const running = await app.evaluate(({ app: a }) => a.getVersion());
-    const now = await bounds(app);
-    await app.close();
+    const running = await within('setupexe-update: reading the version', app.evaluate(({ app: a }) => a.getVersion()), 30);
+    const now = await within('setupexe-update: reading the window bounds', bounds(app), 30);
+    await within('setupexe-update: closing the app', app.close(), 60);
     if (running !== newVersion) throw new Error(`the Start menu shortcut opens version ${running}, not ${newVersion}`);
     const off = kept && now ? Math.max(...['x', 'y', 'width', 'height'].map(k => Math.abs(kept[k] - now[k]))) : Infinity;
     if (off > 2) throw new Error(`the update lost the window's place: before ${JSON.stringify(kept)}, after ${JSON.stringify(now)}`);
