@@ -74,6 +74,8 @@ export default {
   "From the": "Dari modul",
   "Full name": "Nama lengkap",
   "Green": "Hijau",
+  "Hide drawings on messages": "Sembunyikan gambar pada pesan",
+  "Show drawings on messages": "Tampilkan gambar pada pesan",
   "Highlighter": "Stabilo",
   "Home": "Beranda",
   "Home, Work, Trip to Lisbon…": "Rumah, Kerja, Perjalanan ke Lisbon…",

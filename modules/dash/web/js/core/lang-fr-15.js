@@ -38,6 +38,8 @@ const SELF = {
   "Draw anywhere in the chat · circle something to ask about it": "Dessinez n'importe où dans la discussion · entourez quelque chose pour poser une question",
   "Eraser": "Gomme",
   "Erasing, not sent yet": "Effacement, pas encore envoyé",
+  "Hide drawings on messages": "Masquer les dessins sur les messages",
+  "Show drawings on messages": "Afficher les dessins sur les messages",
   "Highlighter": "Surligneur",
   "Ink discarded": "Encre effacée",
   "Ink on a message": "Encre sur un message",

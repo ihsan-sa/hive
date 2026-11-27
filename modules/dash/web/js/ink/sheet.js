@@ -378,7 +378,7 @@ function toInk(art, post) {
 export function goSheet(th, sid, post) {
   if (/^m-/.test(sid)) {
     const art = document.querySelector(`#main article.msg[data-key="${CSS.escape(sid.slice(2))}"]`);
-    if (art) { toInk(art, post) || art.scrollIntoView({ block: "center", behavior: "smooth" }); letGo(); art.classList.remove("msg-flash"); void art.offsetWidth; art.classList.add("msg-flash"); }
+    if (art) { K.setInkOff(false); toInk(art, post) || art.scrollIntoView({ block: "center", behavior: "smooth" }); letGo(); art.classList.remove("msg-flash"); void art.offsetWidth; art.classList.add("msg-flash"); }
     return;
   }
   const sh = liveSheet(th, sid); if (!sh) return;

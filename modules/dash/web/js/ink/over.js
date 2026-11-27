@@ -52,7 +52,7 @@ document.addEventListener("pointerdown", e => {
   const sid = "m-" + art.dataset.key, t = K.TOOL.t;
   steady(art); follow(art);
   cur = { th, sid, art, pid: e.pointerId, x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false, target: e.target, stylus: performance.now() - stylusAt < 600 };
-  if (t === "eraser") { cur.erase = true; erase(unitPt(art, e)); }
+  if (t === "eraser") { cur.erase = true; if (!K.inkOff()) erase(unitPt(art, e)); }   // never erases what is hidden on a bare tap
   else Object.assign(cur, { id: K.sid(), t: t === "hl" ? "hl" : "pen", c: K.TOOL.c, w: Math.round((t === "hl" ? 16 : 2.8) * zoomOf(frameOf(art)) * 10) / 10, p: [unitPt(art, e)], lasso: t === "lasso" });
   try { box().setPointerCapture(e.pointerId); box().dispatchEvent(new Event("rc-hand")); } catch (er) {}
   addEventListener("pointermove", move, true);
@@ -64,7 +64,7 @@ function move(e) {
   if (!cur || e.pointerId !== cur.pid) return;
   e.preventDefault();
   if (!cur.moved && Math.hypot(e.clientX - cur.x0, e.clientY - cur.y0) < 6) return;
-  if (!cur.moved) { cur.moved = true; document.body.setAttribute("data-ink-drawing", ""); }
+  if (!cur.moved) { cur.moved = true; document.body.setAttribute("data-ink-drawing", ""); K.setInkOff(false); }   // a stroke brings hidden drawings back, a tap does not
   const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
   for (const ev of evs.length ? evs : [e]) {
     const p = unitPt(cur.art, ev);
@@ -106,6 +106,7 @@ function up(e) {
   if (c.lasso) { const st = { id: c.id, t: "pen", c: "ink", w: 2, p: c.p }; bubble({ th: c.th, sid: c.sid, stroke: st, lasso: true }); return; }
   const st = { id: c.id, t: c.t, c: c.c, w: c.w, p: c.p.map(p => [Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10, Math.round(p[2] * 100) / 100]) };
   if (c.snap) st.snap = c.snap;
+  const art = c.art.isConnected ? c.art : artOf(c.sid.slice(2)), at = art && pinOf(art, st.p); if (at) st.at = at;
   K.addStroke(c.th, c.sid, st, { title: "Ink on a message" });
   if (st.t !== "hl" && isLoop(st.p, 14)) bubble({ th: c.th, sid: c.sid, stroke: st });
 }
@@ -203,39 +204,49 @@ const cwOf = img => { const a = img.closest("article.msg"); return a ? Math.roun
 function steady(art) {
   for (const img of art.querySelectorAll(".msg-thumb img")) {
     if (img.loading === "lazy") img.loading = "eager";
-    if ((img.complete && img.naturalWidth) || img.dataset.inkHeld != null || img.closest("[data-broken]")) continue;
-    const m = pics()[img.getAttribute("src")], cw = cwOf(img);
-    if (m && Math.abs(m[0] - cw) <= 2) { img.style.width = m[1] + "px"; img.style.height = m[2] + "px"; img.dataset.inkHeld = ""; }
+    if (img.complete || img.dataset.inkHeld != null || img.closest("[data-broken]")) continue;   // complete: loaded, or broken
+    const P = pics(), k = img.getAttribute("src"), m = P[k], cw = cwOf(img);
+    if (m && Math.abs(m[0] - cw) <= 2) { img.style.width = m[1] + "px"; img.style.height = m[2] + "px"; img.dataset.inkHeld = ""; delete P[k]; P[k] = m; }   // used: newest
   }
 }
-// A picture with no size remembered still grows when it arrives (and a narrower chat moves the pictures against the text). The
-// person's strokes not sent yet that lie by a picture (below the text) move with that picture: where each picture sat is kept
-// per message (in units, from the text's top-left), and each paint compares it with where they sit now.
-const GROUND = new WeakMap();   // art -> {src: [left, top, right, bottom]}
-function ground(art, keep = true) {
-  const f = frameOf(art).getBoundingClientRect(); if (!f.width) return null;
-  const k = W / f.width, g = {};
-  for (const t of art.querySelectorAll(".msg-thumb")) {
-    const img = t.querySelector("img"), r = t.getBoundingClientRect(); if (!img || !r.height) continue;
-    g[img.getAttribute("src")] = [(r.left - f.left) * k, (r.top - f.top) * k, (r.right - f.left) * k, (r.bottom - f.top) * k];
-  }
-  if (keep) GROUND.set(art, g);
-  return g;
+// A picture with no size remembered still grows when it arrives, and a narrower chat moves the pictures against the text. A
+// stroke drawn by a picture (below the text, or on a message that is all pictures) is pinned to it at pen-up: st.at = [which
+// picture, where its corner was, in units, top or bottom]. While the stroke is not sent, it moves with that picture by however
+// far the picture now sits from the pin, and the pin moves with it, so the same layout always gives the same place: a reload,
+// a resize or a late picture can't move it twice (the review of thread 11261907a87c). The pin stays in this page; it isn't sent.
+const thumbs = art => [...art.querySelectorAll(".msg-thumb")].filter(t => t.querySelector("img"));
+const keyOf = (t, i) => i + ":" + t.querySelector("img").getAttribute("src");
+const r1 = v => Math.round(v * 10) / 10;
+function pinOf(art, pts) {
+  const fr = frameOf(art), f = fr.getBoundingClientRect(); if (!f.width || !pts.length) return null;
+  const k = W / f.width, b = bbox(pts), cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  if (fr !== art && cy < f.height * k) return null;   // on the text: it moves with the text already
+  let best = null, bd = Infinity;
+  thumbs(art).forEach((t, i) => {
+    const r = t.getBoundingClientRect(); if (!r.height) return;
+    const L = (r.left - f.left) * k, T = (r.top - f.top) * k, R = (r.right - f.left) * k, B = (r.bottom - f.top) * k;
+    const dx = cx < L ? L - cx : cx > R ? cx - R : 0, dy = cy < T ? T - cy : cy > B ? cy - B : 0, d = Math.hypot(dx, dy * 2);
+    // the corner nearest it: the strokes grow with the text's width, the pictures don't, so one to the right of a picture is
+    // kept by its right edge, one below it by its bottom (the review of thread 11261907a87c)
+    if (d < bd) { bd = d; const e = (cy > B ? 1 : 0) | (cx > R ? 2 : 0); best = [keyOf(t, i), r1(e & 2 ? R : L), r1(e & 1 ? B : T), e]; }
+  });
+  return best;
+}
+/** Where pin at's picture sits now in art ([x, y] in units), or null if it isn't there. */
+function spot(art, f, at) {
+  const T = thumbs(art), src = at[0].slice(at[0].indexOf(":") + 1);
+  const t = T.find((x, i) => keyOf(x, i) === at[0]) || (T.filter(x => x.querySelector("img").getAttribute("src") === src).length === 1 ? T.find(x => x.querySelector("img").getAttribute("src") === src) : null);
+  const r = t && t.getBoundingClientRect(); if (!r || !r.height) return null;
+  const k = W / f.width; return [((at[3] & 2 ? r.right : r.left) - f.left) * k, ((at[3] & 1 ? r.bottom : r.top) - f.top) * k];
 }
 function follow(art) {
-  const was = GROUND.get(art), now = ground(art), th = chatTh(); if (!was || !now || !th || !art.dataset.key) return;
-  const sid = "m-" + art.dataset.key;
-  const fh = frameOf(art).getBoundingClientRect(), H = fh.height * W / fh.width, moves = {};
-  for (const st of K.ownStrokes(th, sid)) {
-    if (!st.pending || !st.p.length) continue;
-    const b = bbox(st.p), cx = b.x + b.w / 2, cy = b.y + b.h / 2; if (cy < H) continue;   // on the text: the text didn't move
-    let best = null, bd = Infinity;
-    for (const [src, r] of Object.entries(was)) {
-      const dx = cx < r[0] ? r[0] - cx : cx > r[2] ? cx - r[2] : 0, dy = cy < r[1] ? r[1] - cy : cy > r[3] ? cy - r[3] : 0, d = Math.hypot(dx, dy * 2);
-      if (d < bd) { bd = d; best = src; }
-    }
-    const a = best && was[best], z = best && now[best]; if (!a || !z) continue;
-    const d = [z[0] - a[0], z[1] - a[1]]; if (Math.abs(d[0]) > .5 || Math.abs(d[1]) > .5) moves[st.id] = d;
+  const th = chatTh(); if (!th || !art.dataset.key || !art.querySelector(".msg-thumb")) return;
+  const sid = "m-" + art.dataset.key, pinned = K.ownStrokes(th, sid).filter(st => st.pending && st.at && st.p.length); if (!pinned.length) return;
+  const f = frameOf(art).getBoundingClientRect(); if (!f.width) return;
+  const moves = {};
+  for (const st of pinned) {
+    const z = spot(art, f, st.at); if (!z) continue;
+    const d = [r1(z[0] - st.at[1]), r1(z[1] - st.at[2])]; if (d[0] || d[1]) moves[st.id] = d;
   }
   if (Object.keys(moves).length) K.shiftStrokes(th, sid, moves);
 }
@@ -245,11 +256,15 @@ if (typeof document !== "undefined") {
     const img = e.target; if (!img || img.tagName !== "IMG" || !img.closest || !img.closest("#main .cm-msgs .msg-thumb")) return;
     unhold(img);
     paint();
+    // remembered only for a message with ink, or while the pen is out (the next stroke may go by it)
+    const a = img.closest("article.msg"), th = chatTh();
+    if (!a || !th || !(K.TOOL.pen || K.TOOL.pencil || K.sheetIds(th).has("m-" + a.dataset.key))) return;
+    PICS = null;   // another tab may have written since
     const r = img.getBoundingClientRect(), cw = cwOf(img), P = pics(), k = img.getAttribute("src");
     if (!r.width || !cw) return;
     const v = [cw, Math.round(r.width * 10) / 10, Math.round(r.height * 10) / 10];
-    if (P[k] && P[k].join() === v.join()) return;
-    delete P[k]; P[k] = v;
+    const ks0 = Object.keys(P); if (P[k] && P[k].join() === v.join() && ks0[ks0.length - 1] === k) return;
+    delete P[k]; P[k] = v;   // newest last: the oldest go first
     const ks = Object.keys(P); for (const x of ks.slice(0, Math.max(0, ks.length - 400))) delete P[x];
     try { localStorage.setItem(PK, JSON.stringify(P)); } catch (er) {}
   }, true);
@@ -261,8 +276,12 @@ if (typeof document !== "undefined") {
 // A message that changes size with no scroll or resize to say so (a picture loading, the preview panel opening beside the
 // chat, a re-render) moves its ink at once, not on the next scroll.
 const RO = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => paint()) : null;
-const SEEN = new WeakSet();
-function seen(el) { if (RO && !SEEN.has(el)) { SEEN.add(el); RO.observe(el); } }
+const SEEN = new Set();
+function seen(el) {
+  if (!RO || SEEN.has(el)) return;
+  for (const x of SEEN) if (!x.isConnected) { RO.unobserve(x); SEEN.delete(x); }   // gone from the page: let it go
+  SEEN.add(el); RO.observe(el);
+}
 // A re-render of a message drops its ink (the morph keeps only what the render makes): whatever the render, it comes straight back.
 let MOB = null;
 const MO = typeof MutationObserver !== "undefined" ? new MutationObserver(() => { for (const m of MARKS.values()) if (!m.svg.isConnected) { paint(); break; } }) : null;

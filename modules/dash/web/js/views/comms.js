@@ -29,7 +29,7 @@ import { message, messageHead, messageReceipt, localMessage, draftMessage, markW
 import { chatView } from "../rich/artifact.js";
 import { openSideList, sideChats, sync as scSync } from "../ui/sidechat.js";
 import { sync as inkSync } from "../ink/over.js";
-import { penButton, penStrip } from "../ink/toolbar.js";
+import { penButton, penStrip, inkEyeButton } from "../ink/toolbar.js";
 import { TOOL as INK } from "../ink/store.js";
 import { openQuick, quickOpen, closeQuick, quickPanel, laterButtons, setLater } from "../ui/quick.js";
 import { pickBar, onPick } from "../ui/pick.js";
@@ -405,6 +405,9 @@ function syncOut(c, box) {
   if (grew || L.stuck) { box.scrollTop = box.scrollHeight; L.stuck = true; }
 }
 
+// A draft that opens by naming another agent (@rootwarden, @new) lands as Behind the scenes: with that off, typing it out only to drop it once posted
+// was the flicker the person saw (thread dash-message-flicker). Its steps still show.
+const toAgents = a => ((String(a.draft.text || "").match(/^\s*((?:@[\w.-]+[\s,:]*)+)/) || [])[1] || "").split(/[\s,:]+/).some(m => { const n = m.replace(/^@/, "").toLowerCase(); return n && n !== a.name && !OUTSIDE.has(n); });
 // E11: a reply still being written shows under the messages and grows each read (0.1-0.2 s while it is written, E11b/E41; else the 1.5 s poll); it goes once the post is on the board.
 function syncDrafts(c, box) {
   const th = c.thread; if (!th || !L.drafts) return;
@@ -413,7 +416,7 @@ function syncDrafts(c, box) {
   // E42b: a fast read also brings the code each run here has run since its last post (steps), with or without a draft
   const ds = [...fast.map(f => ({ ...(S.running?.get(f.name) || {}), name: f.name, draft: f.draft, steps: f.steps || [], more: f.more || 0 })),
     ...(S.live ? S.live.agents : []).filter(a => a.alive !== false && a.draft && a.draft.thread === th && !fast.some(f => f.name === a.name))]
-    .map(a => posted(a) ? { ...a, draft: null } : a).filter(a => a.draft || (a.steps && a.steps.length));
+    .map(a => posted(a) || (a.draft && !(maskFor(c) & SHOW.comms) && toAgents(a)) ? { ...a, draft: null } : a).filter(a => a.draft || (a.steps && a.steps.length));
   const sig = ds.map(a => a.name + ":" + (a.draft ? a.draft.text.length : "-") + ":" + (a.steps || []).map(s => (s.running ? "r" : "d") + (s.out || "").length).join("/")).join();
   if (sig === L.draftSig) return;
   const stick = atEnd(box) || L.stuck; L.draftSig = sig;
@@ -1322,6 +1325,7 @@ function head(c, ctx) {
         onclick: () => { C.find = !find; if (!C.find) C.q = ""; ctx.update(); if (C.find) queueMicrotask(() => document.querySelector(".cm-find")?.focus()); } }, icon("search")),
       c.thread && SH.get(c.thread)?.map && Object.values(SH.get(c.thread).map).some(x => x.show !== "full") ? h("button", { type: "button", class: "btn cm-showall", "data-size": "s", "aria-pressed": String(showAll(c.thread)), title: "Show every message in full, not shortened to one line", "aria-label": "All: show every message", onclick: () => { setShowAll(c.thread, !showAll(c.thread)); L.rebuild = true; L.keep = true; ctx.update(); } }, h("span", { class: "cm-sa-l" }, "Show every message"), h("span", { class: "cm-sa-s", "aria-hidden": "true" }, "All")) : null,
       c.thread && app() && can("post") ? penButton() : null,   // ink: draw on the messages (ink/toolbar.js)
+      c.thread && app() ? inkEyeButton(c.thread) : null,   // and hide what is drawn there (shows only when something is)
       c.thread ? button("Files", () => import("../ui/preview.js").then(m => m.openFiles()), { kind: "icon", icon: "folder", cls: "cm-files", title: "Files: this conversation's and the projects'" }) : null,
       c.thread ? asideBtn(c.thread) : null,
       c.thread ? h("button", { type: "button", class: "btn cm-more-b", "data-kind": "icon", "aria-label": "More tools", title: "More tools", "aria-expanded": String(more),

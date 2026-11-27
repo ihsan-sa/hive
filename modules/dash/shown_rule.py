@@ -183,10 +183,11 @@ def kind(p, agents, byid, ask):
         return 0
     if p.frm == "person" or "person" in p.men:
         return YOU
-    if p.frm in SYS or p.frm in OPS or WARDEN.fullmatch(p.frm) or p.th in HOUSE:
+    if p.frm in SYS or p.frm in OPS or p.th in HOUSE:
         return COMMS
     if any(m != p.frm and m not in OUTSIDE for m in p.men):
         return COMMS
+    warden = bool(WARDEN.fullmatch(p.frm))   # a warden run answering the person is theirs to see, as in the app (thread dash-message-flicker)
     if p.frm in agents:
         q = byid.get(p.reply_to) if p.reply_to else None
         if q is not None and q.frm == "person":
@@ -195,7 +196,7 @@ def kind(p, agents, byid, ask):
             return YOU
         if ask is not None and p.frm in ask.men and p.t - ask.t < ANSWER_FOR:
             return YOU
-    return UPDATES
+    return COMMS if warden else UPDATES
 
 
 def link_runs(board, log, byid):

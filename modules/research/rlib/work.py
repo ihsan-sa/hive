@@ -1562,7 +1562,7 @@ class Hunt:
         self.stop_reason = ""
         self.departure_searches = 0
         self.person_signal_searches, self.person_signal_found = 0, 0
-        self.fresher_signal_searches, self.fresher_signal_found = 0, 0
+        self.fresher_signal_searches, self.fresher_signal_found, self.fresher_cut = 0, 0, 0
         self.held_signal_searches, self.held_signal_found = 0, 0
         self.menu_statement_searches, self.menu_statement_found = 0, 0
         self.unsignalled_refreshed = 0   # near misses that took their organisation's signal page mid-run: finish_menu_rows judges them again (hop 40, fnwords89's Stevens)
@@ -2546,11 +2546,11 @@ class Hunt:
         if len(errs) >= len([x for x in srcs if x in self.sources]):
             with self.save_lock: self.failed.add((org, a))
             return False
-        with self.save_lock: self.tried.add((org, a))
-        read, own, unit = 0, None, None
+        read, own, unit, cut = 0, None, None, False
         old_urls = {str(r.get(k) or "").rstrip("/") for k in ("signal_url", "source_url")} | {stored_signal_url(r).rstrip("/")}
         for h in hits:
-            if read >= 3 or time.monotonic() >= self.deadline: break
+            if read >= 3: break
+            if time.monotonic() >= self.deadline: cut = True; break
             if h["url"].rstrip("/") in old_urls or not people.official(org, h["url"], doms) or weak_signal_url(h["url"]) or search_results_url(h["url"]): continue
             read += 1
             pg = fetcher.fetch(h["url"], self.case)
@@ -2574,6 +2574,8 @@ class Hunt:
             if self.function_words and not any(people.term_regex(w).search(fold(excerpt)) for w in self.function_words): continue
             if signal_kind(f"(the organisation's, from {url}) {excerpt}") != "statement" or self.earlier_job_excerpt(pg["text"], excerpt): continue
             unit = (url, excerpt, d)
+        if cut and not own: return self.search_cut(r, "fresher_signal_tried", org, a)
+        with self.save_lock: self.tried.add((org, a))
         with self.save_lock: self.log_rows.append({"org": org, "angle": a, "hits": len(hits), "read": read, "found": int(bool(own or unit)), "secs": round(time.monotonic() - t0, 2), "at": now()})
         was = stored_signal_url(r) or r.get("source_url", "")
         if own:
@@ -2626,10 +2628,11 @@ class Hunt:
         doms = self.domains if (self.domains.get(org) or self.domains.get(people.org_core(org))) else {**self.domains, org: reg}
         try: read_day = dt.date.fromisoformat(str(r.get("read_on") or dt.date.today())[:10])
         except ValueError: read_day = dt.date.today()
-        t0, got, read, n_hits, answered, seen = time.monotonic(), None, 0, 0, False, set()
+        t0, got, read, n_hits, answered, seen, cut = time.monotonic(), None, 0, 0, False, set(), False
         ai = [people.term_regex(w) for w in self.must]
         newsy = lambda u: bool(NEWS_PAGE.search((urllib.parse.urlsplit(u).hostname or "") + urllib.parse.urlsplit(u).path) or re.search(r"/news-and-events/|/news-releases?/", u))
         for srcs in self.org_news_rounds():
+            if time.monotonic() >= self.deadline: cut = True; break
             try: hits, errs = self.search(q, n=10, only=srcs)
             except Exception: continue
             if len(errs) >= len(srcs): continue
@@ -2637,7 +2640,8 @@ class Hunt:
             hits = sorted((h for h in hits if h["url"] not in seen and h["url"].rstrip("/") != old_url.rstrip("/") and not (0 < path_year(h["url"]) < read_day.year - 1)), key=lambda h: (not newsy(h["url"]), -path_year(h["url"])))
             n_hits, rd = n_hits + len(hits), 0
             for h in hits:
-                if rd >= 4 or time.monotonic() >= self.deadline: break
+                if rd >= 4: break
+                if time.monotonic() >= self.deadline: cut = True; break
                 seen.add(h["url"])
                 if not people.official(org, h["url"], doms) or weak_signal_url(h["url"]) or search_results_url(h["url"]) or listing_url(h["url"]): continue
                 rd, read = rd + 1, read + 1
@@ -2651,7 +2655,8 @@ class Hunt:
                 if self.org_signal_shape(cand)[0] == self.UNIT_NEWS_SHAPE:
                     got = cand
                     break
-            if got: break
+            if got or cut: break
+        if cut and not got: return self.search_cut(r, "fresher_org_tried", org, a)
         with self.save_lock: (self.tried if answered else self.failed).add((org, a))
         if not answered: return False
         with self.save_lock: self.log_rows.append({"org": org, "angle": a, "hits": n_hits, "read": read, "found": int(bool(got)), "secs": round(time.monotonic() - t0, 2), "at": now()})
@@ -2666,13 +2671,24 @@ class Hunt:
         self.log(f"  fresher organisation signal: {r['name']} ({org}) — {got['signal_url']} ({got['signal_date']}, was {old})")
         return True
 
+    def search_cut(self, r, flag, org, a):
+        """A fresher search the deadline stopped before it read its hits is not spent: the row loses its tried mark and the search goes in `failed`, which lasts this run only, so the next run's first round (stored_fresher_signals before the hunt, with the pass's whole time ahead) asks it again. fnwords152's p2 ran out of time, then searched for Glover's unit news after its deadline: bing_web gave UF News's C3 story among 6 hits, none was read, and the search was marked tried, so no later pass asked it again. Returns False."""
+        r.pop(flag, None)
+        with self.save_lock: self.failed.add((org, a)); self.fresher_cut += 1
+        return False
+
+    FRESHER_GRACE = 60.0   # seconds stored_fresher_signals may run past the pass's deadline: the end-of-run call came after fnwords152's p2 ran out of time, and its one search (bing_web, 17 s) and up to four page reads fit in this; passes.sh's timeout leaves 300 s over max_seconds
     def stored_fresher_signals(self):
-        """Verified rows whose own signal is older than FRESH_SINCE get fresher_signal, and rows on an organisation signal over a year old get fresher_org_signal, side by side."""
+        """Verified rows whose own signal is older than FRESH_SINCE get fresher_signal, and rows on an organisation signal over a year old get fresher_org_signal, side by side, with at least FRESHER_GRACE seconds before the deadline (put back after). A search the deadline still cuts is asked again on the next run (search_cut)."""
         todo = [r for r in self.leads.values() if self.fresher_due(r)]
         org_todo = [r for r in self.leads.values() if self.fresher_org_due(r)]
         if not todo and not org_todo: return
-        t0, f0 = time.monotonic(), self.fresher_signal_found
-        with cf.ThreadPoolExecutor(max_workers=self.workers) as ex: list(ex.map(self.fresher_signal, todo)); list(ex.map(self.fresher_org_signal, org_todo))
+        t0, f0, c0, saved = time.monotonic(), self.fresher_signal_found, self.fresher_cut, self.deadline
+        self.deadline = max(saved, t0 + self.FRESHER_GRACE)
+        try:
+            with cf.ThreadPoolExecutor(max_workers=self.workers) as ex: list(ex.map(self.fresher_signal, todo)); list(ex.map(self.fresher_org_signal, org_todo))
+        finally: self.deadline = saved
+        if self.fresher_cut > c0: self.log(f"fresher signal: {self.fresher_cut - c0} searches were cut off by the deadline before their hits were read: the next run asks them again")
         self.log(f"fresher signal: searched for {len(todo)} verified rows whose signal is from before {self.FRESH_SINCE} and {len(org_todo)} on an organisation signal over a year old, found a newer one for {self.fresher_signal_found - f0} ({time.monotonic() - t0:.0f}s)")
         self._save()
 

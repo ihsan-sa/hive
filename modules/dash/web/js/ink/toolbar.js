@@ -35,6 +35,7 @@ function colour(k) { K.setTool("c", k); if (K.TOOL.t !== "pen" && K.TOOL.t !== "
 /** Pen on or off: a mouse draws on the chat only while it is on. */
 export function pen(on = !K.TOOL.pen) {
   if (on === K.TOOL.pen) return;
+  if (on) K.setInkOff(false);   // nobody draws what they can't see
   K.setTool("pen", on);
   if (on) document.body.setAttribute("data-ink-pen", ""); else document.body.removeAttribute("data-ink-pen");
 }
@@ -42,6 +43,15 @@ export function pen(on = !K.TOOL.pen) {
 export function penButton() {
   return h("button", { type: "button", class: "btn ink-pen", "data-size": "s", "aria-pressed": String(K.TOOL.pen), title: "Pen: draw on the messages, circle something to ask about it (D)", onclick: () => pen() },
     icon("pen"), h("span", { class: "ink-pen-l" }, "Pen"), h("kbd", {}, "D"));
+}
+/** Beside it, in a chat with drawings on its messages: hide them all, show them again. Sheets in posts stay. */
+export function inkEyeButton(th) {
+  const b = h("button", { type: "button", class: "btn ink-eye", "data-kind": "icon", onclick: () => { const off = !K.inkOff(); if (off) pen(false); K.setInkOff(off); } }, icon("eye"), icon("eye-off"));
+  eyeState(b, th); return b;
+}
+function eyeState(b, th) {
+  const off = K.inkOff(), say = off ? "Show drawings on messages" : "Hide drawings on messages";
+  b.hidden = !K.hasDrawings(th); b.toggleAttribute("data-off", off); b.setAttribute("aria-label", say); b.title = say;
 }
 /** The strip under the header while the pen is on: the tool row, then what the pointer does now. (The design put the row in the
  *  header itself; a 390 px header has no room for it, so it rides in this strip at every width.) */
@@ -59,6 +69,8 @@ function mark() {
   for (const b of document.querySelectorAll(".ink-sw[data-c]")) b.setAttribute("aria-pressed", String(K.TOOL.c === b.dataset.c));
   for (const b of document.querySelectorAll(".ink-t[data-u]")) b.disabled = !th || !(b.dataset.u === "undo" ? K.canUndo(th) : K.canRedo(th));
   for (const b of document.querySelectorAll(".ink-pen")) b.setAttribute("aria-pressed", String(K.TOOL.pen));
+  for (const b of document.querySelectorAll(".ink-eye")) eyeState(b, th);
+  document.body.toggleAttribute("data-ink-off", K.inkOff());
   if (K.TOOL.pen) document.body.setAttribute("data-ink-pen", ""); else document.body.removeAttribute("data-ink-pen");
   document.body.dataset.inkTool = K.TOOL.t;
   float();
@@ -66,6 +78,8 @@ function mark() {
 addEventListener("ink:tool", mark);
 addEventListener("ink:change", () => { mark(); wake(); });
 addEventListener("hashchange", () => setTimeout(() => { if (!thNow()) pen(false); float(); }, 0));   // after the page has moved
+
+if (typeof document !== "undefined" && document.body) document.body.toggleAttribute("data-ink-off", K.inkOff());
 
 // ---------- iPad: the floating row ----------
 let FL = null, foldT = 0;

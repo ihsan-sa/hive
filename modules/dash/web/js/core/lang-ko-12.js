@@ -73,6 +73,8 @@ export default {
   "From the": "출처 모듈:",
   "Full name": "전체 이름",
   "Green": "초록",
+  "Hide drawings on messages": "메시지 위 그림 숨기기",
+  "Show drawings on messages": "메시지 위 그림 보기",
   "Highlighter": "형광펜",
   "Home": "홈",
   "Home, Work, Trip to Lisbon…": "집, 직장, 리스본 여행…",

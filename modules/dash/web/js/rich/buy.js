@@ -60,13 +60,25 @@ function renewButton(d) {
   return h("div", { class: "rc-buy-act" }, b, note);
 }
 
+/** The shops compared before the ask, best first: total, stock, arrival and how each takes payment (we406's 11262030fe53). */
+function shopList(d) {
+  return h("ol", { class: "rc-buy-shops" }, ...d.shops.map(x => h("li", { class: x.best ? "rc-buy-best" : null },
+    h("div", null, x.url ? h("a", { href: x.url, target: "_blank", rel: "noopener noreferrer" }, x.name) : x.name,
+      x.best ? h("b", null, " · best") : null, !d.choose && x.chosen && !x.best ? h("b", null, " · this ask") : null),
+    h("div", { class: "rc-buy-detail" }, [x.total && `${x.total} all in`, x.shipping && `shipping ${x.shipping}`, x.stock, x.arrives && `arrives ${x.arrives}`]
+      .filter(Boolean).join(" · ")),
+    h("div", { class: x.link ? "rc-buy-detail" : "rc-buy-detail rc-buy-nolink" }, x.paysLabel + (x.note ? `: ${x.note}` : "")))),
+    d.shopsWhy ? h("div", { class: "rc-buy-detail" }, d.shopsWhy) : null);
+}
+
 const row = (k, ...v) => h("div", { class: "rc-buy-row" }, h("div", { class: "rc-buy-k" }, k), h("div", { class: "rc-buy-v" }, ...v));
 
 export function buyCard(code, { lang, title }) {
   let d;
   try { d = parseBuy(code); } catch { return codeBlock(lang, title, code); }
-  const waiting = d.tone === "waiting";
-  const head = waiting ? `${d.agent} is requesting to spend ${d.total}` : `${d.agent} asked to spend ${d.total}`;
+  const waiting = d.tone === "waiting" && !d.choose;
+  const head = d.choose ? `The best shop for this, ${d.merchant} at ${d.total}, can't take a Link card`
+    : waiting ? `${d.agent} is requesting to spend ${d.total}` : `${d.agent} asked to spend ${d.total}`;
   const items = d.lines.length > 1 || (d.lines[0] && d.lines[0].name !== d.item)
     ? h("ul", { class: "rc-buy-lines" }, ...d.lines.map(l => h("li", null, `${l.qty} × ${l.name}` + (l.unit != null ? `, ${fmt(l.unit, d.cur)} each` : ""))))
     : null;
@@ -76,7 +88,7 @@ export function buyCard(code, { lang, title }) {
   if (d.receipt) after.push(row("Receipt", d.receipt));
   if (d.recording) after.push(row("Recording", d.recording));
   if (d.whyCancel) after.push(row("Why", d.whyCancel));
-  return h("div", { class: `rc-buy rc-buy-${d.tone}`, role: "group", "aria-label": `Spend request: ${d.total} at ${d.merchant}, ${d.label}` },
+  return h("div", { class: `rc-buy rc-buy-${d.tone}`, role: "group", "aria-label": d.choose ? `Shop choice: ${d.merchant} is best at ${d.total} but can't take Link` : `Spend request: ${d.total} at ${d.merchant}, ${d.label}` },
     h("div", { class: "rc-buy-top" },
       h("span", { class: "rc-buy-chip" }, d.label), d.test ? h("span", { class: "rc-buy-test" }, "test mode") : null,
       d.when ? h("span", { class: "rc-buy-when" }, d.when) : null),
@@ -84,9 +96,14 @@ export function buyCard(code, { lang, title }) {
     row("Merchant", h("div", null, d.merchant),
       d.url ? h("a", { href: d.url, target: "_blank", rel: "noopener noreferrer", class: "rc-buy-url" }, d.urlText) : d.urlText ? h("div", { class: "rc-buy-url" }, d.urlText) : null),
     row("Item", h("div", null, d.item), d.detail ? h("div", { class: "rc-buy-detail" }, d.detail) : null, items, money),
-    row("Card", d.last4 ? `One-time Link card •••• ${d.last4}` : "One-time card from Link, made on approval"),
+    d.shops.length ? row("Shops", shopList(d)) : null,
+    d.choose ? row("Ways on", h("ol", { class: "rc-buy-ways" }, ...d.ways.map(w => h("li", null, w.text)))) : null,
+    d.chosen ? row("Chosen", `By you, in post ${d.chosen}`) : null,
+    d.choose ? null : row("Card", d.last4 ? `One-time Link card •••• ${d.last4}` : "One-time card from Link, made on approval"),
     ...after,
-    h("p", { class: "rc-buy-fine" }, waiting
+    h("p", { class: "rc-buy-fine" }, d.choose
+      ? `Nothing has been asked in Link and nothing is paid. Reply in the thread with 1, 2 or 3; ${d.agent} goes on from your answer.`
+      : waiting
       ? `Approve or decline in your Link app; nothing here can approve it. Approving lets ${d.agent} pay ${d.merchant} this amount once, with a one-time card from Link. Your real card details are never shared.`
       : `Paid, if at all, with a one-time card from Link for this amount at ${d.merchant} only. Your real card details are never shared.`),
     d.renewedBy ? h("p", { class: "rc-buy-fine" }, "Asked again: the newer card below is the live one.") : null,

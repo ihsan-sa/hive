@@ -72,6 +72,8 @@ export default {
   "From the": "から:",
   "Full name": "氏名",
   "Green": "緑",
+  "Hide drawings on messages": "メッセージ上の手書きを隠す",
+  "Show drawings on messages": "メッセージ上の手書きを表示",
   "Highlighter": "蛍光ペン",
   "Home": "ホーム",
   "Home, Work, Trip to Lisbon…": "ホーム、仕事、リスボン旅行…",

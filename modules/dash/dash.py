@@ -6784,6 +6784,7 @@ def import_view():
     mcp = sorted(_person_mcp(ph))
     try: got = sorted(json.loads(MCP_COPY.read_text()).get("mcpServers") or {})
     except (OSError, ValueError, AttributeError): got = []
+    got = [n for n in got if n in mcp and n not in _mcp_urls() and n not in _mcp_own()]   # the ticks are the person's own servers: the page sends this list back
     have = _person_mcp(ph)  # names of the env/headers keys only, never their values: ticking copies those values into mcp.json in clear
     secrets_ = {n: sorted(str(k) for key in ("env", "headers") if isinstance(have[n], dict) and isinstance(have[n].get(key), dict) for k in have[n][key]) for n in mcp}
     return {"claude_md": {"found": bool(txt.strip()), "chars": len(txt), "preview": txt.strip()[:400], "copied": USER_INSTR.is_file()}, "mcp": mcp, "mcp_copied": got,
@@ -6806,7 +6807,9 @@ def do_import(d):
         if bad: raise ValueError("no such MCP server: " + ", ".join(bad))
         clash = [n for n in names if n in _mcp_urls()]
         if clash: raise ValueError("a connector added by address already has this name: " + ", ".join(clash))
-        _write_mcp({n: have[n] for n in names})   # the connectors added by address stay
+        clash = [n for n in names if n in _mcp_own()]
+        if clash: raise ValueError("a tool made here already has this name: " + ", ".join(clash))
+        _write_mcp({n: have[n] for n in names})   # the connectors added by address and the Hive's own tools stay
         if "claude_md" not in d: return import_view()
     if type(d.get("claude_md")) is not bool: raise ValueError("claude_md is true or false")
     if d["claude_md"]:
@@ -6837,14 +6840,24 @@ def _mcp_entry(s):
     return e
 
 
+def _mcp_current():
+    try: cur = json.loads(MCP_COPY.read_text()).get("mcpServers") or {}
+    except (OSError, ValueError, AttributeError): return {}
+    return cur if isinstance(cur, dict) else {}
+
+
+def _mcp_own():
+    """The Hive's own tools in mcp.json, written by `hive mcp connect` (core/mcptool.py own()): their server is under ~/mcp-tools."""
+    root = str(HOME / "mcp-tools") + os.sep
+    return {n: v for n, v in _mcp_current().items() if isinstance(v, dict) and isinstance(v.get("args"), list) and v["args"] and str(v["args"][-1]).startswith(root)}
+
+
 def _write_mcp(imports=None, urls=None):
-    """mcp.json = the ticked imports (None: those already in it) + the connectors added by address. Nothing left: no file."""
+    """mcp.json = the ticked imports (None: those already in it) + the Hive's own tools + the connectors added by address. Nothing left: no file."""
     urls = _mcp_urls() if urls is None else urls
-    if imports is None:
-        try: cur = json.loads(MCP_COPY.read_text()).get("mcpServers") or {}
-        except (OSError, ValueError, AttributeError): cur = {}
-        imports = {n: v for n, v in cur.items() if n not in urls and n not in _mcp_urls()} if isinstance(cur, dict) else {}
-    servers = {**imports, **{n: _mcp_entry(s) for n, s in urls.items()}}
+    own = _mcp_own()
+    if imports is None: imports = {n: v for n, v in _mcp_current().items() if n not in urls and n not in _mcp_urls()}
+    servers = {**imports, **own, **{n: _mcp_entry(s) for n, s in urls.items()}}
     if servers: write_text_private(MCP_COPY, json.dumps({"mcpServers": servers}, indent=1))
     else: MCP_COPY.unlink(missing_ok=True)
 

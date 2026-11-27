@@ -73,6 +73,8 @@ export default {
   "From the": "इस मॉड्यूल से:",
   "Full name": "पूरा नाम",
   "Green": "हरा",
+  "Hide drawings on messages": "संदेशों पर बनी ड्रॉइंग छिपाएँ",
+  "Show drawings on messages": "संदेशों पर बनी ड्रॉइंग दिखाएँ",
   "Highlighter": "हाइलाइटर",
   "Home": "होम",
   "Home, Work, Trip to Lisbon…": "घर, काम, लिस्बन की यात्रा…",

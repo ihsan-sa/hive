@@ -16,7 +16,7 @@ SETTINGS, BOX_HOME, SOCKETS = HOME / "settings.json", HOME / ".sandbox" / "home"
 INSIDE, PORT = "/run/sandbox", 31280
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt")
-READ_ONLY = ("core", "modules", "mcp.json", "board.jsonl", "log.jsonl", "memory.md", "run", "sessions", "files", "settings.json", ".local/bin", ".local/share/claude",
+READ_ONLY = ("core", "modules", "mcp.json", "mcp-tools", "board.jsonl", "log.jsonl", "memory.md", "run", "sessions", "files", "settings.json", ".local/bin", ".local/share/claude",
              ".hive/starter.json", ".hive/usage.json", ".hive/usage_5h.json", ".hive/usage_resets.json", ".hive/paused.json",
              ".hive/login_limits.json", ".hive/provider_limits.json", ".hive/providers.json", ".hive/done", ".hive/killed",
              ".hive/thread-status.jsonl")  # the bars the dash reads: the stop gate checks them; they are set through the broker

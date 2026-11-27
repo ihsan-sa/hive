@@ -4,6 +4,10 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Make your own MCP tools
+
+Agents can now build a tool of their own and connect it: `hive mcp new` makes a working MCP server (Python, no packages, no network port), `hive mcp tools` and `hive mcp call` try it, and `hive mcp connect` gives it to every agent run that starts afterwards. `hive mcp disconnect` takes it away. With the sandbox on, connecting is a step that runs outside it once it is allowed. `hive mcp guide` is the page. A tool can also say when to use it (`WHEN` in `server.py`), so a new chat picks it for an everyday ask.
+
 ## Comment mode in the side panel
 
 Web pages and documents in the side panel have a Comment mode: press **Comment**, then click a spot or drag a box to leave a note, and it stays on until Esc. On a document you can also select words. **Send** posts the notes together to the conversation's agent. Comments work in a page opened in a new tab too, with **Open in new tab**, and the round arrow on a web page starts it again.
@@ -20,6 +24,7 @@ Web pages and documents in the side panel have a Comment mode: press **Comment**
 - The website's Download page now links the Hive's GitHub repo and shows a picture when its link is shared.
 - The website build now checks that every page links the Hive's GitHub repo.
 - The website's home page now tells search engines it is the Hive's site and where its GitHub repo is.
+- In a chat with drawings on its messages, an eye button in the header hides them and shows them again; on a phone it is under More tools while they show.
 
 ## Scrolling past pages and drawings in a chat
 

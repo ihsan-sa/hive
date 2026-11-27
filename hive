@@ -1946,6 +1946,7 @@ if sys.argv[1:2] == ["continue"]: cmd_continue(argparse.Namespace(rest=sys.argv[
 if sys.argv[1:2] == ["judge"]: cmd_judge(argparse.Namespace(rest=sys.argv[2:]))
 if sys.argv[1:2] == ["goals"]: cmd_goals(argparse.Namespace(rest=sys.argv[2:]))
 if sys.argv[1:2] == ["improve"]: cmd_progress(argparse.Namespace(rest=sys.argv[2:] or ["list"]))  # their own flags: handed over whole; bare lists (af3f2 2026-11-20)
+if sys.argv[1:2] == ["mcp"]: os.execv(sys.executable, [sys.executable, "-I", str(CORE / "mcptool.py")] + sys.argv[2:])
 if sys.argv[1:2] == ["fresh"]: os.execv(sys.executable, [sys.executable, "-I", str(CORE / "fresh.py")] + sys.argv[2:])
 if sys.argv[1:2] == ["progress"]: cmd_progress(argparse.Namespace(rest=["progress"] + sys.argv[2:]))
 if sys.argv[1:2] == ["steer"]: cmd_progress(argparse.Namespace(rest=["steer", "--"] + sys.argv[2:]))  # the lab's index, flags handed over whole
@@ -1960,6 +1961,7 @@ def cmd_help(a):
     hits = [x for x in topics if x.startswith(t)]
     if len(hits) != 1: sys.exit(f"hive help: no single topic {a.topic!r}; topics: {', '.join(topics)}")
     print((d / (hits[0] + ".md")).read_text().split("\n", 1)[1].strip())
+sp.add_parser("mcp", help="hive mcp new|tools|call|connect|disconnect|list|guide: your own MCP tools (a stdio server in ~/projects/mcp): make one, start it and call a tool, then connect it so the next agent run has it. The page: hive mcp guide (core/mcptool.py)")
 p = sp.add_parser("help", help="hive help [TOPIC]: the on-demand parts of the orientation (board, agents, hive, core, h4, find): run with no topic for the list")
 p.add_argument("topic", nargs="?"); p.set_defaults(f=cmd_help)
 a = ap.parse_args(); a.f(a)
