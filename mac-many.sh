@@ -15,7 +15,7 @@ answers_soon() { i=0; while [ $i -lt 40 ]; do answers "$1" && return 0; i=$((i +
 answers_soon hive && ok "hive answers" || bad "hive answers"
 P1=$(port hive); note "hive on port $P1"
 as hive 'mkdir -p ~/projects/demo && cd ~/projects/demo && git init -q -b main && echo one > a.txt && git add -A && git -c user.name=t -c user.email=t@t commit -qm first && echo two >> a.txt && git -c user.name=t -c user.email=t@t commit -qam second'
-S1=$(vm sudo sha256sum /home/hive/board.jsonl | cut -c1-64)
+B1=$(vm sudo stat -c %s /home/hive/board.jsonl); S1=$(vm sudo sha256sum /home/hive/board.jsonl | cut -c1-64)
 
 HIVE_USER=hive-work sh line.sh > many-1.log 2>&1 && ok "install hive-work" || { bad "install hive-work"; tail -n 30 many-1.log | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/'; }
 tail -n 6 many-1.log | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/; s/^/--   | /'
@@ -24,7 +24,15 @@ answers_soon hive-work && ok "hive-work answers on the Mac" || bad "hive-work an
 P2=$(port hive-work); note "ports: hive $P1, hive-work $P2"
 [ -n "$P2" ] && [ "$P2" != "$P1" ] && ok "hive-work has its own port" || bad "hive-work has its own port"
 [ "$(port hive)" = "$P1" ] && ok "first Hive's port unchanged" || bad "first Hive's port changed"
-[ "$(vm sudo sha256sum /home/hive/board.jsonl | cut -c1-64)" = "$S1" ] && ok "first Hive's board unchanged" || bad "first Hive's board changed"
+# The first Hive is live and may post on its own board meanwhile: what it had stays as it was, and anything new is shown and must not be hive-work's.
+[ "$(vm sudo sh -c "head -c $B1 /home/hive/board.jsonl | sha256sum" | cut -c1-64)" = "$S1" ] && ok "first Hive's board unchanged" || bad "first Hive's board changed"
+NEW=$(vm sudo tail -c +"$((B1 + 1))" /home/hive/board.jsonl | python3 -c 'import json,sys
+for l in sys.stdin:
+    try: d=json.loads(l)
+    except Exception: print("? not json"); continue
+    print(d.get("from","?"), d.get("thread","?"), str(d.get("text",""))[:60].replace("\n"," "))' | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/')
+[ -n "$NEW" ] && printf '%s\n' "$NEW" | sed 's/^/--   new on hive board: /'
+printf '%s' "$NEW" | grep -q '^hive-work ' && bad "hive-work wrote on the first Hive's board" || ok "nothing of hive-work's on the first board"
 answers hive && ok "hive still answers" || bad "hive still answers"
 grep -q 'Making the Linux VM' many-1.log && bad "a second VM was made" || ok "the same VM, no second one"
 

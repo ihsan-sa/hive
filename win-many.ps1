@@ -37,7 +37,8 @@ Check 'hive installed' ($t1 -match 'http://localhost:\d+/login#')
 $p1 = Port 'hive'; "hive on port $p1"
 Check 'hive answers' ((Code $p1) -match '^[234]')
 InU 'hive' 'mkdir -p ~/projects/demo && cd ~/projects/demo && git init -q -b main && echo one > a.txt && git add -A && git -c user.name=t -c user.email=t@t commit -qm first && echo two >> a.txt && git -c user.name=t -c user.email=t@t commit -qam second' | Out-Null
-$s1 = (& wsl.exe -d Hive -u root -- sha256sum /home/hive/board.jsonl) -join ''
+$b1 = ((& wsl.exe -d Hive -u root -- stat -c %s /home/hive/board.jsonl) -join '').Trim()
+$s1 = ((& wsl.exe -d Hive -u root -- sha256sum /home/hive/board.jsonl) -join '') -replace ' .*', ''
 
 Head 'a second Hive beside it'
 $t2 = Run-Candidate 'hive-work'
@@ -47,7 +48,8 @@ Check 'hive.cmd still opens hive' (Select-String -Quiet -SimpleMatch -Pattern ' 
 $p2 = Port 'hive-work'; "ports: hive $p1, hive-work $p2"
 Check 'hive-work has its own port' ($p2 -and $p2 -ne $p1)
 Check 'first Hive port unchanged' ((Port 'hive') -eq $p1)
-Check 'first Hive board unchanged' (((& wsl.exe -d Hive -u root -- sha256sum /home/hive/board.jsonl) -join '') -eq $s1)
+# The first Hive is live and may post on its own board meanwhile: the lines it had stay as they were.
+Check 'first Hive board unchanged' ((((InU 'root' "head -c $b1 /home/hive/board.jsonl | sha256sum") -join '') -replace ' .*', '') -eq $s1)
 Check 'hive-work answers' ((Code $p2) -match '^[234]')
 Check 'hive still answers' ((Code $p1) -match '^[234]')
 Check 'one Linux system' (@((& wsl.exe -l -q) -replace "`0", '' | Where-Object { $_ -match '^Hive' }).Count -eq 1)
