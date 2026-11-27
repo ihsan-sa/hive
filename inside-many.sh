@@ -57,12 +57,16 @@ grep -h -v '^[[:space:]]*$' /tmp/install-hive-work.out | grep -iE 'port|user|fol
 
 # 3. The same install again: nothing to do, nothing changed.
 W=$(home hive-work)
-before=$(cd "$W" && { cat .hive/web.json; git -C core rev-parse HEAD; git -C core status --porcelain; cat .config/systemd/user/*.service 2>/dev/null; } | sha256sum)
+state() { as hive-work 'cat ~/.hive/web.json; git -C ~/core rev-parse HEAD; git -C ~/core status --porcelain'; cat "$W"/.config/systemd/user/*.service 2>/dev/null; }  # git as the Hive's user: root's git refuses another user's repo and prints nothing
+echo 'IyBSdW4gYXMgYSBIaXZlJ3Mgb3duIHVzZXIgYmVmb3JlIHRoZSByZXJ1biBjaGVja3MuIEEgcmlnIGluc3RhbGxzIHRoZSB0ZXN0IGNhbmRpZGF0ZSAoSElWRV9CUkFOQ0gpLCB3aGljaCBpc24ndCBidWlsdCBvbiB0aGUKIyBwdWJsaXNoZWQgcmVsZWFzZSwgc28gdGhlIHJlcnVuJ3MgYGhpdmUgdXBkYXRlYCB3b3VsZCBzd2FwIGl0IGZvciB0aGF0IG9sZGVyIHJlbGVhc2UgKCJ0aGUgcmVsZWFzZSB3aW5zIikgYW5kIHRoZSBjaGVja3MgYWZ0ZXIKIyB3b3VsZCB0ZXN0IHRoZSByZWxlYXNlLCBub3QgdGhlIGNhbmRpZGF0ZS4gUmVjb3JkaW5nIHRoZSBuZXdlc3QgcHVibGlzaGVkIHRhZyBhcyBpbnN0YWxsZWQgcHV0cyB0aGUgSGl2ZSB3aGVyZSBhIHJlYWwgaW5zdGFsbCBvZgojIHRoZSBuZXdlc3QgcmVsZWFzZSBpczogdGhlIHJlcnVuIHRoZW4gZmluZHMgbm90aGluZyBuZXdlciwgd2hpY2ggaXMgdGhlIGNhc2UgdGhlIGNoZWNrIGlzIGFib3V0LgpzZXQgLWUKdD0kKGdpdCAtQyAiJEhPTUUvY29yZSIgbHMtcmVtb3RlIC0tdGFncyAtLXJlZnMgb3JpZ2luICd2Mi4qJyB8IHNlZCAncyMuKnJlZnMvdGFncy8jIycgfCBncmVwIC1FeCAndjJcLlswLTldK1wuWzAtOV0rJyB8IHNvcnQgLVYgfCB0YWlsIC1uIDEpClsgLW4gIiR0IiBdCm1rZGlyIC1wICIkSE9NRS8uaDIiCnB5dGhvbjMgLWMgImltcG9ydCBqc29uLHN5cyxwYXRobGliIGFzIFA7cD1QLlBhdGguaG9tZSgpLycuaDIvdXBkYXRlLmpzb24nO2Q9anNvbi5sb2FkcyhwLnJlYWRfdGV4dCgpKSBpZiBwLmV4aXN0cygpIGVsc2Uge307ZFsndGFnJ109c3lzLmFyZ3ZbMV07cC53cml0ZV90ZXh0KGpzb24uZHVtcHMoZCkpIiAiJHQiCmVjaG8gIiR0Igo=' | base64 -d > /tmp/pin-release.sh; chmod 644 /tmp/pin-release.sh
+t=$(as hive-work 'sh /tmp/pin-release.sh') && note "hive-work recorded as on $t, the newest release (rig/pin-release.sh says why)" || bad "record the newest release in hive-work"
+note "hive-work core before the rerun: $(as hive-work 'git -C ~/core rev-parse --short HEAD')"
+before=$(state | sha256sum)
 get hive-work && ok "second run of the same install" || { bad "second run of the same install"; show hive-work 20; }
 show hive-work 6
 grep -q 'already here' /tmp/install-hive-work.out && ok "second run says it was already here" || bad "second run says it was already here"
 grep -q 'Setting up the Hive' /tmp/install-hive-work.out && bad "second run set it up again" || ok "second run didn't set it up again"
-after=$(cd "$W" && { cat .hive/web.json; git -C core rev-parse HEAD; git -C core status --porcelain; cat .config/systemd/user/*.service 2>/dev/null; } | sha256sum)
+after=$(state | sha256sum); note "hive-work core after the rerun: $(as hive-work 'git -C ~/core rev-parse --short HEAD')"
 [ "$before" = "$after" ] && ok "second run changed nothing (port, core, services)" || bad "second run changed something"
 up hive-work && ok "hive-work answers after the rerun" || bad "hive-work answers after the rerun"
 

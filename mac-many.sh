@@ -28,11 +28,14 @@ P2=$(port hive-work); note "ports: hive $P1, hive-work $P2"
 answers hive && ok "hive still answers" || bad "hive still answers"
 grep -q 'Making the Linux VM' many-1.log && bad "a second VM was made" || ok "the same VM, no second one"
 
-h0=$(vm sudo sh -c 'cat /home/hive-work/.hive/web.json; git -C /home/hive-work/core rev-parse HEAD; git -C /home/hive-work/core status --porcelain' | shasum)
+state() { as hive-work 'cat ~/.hive/web.json; git -C ~/core rev-parse HEAD; git -C ~/core status --porcelain'; }  # git as the Hive's user: root's git refuses another user's repo
+t=$("$L" shell --workdir / hive sudo -iu hive-work sh < rig/pin-release.sh) && note "hive-work recorded as on $t, the newest release (rig/pin-release.sh says why)" || bad "record the newest release in hive-work"
+note "hive-work core before: $(as hive-work 'git -C ~/core rev-parse --short HEAD')"
+h0=$(state | shasum)
 HIVE_USER=hive-work sh line.sh > many-2.log 2>&1 && ok "the same line again" || bad "the same line again"
 tail -n 4 many-2.log | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/; s/^/--   | /'
 grep -q 'Setting up the Hive' many-2.log && bad "the second run set it up again" || ok "the second run didn't set it up again"
-h1=$(vm sudo sh -c 'cat /home/hive-work/.hive/web.json; git -C /home/hive-work/core rev-parse HEAD; git -C /home/hive-work/core status --porcelain' | shasum)
+h1=$(state | shasum); note "hive-work core after: $(as hive-work 'git -C ~/core rev-parse --short HEAD')"
 [ "$h0" = "$h1" ] && ok "the second run changed nothing (port, core)" || bad "the second run changed something"
 
 Z=$(as hive 'hive export demo 2>/dev/null' | tail -n 1 | tr -d '\r'); note "export: $Z"

@@ -10,7 +10,7 @@ function B64($s) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s))
 function InU($u, $c) { $b = B64 $c; & wsl.exe -d Hive -u $u --cd ~ -- bash -lc "echo $b | base64 -d | bash -l 2>&1" }
 function Port($u) { $j = (& wsl.exe -d Hive -u root -- cat "/home/$u/.hive/web.json" 2>$null) -join ''; try { [string](($j | ConvertFrom-Json).port) } catch { '' } }
 function Code($p) { $c = '000'; foreach ($i in 1..20) { $c = & curl.exe -s -m 10 -o NUL -w '%{http_code}' "http://localhost:$p/login"; if ($c -match '^[234]') { break }; Start-Sleep 3 }; $c }
-function Clean($s) { ($s -replace 'login#\S*', 'login#...') }
+function Mask($s) { ($s -replace 'login#\S*', 'login#...') }
 $raw = 'https://raw.githubusercontent.com/ihsan-sa/hive/train-candidate'
 $real = irm "$raw/get.ps1"
 function Run-Candidate($user) {
@@ -51,16 +51,22 @@ Check 'first Hive board unchanged' (((& wsl.exe -d Hive -u root -- sha256sum /ho
 Check 'hive-work answers' ((Code $p2) -match '^[234]')
 Check 'hive still answers' ((Code $p1) -match '^[234]')
 Check 'one Linux system' (@((& wsl.exe -l -q) -replace "`0", '' | Where-Object { $_ -match '^Hive' }).Count -eq 1)
-$t2 -split "`n" | Select-Object -Last 12 | ForEach-Object { Clean $_ } | Out-Host
+$t2 -split "`n" | Select-Object -Last 12 | ForEach-Object { Mask $_ } | Out-Host
 
 Head 'the same line again'
+# git as the Hive's user: root's git refuses another user's repo and prints nothing. rig/pin-release.sh says why the newest release is recorded first.
 $st = 'cat /home/hive-work/.hive/web.json; git -C /home/hive-work/core rev-parse HEAD; git -C /home/hive-work/core status --porcelain'
-$h0 = (& wsl.exe -d Hive -u root -- sh -c $st) -join "`n"
+$pin = 'IyBSdW4gYXMgYSBIaXZlJ3Mgb3duIHVzZXIgYmVmb3JlIHRoZSByZXJ1biBjaGVja3MuIEEgcmlnIGluc3RhbGxzIHRoZSB0ZXN0IGNhbmRpZGF0ZSAoSElWRV9CUkFOQ0gpLCB3aGljaCBpc24ndCBidWlsdCBvbiB0aGUKIyBwdWJsaXNoZWQgcmVsZWFzZSwgc28gdGhlIHJlcnVuJ3MgYGhpdmUgdXBkYXRlYCB3b3VsZCBzd2FwIGl0IGZvciB0aGF0IG9sZGVyIHJlbGVhc2UgKCJ0aGUgcmVsZWFzZSB3aW5zIikgYW5kIHRoZSBjaGVja3MgYWZ0ZXIKIyB3b3VsZCB0ZXN0IHRoZSByZWxlYXNlLCBub3QgdGhlIGNhbmRpZGF0ZS4gUmVjb3JkaW5nIHRoZSBuZXdlc3QgcHVibGlzaGVkIHRhZyBhcyBpbnN0YWxsZWQgcHV0cyB0aGUgSGl2ZSB3aGVyZSBhIHJlYWwgaW5zdGFsbCBvZgojIHRoZSBuZXdlc3QgcmVsZWFzZSBpczogdGhlIHJlcnVuIHRoZW4gZmluZHMgbm90aGluZyBuZXdlciwgd2hpY2ggaXMgdGhlIGNhc2UgdGhlIGNoZWNrIGlzIGFib3V0LgpzZXQgLWUKdD0kKGdpdCAtQyAiJEhPTUUvY29yZSIgbHMtcmVtb3RlIC0tdGFncyAtLXJlZnMgb3JpZ2luICd2Mi4qJyB8IHNlZCAncyMuKnJlZnMvdGFncy8jIycgfCBncmVwIC1FeCAndjJcLlswLTldK1wuWzAtOV0rJyB8IHNvcnQgLVYgfCB0YWlsIC1uIDEpClsgLW4gIiR0IiBdCm1rZGlyIC1wICIkSE9NRS8uaDIiCnB5dGhvbjMgLWMgImltcG9ydCBqc29uLHN5cyxwYXRobGliIGFzIFA7cD1QLlBhdGguaG9tZSgpLycuaDIvdXBkYXRlLmpzb24nO2Q9anNvbi5sb2FkcyhwLnJlYWRfdGV4dCgpKSBpZiBwLmV4aXN0cygpIGVsc2Uge307ZFsndGFnJ109c3lzLmFyZ3ZbMV07cC53cml0ZV90ZXh0KGpzb24uZHVtcHMoZCkpIiAiJHQiCmVjaG8gIiR0Igo='
+$t = (& wsl.exe -d Hive -u hive-work -- sh -c "cd; echo $pin | base64 -d | sh") -join ''
+Check "hive-work recorded as on the newest release ($t)" ($LASTEXITCODE -eq 0 -and $t -match '^v2\.')
+"hive-work core before: " + ((& wsl.exe -d Hive -u hive-work -- git -C /home/hive-work/core rev-parse --short HEAD) -join '')
+$h0 = (& wsl.exe -d Hive -u hive-work -- sh -c $st) -join "`n"
 $t3 = Run-Candidate 'hive-work'
-$t3 -split "`n" | Select-Object -Last 8 | ForEach-Object { Clean $_ } | Out-Host
+$t3 -split "`n" | Select-Object -Last 8 | ForEach-Object { Mask $_ } | Out-Host
 $il = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Hive') -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
 if ($il) { $it = Get-Content -Raw $il.FullName; Check 'second run: the inner install says it was already here' ($it -match 'already here') } else { "  (no inner install log under LOCALAPPDATA\Hive)" }
-Check 'second run changed nothing (port, core)' (((& wsl.exe -d Hive -u root -- sh -c $st) -join "`n") -eq $h0)
+"hive-work core after: " + ((& wsl.exe -d Hive -u hive-work -- git -C /home/hive-work/core rev-parse --short HEAD) -join '')
+Check 'second run changed nothing (port, core)' (((& wsl.exe -d Hive -u hive-work -- sh -c $st) -join "`n") -eq $h0)
 
 Head 'a project from one Hive to the other'
 $z = @(InU 'hive' 'hive export demo 2>/dev/null')[-1]; "export: $z"
