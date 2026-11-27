@@ -17,6 +17,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawn } = require('child_process');
 const { _electron } = require('playwright-core');
+const quit = require('./quit');
 const exe = process.argv[2];
 if (process.platform !== 'win32' || !exe || !fs.existsSync(exe)) { console.error('usage (Windows only): node test/setupexe.js PATH-TO-Hive-Setup.exe'); process.exit(2); }
 // HIVE_EXPECT_VERSION: the version the installer must put in (test/livewin.sh: the one the live site names).
@@ -118,7 +119,7 @@ async function openFromStart(start, shot) {
   fs.mkdirSync('test/shots', { recursive: true });
   await within(`${shot}: screenshot`, (frontPage(app, at) || page).screenshot({ path: `test/shots/${shot}-${process.arch}.png` }), 30).catch(() => { });
   const reached = hiveAt.test(at) ? `the Hive at ${at}` : t === 'Set up the Hive' ? 'the setup screen (no Hive on this machine)' : '';
-  if (!reached) { await within(`${shot}: closing the app`, app.close(), 60).catch(() => { }); throw new Error(`the installed app never showed the Hive or its setup screen (at "${at}", "${t}")`); }
+  if (!reached) { await within(`${shot}: closing the app`, quit(app), 60).catch(() => { }); throw new Error(`the installed app never showed the Hive or its setup screen (at "${at}", "${t}")`); }
   return { app, reached };
 }
 const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; return w ? w.getNormalBounds() : null; });
@@ -158,7 +159,7 @@ const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWin
     await sleep(1500);
     kept = await within('setupexe: reading the window bounds', bounds(app), 30);
   }
-  await within('setupexe: closing the app', app.close(), 60);
+  await within('setupexe: closing the app', quit(app), 60);
   console.log(`ok setup-exe launch: the Start menu shortcut opens ${reached}`);
 
   if (newer) {
@@ -181,7 +182,7 @@ const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWin
     ({ app, reached } = await openFromStart(start2, 'setupexe-update'));
     const running = await within('setupexe-update: reading the version', app.evaluate(({ app: a }) => a.getVersion()), 30);
     const now = await within('setupexe-update: reading the window bounds', bounds(app), 30);
-    await within('setupexe-update: closing the app', app.close(), 60);
+    await within('setupexe-update: closing the app', quit(app), 60);
     if (running !== newVersion) throw new Error(`the Start menu shortcut opens version ${running}, not ${newVersion}`);
     const off = kept && now ? Math.max(...['x', 'y', 'width', 'height'].map(k => Math.abs(kept[k] - now[k]))) : Infinity;
     if (off > 2) throw new Error(`the update lost the window's place: before ${JSON.stringify(kept)}, after ${JSON.stringify(now)}`);
@@ -206,7 +207,7 @@ const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWin
     await runInstaller(copy3, ['/S'], 'setupexe-update-open');
     let e3 = null;
     for (let i = 0; i < 60; i++) { e3 = entry(); if (e3 && e3.some(x => x.DisplayVersion === newestVersion)) break; await sleep(2000); }
-    await Promise.race([app.close().catch(() => { }), sleep(10000)]); // its process is gone, so this only tidies up
+    await Promise.race([quit(app, 10000).catch(() => { }), sleep(11000)]); // its process is gone, so this only tidies up
     if (alive(pid)) throw new Error(`the installer finished but the open ${from} app (pid ${pid}) is still running`);
     if (!e3 || e3.length !== 1 || e3[0].DisplayVersion !== newestVersion) throw new Error(`after the update with the app open, Apps & features shows ${JSON.stringify(e3)}, not one entry at ${newestVersion}`);
     const unexe3 = (e3[0].UninstallString.match(/^"([^"]+)"/) || [null, e3[0].UninstallString.split(' /')[0]])[1];
@@ -220,7 +221,7 @@ const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWin
     ({ app, reached } = await openFromStart(start3, 'setupexe-update-open'));
     const running3 = await app.evaluate(({ app: a }) => a.getVersion());
     const now3 = await bounds(app);
-    await app.close();
+    await within('setupexe-update-open: closing the app', quit(app), 60);
     if (running3 !== newestVersion) throw new Error(`after the update with the app open, the Start menu shortcut opens ${running3}, not ${newestVersion}`);
     const off3 = kept3 && now3 ? Math.max(...['x', 'y', 'width', 'height'].map(k => Math.abs(kept3[k] - now3[k]))) : Infinity;
     console.log(`ok setup-exe upgrade while open: ${from} open at ${reached0.replace(/^the Hive at /, '')}, ${newestVersion} installed over it in ${Math.round((Date.now() - t2) / 1000)} s; the open app was closed by the installer; one Apps & features entry, "${e3[0].DisplayName}" ${e3[0].DisplayVersion}, same folder; ${started.length ? 'the installer started ' + newestVersion + ' itself; ' : ''}window ${off3 <= 2 ? 'kept' : 'not kept (' + JSON.stringify(kept3) + ' then ' + JSON.stringify(now3) + ')'}; ${newestVersion} opens ${reached}`);
@@ -266,4 +267,5 @@ const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWin
   const left = [entry() && 'the Apps & features entry', fs.existsSync(bin) && bin, ...links().map(x => x.Path)].filter(Boolean);
   if (left.length) throw new Error('left after the uninstall: ' + left.join(', '));
   console.log('ok setup-exe uninstall: no app, no shortcut, no Apps & features entry');
+  process.exit(0);
 })().catch(err => { console.error('FAILED', err.message || err); process.exit(1); });

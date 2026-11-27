@@ -3,6 +3,7 @@
 // web app in the window. It installs a Hive into this account, so it refuses to run unless HIVE_APP_REAL=1.
 const fs = require('fs');
 const { _electron } = require('playwright-core');
+const quit = require('./quit');
 const bin = process.argv[2];
 if (process.env.HIVE_APP_REAL !== '1' || !bin || !fs.existsSync(bin)) { console.error('usage: HIVE_APP_REAL=1 node test/real.js PATH-TO-APP-EXECUTABLE (on a throwaway machine)'); process.exit(2); }
 let logText = '';
@@ -51,7 +52,7 @@ const frontPage = (app, at) => app.windows().find(p => at && p.url().split('#')[
   console.log(`ok real ${process.platform}: the window shows ${await where()} (${await hp.title()})`);
   // The installer's own words, so the run shows which path it took (on Windows: "Getting Ubuntu" means it built its own Linux system).
   console.log('the installer said:\n' + logText.split('\n').map(l => l.trim()).filter(l => l && l.length < 160).slice(-40).join('\n'));
-  await app.close();
+  await quit(app);
   // Second launch: the Hive is installed now, so the app must go straight to it, never showing the install step.
   const app2 = await _electron.launch({ executablePath: bin, args: process.platform === 'linux' ? ['--no-sandbox'] : [], env });
   const page2 = await ownPage(app2);
@@ -65,5 +66,6 @@ const frontPage = (app, at) => app.windows().find(p => at && p.url().split('#')[
     if (Date.now() > end2) throw new Error(`second launch ended at "${t2}" (${at2})`);
     await new Promise(r => setTimeout(r, 1000));
   }
-  await app2.close();
+  await quit(app2);
+  process.exit(0);
 })().catch(e => { console.error('FAILED', e.message || e); console.error('the installer\'s output up to then:\n' + logText.slice(-6000)); process.exit(1); });
