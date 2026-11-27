@@ -329,3 +329,31 @@ t('right-click menu: link, box, selection', () => {
   assert.ok(!('gate' in validHive(base)));
   console.log('ok saved gate');
 }
+
+// ---- Many Hives, step 7d: the list core's `hive-admin list --json` prints ----
+{
+  const { parseAdminList } = require('../lib');
+  // ADMIN_JSON: a file core's test printed, read as the app reads it (dist/test_install.sh writes one).
+  const text = process.env.ADMIN_JSON ? require('fs').readFileSync(process.env.ADMIN_JSON, 'utf8') : JSON.stringify({ v: 1, hives: [
+    { user: 'hive', home: '/home/hive', port: 8077, version: 'v2.5.1', state: 'running',
+      update: { tag: 'v2.5.1', newest: null, failed: [], error: null, checked: 1764200000 } },
+    { user: 'hive-work', home: '/home/hive-work', port: 8078, version: 'v2.4.0', state: 'stopped',
+      update: { tag: 'v2.4.0', newest: 'v2.5.1', failed: ['v2.5.0'], error: 'services did not come back', checked: 1764200000.5 } },
+    { user: 'Bad User', home: '/home/x', port: 1, state: 'running' },        // not a user name: dropped
+    { user: 'hive', home: '/home/hive', port: 8077, state: 'running' },       // the same user twice: dropped
+    { user: 'odd', home: 'relative', port: 8079, state: 'running' },         // a home that isn't a path: dropped
+  ] });
+  const r = parseAdminList(text);
+  assert.ok(!r.error, r.error);
+  const by = Object.fromEntries(r.hives.map(h => [h.user, h]));
+  assert.deepStrictEqual(Object.keys(by).sort(), ['hive', 'hive-work'], 'two Hives');
+  assert.strictEqual(by.hive.state, 'running');
+  assert.ok(Number.isInteger(by.hive.port) && Number.isInteger(by['hive-work'].port) && by.hive.port !== by['hive-work'].port, 'each its own port');
+  assert.strictEqual(by['hive-work'].state, 'stopped');
+  assert.deepStrictEqual(by['hive-work'].update, { tag: 'v2.4.0', newest: 'v2.5.1', failed: ['v2.5.0'], error: 'services did not come back', checked: 1764200000.5 });
+  if (!process.env.ADMIN_JSON) assert.strictEqual(r.dropped, 3, 'malformed entries dropped');
+  const odd = parseAdminList(JSON.stringify({ v: 1, hives: [{ user: 'hive', home: '/h', port: 99999, state: 'exploded', version: 7, update: { failed: [1, 'v2.0.1'] } }] })).hives[0];
+  assert.deepStrictEqual([odd.port, odd.state, odd.version, odd.update.failed], [null, 'unknown', null, ['v2.0.1']], 'odd fields read as nothing');
+  assert.ok(parseAdminList('nope').error && /newer/.test(parseAdminList('{"v":2,"hives":[]}').error) && parseAdminList('{"v":1}').error);
+  console.log('ok admin list' + (process.env.ADMIN_JSON ? ' (from core)' : ''));
+}

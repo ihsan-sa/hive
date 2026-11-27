@@ -47,6 +47,7 @@ function make() {
       return res.end(Buffer.concat([Buffer.from(nonce), Buffer.from(box)]).toString('base64'));
     }
     const c = (req.headers.cookie || '').match(/(?:^|;\s*)CF_Authorization=([^;]+)/);
+    if (c && valid(c[1]) && f.forward) { res.writeHead(302, { location: f.forward }); return res.end(); }   // f.forward: a gated address that sends on to another
     if (c && valid(c[1])) { res.setHeader('content-type', 'text/html'); return res.end('<title>Gated Hive</title><h1 id="app">The gated Hive</h1>'); }
     res.writeHead(302, { location: login }); res.end();
   });

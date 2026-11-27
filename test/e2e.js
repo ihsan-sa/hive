@@ -777,12 +777,22 @@ const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.g
   await page.getByRole('button', { name: 'Sign in again in your browser' }).click();
   await signInBrowser();
   await hive(app, gf.origin);
+  // A gated address that, once signed in, sends the app on to another one (as h2.ihsan.cc does to dash.ihsan.cc): the
+  // window says where it went, and doesn't ask for a sign-in, which would only lead back here.
+  gf.forward = `http://localhost:${rport}/`;
+  (await hive(app, gf.origin)).reload().catch(() => { });
+  await screen("Can't reach 127.0.0.1");
+  const fwd = await page.locator('#text').textContent();
+  assert.ok(fwd.includes(`sends the app on to localhost:${rport}`) && !fwd.includes('Sign in again'), 'says where it was sent: ' + fwd.slice(0, 400));
+  assert.strictEqual(gf.tokens.length, 3, 'no new sign-in was asked for');
+  gf.forward = '';
   await app.close();
   const told = fs.readFileSync(path.join(userData, 'app.log'), 'utf8') + hivesJson();
   assert.strictEqual(gf.tokens.length, 3);
   for (const t of gf.tokens) for (const bit of t.split('.')) assert.ok(!told.includes(bit), 'no token in the log or hives.json');
   assert.ok(told.includes('ran out'), 'the log says it ran out');
   console.log('ok gate expiry');
+  console.log('ok gate forward');
   gf.close(); remote.close();
 
   if (win) { wipe(); forgetHives(); }

@@ -290,6 +290,33 @@ function parseHives(text) {
   list.sort((a, b) => a.order - b.order);
   return { v: 1, hives: list, extra, dropped };
 }
+// `hive-admin list --json` as the manager reads it (run as root in the Hive system): the Hives there, each with its user,
+// home, port, version, state and update state. Anything malformed is dropped rather than shown; a newer format says so.
+const ADMIN_STATES = new Set(['running', 'stopped', 'installing']);
+function parseAdminList(text) {
+  let d;
+  try { d = JSON.parse(String(text)); } catch { return { hives: [], error: "The Hive system's list of Hives couldn't be read." }; }
+  if (!d || typeof d !== 'object' || !Array.isArray(d.hives)) return { hives: [], error: "The Hive system's list of Hives couldn't be read." };
+  if (d.v !== 1) return { hives: [], error: 'The Hive system is newer than this app. Update the app to manage its Hives.' };
+  const str = v => (typeof v === 'string' && v.length < 2000 ? v : null);
+  const seen = new Set(), hives = [];
+  let dropped = 0;
+  for (const h of d.hives) {
+    if (!h || typeof h !== 'object' || typeof h.user !== 'string' || !/^[a-z_][a-z0-9_-]{0,31}$/.test(h.user) || seen.has(h.user)
+      || typeof h.home !== 'string' || !h.home.startsWith('/')) { dropped++; continue; }
+    seen.add(h.user);
+    const u = h.update && typeof h.update === 'object' ? h.update : {};
+    hives.push({
+      user: h.user, home: h.home,
+      port: Number.isInteger(h.port) && h.port > 0 && h.port < 65536 ? h.port : null,
+      version: str(h.version),
+      state: ADMIN_STATES.has(h.state) ? h.state : 'unknown',
+      update: { tag: str(u.tag), newest: str(u.newest), failed: Array.isArray(u.failed) ? u.failed.map(str).filter(Boolean) : [],
+        error: str(u.error), checked: Number.isFinite(u.checked) ? u.checked : null },
+    });
+  }
+  return { hives, dropped };
+}
 function stringifyHives(state) {
   const hives = (state.hives || []).map(validHive).filter(Boolean);
   return JSON.stringify({ ...(state.extra || {}), v: 1, hives }, null, 1) + '\n';
@@ -334,4 +361,4 @@ function browserLabel(name) {
 // The proof a Hive gives that it holds the key, tied to the whole origin (scheme, host and port) as well as the moment.
 function proofString(origin, nonce) { return `proof:${origin}:${nonce}`; }
 
-module.exports = { linkMenu, browserLabel, addressRule, sameHive, newId, hiveUserName, validHive, parseHives, stringifyHives, windowsState, proofString, newerApp, contextItems, downloadPage, downloadPath, appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };
+module.exports = { parseAdminList, linkMenu, browserLabel, addressRule, sameHive, newId, hiveUserName, validHive, parseHives, stringifyHives, windowsState, proofString, newerApp, contextItems, downloadPage, downloadPath, appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };

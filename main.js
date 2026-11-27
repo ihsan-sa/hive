@@ -423,7 +423,7 @@ function guard(wc, h, W) {
     // the window asks for a sign-in in the browser (a Cloudflare Access gate, step 6), or says where it was sent.
     if (h.kind === 'remote' && (e.isMainFrame ?? isMain) && W && W.views.get(h.id)?.webContents === wc) {
       const at = hostOf(u);
-      if (h.pending) h.blocked = at; else gateOrFail(W, h, at);
+      if (h.pending) h.blocked = at; else gateOrFail(W, h, u);
       return;
     }
     external(u);
@@ -562,7 +562,7 @@ async function connectNow(W, t) {
     await Promise.race([v.webContents.loadURL(full.href), new Promise((_r, no) => { timer = setTimeout(() => no(new Error('ERR_TIMED_OUT')), 30000); })]);
   } catch (e) { why = failWords(0, e.code || e.message); }
   clearTimeout(timer);
-  if (h.blocked) why = sentOn(h.blocked);
+  if (h.blocked) why = sentOn(h, h.blocked);
   if (!why && !alive(W)) why = 'The window closed.';
   if (why) {
     if (alive(W)) closeView(W, h.id);
@@ -593,7 +593,9 @@ function keep(W, h, note) {
 // Sign-in gates (DESIGN-many-hives.md step 6). A Hive behind Cloudflare Access is signed in to in the person's own
 // browser (gate.js). The token that comes back becomes the CF_Authorization cookie in that Hive's session only, and when
 // it runs out the windows on that Hive ask for a sign-in again. The token itself is never logged or kept anywhere else.
-const sentOn = at => `It sent the app on to ${at}, which isn't the Hive and isn't a sign-in the app knows, so the app stopped there.`;
+// Words for a Hive whose page sends the app on to another address. The app never follows it, as that address isn't the
+// Hive the person added; the person can add it themselves if it is theirs.
+const sentOn = (h, at) => `${hostOf(h.saved.url)} sends the app on to ${at}, another address, so the app stopped there. If your Hive is at ${at}, connect to that instead: Hives…, then Connect to a Hive….`;
 // A request through a Hive's own session (its name lookup, proxy and certificate rules) for gate.js. No cookies go with
 // it, and a redirect is answered, not followed (Electron's own fetch refuses that).
 function sessionFetch(h) {
@@ -637,10 +639,15 @@ function needSignIn(h) {
   for (const W of all()) { closeView(W, h.id); if (W.chosen === h && !W.aside) display(W); else rail(W); }
 }
 // A Hive that sent its page somewhere else: if that is a Cloudflare Access gate, sign in to it; else say where it went.
-async function gateOrFail(W, h, at) {
+async function gateOrFail(W, h, to) {
+  const at = hostOf(to);
+  // Only a gate's own sign-in page means the sign-in is missing or turned away. A gated address that, once signed in,
+  // forwards to another one (h2.ihsan.cc forwards to dash.ihsan.cc) is not asked again: each sign-in would lead back here.
+  let where = ''; try { where = new URL(to).pathname; } catch { }
+  if (!where.startsWith('/cdn-cgi/access/')) return remoteFailed(W, h, sentOn(h, at));
   let g = null;
   try { g = await gate.probe(sessionFetch(h), h.saved.url); } catch (e) { return remoteFailed(W, h, e.message); }
-  if (!g) return remoteFailed(W, h, sentOn(at));
+  if (!g) return remoteFailed(W, h, sentOn(h, at));
   if (!h.saved.gate || h.saved.gate.aud !== g.aud || h.saved.gate.team !== g.team) { h.saved.gate = g; saveHives(); }
   needSignIn(h);
 }
