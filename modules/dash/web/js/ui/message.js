@@ -563,9 +563,14 @@ function appMessage(p, opts) {
     simpleOn() ? null : msgTools(p, ws, opts));
 }
 
-/** E203n: the steps the message's Stop and send ended, or null. E203o: comms.js adds it to a message already drawn when the stop is logged. */
+/** E203n: the steps the message's Stop and send ended, or null. E203o: comms.js adds it to a message already drawn when the stop is logged.
+ *  E203p: they say which agent ran them, as the running group does (draftMessage); classes of their own, as the person's message holds them. */
 export function cutRan(p) {
-  return p.from === "person" && p.interrupt && S.cut[p.id]?.did === "stopped the running command" ? h("div", { class: "msg-cutran", "data-key": "cutran" }, ranFold(p)) : null;
+  const cut = p.from === "person" && p.interrupt ? S.cut[p.id] : null;
+  if (cut?.did !== "stopped the running command") return null;
+  return inConversation(p.th, () => h("div", { class: "msg-cutran", "data-key": "cutran" },
+    S.app.app ? agentAvatar(cut.name) : null,
+    h("div", { class: "cutran-c" }, h("b", { class: "cutran-who" }, who(cut.name)), ranFold(p))));
 }
 
 // ---- E12: edit a sent message, ask for another reply; the older versions stay behind the arrows ----

@@ -10,6 +10,11 @@ function Install-Hive {
   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
   $site = 'https://hivelab.ca'
   $distro = 'Hive'
+  # Which Hive in the system: its Linux user. hive, or HIVE_USER=name for another one beside it (each has its own home, port and sign-in).
+  $hu = if ($env:HIVE_USER) { "$env:HIVE_USER" } else { 'hive' }
+  if ($hu -cnotmatch '^[a-z0-9_][a-z0-9_-]{0,31}$' -or $hu -eq 'root') { Write-Host "HIVE_USER must be a plain user name in small letters, other than root, not $hu"; return }
+  # Its command on Windows: hive for the first, hive-NAME for the others.
+  $cmdName = if ($hu -eq 'hive' -or $hu.StartsWith('hive-')) { $hu } else { "hive-$hu" }
   $base = Join-Path $env:LOCALAPPDATA 'Hive'
   $bin = Join-Path $base 'bin'
   New-Item -ItemType Directory -Force $base | Out-Null
@@ -190,7 +195,7 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
   # To a file first, because a failed curl piped into sh looks like success. HIVE_INSIDE keeps the Linux installer from printing an ending of its own.
   # HIVE_REPORT=1 (or 0) set in PowerShell says yes (or no) to sending a failure to the Hive's makers, as on Linux. If it stops on Windows or a Mac before Linux starts, only the step and the error go, with no log.
   $report = if ($env:HIVE_REPORT -in '0', '1') { "HIVE_REPORT=$($env:HIVE_REPORT) " } else { '' }
-  $getIt = 'f=$(mktemp) && curl -fsSL ' + $site + '/install.sh -o "$f" && ' + $report + 'HIVE_HOST=windows HIVE_INSIDE=1 sh "$f"; c=$?; rm -f "$f"; exit $c'
+  $getIt = 'f=$(mktemp) && curl -fsSL ' + $site + '/install.sh -o "$f" && ' + $report + 'HIVE_USER=' + $hu + ' HIVE_HOST=windows HIVE_INSIDE=1 sh "$f"; c=$?; rm -f "$f"; exit $c'
   $c = Invoke-InHive $getIt
   if ($c -eq 0) { Stage $null }
   if ($c -ne 0) { $ui.code = $c; Fail "The install inside the Hive system failed; the lines below say why. Fix that and run this again.$halfway"; return }
@@ -210,14 +215,14 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
     $code = Quietly { & $tar -c -f (Join-Path $work 'old.tar') --exclude 'projects/*/.checkouts' -C $oldRoot @items -C $work projects.jsonl }
     if ($code -ne 0) { Fail "Couldn't read all of the old Hive's things.$halfway"; return }
     $s = '$HOME/.old-hive-incoming'
-    if ((Invoke-InHive "chmod -R u+w $s 2>/dev/null; rm -rf $s; mkdir -p $s" 'hive') -ne 0) { Fail "Couldn't get the new Hive ready for them.$halfway"; return }
+    if ((Invoke-InHive "chmod -R u+w $s 2>/dev/null; rm -rf $s; mkdir -p $s" $hu) -ne 0) { Fail "Couldn't get the new Hive ready for them.$halfway"; return }
     Push-Location $work
-    try { $code = Quietly { & cmd.exe /c 'wsl.exe -d Hive -u hive --cd ~ -- tar x --no-same-owner -f - -C .old-hive-incoming < old.tar' } } finally { Pop-Location }
+    try { $code = Quietly { & cmd.exe /c "wsl.exe -d $distro -u $hu --cd ~ -- tar x --no-same-owner -f - -C .old-hive-incoming < old.tar" } } finally { Pop-Location }
     if ($code -ne 0) { Fail "Couldn't copy the old Hive's things in.$halfway"; return }
     $back = $oldRoot.Replace("'", "'\''")
     # Its summary (counts and names, no values) is for reading, so it shows.
     $ui.show = $true
-    $code = Invoke-InHive "cd && python3 -I core/import-old.py $s '$back'" 'hive'
+    $code = Invoke-InHive "cd && python3 -I core/import-old.py $s '$back'" $hu
     $ui.show = $false
     if ($code -ne 0) { Fail "Couldn't sort out the old Hive's things.$halfway"; return }
     [IO.File]::WriteAllText((Join-Path $oldRoot '.hive\v2-import'), 'done')
@@ -228,7 +233,10 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
   # 5. A hive command for Windows.
   Step 'Adding the hive command'
   New-Item -ItemType Directory -Force $bin | Out-Null
-  Set-Content -Encoding ASCII (Join-Path $bin 'hive.cmd') "@wsl.exe -d $distro -u hive --cd ~ -- bash -lc `"hive %*`""
+  $cmdFile = Join-Path $bin "$cmdName.cmd"
+  # One command name can't serve two Hives (users work and hive-work would both make hive-work).
+  if ((Test-Path $cmdFile) -and -not (Select-String -Quiet -SimpleMatch -Pattern " -u $hu " -Path $cmdFile)) { Fail "$cmdFile already opens another Hive, so I left it. Pick another HIVE_USER."; return }
+  Set-Content -Encoding ASCII $cmdFile "@wsl.exe -d $distro -u $hu --cd ~ -- bash -lc `"hive %*`""
   try {
     $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
     $raw = [string]$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
@@ -243,7 +251,8 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
 
   Step 'Starting the Hive'
   # 6. WSL stops a system with nothing attached, so a hidden process keeps it up from sign-in on.
-  $keep = '--headless wsl.exe -d ' + $distro + ' -u hive --exec sleep infinity'
+  # As root, not as a Hive's user: one keep-alive serves every Hive in the system, and still works once any one Hive is removed.
+  $keep = '--headless wsl.exe -d ' + $distro + ' -u root --exec sleep infinity'
   $conhost = Join-Path $env:windir 'System32\conhost.exe'
   try {
     $link = Join-Path ([Environment]::GetFolderPath('Startup')) 'Hive.lnk'
@@ -253,17 +262,17 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
   } catch { Note "Couldn't set the Hive to start when you sign in: $_. It runs while a hive window is open." }
 
   # 6b. A Hive icon in the Start menu and on the Desktop: it wakes the Hive if stopped, waits, then opens the app.
-  # The desktop app (HIVE_FROM_APP=1) has its own icons with the same name, so it skips these.
-  if ($env:HIVE_FROM_APP -ne '1') { try {
+  # The desktop app (HIVE_FROM_APP=1) has its own icons with the same name, so it skips these. They open the first Hive; another opens from the desktop app or its command.
+  if ($env:HIVE_FROM_APP -ne '1' -and $hu -eq 'hive') { try {
     $ico = Join-Path $bin 'Hive.ico'
-    try { & wsl.exe -d $distro -u hive --cd ~ -- bash -lc 'cp ~/modules/dash/web/icons/hive.ico "$(wslpath "$0")"' $ico 2>$null | Out-Null } catch { }
+    try { & wsl.exe -d $distro -u $hu --cd ~ -- bash -lc 'cp ~/modules/dash/web/icons/hive.ico "$(wslpath "$0")"' $ico 2>$null | Out-Null } catch { }
     $launch = Join-Path $bin 'hive-open.ps1'
     $body = @(
       "`$ErrorActionPreference = 'SilentlyContinue'",
       "`$app = Join-Path `$env:LOCALAPPDATA 'Programs\Hive\Hive.exe'",
       "if (Test-Path `$app) { Start-Process `$app; exit }",
       "Start-Process '$conhost' -ArgumentList '$keep' -WindowStyle Hidden",
-      "`$u = (& wsl.exe -d $distro -u hive --cd ~ -- bash -lc 'hive open --print' | Select-Object -First 1)",
+      "`$u = (& wsl.exe -d $distro -u $hu --cd ~ -- bash -lc 'hive open --print' | Select-Object -First 1)",
       "if (`$u -like 'http*') { Start-Process `$u } else { Write-Host 'The Hive did not start. Open a window and run: hive open'; Start-Sleep 8 }"
     )
     Set-Content -Encoding ASCII $launch $body
@@ -281,7 +290,7 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
   } catch { Note "Couldn't add the Hive icon: $_. Run hive open in a window instead." } }
 
   # 7. Open the app.
-  $address = (& wsl.exe -d $distro -u hive --cd ~ -- bash -lc 'hive web 2>/dev/null' | Select-Object -First 1)
+  $address = (& wsl.exe -d $distro -u $hu --cd ~ -- bash -lc 'hive web 2>/dev/null' | Select-Object -First 1)
   End-Line
   Write-Host ''
   if ($oldRoot) {
@@ -290,7 +299,8 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
   }
   Write-Host 'The Hive is installed. This address is the key to it, so keep it to yourself:'
   if ($address) { Write-Host "  $address" } else { Write-Host "  (it didn't print just now: wait a minute, then run: hive web)" }
-  Write-Host 'To open it again, click the Hive icon on your Desktop or in the Start menu.'
+  if ($hu -eq 'hive') { Write-Host 'To open it again, click the Hive icon on your Desktop or in the Start menu.' }
+  else { Write-Host "To open it again, add it in the Hive desktop app, or see its address with: $cmdName web" }
   Write-Host 'Code, issues and updates: https://github.com/ihsan-sa/hive (a star there helps others find it).'
   # The desktop app (HIVE_FROM_APP=1) shows the Hive in its own window, so no browser tab beside it.
   if ($env:HIVE_FROM_APP -ne '1' -and ($address -like 'http://localhost*' -or $address -like 'http://127.0.0.1*')) { try { Start-Process $address } catch { } }

@@ -303,10 +303,13 @@
 .msg-fold[open]>summary .ic{transform:rotate(90deg)}
 .msg-fold-b{margin-top:6px;padding:10px 12px;border-radius:var(--r-m);background:var(--sunken);font:12px/1.6 var(--mono);color:var(--ink-2);white-space:pre-wrap;overflow-x:auto}
 /* everyday E203n: the stopped steps above the Stop and send message sit on the agent's side */
-.msg-cutran{justify-self:start;max-width:100%;min-width:0;margin:0 0 var(--s3,12px) 40px;text-align:left}
-.msg-cutran>details[open]{width:min(640px,calc(100vw - 80px))}
-.msg-cutran:has(>.msg-ran-slot:only-child){display:none}
-@media (max-width:760px){.msg-cutran{margin-left:calc(-1 * var(--s2,8px))}.msg-cutran>details[open]{width:calc(100vw - 48px)}}
+.msg-cutran{justify-self:start;max-width:100%;min-width:0;margin:0 0 var(--s3,12px);text-align:left;display:grid;grid-template-columns:28px minmax(0,1fr);column-gap:var(--s3,12px);align-items:start}
+.msg-cutran>.av{margin-top:1px;width:28px;height:28px}
+.cutran-c{grid-column:2;min-width:0;display:grid;justify-items:start;gap:4px}
+.cutran-who{font-size:var(--fs-body)}
+.cutran-c>details[open]{width:min(640px,calc(100vw - 80px))}
+.msg-cutran:has(>.cutran-c>.msg-ran-slot){display:none}
+@media (max-width:760px){.msg-cutran{grid-template-columns:minmax(0,1fr);margin-left:calc(-1 * var(--s2,8px))}.msg-cutran>.av{display:none}.cutran-c{grid-column:1}.cutran-c>details[open]{width:calc(100vw - 48px)}}
 /* everyday E42: "Code it ran", each step's code and its output under the reply */
 .ran-b{margin-top:6px;display:grid;gap:10px;min-width:0}
 .ran-s{min-width:0;border:1px solid var(--line);border-radius:var(--r-m);overflow:hidden;background:var(--surface)}
