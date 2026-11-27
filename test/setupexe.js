@@ -82,10 +82,20 @@ const marked = file => {
 // The app may open the Hive at /login#key, which signs in and goes on; only a page past /login is the Hive signed in.
 const hiveAt = /^http:\/\/(localhost|127\.0\.0\.1):\d+\/(?!login\b)/;
 // Started the way a person does, from its Start menu shortcut; resolves once the Hive or the setup screen shows.
+// The app's own page (setup.html) is the window's; each Hive shows in a view over it (DESIGN-many-hives.md), so what the
+// window shows is its top view's address, and the Hive's page is the Playwright page at that address.
+async function ownPage(app) {
+  for (const end = Date.now() + 60000; Date.now() < end; await new Promise(r => setTimeout(r, 200))) {
+    const p = app.windows().find(w => w.url().includes('setup.html'));
+    if (p) return p;
+  }
+  return app.firstWindow();
+}
+const frontPage = (app, at) => app.windows().find(p => at && p.url().split('#')[0] === at);
 async function openFromStart(start, shot) {
   const app = await _electron.launch({ executablePath: start.Target, args: start.Args ? start.Args.split(/\s+/) : [], env: { ...process.env, HIVE_APP_TEST: '1' } });
-  const page = await app.firstWindow();
-  const where = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.webContents.getURL().split('#')[0])[0] || '').catch(() => '');
+  const page = await ownPage(app);
+  const where = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => (w.contentView.children.at(-1)?.webContents ?? w.webContents).getURL().split('#')[0])[0] || '').catch(() => '');
   const title = () => page.evaluate(() => document.querySelector('#title')?.textContent || '').catch(() => '');
   const end = Date.now() + 4 * 60000; let at = '', t = '';
   for (;;) {
@@ -94,7 +104,7 @@ async function openFromStart(start, shot) {
     await sleep(1000);
   }
   fs.mkdirSync('test/shots', { recursive: true });
-  await page.screenshot({ path: `test/shots/${shot}-${process.arch}.png` }).catch(() => { });
+  await (frontPage(app, at) || page).screenshot({ path: `test/shots/${shot}-${process.arch}.png` }).catch(() => { });
   const reached = hiveAt.test(at) ? `the Hive at ${at}` : t === 'Set up the Hive' ? 'the setup screen (no Hive on this machine)' : '';
   if (!reached) { await app.close().catch(() => { }); throw new Error(`the installed app never showed the Hive or its setup screen (at "${at}", "${t}")`); }
   return { app, reached };

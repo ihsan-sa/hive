@@ -52,10 +52,20 @@ function download(file) {
   sh('xattr', ['-dr', 'com.apple.quarantine', dest]);
 }
 // Opened from Applications: it must reach the Hive without showing setup first (or, with HIVE_DL_EXPECT=setup, show setup).
+// The app's own page (setup.html) is the window's; each Hive shows in a view over it (DESIGN-many-hives.md), so what the
+// window shows is its top view's address, and the Hive's page is the Playwright page at that address.
+async function ownPage(app) {
+  for (const end = Date.now() + 60000; Date.now() < end; await new Promise(r => setTimeout(r, 200))) {
+    const p = app.windows().find(w => w.url().includes('setup.html'));
+    if (p) return p;
+  }
+  return app.firstWindow();
+}
+const frontPage = (app, at) => app.windows().find(p => at && p.url().split('#')[0] === at);
 async function open(shot) {
   const app = await _electron.launch({ executablePath: path.join(dest, 'Contents/MacOS/Hive'), env: { ...process.env, HIVE_APP_TEST: '1' } });
-  const page = await app.firstWindow();
-  const where = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.webContents.getURL().split('#')[0])[0] || '').catch(() => '');
+  const page = await ownPage(app);
+  const where = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => (w.contentView.children.at(-1)?.webContents ?? w.webContents).getURL().split('#')[0])[0] || '').catch(() => '');
   const title = () => page.evaluate(() => document.querySelector('#title')?.textContent || '').catch(() => '');
   const end = Date.now() + 4 * 60000; let at = '', t = '', sawSetup = false;
   for (;;) {
@@ -70,13 +80,13 @@ async function open(shot) {
   const rosettaFail = rosetta !== wantRosetta ? `the app says runningUnderARM64Translation is ${rosetta}, not ${wantRosetta}`
     : wantSetup && !!line !== wantRosetta ? (line ? `the setup screen says "${line}" on a Mac where the app is native` : 'the setup screen under Rosetta has no line about the Apple chip download') : '';
   fs.mkdirSync('test/shots', { recursive: true });
-  await page.screenshot({ path: `test/shots/${shot}.png` }).catch(() => { });
+  await (frontPage(app, at) || page).screenshot({ path: `test/shots/${shot}.png` }).catch(() => { });
   const fail = wantSetup ? (hiveUrl.test(at) ? `the app from ${dest} opened a Hive page (${at}) on a machine with no Hive`
       : t !== 'Set up the Hive' ? `the app from ${dest} never showed its setup screen (at "${at}", "${t}")` : rosettaFail)
     : !signedIn(at) ? `the app from ${dest} never reached the Hive signed in (at "${at}", "${t}"); is the Hive from test/real.js there?`
     : sawSetup ? `the app from ${dest} showed the setup screen ("${t}") before the Hive` : rosettaFail;
   if (fail) { await app.close().catch(() => { }); throw new Error(fail); }
-  const name = await page.title().catch(() => '');
+  const name = await (frontPage(app, at) || page).title().catch(() => '');
   return { app, at: wantSetup ? `its setup screen ("${t}"; no Hive on this machine)` : `straight to the Hive at ${at} (${name})` };
 }
 const bounds = app => app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; return w ? w.getNormalBounds() : null; });

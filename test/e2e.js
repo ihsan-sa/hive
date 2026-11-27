@@ -89,6 +89,17 @@ echo "The Hive is installed. Open this address: http://localhost:${port}/login#S
   else if (req.url === '/thread') { res.setHeader('content-type', 'text/html'); res.end('<h1 id="thread">A thread</h1>'); }
   else { res.statusCode = 404; res.end('no'); }
 });
+// A second Hive somewhere else (here another port of this computer), for a window with more than one (DESIGN-many-hives.md, step 3).
+// Its key is OTHERKEY. /login signs in with a cookie of its own; its pages show only to that cookie.
+let rport = 0; const rseen = [];
+const remote = http.createServer((req, res) => {
+  if (req.url.startsWith('/api/proof?n=')) return res.end(require('crypto').createHmac('sha256', 'OTHERKEY').update(`proof:${rport}:${req.url.split('n=')[1]}`).digest('hex'));
+  const page = `<title>Other Hive</title><h1 id="app">The other Hive</h1><p id="remote">remote</p><button id="pop" onclick="window.open('/')">pop</button>`;
+  res.setHeader('content-type', 'text/html');
+  if (req.url.startsWith('/login')) { rseen.push(req.url); res.setHeader('set-cookie', 'hive=remote; Path=/; HttpOnly; Max-Age=86400'); return res.end(page); }
+  if (/(^|;\s*)hive=remote/.test(req.headers.cookie || '')) return res.end(page);
+  res.statusCode = 401; res.end('<h1 id="nope">Sign in first</h1>');
+});
 // A wait for the installer to run: a cold runner under emulation (HIVE_TEST_SLOW=1, Windows on ARM) starts PowerShell slowly, each time.
 const WAIT = process.env.HIVE_TEST_SLOW === '1' ? 90000 : 20000;
 let appVersion = '', port, impostor = '', needRestart = false, failInstall = false, slowInstall = false, siteOverride = '';
@@ -103,7 +114,9 @@ async function start(extra = {}) {
     env[k] = wslDir + ';' + (env[k] || '');
   }
   const app = await _electron.launch(process.env.HIVE_APP_BIN ? { executablePath: process.env.HIVE_APP_BIN, args: ['--no-sandbox'], env } : { executablePath: require('electron'), args: [root, '--no-sandbox'], env });
-  const page = await app.firstWindow();
+  // The window's own page is the app's page (setup, Hives, Connect); a Hive shows in a view of its own over it, which can start first.
+  let page = await app.firstWindow();
+  for (let i = 0; i < 300 && !/setup\.html/.test(page.url()); i++) { await new Promise(r => setTimeout(r, 50)); page = app.windows().find(p => /setup\.html/.test(p.url())) || page; }
   if (process.env.HIVE_TEST_SLOW === '1') page.setDefaultTimeout(WAIT);   // the waits with no timeout of their own too
   cur = page;
   return { app, page };
@@ -128,6 +141,19 @@ class P { static int Main(string[] a) {
 function wipe() { for (const d of ['hive', '.hive']) fs.rmSync(path.join(home, d), { recursive: true, force: true });
   if (win) fs.rmSync(path.join(localApp, 'Hive'), { recursive: true, force: true }); }
 const title = page => page.locator('#title').textContent();
+// A Hive's page (DESIGN-many-hives.md, step 3): a view of its own over the window's page, so a page of its own to the driver.
+// Waits for one at that origin showing the web app (#app), and returns it.
+async function hive(app, origin = `http://127.0.0.1:${port}`, timeout = WAIT) {
+  const end = Date.now() + timeout;
+  for (;;) {
+    for (const p of app.windows()) { try { if (p.url().startsWith(origin + '/') && await p.$('#app')) return p; } catch { } }
+    if (Date.now() > end) throw new Error(`no Hive page at ${origin} in ${timeout} ms: ` + app.windows().map(p => p.url().replace(/#.*/, '#…')).join(' '));
+    await new Promise(r => setTimeout(r, 200));
+  }
+}
+// What each window shows: its top view's address (a Hive), else its own page's (the app's page).
+const showing = app => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => (w.contentView.children.at(-1)?.webContents ?? w.webContents).getURL()));
+const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.getApplicationMenu().getMenuItemById(id); if (!m) throw new Error('no menu item ' + id); m.click(); }, id);
 
 (async () => {
   await new Promise(r => server.listen(0, '127.0.0.1', r)); port = server.address().port; buildWsl();
@@ -154,7 +180,8 @@ const title = page => page.locator('#title').textContent();
     await page.getByRole('button', { name: 'Accept and install' }).click();
   }
 
-  await page.waitForSelector('#app', { timeout: WAIT });
+  // From here `page` is the Hive's own page (its view); `setup` the app's page under it.
+  const setup = page; page = await hive(app, undefined, WAIT);
   assert.strictEqual(new URL(page.url()).port, String(port));
   assert.strictEqual(new URL(page.url()).hostname, '127.0.0.1', 'the window uses the one address the Hive listens on, not "localhost" (which is also ::1)');
   assert.ok(asked.length && asked.every(u => !u.includes('SECRETKEY')));
@@ -166,12 +193,12 @@ const title = page => page.locator('#title').textContent();
   await page.goBack(); await page.waitForSelector('#out');
   await page.evaluate(() => { document.querySelector('#out').click(); });
   await new Promise(r => setTimeout(r, 1500));
-  const at = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.webContents.getURL()));
+  const at = await showing(app);
   assert.strictEqual(at.length, 1); assert.ok(at[0].startsWith(`http://127.0.0.1:${port}/`), 'outside link stayed out of the window: ' + at);
   // Nor may the Hive's own address send the window elsewhere.
   await page.evaluate(() => { document.querySelector('#away').click(); });
   await new Promise(r => setTimeout(r, 1500));
-  const at2 = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.webContents.getURL()));
+  const at2 = await showing(app);
   assert.ok(at2.length === 1 && at2[0].startsWith(`http://127.0.0.1:${port}/`), 'a redirect stayed out of the window: ' + at2);
   // The Hive's own page may use notifications; anything else it asks for (location, say) is refused.
   const notif = await page.evaluate(() => Notification.requestPermission());
@@ -246,11 +273,85 @@ const title = page => page.locator('#title').textContent();
   const certLog = fs.readFileSync(path.join(userData, 'app.log'), 'utf8');
   assert.ok(certLog.includes('certificate refused ' + certAt), 'the refusal is in the log');
   console.log('ok cert refused');
+
+  // More than one Hive (DESIGN-many-hives.md, step 3): Hives > Connect, by the address as typed; each Hive in its own session.
+  await new Promise(r => remote.listen(0, '127.0.0.1', r)); rport = remote.address().port;
+  const rorigin = `http://127.0.0.1:${rport}`;
+  await menuClick(app, 'hives-connect');
+  await setup.waitForSelector('#address');
+  assert.ok((await showing(app)).every(u => u.startsWith('file:')), 'the Connect screen shows over the Hive');
+  const connectTo = async a => {   // what the screen says back (empty once it connected)
+    await setup.fill('#address', a); await setup.click('#go');
+    await setup.waitForFunction(() => !document.querySelector('#go') || (!document.querySelector('#go').disabled && document.querySelector('#err').textContent), null, { timeout: WAIT });
+    return (await setup.locator('#err').count()) ? setup.locator('#err').textContent() : '';
+  };
+  assert.ok((await connectTo('http://192.168.1.5/')).includes('only for this computer'), 'plain http to another computer is refused');
+  assert.ok((await connectTo(`127.0.0.1:${rport}/login#WRONGKEY`)).includes("didn't show it is the Hive"), 'a wrong key is refused');
+  assert.strictEqual(rseen.length, 0, 'with the wrong key nothing was loaded from it');
+  await setup.screenshot({ path: path.join(shots, '8-connect.png') });
+  await setup.fill('#address', `127.0.0.1:${rport}/login#OTHERKEY`); await setup.click('#go');
+  const rp = await hive(app, rorigin);
+  assert.ok((await showing(app))[0].startsWith(rorigin + '/'), 'the window shows the other Hive');
+  assert.strictEqual(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getTitle()), 'Other Hive');
+  const hivesJson = () => fs.readFileSync(path.join(userData, 'hives.json'), 'utf8');
+  const kept = JSON.parse(hivesJson()), rid = kept.hives.find(h => h.kind === 'remote')?.id;
+  assert.ok(rid && kept.hives.find(h => h.id === rid).url === rorigin + '/', 'the Hive is kept by its address: ' + hivesJson());
+  assert.ok(!/OTHERKEY|login/.test(hivesJson()), 'and not its key');
+  await rp.screenshot({ path: path.join(shots, '9-other-hive.png') });
+  console.log('ok add hive');
+  // Hives > This computer and back: each Hive's page stays as it was (no reload), the menu says which shows.
+  await rp.evaluate(() => { window.__kept = 1; });
+  await menuClick(app, 'hive-local');
+  assert.ok((await showing(app))[0].startsWith(`http://127.0.0.1:${port}/`), 'Hives > This computer shows the local Hive');
+  assert.strictEqual(await app.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('hive-local').checked), true);
+  await menuClick(app, 'hive-' + rid);
+  assert.ok((await showing(app))[0].startsWith(rorigin + '/'), 'and back');
+  assert.strictEqual(await rp.evaluate(() => window.__kept), 1, 'the other Hive was kept open, not loaded again');
+  console.log('ok switch hive');
+  // Its sign-in is in its own session: the local Hive's (the default session) has no sight of it.
+  const jars = await app.evaluate(async ({ session }, rid) => ({ def: (await session.defaultSession.cookies.get({})).map(c => c.name),
+    own: (await session.fromPartition('persist:hive-' + rid).cookies.get({})).map(c => c.name) }), rid);
+  assert.ok(jars.own.includes('hive') && !jars.def.includes('hive'), 'cookies apart: ' + JSON.stringify(jars));
+  console.log('ok cookies apart');
+  // A window its page opens stays in its session, so it is signed in to that Hive (the cookie-only page shows).
+  const [pop] = await Promise.all([app.waitForEvent('window'), rp.click('#pop')]);
+  await pop.waitForSelector('#remote', { timeout: WAIT });
+  const sess = await app.evaluate(({ webContents, session }, [o, rid]) => webContents.getAllWebContents().filter(w => w.getURL().startsWith(o + '/'))
+    .map(w => w.session === session.fromPartition('persist:hive-' + rid)), [rorigin, rid]);
+  assert.ok(sess.length === 2 && sess.every(Boolean), 'the popup is in the Hive\'s session: ' + sess);
+  await pop.close();
+  console.log('ok popup same session');
   await app.close();
 
-  // Second start: straight in, no setup.
+  // Next start: back on the Hive it showed last. Then remove it (Hives > Manage, Remove twice): it and its sign-in go.
   ({ app, page } = await start());
-  await page.waitForSelector('#app', { timeout: WAIT });
+  const rp2 = await hive(app, rorigin);
+  assert.strictEqual(await rp2.locator('#remote').count(), 1, 'still signed in to it');
+  assert.strictEqual(rseen.length, 1, 'with no second sign-in');
+  console.log('ok remote remembered');
+  const partDir = path.join(userData, 'Partitions', 'hive-' + rid);
+  assert.ok(fs.existsSync(partDir), 'its session is on disk: ' + partDir);
+  await menuClick(app, 'hive-local');
+  await hive(app);
+  await menuClick(app, 'hives-manager');
+  await page.waitForSelector('#remove-' + rid);
+  await page.screenshot({ path: path.join(shots, '10-hives.png') });
+  await page.click('#remove-' + rid);
+  assert.strictEqual(JSON.parse(hivesJson()).hives.length, 1, 'one click does not remove it');
+  await page.click('#remove-' + rid);
+  await page.waitForFunction(id => !document.getElementById('remove-' + id), rid);
+  const after = JSON.parse(hivesJson());
+  assert.ok(!after.hives.some(h => h.kind === 'remote') && after.removed.includes(rid), 'removed from the list: ' + hivesJson());
+  assert.strictEqual(await app.evaluate(({ Menu }, id) => !!Menu.getApplicationMenu().getMenuItemById(id), 'hive-' + rid), false, 'and from the menu');
+  await app.close();
+  remote.close();
+
+  // Second start: straight in, no setup. The removed Hive's files went before anything opened.
+  ({ app, page } = await start());
+  await hive(app, undefined, WAIT);
+  assert.ok(!fs.existsSync(partDir), 'the removed Hive\'s session is gone from disk');
+  assert.deepStrictEqual(JSON.parse(hivesJson()).removed, [], 'and the list forgot it');
+  console.log('ok remote removed');
   await app.close();
 
   // A Hive that won't start: says so, hides nothing, and Try again works once it's back.
@@ -261,7 +362,7 @@ const title = page => page.locator('#title').textContent();
   await page.screenshot({ path: path.join(shots, '4-nostart.png') });
   fs.unlinkSync(path.join(home, 'broken'));
   await page.getByRole('button', { name: 'Try again' }).click();
-  await page.waitForSelector('#app', { timeout: WAIT });
+  await hive(app, undefined, WAIT);
   await app.close();
 
   // Repair on the "didn't start" screen: runs the installer again (with its accept step), which puts the install right, and the Hive opens.
@@ -274,7 +375,7 @@ const title = page => page.locator('#title').textContent();
     assert.ok(fs.existsSync(path.join(home, 'broken')), 'nothing changed before the yes');
     await page.getByRole('button', { name: 'Accept and install' }).click();
   }
-  await page.waitForSelector('#app', { timeout: WAIT });
+  await hive(app, undefined, WAIT);
   assert.ok(!fs.existsSync(path.join(home, 'broken')), 'the installer put it right');
   console.log('ok repair');
   await app.close();
@@ -287,39 +388,39 @@ const title = page => page.locator('#title').textContent();
     assert.ok((await page.locator('#log').textContent()).includes("didn't show that it is the Hive"));
     assert.strictEqual(asked.length, 1, 'it was asked once'); assert.ok(!asked[0].includes('SECRETKEY'), 'the question carries no key');
     assert.strictEqual(seen.length, 0, 'the sign-in page (which would read the key) was never loaded from it: ' + seen);
-    const urls = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.webContents.getURL()));
+    const urls = await showing(app);
     assert.ok(urls.every(u => u.startsWith('file:')), 'the window stayed on the setup screen: ' + urls);
     if (kind === 'wrong') await page.screenshot({ path: path.join(shots, '5-not-the-hive.png') });
     // ... and once the real Hive answers there, Try again goes in.
     impostor = '';
     await page.getByRole('button', { name: 'Try again' }).click();
-    await page.waitForSelector('#app', { timeout: WAIT });
+    await hive(app, undefined, WAIT);
     await app.close();
   }
 
   // The Hive restarts under an open window and another program takes its port: the window leaves for the setup screen.
   ({ app, page } = await start());
-  await page.waitForSelector('#app', { timeout: WAIT });
+  await hive(app, undefined, WAIT);
   impostor = 'wrong';
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === "The Hive didn't start", null, { timeout: 15000 });
   assert.ok((await page.locator('#log').textContent()).includes('stopped answering'));
   impostor = '';
   await page.getByRole('button', { name: 'Try again' }).click();
-  await page.waitForSelector('#app', { timeout: WAIT });
+  await hive(app, undefined, WAIT);
   await app.close();
 
   // The Hive stops altogether under an open window (the server really closes, so the page load itself fails: the did-fail-load path).
   // The watcher is slowed right down so it is the reload that finds out. The screen says so and offers Repair, not a blank page.
   ({ app, page } = await start({ HIVE_APP_WATCH_MS: '600000', HIVE_APP_ANSWER_MS: '3000' }));
-  await page.waitForSelector('#app', { timeout: WAIT });
+  await hive(app, undefined, WAIT);
   await new Promise(r => { server.close(r); server.closeAllConnections(); });
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload());   // a reload that fails: the did-fail-load path
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.at(-1).webContents.reload());   // a reload that fails: the did-fail-load path
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === "The Hive didn't start", null, { timeout: WAIT });
   assert.ok(await page.getByRole('button', { name: /^Repair/ }).count(), 'Repair is offered');
-  assert.ok(new URL(page.url()).protocol === 'file:', 'the window is on the setup screen, not a blank page');
+  assert.ok((await showing(app)).every(u => u.startsWith('file:')), 'the window is on the setup screen, not a blank page');
   await new Promise(r => server.listen(port, '127.0.0.1', r));
   await page.getByRole('button', { name: 'Try again' }).click();
-  await page.waitForSelector('#app', { timeout: WAIT });
+  await hive(app, undefined, WAIT);
   console.log('ok hive down');
   console.log('ok hive stopped');
   await app.close();
@@ -331,7 +432,7 @@ const title = page => page.locator('#title').textContent();
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Opening the Hive', null, { timeout: WAIT });
   for (let i = 0; i < 10; i++) { await new Promise(r => setTimeout(r, 2000)); assert.strictEqual(await title(), 'Opening the Hive', 'still starting, not "didn\'t start"'); }
   await new Promise(r => server.listen(port, '127.0.0.1', r));
-  await page.waitForSelector('#app', { timeout: WAIT });
+  await hive(app, undefined, WAIT);
   console.log('ok slow start');
   await app.close();
 
@@ -370,7 +471,7 @@ const title = page => page.locator('#title').textContent();
   failInstall = false;
   await page.getByRole('button', { name: 'Try again' }).click();
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs', null, { timeout: WAIT }).then(() => page.getByRole('button', { name: 'Accept and install' }).click()).catch(() => {});
-  await page.waitForSelector('#app', { timeout: WAIT });
+  await hive(app, undefined, WAIT);
   console.log('ok install-failed screen');
   await app.close();
 
@@ -391,31 +492,31 @@ const title = page => page.locator('#title').textContent();
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
   await page.getByRole('button', { name: 'Install' }).click();
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs', null, { timeout: WAIT }).then(() => page.getByRole('button', { name: 'Accept and install' }).click()).catch(() => {});
-  await page.waitForSelector('#app', { timeout: WAIT });
+  await hive(app, undefined, WAIT);
   console.log('ok offline');
   await app.close();
 
   // No menu on Windows and Linux: Ctrl+plus/minus/0 zoom the Hive, and Ctrl+R reloads it.
   if (process.platform !== 'darwin') {
     ({ app, page } = await start());
-    await page.waitForSelector('#app', { timeout: WAIT });
-    // (page.keyboard goes round the window's key handling, so keys are sent to the window itself.)
-    const press = (k) => app.evaluate(({ BrowserWindow }, k) => { const wc = BrowserWindow.getAllWindows()[0].webContents; for (const type of ['keyDown', 'keyUp']) wc.sendInputEvent({ type, keyCode: k, modifiers: ['control'] }); }, k);
-    const zoom = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomLevel());
+    page = await hive(app, undefined, WAIT);
+    // (page.keyboard goes round the Hive view's key handling, so keys are sent to the view itself.)
+    const press = (k) => app.evaluate(({ BrowserWindow }, k) => { const wc = BrowserWindow.getAllWindows()[0].contentView.children.at(-1).webContents; for (const type of ['keyDown', 'keyUp']) wc.sendInputEvent({ type, keyCode: k, modifiers: ['control'] }); }, k);
+    const zoom = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.at(-1).webContents.getZoomLevel());
     await press('=');  assert.ok(await zoom() > 0, 'Ctrl+= zooms in');
     await press('-'); await press('-'); assert.ok(await zoom() < 0, 'Ctrl+- zooms out');
     await press('0'); assert.strictEqual(await zoom(), 0, 'Ctrl+0 resets');
     await page.evaluate(() => { window.__mark = 1; });
     await press('r');
     await page.waitForFunction(() => !window.__mark, null, { timeout: 10000 });
-    await page.waitForSelector('#app', { timeout: WAIT });
+    await hive(app, undefined, WAIT);
     console.log('ok shortcuts');
     await app.close();
   }
 
   // One copy at a time: a second start while one runs leaves at once and the first stays (still one window); closing the window quits (Linux, Windows).
   ({ app, page } = await start());
-  await page.waitForSelector('#app', { timeout: WAIT });
+  await hive(app, undefined, WAIT);
   // The second copy can quit while Playwright is still attaching to it; Playwright then rejects a promise of its own that
   // nobody awaits ("session closed", run 45790781910), which would end this test though the copy did what it should.
   const closed = e => { if (!/session closed|Target page, context or browser has been closed/i.test(String(e && e.message))) throw e; };
@@ -435,12 +536,12 @@ const title = page => page.locator('#title').textContent();
 
   // The window's size and place are remembered: set them, close, start again.
   ({ app, page } = await start());
-  await page.waitForSelector('#app', { timeout: WAIT });
+  await hive(app, undefined, WAIT);
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setBounds({ x: 60, y: 40, width: 900, height: 640 }));
   await new Promise(r => setTimeout(r, 1000));
   await app.close();
   ({ app, page } = await start());
-  await page.waitForSelector('#app', { timeout: WAIT });
+  await hive(app, undefined, WAIT);
   const b = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getNormalBounds());
   assert.strictEqual(b.width, 900); assert.strictEqual(b.height, 640);
   console.log('ok window state');
@@ -505,7 +606,7 @@ const title = page => page.locator('#title').textContent();
     await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Before it installs');
     await page.getByRole('button', { name: 'Accept and install' }).click();
   }
-  await page.waitForSelector('#app', { timeout: WAIT + 10000 });
+  await hive(app, undefined, WAIT + 10000);
   console.log('ok after restart');
   await app.close();
 

@@ -10,5 +10,14 @@ if (location.protocol === 'file:') contextBridge.exposeInMainWorld('hive', {
   rosetta: ipcRenderer.sendSync('rosetta'),
   chipDownload: () => ipcRenderer.send('chip-download'),
   askNewer: () => ipcRenderer.send('newer?'),
+  // Many Hives: connect by address, open or remove one by its id, and the app's own screens for them.
+  connect: address => ipcRenderer.send('connect', String(address)),
+  openHive: id => ipcRenderer.send('open-hive', String(id)),
+  removeHive: id => ipcRenderer.send('remove-hive', String(id)),
+  browserHive: () => ipcRenderer.send('browser-hive'),
+  hives: () => ipcRenderer.send('hives'),
+  connectScreen: () => ipcRenderer.send('connect-screen'),
+  back: () => ipcRenderer.send('back'),
+  retryHive: () => ipcRenderer.send('retry-hive'),
   on: (name, fn) => ipcRenderer.on(name, (_e, ...a) => fn(...a)),
 });

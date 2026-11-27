@@ -31,7 +31,7 @@ async function open() {
   const { exec, words } = menuCommand();
   const app = await _electron.launch({ executablePath: words[0], args: [...words.slice(1), '--no-sandbox'], env: { ...process.env, HIVE_APP_TEST: '1' } });
   await app.firstWindow();
-  const where = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.webContents.getURL().split('#')[0])[0] || '').catch(() => '');
+  const where = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => (w.contentView.children.at(-1)?.webContents ?? w.webContents).getURL().split('#')[0])[0] || '').catch(() => '');
   const end = Date.now() + 4 * 60000; let at = '';
   while (!signedIn(at = await where())) {
     if (Date.now() > end) { await app.close().catch(() => { }); throw new Error(`the window never reached the Hive signed in (at "${at}")`); }
@@ -76,11 +76,11 @@ const installed = () => sh('dpkg-query', ['-W', '-f', '${Package} ${Version} ${d
   // Does the open app still work? Its window reloads the Hive (a fresh page load in its renderer) and a second window
   // opens (a new renderer process, started from the files apt just replaced).
   const answer = (async () => {
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload());
+    await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; (w.contentView.children.at(-1)?.webContents ?? w.webContents).reload(); });
     const end = Date.now() + 60000; let u = '';
     while (Date.now() < end) {
       await sleep(1000);
-      u = await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; return w && !w.webContents.isLoading() ? w.webContents.getURL().split('#')[0] : ''; }).catch(() => '');
+      u = await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0], c = w && (w.contentView.children.at(-1)?.webContents ?? w.webContents); return c && !c.isLoading() ? c.getURL().split('#')[0] : ''; }).catch(() => '');
       if (signedIn(u)) break;
     }
     if (!signedIn(u)) throw new Error(`after the update the open ${from} window, reloaded, did not reach the Hive again (at "${u}")`);

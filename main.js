@@ -1,15 +1,17 @@
 // The Hive as a desktop app. A thin shell: it finds the Hive on this machine (or installs it with the site's own installer),
 // asks it for its address, and shows the web app in a window. All the product is the web app, so it has one version on every system.
 'use strict';
-const { app, BrowserWindow, ipcMain, shell, session, Menu, screen, clipboard } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, session, Menu, screen, clipboard } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const lib = require('./lib');
 
 let win = null, hiveUrl = null, child = null, kept = false, fails = 0, newer = null, shown = null;   // shown: the update notification, kept so its click still arrives
-// The one local Hive, for now (DESIGN-many-hives.md step 2): its rules read its address as it is at the moment of asking.
-const local = { id: 'local', kind: 'local', first: true, url: () => hiveUrl };
+// The Hives this window can show (DESIGN-many-hives.md). The local one is found as before; its rules read its address as it is
+// at the moment of asking. A remote one is one the person connected to by its address, kept in hives.json (step 3).
+const local = { id: 'local', kind: 'local', first: true, name: 'This computer', url: () => hiveUrl, same: u => !!hiveUrl && lib.sameApp(u, hiveUrl), view: null, popups: new Set() };
+let remotes = [], hivesFile = null, chosen = local, aside = false, localState = ['starting', ''];
 const logFile = () => path.join(app.getPath('userData'), 'app.log');
 const log = t => lib.appendLog(logFile(), t);
 const setupFile = path.join(__dirname, 'setup.html');
@@ -71,11 +73,49 @@ async function proves(url) {
   return lib.proofOk(p.want, got);
 }
 
+// The local Hive's own screen (setup, starting, didn't start). It shows when the window is on the local Hive.
 async function showSetup(state, note) {
   log('screen ' + state + (note ? ': ' + note : ''));
-  if (!isSetup(win.webContents)) await win.loadFile(setupFile);
-  send('state', state, { platform: process.platform, note: note || '' });
+  localState = [state, note || ''];
+  closeView(local);
+  if (chosen === local && !aside) display();
+}
+function render(state, extra) {
+  send('state', state, { platform: process.platform, note: '', ...extra });
   if (newer) send('newer', newer);
+}
+
+// What the window shows: the chosen Hive's view over the app's own page, or the app's page (setup, Hives, Connect, can't reach).
+function display() {
+  if (!win || win.isDestroyed()) return;
+  const h = chosen, v = !aside && h.view && !h.pending ? h.view : null;
+  for (const c of win.contentView.children) if (c !== v) win.contentView.removeChildView(c);
+  if (v) {
+    if (!win.contentView.children.includes(v)) win.contentView.addChildView(v);
+    layout();
+    const t = v.webContents.getTitle();
+    win.setTitle(t && !/^https?:|^about:/.test(t) ? t : h.name);
+    v.webContents.focus();
+    return;
+  }
+  win.setTitle('Hive');
+  if (aside) return;
+  if (h === local) render(localState[0], { note: localState[1] });
+  else render('cantreach', { name: h.name, host: hostOf(h.saved.url), why: h.why || '' });
+  win.webContents.focus();
+}
+function layout() {
+  if (!win || win.isDestroyed()) return;
+  const [width, height] = win.getContentSize();
+  for (const c of win.contentView.children) c.setBounds({ x: 0, y: 0, width, height });
+}
+const hostOf = u => { try { return new URL(u).host; } catch { return ''; } };
+function closeView(h) {
+  const v = h.view;
+  if (!v) return;
+  h.view = null;
+  if (win && !win.isDestroyed()) try { win.contentView.removeChildView(v); } catch { }
+  setImmediate(() => { try { if (!v.webContents.isDestroyed()) v.webContents.close(); } catch { } });
 }
 
 // Once a launch, ask the site (and only the site) which app is current. A newer one is said on the setup screen and, once per
@@ -133,8 +173,11 @@ async function open() {
   hiveUrl = url;
   log('opened the Hive');
   watch();
-  try { await win.loadURL(url); fails = 0; }
-  catch (e) { hiveUrl = null; return showSetup('nostart', sorry); }
+  closeView(local);
+  const v = viewFor(local);
+  display();
+  try { await v.webContents.loadURL(url); fails = 0; if (chosen === local) display(); }
+  catch (e) { if (local.view !== v) return; hiveUrl = null; return showSetup('nostart', sorry); }
 }
 
 // While the Hive is showing, ask again now and then: if another program has taken its port (the Hive restarted under the window),
@@ -143,7 +186,7 @@ let watcher = null;
 function watch() {
   clearInterval(watcher);
   watcher = setInterval(async () => {
-    if (!win || !hiveUrl || isSetup(win.webContents)) return;
+    if (!win || !hiveUrl || !local.view) return;
     const u = hiveUrl;
     if (await proves(u) || hiveUrl !== u) return;
     hiveUrl = null;
@@ -167,7 +210,8 @@ async function install(accept) {
   // "Done" with no Hive to show for it (Windows' installer ends the same way when it stops) is a stop: keep what it said on the screen.
   if (what === 'done' && !lib.openCommand(process.platform, process.env)) what = 'failed';
   if (what === 'done') return open();
-  send('state', what, { platform: process.platform, note: '' });
+  localState = [what, ''];
+  if (chosen === local && !aside) send('state', what, { platform: process.platform, note: '' });
 }
 
 // The window's size and place are kept in the app's own data folder (nothing from the Hive), and used at the next launch.
@@ -182,59 +226,241 @@ function saveState(w) {
   } catch { }
 }
 
+const PREFS = { contextIsolation: true, nodeIntegration: false, sandbox: true, devTools: !app.isPackaged };
+const bg = () => require('electron').nativeTheme.shouldUseDarkColors ? '#111111' : '#ffffff';
 function create() {
   const was = savedState();
   win = new BrowserWindow({
-    width: 1280, height: 860, ...(was ? { width: was.width, height: was.height, ...('x' in was ? { x: was.x, y: was.y } : {}) } : {}), minWidth: 380, minHeight: 500, title: 'Hive', backgroundColor: require('electron').nativeTheme.shouldUseDarkColors ? '#111111' : '#ffffff', autoHideMenuBar: true,
+    width: 1280, height: 860, ...(was ? { width: was.width, height: was.height, ...('x' in was ? { x: was.x, y: was.y } : {}) } : {}), minWidth: 380, minHeight: 500, title: 'Hive', backgroundColor: bg(),
+    // Windows and Linux show the menu bar, since its Hives menu is how you move between Hives (DESIGN-many-hives.md, step 3).
+    autoHideMenuBar: false,
     icon: path.join(__dirname, 'build', 'icon.png'),
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, devTools: !app.isPackaged },
+    // The app's own page has a session of its own, in memory: it shares nothing with any Hive.
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), partition: 'app', ...PREFS },
   });
   if (was && was.maximized) win.maximize();
   let tick = null;
   const later = () => { clearTimeout(tick); tick = setTimeout(() => saveState(win), 500); };
   win.on('resize', later); win.on('move', later);
+  for (const ev of ['resize', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen']) win.on(ev, layout);
+  win.on('page-title-updated', e => e.preventDefault());   // the title is the Hive's (display sets it)
   win.on('close', () => { clearTimeout(tick); saveState(win); });
   win.on('closed', () => { win = null; });
-  // Links that leave the Hive's own app open in the person's browser; the window itself only ever shows the Hive or the setup screen.
-  // The same rules for the main window, for a window the web app opens, and for where a server sends either of them on. Each
-  // guard is bound to its own Hive, not to whichever Hive the window shows now (DESIGN-many-hives.md R12).
-  const guard = (wc, hive) => {
-    const stays = u => { const at = hive.url(); return !!at && lib.sameApp(u, at); };
-    wc.setWindowOpenHandler(({ url }) => {
-      if (stays(url)) return { action: 'allow', overrideBrowserWindowOptions: { autoHideMenuBar: true, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, devTools: !app.isPackaged } } };
-      external(url);
-      return { action: 'deny' };
-    });
-    const nav = (e, url) => {
-      if (stays(url) || (wc === win.webContents && isSetupUrl(url))) return;
-      e.preventDefault();
-      external(url);
-    };
-    wc.on('will-navigate', nav);
-    wc.on('will-redirect', nav);
-    wc.on('did-create-window', w => guard(w.webContents, hive));
-    wc.on('context-menu', (_e, p) => {
-      const items = lib.contextItems(p).map(k => k === 'copyLink' ? { label: 'Copy link', click: () => clipboard.writeText(p.linkURL) } : { role: k });
-      if (items.length) Menu.buildFromTemplate(items).popup({ window: BrowserWindow.fromWebContents(wc) || win });
-    });
-  };
-  guard(win.webContents, local);
-  // No menu on Windows and Linux, so the keys a View menu would give: zoom, and reload (only while the Hive shows).
-  if (process.platform !== 'darwin') win.webContents.on('before-input-event', (e, input) => {
-    const a = lib.shortcut(input), wc = win.webContents;
+  // The app's own page only ever shows itself: every link from it goes to the browser.
+  const wc = win.webContents;
+  wc.setWindowOpenHandler(({ url }) => { external(url); return { action: 'deny' }; });
+  const own = (e, url) => { if (!isSetupUrl(e.url || url)) e.preventDefault(); };
+  wc.on('will-navigate', own); wc.on('will-redirect', own);
+  menuFor(wc); keys(wc);
+  if (chosen.kind === 'remote') openRemote(chosen);
+  menu();
+  win.loadFile(setupFile).then(() => { display(); open(); }, () => open());
+}
+
+// One Hive's page: a view of its own, in its own session, held while the window shows another Hive so switching back is instant.
+function viewFor(h) {
+  const v = new WebContentsView({ webPreferences: { session: sessionFor(h), ...PREFS } });
+  v.setBackgroundColor(bg());
+  h.view = v;
+  const wc = v.webContents;
+  guard(wc, h); keys(wc); menuFor(wc);
+  wc.on('page-title-updated', (_e, t) => { if (win && !win.isDestroyed() && chosen === h && !aside && h.view === v) win.setTitle(t || h.name); });
+  wc.on('did-fail-load', (_e, code, desc, url, main) => {
+    if (!main || code === -3 || h.view !== v) return;
+    if (h === local) {
+      // The Hive stopped under the window (an update, a restart): go and find it again rather than show a blank page.
+      if (!(hiveUrl && lib.isLocal(url))) return;
+      hiveUrl = null;
+      // A few tries, then the screen that says so (with Try again and Repair), not a loop.
+      if (++fails > 3) { fails = 0; showSetup('nostart', "The Hive's app stopped answering."); } else setTimeout(open, 1500);
+      return;
+    }
+    if (!h.pending) remoteFailed(h, failWords(code, desc));
+  });
+  return v;
+}
+function openRemote(h) {
+  h.down = false; h.why = '';
+  viewFor(h).webContents.loadURL(h.saved.url).catch(() => { });   // a failure arrives as did-fail-load
+}
+function remoteFailed(h, why) {
+  h.down = true; h.why = why;
+  log('cannot reach ' + hostOf(h.saved.url) + ': ' + why);
+  closeView(h);
+  if (chosen === h && !aside) display();
+}
+function failWords(code, desc) {
+  const d = (String(desc || '').match(/ERR_[A-Z_]+/) || [''])[0];   // the error's name only: the message carries the address, key and all
+  if (/NAME_NOT_RESOLVED|NAME_RESOLUTION/.test(d)) return 'No computer answers to that name. Check the address.';
+  if (/CERT|SSL/.test(d)) return "Its certificate isn't one this computer trusts, so the app didn't connect. It has no way to go on anyway.";
+  if (/CONNECTION_REFUSED/.test(d)) return 'Nothing answered at that address. The Hive may be stopped.';
+  if (/TIMED_OUT|INTERNET_DISCONNECTED|NETWORK_CHANGED|ADDRESS_UNREACHABLE/.test(d)) return "It didn't answer. Check this computer's internet connection.";
+  return `It didn't answer (${d || 'error ' + code}).`;
+}
+
+// Links that leave a Hive's own app open in the person's browser. The same rules for the Hive's view, for a window its
+// page opens, and for where a server sends either of them on. Each guard is bound to its own Hive, not to whichever
+// Hive the window shows now (DESIGN-many-hives.md R12).
+function guard(wc, h) {
+  wc.setWindowOpenHandler(({ url }) => {
+    // No session here: the new window keeps the opener's, so it is signed in to the same Hive and no other.
+    if (h.same(url)) return { action: 'allow', overrideBrowserWindowOptions: { autoHideMenuBar: true, backgroundColor: bg(), webPreferences: { ...PREFS } } };
+    external(url);
+    return { action: 'deny' };
+  });
+  wc.on('will-navigate', (e, url) => { if (h.same(e.url || url)) return; e.preventDefault(); external(e.url || url); });
+  wc.on('will-redirect', (e, url, _inPlace, isMain) => {
+    const u = e.url || url;
+    if (h.same(u)) return;
+    e.preventDefault();
+    // A remote Hive behind a sign-in gate sends its page to the gate. That isn't the Hive, so the view doesn't follow
+    // (the gate sign-in is step 6): the window says so instead of showing a blank page.
+    if (h.kind === 'remote' && (e.isMainFrame ?? isMain) && h.view && wc === h.view.webContents) {
+      const at = hostOf(u);
+      if (h.pending) h.blocked = at; else remoteFailed(h, `It sent the app to ${at} to sign in, which the app can't do yet.`);
+      return;
+    }
+    external(u);
+  });
+  wc.on('did-create-window', w => {
+    h.popups.add(w); w.on('closed', () => h.popups.delete(w));
+    if (process.platform !== 'darwin') w.removeMenu();
+    guard(w.webContents, h); keys(w.webContents); menuFor(w.webContents);
+  });
+}
+// Windows and Linux have no View menu, so the keys one would give: zoom, and reload (a Hive's page, not the app's own).
+function keys(wc) {
+  if (process.platform === 'darwin') return;
+  wc.on('before-input-event', (e, input) => {
+    const a = lib.shortcut(input);
     if (!a) return;
-    if (a === 'reload') { if (hiveUrl && !isSetup(wc)) { e.preventDefault(); wc.reload(); } return; }
+    if (a === 'reload') { if (!(win && !win.isDestroyed() && wc === win.webContents)) { e.preventDefault(); wc.reload(); } return; }
     e.preventDefault();
     wc.setZoomLevel(a === 'zoomReset' ? 0 : Math.max(-3, Math.min(5, wc.getZoomLevel() + (a === 'zoomIn' ? 0.5 : -0.5))));
   });
-  // The Hive stopped under the window (an update, a restart): go and find it again rather than show a blank page.
-  win.webContents.on('did-fail-load', (_e, code, _d, url, main) => {
-    if (!(main && code !== -3 && hiveUrl && lib.isLocal(url))) return;
-    hiveUrl = null;
-    // A few tries, then the screen that says so (with Try again and Repair), not a loop.
-    if (++fails > 3) { fails = 0; showSetup('nostart', "The Hive's app stopped answering."); } else setTimeout(open, 1500);
+}
+function menuFor(wc) {
+  wc.on('context-menu', (_e, p) => {
+    const items = lib.contextItems(p).map(k => k === 'copyLink' ? { label: 'Copy link', click: () => clipboard.writeText(p.linkURL) } : { role: k });
+    if (items.length) Menu.buildFromTemplate(items).popup({ window: BrowserWindow.fromWebContents(wc) || win });
   });
-  open();
+}
+
+// The remote Hives, kept in hives.json in the app's own data folder: each one's id, name and address, never its key
+// (the key opens the Hive once; after that the sign-in is the cookie in its own session).
+let store = lib.parseHives(null), connecting = false;
+const partitionDir = id => path.join(app.getPath('userData'), 'Partitions', 'hive-' + id);
+const removedIds = () => Array.isArray(store.extra.removed) ? store.extra.removed.filter(id => /^[a-f0-9]{16}$/.test(id)) : [];
+function remoteFrom(s) {
+  return { id: s.id, kind: 'remote', saved: s, name: s.name, url: () => s.url, same: u => lib.sameHive(u, s.url), view: null, popups: new Set(), down: false, why: '' };
+}
+function loadHives() {
+  hivesFile = path.join(app.getPath('userData'), 'hives.json');
+  let text = null;
+  try { text = fs.readFileSync(hivesFile, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') text = ''; }
+  store = lib.parseHives(text);
+  if (store.error) log('hives.json: ' + store.error);
+  remotes = store.hives.filter(s => s.kind === 'remote').map(remoteFrom);
+  chosen = remotes.find(h => h.id === store.extra.last) || local;
+  // What a removed Hive's session left on disk goes before any session opens on it.
+  const gone = removedIds();
+  for (const id of gone) try { fs.rmSync(partitionDir(id), { recursive: true, force: true }); } catch (e) { log('left a removed Hive\'s files: ' + e.message); }
+  if (gone.length && !store.error) { store.extra.removed = []; saveHives(); }
+}
+function saveHives() {
+  if (store.error || !hivesFile) return;   // a list that couldn't be read is kept as it is, not written over
+  store.hives = [...store.hives.filter(s => s.kind !== 'remote'), ...remotes.map(h => h.saved)];
+  const tmp = hivesFile + '.tmp';
+  try { fs.writeFileSync(tmp, lib.stringifyHives(store), { mode: 0o600 }); fs.renameSync(tmp, hivesFile); } catch (e) { log('hives.json not saved: ' + e.message); }
+}
+
+// The window shows this Hive.
+function choose(h) {
+  chosen = h; aside = false;
+  if (h.kind === 'remote' && !h.view) openRemote(h);
+  display();
+  if (store.extra.last !== h.id) { store.extra.last = h.id; saveHives(); }
+  menu();
+}
+// The app's own Hives and Connect screens, over whichever Hive is chosen (Back returns to it).
+function showAside(state) {
+  aside = true;
+  display();
+  render(state, state === 'hives' ? { list: [local, ...remotes].map(h => ({ id: h.id, name: h.name, current: h === chosen,
+    where: h === local ? (hiveUrl ? 'On this computer' : 'On this computer, not running') : hostOf(h.saved.url) + (h.down ? ' · not answering' : ''), remote: h.kind === 'remote' })) } : {});
+  menu();
+}
+
+async function connect(text) {
+  if (connecting) return;
+  connecting = true;
+  try { const why = await connectNow(String(text || '').trim().slice(0, 2000)); if (why) send('connect-error', why); }
+  catch (e) { send('connect-error', "The app couldn't connect: " + String(e.message || e).slice(0, 200)); }
+  finally { connecting = false; }
+}
+async function connectNow(t) {
+  if (!t) return "Type the Hive's address.";
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) t = (/^(localhost|127\.|\[::1\])/i.test(t) ? 'http://' : 'https://') + t;
+  t = lib.pin(t);
+  const a = lib.addressRule(t);
+  if (!a.ok) return a.why;
+  if (hiveUrl && lib.sameHive(a.url, hiveUrl)) { choose(local); return ''; }
+  const have = remotes.find(h => lib.sameHive(a.url, h.saved.url));
+  if (have) { choose(have); return ''; }
+  const full = new URL(t); full.search = '';   // the address as typed, #key and all: it is loaded once, never stored
+  // Over plain http (this computer only) the server must first show it holds the key; over https the certificate is the proof.
+  if (full.protocol === 'http:' && !await proves(full.href)) return "What answers at that address didn't show it is the Hive with that key, so the app sent it nothing.";
+  const s = { id: lib.newId([...remotes.map(h => h.id), ...store.hives.map(x => x.id), ...removedIds()]), kind: 'remote', url: a.url, name: new URL(a.url).hostname, order: remotes.length + 1 };
+  const h = remoteFrom(s);
+  h.pending = true;
+  const v = viewFor(h);
+  let why = '', timer;
+  try {
+    await Promise.race([v.webContents.loadURL(full.href), new Promise((_r, no) => { timer = setTimeout(() => no(new Error('ERR_TIMED_OUT')), 30000); })]);
+  } catch (e) { why = failWords(0, e.code || e.message); }
+  clearTimeout(timer);
+  if (h.blocked) why = `It sent the app to ${h.blocked} to sign in, which the app can't do yet.`;
+  if (why) {
+    closeView(h); forget(h);
+    store.extra.removed = [...removedIds(), h.id]; saveHives();
+    log('connect refused ' + hostOf(a.url) + ': ' + why);
+    return why;
+  }
+  h.pending = false;
+  remotes.push(h);
+  saveHives();
+  log('connected ' + hostOf(a.url));
+  choose(h);
+  return '';
+}
+// What a Hive's session holds (its sign-in, its stored pages) goes when the Hive is removed; its folder goes at the next start.
+function forget(h) {
+  const s = session.fromPartition('persist:hive-' + h.id);
+  for (const p of [s.clearStorageData(), s.clearCache(), s.clearAuthCache()]) Promise.resolve(p).catch(() => { });
+}
+function removeHive(id) {
+  const h = remotes.find(r => r.id === id);
+  if (!h) return;
+  remotes = remotes.filter(r => r !== h);
+  for (const w of [...h.popups]) try { w.close(); } catch { }
+  closeView(h); forget(h);
+  if (chosen === h) chosen = local;
+  store.extra.removed = [...removedIds(), h.id];
+  if (store.extra.last === h.id) store.extra.last = local.id;
+  saveHives();
+  log('removed ' + hostOf(h.saved.url));
+  if (aside) showAside('hives'); else display();
+  menu();
+}
+
+// The Hives menu: one entry per Hive (the one showing is checked), then Connect and Manage.
+function menu() {
+  const item = h => ({ id: 'hive-' + h.id, label: h.name.replace(/&/g, '&&'), type: 'radio', checked: h === chosen && !aside, click: () => choose(h) });
+  const hives = { label: process.platform === 'darwin' ? 'Hives' : '&Hives', submenu: [item(local), ...remotes.map(item), { type: 'separator' },
+    { id: 'hives-connect', label: 'Connect to a Hive…', click: () => showAside('connect') },
+    { id: 'hives-manager', label: 'Manage Hives…', click: () => showAside('hives') }] };
+  // No View menu on the Mac: its Reload would skip the guards.
+  Menu.setApplicationMenu(Menu.buildFromTemplate(process.platform === 'darwin' ? [{ role: 'appMenu' }, { role: 'editMenu' }, hives, { role: 'windowMenu' }] : [hives]));
 }
 
 // Every session is set up before anything loads in it (DESIGN-many-hives.md R1). sessionFor(hive) gives that Hive its own
@@ -253,14 +479,14 @@ function sessionFor(hive) {
   if (setUp.has(s)) return s;
   const ok = (wc, perm, origin) => {
     const at = hive.url(), u = origin || (wc && wc.getURL()) || '';
-    return !!at && lib.sameApp(u, at) && PERMS.includes(perm);
+    return !!at && hive.same(u) && PERMS.includes(perm);
   };
   s.setPermissionRequestHandler((wc, perm, cb, d) => cb(ok(wc, perm, d && d.requestingUrl)));
   s.setPermissionCheckHandler((wc, perm, origin) => ok(wc, perm, origin));
   // A file the Hive page offers is saved to Downloads under its own name, with no dialog and nothing opened in the window.
   s.on('will-download', (_e, item) => {
     const at = hive.url();
-    if (!at || !lib.sameApp(item.getURL(), at)) return item.cancel();
+    if (!at || !hive.same(item.getURL())) return item.cancel();
     const dir = (process.env.HIVE_APP_TEST && process.env.HIVE_APP_DOWNLOADS) || app.getPath('downloads');
     try { fs.mkdirSync(dir, { recursive: true }); } catch { }
     const dest = lib.downloadPath(dir, item.getFilename(), fs.existsSync);
@@ -288,6 +514,16 @@ ipcMain.on('chip-download', e => { if (fromSetup(e)) external(lib.downloadPage()
 // The setup screen asks once its listener is up, so a notice that arrived while the page was loading isn't lost.
 ipcMain.on('newer?', e => { if (fromSetup(e) && newer) e.sender.send('newer', newer); });
 ipcMain.on('quit', e => { if (fromSetup(e)) app.quit(); });
+// Many Hives (step 3): connect by address, open, remove, and the app's own screens for them.
+const hiveById = id => id === local.id ? local : remotes.find(h => h.id === id);
+ipcMain.on('connect', (e, text) => { if (fromSetup(e)) connect(text); });
+ipcMain.on('open-hive', (e, id) => { const h = fromSetup(e) && hiveById(String(id)); if (h) choose(h); });
+ipcMain.on('remove-hive', (e, id) => { if (fromSetup(e)) removeHive(String(id)); });
+ipcMain.on('browser-hive', e => { if (fromSetup(e) && chosen.kind === 'remote') external(chosen.saved.url); });
+ipcMain.on('hives', e => { if (fromSetup(e)) showAside('hives'); });
+ipcMain.on('connect-screen', e => { if (fromSetup(e)) showAside('connect'); });
+ipcMain.on('back', e => { if (fromSetup(e)) { aside = false; display(); menu(); } });
+ipcMain.on('retry-hive', e => { if (fromSetup(e)) choose(chosen); });
 
 // Windows ties notifications (and their clicks) to the Start menu shortcut by this ID; it must match the installer's appId.
 if (process.platform === 'win32') app.setAppUserModelId('cc.ihsan.hive');
@@ -295,9 +531,7 @@ if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
   app.whenReady().then(() => {
-    if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
-    else Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }])); // no View menu: its Reload would skip our guard
-    sessionFor(local); create(); checkNewer();
+    loadHives(); sessionFor(local); create(); checkNewer();
     app.on('activate', () => { if (!win) create(); });
   });
   // Closing the window closes the app. The Hive itself keeps running in the background, as it does without the app.
