@@ -1,15 +1,44 @@
 #!/usr/bin/env python3
 """PreToolUse hook on Bash: a board post that answers from the web must cite the pages it used.
 
-If the agent read outside web pages (WebFetch, WebSearch, or curl/wget to a non-local http(s) URL) since its last post,
+If the agent read outside web pages (WebFetch, WebSearch, or curl/wget to an http(s) URL off this machine, the LAN, the tailnet,
+API hosts and the Hive's own domains in ~/.hive/own-hosts) since its last post,
 and the post it is about to send has no footnote (`[^`; a plain link is not enough), the post is refused once with a note saying
 how to cite. The same post sent again goes through, so this can never block an agent for good (a post that rightly
 has nothing to cite just repeats). Anything it can't read lets the call through."""
-import hashlib, json, os, re, sys
+import functools, hashlib, json, os, re, sys
 from pathlib import Path
 
 POST = re.compile(r"\b(hive|hive)\s+post\b")
-WEB = re.compile(r"\b(curl|wget)\b[^|;&]*?https?://(?!(localhost|127\.[\d.]+|\[::1\]|0\.0\.0\.0)(?![\w.-]))", re.S)
+FETCH = re.compile(r"\b(curl|wget)\b([^|;&]*)", re.S)
+HOST = re.compile(r"https?://(?:[^/\s'\"@]*@)?(\[[^\]]*\]|[^/\s'\"?#:@]+(?=[/\s'\"?#:]|$))")
+# Not the outside web: this machine, the LAN, the tailnet, and API hosts that return data rather than pages to cite.
+# 549 refusals in 36 h on 11-26/27, 376 of them sent again unchanged; most were curls to the hive's own sites
+# (279 of them), the GitHub API (16), the tailnet and the LAN.
+LOCAL = re.compile(r"(localhost|127\.[\d.]+|\[::1\]|0\.0\.0\.0|10\.[\d.]+|192\.168\.[\d.]+|172\.(1[6-9]|2\d|3[01])\.[\d.]+"
+                   r"|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.[\d.]+|.*\.(ts\.net|local|internal|lan|home\.arpa))", re.I)
+RESERVED = re.compile(r"(.*\.)?(example\.(com|org|net)|[^.]+\.(example|test|invalid|localhost))", re.I)  # RFC 2606 names, for tests
+API = ("api.github.com", "uploads.github.com", "api.anthropic.com", "downloads.claude.ai", "registry.npmjs.org", "pypi.org")
+
+
+@functools.lru_cache(None)
+def own_hosts():
+    """This Hive's own domains, one per line in ~/.hive/own-hosts (a subdomain counts too): reading your own site is not research."""
+    try: lines = (Path.home() / ".hive/own-hosts").read_text().splitlines()
+    except OSError: return []
+    return [w.lower().strip(".") for l in lines for w in l.split("#")[0].split()]
+
+
+def web_fetch(cmd, own=None):
+    """True when a curl/wget in cmd reaches a host on the outside web."""
+    own = own_hosts() if own is None else own
+    for f in FETCH.finditer(cmd):
+        for m in HOST.finditer(f.group(2)):
+            h = m.group(1).lower().rstrip(".")
+            if LOCAL.fullmatch(h) or h in API or RESERVED.fullmatch(h) or any(c in h for c in "${}<>%*"): continue  # a template ($h, {HOST})
+            if any(h == o or h.endswith("." + o) for o in own): continue
+            return True
+    return False
 
 
 # A wait loop on `pgrep -f PATTERN` never ends: the shell running the loop has PATTERN in its own command line, so pgrep
@@ -69,7 +98,7 @@ def web_reads(transcript):
             if not isinstance(b, dict) or b.get("type") != "tool_use": continue
             name, inp = b.get("name"), b.get("input") or {}
             if name == "Bash" and POST.search(inp.get("command") or ""): return []
-            if name in ("WebFetch", "WebSearch") or (name == "Bash" and WEB.search(inp.get("command") or "")): return [name]
+            if name in ("WebFetch", "WebSearch") or (name == "Bash" and web_fetch(inp.get("command") or "")): return [name]
     return []
 
 

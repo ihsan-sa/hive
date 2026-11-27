@@ -65,9 +65,10 @@ function shopList(d) {
   return h("ol", { class: "rc-buy-shops" }, ...d.shops.map(x => h("li", { class: x.best ? "rc-buy-best" : null },
     h("div", null, x.url ? h("a", { href: x.url, target: "_blank", rel: "noopener noreferrer" }, x.name) : x.name,
       x.best ? h("b", null, " · best") : null, !d.choose && x.chosen && !x.best ? h("b", null, " · this ask") : null),
-    h("div", { class: "rc-buy-detail" }, [x.total && `${x.total} all in`, x.shipping && `shipping ${x.shipping}`, x.stock, x.arrives && `arrives ${x.arrives}`]
-      .filter(Boolean).join(" · ")),
-    h("div", { class: x.link ? "rc-buy-detail" : "rc-buy-detail rc-buy-nolink" }, x.paysLabel + (x.note ? `: ${x.note}` : "")))),
+    // each part its own text, so its words get their language and the shop's own stock and note stay as written
+    h("div", { class: "rc-buy-detail" }, ...[x.total && `${x.total} all in`, x.shipping && `shipping ${x.shipping}`, x.stock, x.arrives && `arrives ${x.arrives}`]
+      .filter(Boolean).flatMap((t, i) => i ? [" · ", t] : [t])),
+    h("div", { class: x.link ? "rc-buy-detail" : "rc-buy-detail rc-buy-nolink" }, x.paysLabel, x.note ? `: ${x.note}` : null))),
     d.shopsWhy ? h("div", { class: "rc-buy-detail" }, d.shopsWhy) : null);
 }
 
@@ -80,7 +81,7 @@ export function buyCard(code, { lang, title }) {
   const head = d.choose ? `The best shop for this, ${d.merchant} at ${d.total}, can't take a Link card`
     : waiting ? `${d.agent} is requesting to spend ${d.total}` : `${d.agent} asked to spend ${d.total}`;
   const items = d.lines.length > 1 || (d.lines[0] && d.lines[0].name !== d.item)
-    ? h("ul", { class: "rc-buy-lines" }, ...d.lines.map(l => h("li", null, `${l.qty} × ${l.name}` + (l.unit != null ? `, ${fmt(l.unit, d.cur)} each` : ""))))
+    ? h("ul", { class: "rc-buy-lines" }, ...d.lines.map(l => h("li", null, `${l.qty} × ${l.name}`, l.unit != null ? `, ${fmt(l.unit, d.cur)} each` : null)))
     : null;
   const money = d.parts.length ? h("div", { class: "rc-buy-sum" }, ...d.parts.map(([k, v]) => h("span", null, `${k} ${v}`)), h("b", null, `Total ${d.total}`)) : null;
   const after = [];

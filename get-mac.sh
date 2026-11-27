@@ -160,16 +160,15 @@ Y
 
 # The command on the Mac: hive anything runs in the VM, starting it first if it's stopped.
 wrapper() {
+  printf '#!/bin/sh\n# The Hive runs in a Linux VM; this passes commands to it. Made by the Mac installer.\nHU=%s\n' "$U"
   cat <<'W'
-#!/bin/sh
-# The Hive runs in a Linux VM; this passes commands to it. Made by the Mac installer.
 set -eu
 export LIMA_HOME="$HOME/.hive/lima"
 L="$HOME/.hive/lima-dist/bin/limactl"
 up() { [ "$("$L" list hive --format '{{.Status}}' 2>/dev/null)" = Running ] || "$L" start --tty=false hive >&2; }
 # Not sudo -i: it leaves each $ for the VM's login shell to expand, so a word like "costs $5" would change on the way.
 # shellcheck disable=SC2016  # these expand in the VM
-in_vm() { "$L" shell --workdir / hive sudo -u hive -H bash -lc 'cd; export XDG_RUNTIME_DIR=/run/user/$(id -u); exec "$@"' _ "$@"; }
+in_vm() { "$L" shell --workdir / hive sudo -u "$HU" -H bash -lc 'cd; export XDG_RUNTIME_DIR=/run/user/$(id -u); exec "$@"' _ "$@"; }
 address() { in_vm hive web 2>/dev/null | tr -d '\r' | sed -n 's/.*\(http:[^ ]*\).*/\1/p' | head -n 1; }
 case "${1:-}" in
   vm)
@@ -198,6 +197,8 @@ W
 # The icon is taken from the VM and made into an .icns with the Mac's own sips and iconutil; if either fails, the app just has the plain icon.
 make_app() {
   A="$HOME/Applications/Hive.app"
+  # The icon opens the first Hive; another one opens from the desktop app or its own command.
+  [ "$U" = hive ] || return 0
   [ ! -e "$A" ] || grep -qs 'made by the Hive install' "$A/Contents/MacOS/Hive" || { echo "$A is something else, so I left it."; return 0; }
   rm -rf "$A"; mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources" || return 0
   printf '#!/bin/sh\n# made by the Hive install\n# The Hive desktop app, if it is installed, is the one way in; this icon just hands over to it.\na=${HIVE_DESKTOP_APP:-/Applications/Hive.app}\n[ -d "$a" ] && exec open "$a"\nexec "%s/bin/hive" open\n' "$D" > "$A/Contents/MacOS/Hive"; chmod +x "$A/Contents/MacOS/Hive"
@@ -217,7 +218,7 @@ make_app() {
 </dict>
 </plist>
 PL
-  t=$(mktemp -d) && "$L" shell --workdir / "$VM" sudo -u hive -H bash -lc 'cat ~/modules/dash/web/icons/hive-1024.png' </dev/null > "$t/h.png" 2>/dev/null \
+  t=$(mktemp -d) && "$L" shell --workdir / "$VM" sudo -u "$U" -H bash -lc 'cat ~/modules/dash/web/icons/hive-1024.png' </dev/null > "$t/h.png" 2>/dev/null \
     && mkdir "$t/Hive.iconset" && for z in 16 32 64 128 256 512; do
       sips -z "$z" "$z" "$t/h.png" --out "$t/Hive.iconset/icon_${z}x${z}.png" >/dev/null 2>&1 || break
       sips -z $((z * 2)) $((z * 2)) "$t/h.png" --out "$t/Hive.iconset/icon_${z}x${z}@2x.png" >/dev/null 2>&1 || break
@@ -289,6 +290,11 @@ main() {
   case "$major" in "" | *[!0-9]*) die "couldn't read this Mac's macOS version" ;; esac
   [ "$major" -ge 13 ] || { stage macos-old "macOS older than 13"; die "this needs macOS 13 (Ventura) or newer, for Apple's Virtualization framework. This Mac has $(sw_vers -productVersion)"; }
 
+  # Which Hive in the VM: its Linux user. hive, or HIVE_USER=name for another one beside it (each has its own home, port and sign-in).
+  U="${HIVE_USER:-hive}"
+  case "$U" in "" | -* | root | *[!a-z0-9_-]*) die "HIVE_USER must be a plain user name in small letters, other than root, not $U" ;; esac
+  # Its command on the Mac: hive for the first, hive-NAME for the others.
+  case "$U" in hive | hive-*) CMD=$U ;; *) CMD=hive-$U ;; esac
   SITE="${HIVE_SITE:-https://hivelab.ca}"
   D="$HOME/.hive"
   mkdir -p "$D/bin"
@@ -324,12 +330,14 @@ main() {
   PIN="${HIVE_TAG:-}"; [ -n "$PIN" ] || [ -n "${HIVE_BRANCH:-}" ] || PIN=$(curl -fsS -m 15 "$SITE/mac-pin" 2>/dev/null | head -n 1 || true)
   printf %s "$PIN" | grep -Eqx 'v2\.[0-9]+\.[0-9]+' || PIN=""
   [ -z "$PIN" ] || echo "The newest release hasn't passed its Mac test yet, so this installs $PIN, the last one that did. Its auto-update moves it to the newest, and steps back if that fails to install."
-  "$L" shell --workdir / "$VM" sudo env HIVE_INSIDE=1 HIVE_HOST=mac HIVE_REPORT="${HIVE_REPORT:-}" HIVE_BRANCH="${HIVE_BRANCH:-}" HIVE_TAG="$PIN" HIVE_VOICE="${HIVE_VOICE:-}" SITE="$SITE" sh -c \
+  "$L" shell --workdir / "$VM" sudo env HIVE_USER="$U" HIVE_INSIDE=1 HIVE_HOST=mac HIVE_REPORT="${HIVE_REPORT:-}" HIVE_BRANCH="${HIVE_BRANCH:-}" HIVE_TAG="$PIN" HIVE_VOICE="${HIVE_VOICE:-}" SITE="$SITE" sh -c \
     '[ -n "$HIVE_BRANCH" ] || unset HIVE_BRANCH; f=$(mktemp); curl -fsSL -o "$f" "$SITE/install.sh" && sh "$f"' </dev/null \
     || die "the install in the VM failed. Run this line again to retry"
 
   STOP=""
-  wrapper > "$D/bin/hive"; chmod +x "$D/bin/hive"
+  # One command name can't serve two Hives (users work and hive-work would both make hive-work).
+  [ ! -e "$D/bin/$CMD" ] || grep -qx "HU=$U" "$D/bin/$CMD" || ! grep -q '^HU=' "$D/bin/$CMD" || die "$D/bin/$CMD already opens another Hive, so I left it. Pick another HIVE_USER"
+  wrapper > "$D/bin/$CMD"; chmod +x "$D/bin/$CMD"
   add_to_path
   mkdir -p "$HOME/Library/LaunchAgents"
   agent_plist > "$HOME/Library/LaunchAgents/$AGENT.plist"
@@ -338,7 +346,7 @@ main() {
   # The web app can still be starting right after the install (the rig hit "no address" here), so ask again for a minute.
   address=""; n=0
   while [ -z "$address" ] && [ "$n" -lt 20 ]; do
-    out=$("$D/bin/hive" web 2>&1 | tr -d '\r' || true)
+    out=$("$D/bin/$CMD" web 2>&1 | tr -d '\r' || true)
     address=$(printf '%s\n' "$out" | sed -n 's/.*\(http:[^ ]*\).*/\1/p' | head -n 1)
     [ -n "$address" ] || { n=$((n + 1)); sleep 3; }
     # The VM's ssh can stay down after a heavy install ("Connection refused", rig run 42885823260). A restart of the
@@ -350,12 +358,13 @@ main() {
     fi
   done
   [ -n "$address" ] || echo "hive web said: $out" >&2
-  [ -n "$address" ] || die "the Hive installed, but it gave no address. Try, in a new Terminal window: hive web"
+  [ -n "$address" ] || die "the Hive installed, but it gave no address. Try, in a new Terminal window: $CMD web"
   echo
   echo "The Hive is running in its own Linux VM, which can't see your files."
   echo "It starts when you log in. It pauses while this Mac sleeps, and carries on when it wakes."
   echo "Open it at: $address"
-  echo "To open it again, click Hive in your Applications folder, or in a new Terminal window: hive open"
+  if [ "$U" = hive ]; then echo "To open it again, click Hive in your Applications folder, or in a new Terminal window: hive open"
+  else echo "To open it again, add it in the Hive desktop app, or in a new Terminal window: $CMD open"; fi
   echo "Code, issues and updates: https://github.com/ihsan-sa/hive (a star there helps others find it)."
   case "$address" in
     http://localhost*|http://127.0.0.1*)

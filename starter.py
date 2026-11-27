@@ -733,10 +733,12 @@ def interrupt_step(name, post_id=None, only=None, min_s=None, then=None):
     for k in reversed(tree): sigterm(k)
     t1 = uptime_ticks()
     if then is None: return await_end(q, tree, t0, t1)
-    def wait():
-        try: then(await_end(q, tree, t0, t1))
-        except Exception as e: then(f"{type(e).__name__}: {e}"[:200])
-    threading.Thread(target=wait, name=f"interrupt-{name}").start()
+    def wait():   # E203p: `then` runs once, even when it raises; a daemon, so it cannot hold up a starter exit
+        try: did = await_end(q, tree, t0, t1)
+        except Exception as e: did = f"{type(e).__name__}: {e}"[:200]
+        try: then(did)
+        except Exception as e: print(f"interrupt {name}: could not record {did!r}: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+    threading.Thread(target=wait, name=f"interrupt-{name}", daemon=True).start()
     return None
 
 def uptime_ticks():

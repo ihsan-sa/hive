@@ -1475,6 +1475,19 @@ def story_url(url):
     return bool(NEWS_PAGE.search(parts.path or "")) or (parts.hostname or "").split(".")[0] in ("news", "newsroom", "blog", "blogs", "stories") or path_year(url) > 0
 
 
+def hit_names(h, name):
+    """Whether a search hit's title or snippet names the person."""
+    return bool(people.name_regex(name).search(fold(f"{h.get('title', '')} {h.get('snippet', '')}")))
+
+
+def recheck_rank(h, name, title):
+    """0 when a hit's title or snippet names the person with at least half the words of their title that say which unit (career, experiential...), 1 when it names them only, 2 otherwise. fnwords155: two WMU directory hits printed "Evan Heiser ... Senior Director Career and Experiential Education" and the three reads went to the first, a scholarly PDF and an event page."""
+    if not hit_names(h, name): return 2
+    tw = title_words(title or "")
+    text = people.long_form(fold(f"{h.get('title', '')} {h.get('snippet', '')}"))
+    return 0 if tw and len(tw & title_words(text)) * 2 >= len(tw) else 1
+
+
 UNIVERSITY_NAME = re.compile(r"(?:University of [A-Z][\w'.-]*(?:,? [A-Z][\w'.-]*){0,3}|[A-Z][\w'.-]*(?: [A-Z][\w'.-]*){0,3} University)")
 
 def site_label(d):
@@ -2878,7 +2891,7 @@ class Hunt:
     def stored_official_rechecks(self):
         """Stored rows whose signal is the person's own but whose page is another site's, or too old to show the post is still held, get one search on the organisation's site, side by side. A near miss confirmed there comes back to the list."""
         if self.s.get("official_recheck") is False: return
-        lead = [r for r in self.leads.values() if r.get("check_status") != "verified" and r.get("signal_near_person") == "yes" and (not r.get("official_recheck_tried") or self.unit_retry(r)) and SIGNAL_MARK not in str(r.get("note") or "")]   # a row mark_signals made partial is verified on its page: a recheck would only undo the mark
+        lead = [r for r in self.leads.values() if r.get("check_status") != "verified" and r.get("signal_near_person") == "yes" and (not r.get("official_recheck_tried") or self.unit_retry(r) or self.named_retry(r)) and SIGNAL_MARK not in str(r.get("note") or "")]   # a row mark_signals made partial is verified on its page: a recheck would only undo the mark
         near = [(k, r) for k, r in self.near.items() if r.get("check_status") != "verified" and r.get("signal_near_person") == "yes" and not r.get("official_recheck_tried") and str(r.get("note", "")).startswith("not listed: the page is from")]
         if not lead and not near: return
         t0 = time.monotonic()
@@ -2893,6 +2906,12 @@ class Hunt:
         self.recheck_stored()  # a confirmed row still has to pass the spec as it stands
         self.log(f"official recheck: searched the organisation's own site for {len(lead) + len(near)} stored rows whose signal is the person's own, verified {sum(ok)}, {back} of them back from the near misses ({time.monotonic() - t0:.0f}s, {self.domain_searches} domain searches)")
         self._save()
+
+    def named_retry(self, row):
+        """A stored row rechecked before rechecks read first the hits that name the person with their title gets one more try, marked so it gets no other (fnwords155: Heiser's recheck read three wmich.edu hits and never WMU's career directory, the sixth). Its search and pages are in the case, so the retry costs little."""
+        if row.get("named_recheck_tried"): return False
+        row["named_recheck_tried"] = "yes"
+        return True
 
     def unit_retry(self, row):
         """A stored row of a sub-college, rechecked before rechecks read staff pages first and filed sub-colleges under their university, gets one more try, marked so it gets no other: its organisation's site is a parent's (unit_site) whose label the signal page prints as a word ("Chapman's Career and Professional Development team" for Argyros College's Dusserre, fnwords153 review)."""
@@ -3364,7 +3383,7 @@ class Hunt:
     @side_search("official recheck")
     def official_recheck(self, row, org):
         """A lead read on another site, or on a page too old to show the post is still held, gets one search for the person on the organisation's own domain; it is upgraded when `check` verifies them there, and keeps its quote as the signal."""
-        row["official_recheck_tried"] = "yes"
+        row["official_recheck_tried"] = row["named_recheck_tried"] = "yes"
         if self.s.get("official_recheck") is False:
             d = self.domains.get(org) or self.domains.get(people.org_core(org)) or self.learned.get(org)
             d = d[0] if isinstance(d, (list, tuple)) and d else d
@@ -3374,8 +3393,13 @@ class Hunt:
         doms = self.domains if (self.domains.get(org) or self.domains.get(people.org_core(org))) or not d else {**self.domains, org: d}
         try: hits, _ = self.search(q, n=6)
         except Exception: return False
+        if d and not any(hit_names(h, row["name"]) and people.official(org, h["url"], doms) for h in hits):  # no hit names them: the quoted name misses "Doe, Jane" and "Jane Q. Doe", so the site is searched for the surname with the first name
+            toks = people.clean_name(row["name"]).split()
+            try: more, _ = self.search(f'site:{d} {toks[0]} "{toks[-1]}"', n=6) if len(toks) > 1 else ([], {})
+            except Exception: more = []
+            hits = hits + [h for h in more if h["url"] not in {x["url"] for x in hits}]
         seen = 0
-        for h in sorted(hits, key=lambda h: story_url(h["url"])):  # staff pages before stories, which seldom show the post is held now
+        for h in sorted(hits, key=lambda h: (story_url(h["url"]), recheck_rank(h, row["name"], row["title"]))):  # staff pages before stories, which seldom show the post is held now; then the hits whose title or snippet names them with their title's words (fnwords155: WMU's career directory, which prints Heiser's title, was the fifth hit and never read)
             if h["url"] == row["source_url"] or not people.official(org, h["url"], doms): continue
             seen += 1
             if seen > 3: break
