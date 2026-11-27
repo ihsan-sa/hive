@@ -94,7 +94,8 @@ echo "The Hive is installed. Open this address: http://localhost:${port}/login#S
 let rport = 0; const rseen = [];
 const remote = http.createServer((req, res) => {
   if (req.url.startsWith('/api/proof?n=')) return res.end(require('crypto').createHmac('sha256', 'OTHERKEY').update(`proof:${rport}:${req.url.split('n=')[1]}`).digest('hex'));
-  const page = `<title>Other Hive</title><h1 id="app">The other Hive</h1><p id="remote">remote</p><button id="pop" onclick="window.open('/')">pop</button>`;
+  const page = `<title>Other Hive</title><h1 id="app">The other Hive</h1><p id="remote">remote</p><button id="pop" onclick="window.open('/', 'signin', 'popup,width=500,height=600')">pop</button>`
+    + `<a id="same" href="/" target="_blank">same</a><a id="other" href="http://127.0.0.1:${port}/thread">other</a><a id="far" href="https://example.com/">far</a>`;
   res.setHeader('content-type', 'text/html');
   if (req.url.startsWith('/login')) { rseen.push(req.url); res.setHeader('set-cookie', 'hive=remote; Path=/; HttpOnly; Max-Age=86400'); return res.end(page); }
   if (/(^|;\s*)hive=remote/.test(req.headers.cookie || '')) return res.end(page);
@@ -321,6 +322,51 @@ const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.g
   assert.ok(sess.length === 2 && sess.every(Boolean), 'the popup is in the Hive\'s session: ' + sess);
   await pop.close();
   console.log('ok popup same session');
+  // Many windows (step 4). With two Hives the rail shows down the left of the window, the Hive's view beside it.
+  await setup.waitForSelector('#rail:not([hidden]) #tile-' + rid + '.on');
+  assert.strictEqual(await setup.locator('#rail .tile').count(), 2, 'a tile for each Hive');
+  assert.strictEqual(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.at(-1).getBounds().x), 72, 'the view sits beside the rail');
+  await setup.screenshot({ path: path.join(shots, '11-rail.png') });   // the rail (the page under the view) and the view beside it, as two pictures
+  fs.writeFileSync(path.join(shots, '11-rail-view.png'), Buffer.from(await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].contentView.children.at(-1).webContents.capturePage()).toPNG().toString('base64')), 'base64'));
+  await setup.click('#tile-local');
+  await setup.waitForSelector('#tile-local.on');
+  assert.ok((await showing(app))[0].startsWith(`http://127.0.0.1:${port}/`), 'its tile shows the local Hive');
+  await setup.click('#tile-' + rid);
+  await setup.waitForSelector('#tile-' + rid + '.on');
+  assert.ok((await showing(app))[0].startsWith(rorigin + '/'), 'and back');
+  console.log('ok rail');
+  const ids0 = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.id));
+  const until = async (fn, what) => { const end = Date.now() + WAIT; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) throw new Error(what + ': ' + JSON.stringify(await showing(app))); await new Promise(r => setTimeout(r, 200)); } };
+  // A link to the Hive's own page with target=_blank opens a window of the app on that Hive, signed in (its session).
+  await rp.click('#same');
+  await until(async () => { const s = await showing(app); return s.length === 2 && s.every(u => u.startsWith(rorigin + '/')); }, 'a second window on the other Hive');
+  console.log('ok link same hive window');
+  // A link to another Hive in the list opens there (in its own session), not in this Hive's view, and not in the browser.
+  await rp.evaluate(() => document.getElementById('other').click());   // (the app stops the navigation; page.click would wait for it)
+  await until(async () => (await showing(app)).includes(`http://127.0.0.1:${port}/thread`), 'the local Hive in a window of its own');
+  assert.ok(rp.url().startsWith(rorigin + '/'), 'the other Hive\'s page stayed where it was');
+  console.log('ok link other hive');
+  const logText = () => fs.readFileSync(path.join(userData, 'app.log'), 'utf8');
+  const before = (logText().match(/external example\.com/g) || []).length;
+  await rp.evaluate(() => document.getElementById('far').click());
+  await until(async () => (logText().match(/external example\.com/g) || []).length > before, 'the link outside went to the browser');
+  assert.ok(rp.url().startsWith(rorigin + '/'), 'and the page stayed');
+  console.log('ok link outside browser');
+  await app.evaluate(({ BrowserWindow }, ids0) => BrowserWindow.getAllWindows().filter(w => !ids0.includes(w.id)).forEach(w => w.close()), ids0);
+  await until(async () => (await showing(app)).length === 1, 'back to one window');
+  // Hives > New Window (Ctrl+Shift+N; the Mac's menu): a second window on the same Hive, a little down from the first.
+  if (process.platform === 'darwin') await menuClick(app, 'hives-new-window');
+  else await app.evaluate(({ BrowserWindow }) => { const wc = BrowserWindow.getAllWindows()[0].contentView.children.at(-1).webContents; for (const type of ['keyDown', 'keyUp']) wc.sendInputEvent({ type, keyCode: 'N', modifiers: ['control', 'shift'] }); });
+  await until(async () => { const s = await showing(app); return s.length === 2 && s.every(u => u.startsWith(rorigin + '/')); }, 'a new window');
+  const bounds = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.getBounds()));
+  assert.ok(bounds[0].x !== bounds[1].x || bounds[0].y !== bounds[1].y, 'not right on top of the first: ' + JSON.stringify(bounds));
+  console.log('ok new window');
+  // The new window moves to the local Hive by its own rail; the first stays on the other Hive.
+  const setup2 = await until(async () => app.windows().find(p => p !== setup && /setup\.html/.test(p.url())), 'the new window\'s page');
+  await setup2.waitForSelector('#tile-local');
+  await setup2.click('#tile-local');
+  await until(async () => { const s = await showing(app); return s.some(u => u.startsWith(rorigin + '/')) && s.some(u => u.startsWith(`http://127.0.0.1:${port}/`)); }, 'one window on each Hive');
+  await new Promise(r => setTimeout(r, 700));   // the windows' places are saved a moment after a move
   await app.close();
 
   // Next start: back on the Hive it showed last. Then remove it (Hives > Manage, Remove twice): it and its sign-in go.
@@ -329,6 +375,16 @@ const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.g
   assert.strictEqual(await rp2.locator('#remote').count(), 1, 'still signed in to it');
   assert.strictEqual(rseen.length, 1, 'with no second sign-in');
   console.log('ok remote remembered');
+  // Both windows come back, each on its Hive. Then the local one closes: the app goes on in the other.
+  await hive(app);
+  assert.strictEqual(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 2, 'both windows came back');
+  const back = await showing(app);
+  assert.ok(back.some(u => u.startsWith(rorigin + '/')) && back.some(u => u.startsWith(`http://127.0.0.1:${port}/`)), 'each on its Hive: ' + back.map(u => u.replace(/#.*/, '#…')));
+  await app.evaluate(({ BrowserWindow }, p) => BrowserWindow.getAllWindows().find(w => (w.contentView.children.at(-1)?.webContents.getURL() || '').startsWith(`http://127.0.0.1:${p}/`)).close(), port);
+  for (let i = 0; i < 100 && (await showing(app)).length > 1; i++) await new Promise(r => setTimeout(r, 100));
+  assert.strictEqual((await showing(app)).length, 1, 'one window left');
+  page = app.windows().find(p => /setup\.html/.test(p.url()) && !p.isClosed());
+  console.log('ok windows remembered');
   const partDir = path.join(userData, 'Partitions', 'hive-' + rid);
   assert.ok(fs.existsSync(partDir), 'its session is on disk: ' + partDir);
   await menuClick(app, 'hive-local');

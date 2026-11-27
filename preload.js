@@ -19,5 +19,9 @@ if (location.protocol === 'file:') contextBridge.exposeInMainWorld('hive', {
   connectScreen: () => ipcRenderer.send('connect-screen'),
   back: () => ipcRenderer.send('back'),
   retryHive: () => ipcRenderer.send('retry-hive'),
+  // The rail (step 4): show a Hive in this window, its tile's menu, and a new window.
+  railPick: id => ipcRenderer.send('rail-pick', String(id)),
+  tileMenu: id => ipcRenderer.send('tile-menu', String(id)),
+  newWindow: () => ipcRenderer.send('new-window'),
   on: (name, fn) => ipcRenderer.on(name, (_e, ...a) => fn(...a)),
 });

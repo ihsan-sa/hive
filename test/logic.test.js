@@ -117,6 +117,10 @@ console.log(`ok ${n} tests`);
   assert.strictEqual(k('=', { control: true }), 'zoomIn'); assert.strictEqual(k('-', { control: true }), 'zoomOut'); assert.strictEqual(k('0', { control: true }), 'zoomReset');
   assert.strictEqual(k('r'), null); assert.strictEqual(k('-', { control: true, alt: true }), null);
   assert.strictEqual(lib.shortcut({ type: 'keyUp', key: 'r', control: true }), null);
+  // The Hives menu's keys: Ctrl (or Cmd) + 1..9 and Ctrl+Shift+N; not with Shift on a digit, not bare.
+  assert.strictEqual(k('1', { control: true }), 'hive:1'); assert.strictEqual(k('9', { meta: true }), 'hive:9');
+  assert.strictEqual(k('3'), null); assert.strictEqual(k('3', { control: true, shift: true }), null);
+  assert.strictEqual(k('N', { control: true, shift: true }), 'newWindow'); assert.strictEqual(k('n', { control: true }), null);
   console.log('ok shortcuts logic');
 t('right-click menu: link, box, selection', () => {
   assert.deepStrictEqual(lib.contextItems({ linkURL: 'https://auth.openai.com/codex/device', selectionText: '' }), ['copyLink']);

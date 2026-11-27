@@ -121,7 +121,7 @@ console.log('ok page: Windows, Mac (Apple chip or Intel) and Linux each get thei
   const main = fs.readFileSync(p.join(__dirname, '../main.js'), 'utf8');
   const setup = fs.readFileSync(p.join(__dirname, '../setup.html'), 'utf8');
   const pre = fs.readFileSync(p.join(__dirname, '../preload.js'), 'utf8');
-  assert(/ipcMain\.on\('rosetta', e => \{ e\.returnValue = fromSetup\(e\) && process\.platform === 'darwin' && !!app\.runningUnderARM64Translation; \}\)/.test(main), 'the rosetta flag: setup screen, Mac, under translation');
+  assert(/ipcMain\.on\('rosetta', e => \{ e\.returnValue = !!fromSetup\(e\) && process\.platform === 'darwin' && !!app\.runningUnderARM64Translation; \}\)/.test(main), 'the rosetta flag: setup screen, Mac, under translation');
   assert(/ipcMain\.on\('chip-download', e => \{ if \(fromSetup\(e\)\) external\(lib\.downloadPage\(\)\); \}\)/.test(main), 'the Apple chip line opens the download page');
   assert(/rosetta: ipcRenderer\.sendSync\('rosetta'\)/.test(pre) && /chipDownload: \(\) => ipcRenderer\.send\('chip-download'\)/.test(pre), 'the bridge carries both');
   assert(/if \(hive\.rosetta\)[\s\S]{0,300}id = 'rosetta'[\s\S]{0,200}Apple chip download opens faster[\s\S]{0,80}hive\.chipDownload\(\)/.test(setup), 'the setup screen shows the line only under Rosetta');

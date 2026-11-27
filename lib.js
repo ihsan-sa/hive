@@ -131,12 +131,15 @@ function redact(text) {
 function plain(text) { return String(text).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[^\n\r]*\r(?!\n)/g, ''); }
 function uid() { try { return require('os').userInfo().uid; } catch { return 1000; } }
 
-// Windows and Linux have no menu (so no View menu either): these keys do what it would. input: Electron's before-input-event data.
+// Windows and Linux have no View menu: these keys do what it would, and the Hives menu's keys. input: Electron's before-input-event data.
 function shortcut(i) {
   if (!i || i.type !== 'keyDown' || i.alt) return null;
   if (i.key === 'F5') return 'reload';
   if (!(i.control || i.meta)) return null;
   const k = String(i.key).toLowerCase();
+  // The Hives menu's keys (a page's keys don't reach the menu bar): Ctrl+1..9 shows a Hive, Ctrl+Shift+N opens a window.
+  if (/^[1-9]$/.test(k) && !i.shift) return 'hive:' + k;
+  if (k === 'n' && i.shift) return 'newWindow';
   if (k === 'r') return 'reload';
   if (k === '=' || k === '+') return 'zoomIn';
   if (k === '-' || k === '_') return 'zoomOut';
