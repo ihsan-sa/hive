@@ -400,7 +400,6 @@ const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.g
   assert.ok(!after.hives.some(h => h.kind === 'remote') && after.removed.includes(rid), 'removed from the list: ' + hivesJson());
   assert.strictEqual(await app.evaluate(({ Menu }, id) => !!Menu.getApplicationMenu().getMenuItemById(id), 'hive-' + rid), false, 'and from the menu');
   await app.close();
-  remote.close();
 
   // Second start: straight in, no setup. The removed Hive's files went before anything opened.
   ({ app, page } = await start());
@@ -693,6 +692,33 @@ const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.g
   console.log('ok no update notice');
   console.log('ok update notice');
   appVersion = '';
+
+  // Only a Hive somewhere else (step 5): on the first screen, Connect instead of Install. Nothing is installed, no rail shows
+  // (there is one Hive), the next start opens that Hive, and the Hives screen still offers a Hive on this computer.
+  wipe();
+  const ps0 = ps1Asked, logAt = fs.readFileSync(path.join(userData, 'app.log'), 'utf8').length;
+  ({ app, page } = await start());
+  await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive');
+  await page.getByRole('button', { name: 'Connect to a Hive…' }).click();
+  await page.waitForSelector('#address');
+  await page.fill('#address', `127.0.0.1:${rport}/login#OTHERKEY`); await page.click('#go');
+  await hive(app, rorigin);
+  assert.ok((await showing(app))[0].startsWith(rorigin + '/'), 'the window shows the other Hive');
+  assert.strictEqual(await page.evaluate(() => document.getElementById('rail').hidden), true, 'no rail with one Hive');
+  assert.strictEqual(JSON.parse(hivesJson()).noLocal, true, 'kept as a Hive somewhere else only: ' + hivesJson());
+  await app.close();
+  ({ app, page } = await start());
+  await hive(app, rorigin);
+  assert.strictEqual(await page.evaluate(() => document.getElementById('rail').hidden), true, 'still no rail');
+  await menuClick(app, 'hives-manager');
+  await page.getByRole('button', { name: 'Set up a Hive on this computer' }).waitFor();
+  assert.strictEqual(await page.locator('#open-local').count(), 0, 'no Hive on this computer in the list');
+  await app.close();
+  const said = fs.readFileSync(path.join(userData, 'app.log'), 'utf8').slice(logAt);
+  assert.ok(ps1Asked === ps0 && !said.includes('installer exit') && !fs.existsSync(path.join(home, 'hive')) && !fs.existsSync(path.join(home, '.hive')), 'nothing was installed: ' + said.slice(-800));
+  assert.ok(said.includes('no Hive on this computer'), 'and the log says so');
+  console.log('ok remote only');
+  remote.close();
 
   if (win) wipe();
   server.close(); fs.rmSync(home, { recursive: true, force: true });

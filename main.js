@@ -18,8 +18,12 @@ const wins = new Set();
 let last = null, quitting = false, started = false;
 const alive = W => !!W && !!W.bw && !W.bw.isDestroyed();
 const all = () => [...wins].filter(alive);
-const hives = () => [local, ...remotes];
-const many = () => remotes.length > 0;   // the rail shows once a second Hive exists
+// The local Hive is in the list unless the person connected to a Hive somewhere else instead of setting one up here
+// (DESIGN-many-hives.md, step 5), and none is installed: then the app is only for the Hives they connected to.
+const hasLocal = () => !store.extra.noLocal || !!hiveUrl || !!child || !!lib.openCommand(process.platform, process.env);
+const hives = () => hasLocal() ? [local, ...remotes] : [...remotes];
+const home = () => hives()[0] || local;   // where a new window goes when nothing else says
+const many = () => hives().length > 1;   // the rail shows once a second Hive exists
 const winOf = bw => all().find(W => W.bw === bw);
 // The window a menu click, a key in a popup or a second launch means: the focused one, else the one focused last.
 const front = () => winOf(BrowserWindow.getFocusedWindow()) || (alive(last) ? last : all().at(-1)) || null;
@@ -505,7 +509,7 @@ function showAside(W, state) {
   if (!alive(W)) return;
   W.aside = true; W.asideState = state;
   display(W);
-  render(W, state, state === 'hives' ? { list: hives().map(h => ({ id: h.id, name: h.name, current: h === W.chosen, where: where(h), remote: h.kind === 'remote' })) } : {});
+  render(W, state, state === 'hives' ? { list: hives().map(h => ({ id: h.id, name: h.name, current: h === W.chosen, where: where(h), remote: h.kind === 'remote' })), noLocal: !hasLocal() } : {});
   menu();
 }
 
@@ -549,9 +553,14 @@ async function connectNow(W, t) {
   }
   h.pending = false;
   remotes.push(h);
+  // Connected with no Hive on this computer (the welcome's "somewhere else"): nothing is installed, and the windows that
+  // were offering to set one up go to this Hive. Setting one up later is on the Hives screen.
+  const none = !hasLocal() || (!hiveUrl && !child && !lib.openCommand(process.platform, process.env));
+  if (none) store.extra.noLocal = true;
   saveHives();
-  log('connected ' + hostOf(a.url));
+  log('connected ' + hostOf(a.url) + (none ? ' (no Hive on this computer)' : ''));
   choose(W, h);
+  if (none) for (const o of all()) if (o !== W && o.chosen === local) choose(o, h);
   // The other windows' rails gain the new Hive (and the rail shows, now that there are two).
   for (const o of all()) if (o !== W) { if (o.aside) rail(o); else display(o); }
   return '';
@@ -565,14 +574,15 @@ function removeHive(id) {
   const h = remotes.find(r => r.id === id);
   if (!h) return;
   remotes = remotes.filter(r => r !== h);
+  if (!remotes.length) delete store.extra.noLocal;   // with no Hive left, the window offers the choice again
   for (const w of [...h.popups]) try { w.close(); } catch { }
   for (const W of all()) {
     closeView(W, h.id);
-    if (W.chosen === h) { W.chosen = local; if (hiveUrl && !W.views.has(local.id)) openLocal(W); }
+    if (W.chosen === h) { W.chosen = home(); if (W.chosen === local) { if (hiveUrl && !W.views.has(local.id)) openLocal(W); } else if (!W.views.has(W.chosen.id)) openRemote(W, W.chosen); }
   }
   forget(h);
   store.extra.removed = [...removedIds(), h.id];
-  if (store.extra.last === h.id) store.extra.last = local.id;
+  if (store.extra.last === h.id) store.extra.last = home().id;
   saveHives();
   log('removed ' + hostOf(h.saved.url));
   for (const W of all()) { if (W.aside) showAside(W, W.asideState); else display(W); }
@@ -595,7 +605,7 @@ async function tileMenu(W, id) {
 // Ctrl+1..9 reach the first nine; on Windows and Linux keys() catches them in the pages, so the menu only shows them.
 function menu() {
   const f = front(), mac = process.platform === 'darwin';
-  const act = fn => () => { const W = front(); if (W) fn(W); else fn(create(local)); };
+  const act = fn => () => { const W = front(); if (W) fn(W); else fn(create(home())); };
   const item = (h, i) => ({ id: 'hive-' + h.id, label: h.name.replace(/&/g, '&&'), type: 'radio', checked: !!f && h === f.chosen && !f.aside,
     ...(i < 9 ? { accelerator: 'CmdOrCtrl+' + (i + 1), registerAccelerator: mac } : {}), click: act(W => choose(W, h)) });
   const list = { label: mac ? 'Hives' : '&Hives', submenu: [...hives().map(item), { type: 'separator' },
@@ -677,6 +687,14 @@ ipcMain.on('hives', e => { const W = fromSetup(e); if (W) showAside(W, 'hives');
 ipcMain.on('connect-screen', e => { const W = fromSetup(e); if (W) showAside(W, 'connect'); });
 ipcMain.on('back', e => { const W = fromSetup(e); if (W) { W.aside = false; display(W); menu(); } });
 ipcMain.on('retry-hive', e => { const W = fromSetup(e); if (W) choose(W, W.chosen); });
+// Set up a Hive on this computer after all (the Hives screen): the local Hive is back in the list and this window shows its setup.
+ipcMain.on('setup-local', e => {
+  const W = fromSetup(e); if (!W) return;
+  delete store.extra.noLocal; saveHives();
+  log('set up a Hive on this computer');
+  choose(W, local);
+  for (const o of all()) if (o !== W) { if (o.aside) rail(o); else display(o); }
+});
 
 // Windows ties notifications (and their clicks) to the Start menu shortcut by this ID; it must match the installer's appId.
 if (process.platform === 'win32') app.setAppUserModelId('cc.ihsan.hive');
@@ -684,7 +702,7 @@ if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => {
     const W = front();
-    if (!W) return void create(local);
+    if (!W) return void create(home());
     if (W.bw.isMinimized()) W.bw.restore();
     W.bw.focus();
   });
@@ -692,10 +710,10 @@ else {
     loadHives(); sessionFor(local);
     // The windows open as they were left, each on its Hive; a window saved before there were many shows the Hive shown last.
     const lastRemote = remotes.find(h => h.id === store.extra.last);
-    for (const s of savedWindows()) create(s.hive ? hiveById(s.hive) : lastRemote || local, s.rect);
+    for (const s of savedWindows()) create(s.hive ? hiveById(s.hive) : lastRemote || home(), s.rect);
     started = true; saveAll();
     open(); checkNewer();
-    app.on('activate', () => { if (!all().length) create(local); });
+    app.on('activate', () => { if (!all().length) create(home()); });
   });
   // Closing the last window closes the app. The Hive itself keeps running in the background, as it does without the app.
   app.on('window-all-closed', () => app.quit());

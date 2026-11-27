@@ -16,6 +16,7 @@ if (location.protocol === 'file:') contextBridge.exposeInMainWorld('hive', {
   removeHive: id => ipcRenderer.send('remove-hive', String(id)),
   browserHive: () => ipcRenderer.send('browser-hive'),
   hives: () => ipcRenderer.send('hives'),
+  setupLocal: () => ipcRenderer.send('setup-local'),
   connectScreen: () => ipcRenderer.send('connect-screen'),
   back: () => ipcRenderer.send('back'),
   retryHive: () => ipcRenderer.send('retry-hive'),
