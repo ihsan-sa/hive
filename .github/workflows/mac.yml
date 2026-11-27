@@ -32,7 +32,7 @@ jobs:
         HIVE_VOICE=0 HIVE_CHECK_LINE=line.sh sh mac-check.sh > install.log 2>&1 < /dev/null || true
         tail -n 80 install.log
         grep -q '^done, 0 failed\.' install.log && ! grep -q '^done, [1-9][0-9]* failed' install.log
-    - name: A second Hive beside it (rig/mac-many.sh; many.yml does Linux and Windows)
+    - name: Two more Hives beside it, installed at once (rig/mac-many.sh; many.yml does Linux and Windows)
       timeout-minutes: 8
       run: sh rig/mac-many.sh < /dev/null
     - name: The report
@@ -51,7 +51,8 @@ jobs:
       if: always()
       timeout-minutes: 8
       run: |
-        # hive-work first: the last Hive left takes the VM with it, whichever it is (mac-many.sh removes hive when it gets that far; otherwise the second line does)
+        # hive-two and hive-work first: the last Hive left takes the VM with it, whichever it is (mac-many.sh removes hive when it gets that far; otherwise the last line does)
+        { sleep 5; echo delete; sleep 5; } | HIVE_USER=hive-two HIVE_KEEP=projects,notes,board script -q /dev/null sh remove-mac.sh || true
         { sleep 5; echo delete; sleep 5; } | HIVE_USER=hive-work HIVE_KEEP=projects,notes,board script -q /dev/null sh remove-mac.sh || true
         { sleep 5; echo delete; sleep 5; } | HIVE_KEEP=projects,notes,board script -q /dev/null sh remove-mac.sh || true
         sleep 5; sh mac-check.sh --after-uninstall || true

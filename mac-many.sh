@@ -1,5 +1,5 @@
 #!/bin/sh
-# On the Mac runner, after mac-check.sh has installed the first Hive (user hive in the Lima VM): a second Hive beside it,
+# On the Mac runner, after mac-check.sh has installed the first Hive (user hive in the Lima VM): two more beside it, installed at once,
 # the same line again, a project moved with its history, hive shell, and removing the first. Stub-free: the real line. Public log.
 set -u
 fail=0
@@ -17,12 +17,23 @@ P1=$(port hive); note "hive on port $P1"
 as hive 'mkdir -p ~/projects/demo && cd ~/projects/demo && git init -q -b main && echo one > a.txt && git add -A && git -c user.name=t -c user.email=t@t commit -qm first && echo two >> a.txt && git -c user.name=t -c user.email=t@t commit -qam second'
 B1=$(vm sudo stat -c %s /home/hive/board.jsonl); S1=$(vm sudo sha256sum /home/hive/board.jsonl | cut -c1-64)
 
-HIVE_USER=hive-work sh line.sh > many-1.log 2>&1 && ok "install hive-work" || { bad "install hive-work"; tail -n 30 many-1.log | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/'; }
-tail -n 6 many-1.log | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/; s/^/--   | /'
+# Two more at once, as a person running the line in two Terminal windows would.
+HIVE_USER=hive-work sh line.sh > many-1.log 2>&1 & a=$!
+HIVE_USER=hive-two sh line.sh > many-1b.log 2>&1 & b=$!
+wait $a && ok "install hive-work (at the same time as hive-two)" || { bad "install hive-work"; tail -n 30 many-1.log | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/'; }
+wait $b && ok "install hive-two (at the same time as hive-work)" || { bad "install hive-two"; tail -n 30 many-1b.log | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/'; }
+tail -n 6 many-1.log | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/; s/^/--   hive-work | /'
+tail -n 6 many-1b.log | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/; s/^/--   hive-two | /'
 [ -x "$HOME/.hive/bin/hive-work" ] && ok "hive-work command on the Mac" || bad "hive-work command on the Mac"
+[ -x "$HOME/.hive/bin/hive-two" ] && ok "hive-two command on the Mac" || bad "hive-two command on the Mac"
 answers_soon hive-work && ok "hive-work answers on the Mac" || bad "hive-work answers on the Mac"
-P2=$(port hive-work); note "ports: hive $P1, hive-work $P2"
-[ -n "$P2" ] && [ "$P2" != "$P1" ] && ok "hive-work has its own port" || bad "hive-work has its own port"
+answers_soon hive-two && ok "hive-two answers on the Mac" || bad "hive-two answers on the Mac"
+P2=$(port hive-work); P3=$(port hive-two); note "ports: hive $P1, hive-work $P2, hive-two $P3"
+[ -n "$P2" ] && [ -n "$P3" ] && [ "$P2" != "$P3" ] && ok "two installs at once got different ports" || bad "two installs at once got different ports"
+[ "$P2" != "$P1" ] && [ "$P3" != "$P1" ] && ok "neither took the first Hive's port" || bad "neither took the first Hive's port"
+AL=$(vm sudo sh -c 'A=$(command -v hive-admin || command -v h2-admin) && "$A" list' 2>&1 | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/')
+printf '%s\n' "$AL" | sed 's/^/--   admin: /'
+printf '%s' "$AL" | grep -q 'hive-work' && printf '%s' "$AL" | grep -q 'hive-two' && ok "hive-admin list shows both" || bad "h2-admin list shows both"
 [ "$(port hive)" = "$P1" ] && ok "first Hive's port unchanged" || bad "first Hive's port changed"
 # The first Hive is live and may post on its own board meanwhile: what it had stays as it was, and anything new is shown and must not be hive-work's.
 [ "$(vm sudo sh -c "head -c $B1 /home/hive/board.jsonl | sha256sum" | cut -c1-64)" = "$S1" ] && ok "first Hive's board unchanged" || bad "first Hive's board changed"
@@ -32,9 +43,9 @@ for l in sys.stdin:
     except Exception: print("? not json"); continue
     print(d.get("from","?"), d.get("thread","?"), str(d.get("text",""))[:60].replace("\n"," "))' | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/')
 [ -n "$NEW" ] && printf '%s\n' "$NEW" | sed 's/^/--   new on hive board: /'
-printf '%s' "$NEW" | grep -q '^hive-work ' && bad "hive-work wrote on the first Hive's board" || ok "nothing of hive-work's on the first board"
+printf '%s' "$NEW" | grep -qE '^hive-(work|two) ' && bad "a new Hive wrote on the first Hive's board" || ok "nothing of the new Hives' on the first board"
 answers hive && ok "hive still answers" || bad "hive still answers"
-grep -q 'Making the Linux VM' many-1.log && bad "a second VM was made" || ok "the same VM, no second one"
+cat many-1.log many-1b.log | grep -q 'Making the Linux VM' && bad "a second VM was made" || ok "the same VM, no second one"
 
 state() { as hive-work 'cat ~/.hive/web.json; git -C ~/core rev-parse HEAD; git -C ~/core status --porcelain'; }  # git as the Hive's user: root's git refuses another user's repo
 t=$("$L" shell --workdir / hive sudo -iu hive-work sh < rig/pin-release.sh) && note "hive-work recorded as on $t, the newest release (rig/pin-release.sh says why)" || bad "record the newest release in hive-work"
