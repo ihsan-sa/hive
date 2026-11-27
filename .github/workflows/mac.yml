@@ -5,7 +5,7 @@ jobs:
   install:
     # Intel: GitHub's Apple-silicon Macs can't start a VM inside, so only this one runs the real line end to end.
     runs-on: macos-15-intel
-    timeout-minutes: 55
+    timeout-minutes: 58   # under the train's hour of waiting (release_train.py rig()); the line ~21 min, its second Hive ~4
     env:
       HIVE_SITE: https://raw.githubusercontent.com/ihsan-sa/hive/train-candidate
       HIVE_BRANCH: train-candidate
@@ -13,6 +13,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       with: { ref: train-candidate }
+    - uses: actions/checkout@v4
+      with: { path: rig }
     - name: Where this runs
       run: sw_vers; uname -m; sysctl -n hw.memsize hw.ncpu
     - name: The login item is valid for plutil
@@ -30,6 +32,9 @@ jobs:
         HIVE_VOICE=0 HIVE_CHECK_LINE=line.sh sh mac-check.sh > install.log 2>&1 < /dev/null || true
         tail -n 80 install.log
         grep -q '^done, 0 failed\.' install.log && ! grep -q '^done, [1-9][0-9]* failed' install.log
+    - name: A second Hive beside it (rig/mac-many.sh; many.yml does Linux and Windows)
+      timeout-minutes: 8
+      run: sh rig/mac-many.sh < /dev/null
     - name: The report
       if: always()
       run: cat "$HOME/hive-mac-report.txt" || true
@@ -44,7 +49,9 @@ jobs:
         timeout 60 "$L" shell --workdir / hive sh -c 'ps -eo pid,ppid,etime,stat,args --forest | cut -c1-200; echo ---; tail -n 30 /home/hive/.h2/voice-setup.log 2>/dev/null; journalctl -n 30 --no-pager 2>/dev/null | cut -c1-200' </dev/null || true
     - name: Uninstall, for real
       if: always()
-      timeout-minutes: 5
+      timeout-minutes: 8
       run: |
+        # hive-work first: the last Hive left takes the VM with it, whichever it is (mac-many.sh removes hive when it gets that far; otherwise the second line does)
+        { sleep 5; echo delete; sleep 5; } | HIVE_USER=hive-work HIVE_KEEP=projects,notes,board script -q /dev/null sh remove-mac.sh || true
         { sleep 5; echo delete; sleep 5; } | HIVE_KEEP=projects,notes,board script -q /dev/null sh remove-mac.sh || true
         sleep 5; sh mac-check.sh --after-uninstall || true
