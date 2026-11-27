@@ -36,6 +36,8 @@ class _Page(HTMLParser):
         self.stack.append(tag)
         self.open[tag] += 1
         if tag in BLOCK or HEADING.match(tag): self.chunks.append("\n")
+        # A mail link set beside other words by layout alone (<span>City, CA</span><a href="mailto:..">) must not read as "CAname@site"
+        if tag == "a" and a.get("href", "").lower().startswith("mailto:") and self.chunks and re.search(r"[\w.+-]$", self.chunks[-1]): self.chunks.append(" ")
         if tag == "a" and a.get("href"): self.href, self.anchor = a["href"], []
 
     def handle_endtag(self, tag):

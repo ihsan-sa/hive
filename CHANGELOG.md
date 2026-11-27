@@ -10,6 +10,7 @@ Web pages and documents in the side panel have a Comment mode: press **Comment**
 
 ## Smaller fixes, 2026-11-26
 
+- A chat an agent answered last now says "Replied" and how long ago at the top and in the sidebar, and the receipt lines after Stop and send are translated into the app's languages. The step that Stop and send cut short now sits with the message that stopped it, not under the answer.
 - Stop and send says a step stopped only once it has ended, shows one status line under your message, and the line over the message box lets go of the stopped step.
 - The README's top links now include the Download page and the Hard questions page.
 - Spend notice: with the cost module added, when one agent uses an unusually large amount in a day, counted at API prices, one post says so while its run is still going. Nothing is stopped.

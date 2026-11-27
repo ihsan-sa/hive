@@ -50,6 +50,7 @@ document.addEventListener("pointerdown", e => {
   closeBubble();
   e.preventDefault();   // no text selection, no focus change; a mouse click still follows a tap, a Pencil's is made on pointerup
   const sid = "m-" + art.dataset.key, t = K.TOOL.t;
+  steady(art); follow(art);
   cur = { th, sid, art, pid: e.pointerId, x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false, target: e.target, stylus: performance.now() - stylusAt < 600 };
   if (t === "eraser") { cur.erase = true; erase(unitPt(art, e)); }
   else Object.assign(cur, { id: K.sid(), t: t === "hl" ? "hl" : "pen", c: K.TOOL.c, w: Math.round((t === "hl" ? 16 : 2.8) * zoomOf(frameOf(art)) * 10) / 10, p: [unitPt(art, e)], lasso: t === "lasso" });
@@ -162,7 +163,11 @@ function draw() {
   for (const sid of sids) {
     const art = artOf(sid.slice(2)); if (!art) continue;
     const r = place(art, art), was = MARKS.get(sid);
-    if (!r || (!(was && was.svg.parentNode === art) && (r.ar.bottom < br.top - 300 || r.ar.top > br.bottom + 300))) continue;
+    if (!r) continue;
+    // near the view by the whole message, not its text: ink beside its pictures lies below the text, and it vanished
+    // whenever the text was scrolled off (person, thread 11261907a87c)
+    if (!(was && was.svg.parentNode === art)) { const a = art.getBoundingClientRect(); if (a.bottom < br.top - 300 || a.top > br.bottom + 300) continue; }
+    steady(art); seen(art); if (!(cur && cur.art === art)) follow(art);
     const sig = [th, f.n, f.last, pj.length, pj.includes(sid) ? pj : "", Math.round(r.ar.width), r.H, hid(sid), K.ownStrokes(th, sid).length].join("|");
     let m = MARKS.get(sid);
     if (!m || m.sig !== sig || m.svg.parentNode !== art) {
@@ -177,8 +182,91 @@ function draw() {
     keep.add(sid);
   }
   for (const [sid, m] of MARKS) if (!keep.has(sid)) { m.svg.remove(); MARKS.delete(sid); }
+  // under the pen, the pictures near the view load now, not when they scroll in: a stroke drawn beside one stays beside it
+  if (K.TOOL.pen || K.TOOL.pencil) for (const img of b.querySelectorAll(".msg-thumb img[loading=lazy]")) {
+    const r = img.getBoundingClientRect(); if (r.bottom > br.top - 1500 && r.top < br.bottom + 1500) img.loading = "eager";
+  }
+  seen(b); watch(b);
   if (BUB) BUB.place();
 }
+
+// ---------- the ground under the ink ----------
+// A stroke sits in its message's units, from the top of the message's text; the pictures under the text grow when they load.
+// One that loaded after a stroke was drawn beside a later picture left the stroke behind (person, thread 11261907a87c). So in
+// a message with ink (or under the pen), its pictures load at once, and a picture seen before keeps the size it had from the
+// first frame (remembered here, per picture and message width) instead of growing from a placeholder when it arrives.
+const PK = "dash.ink.pics";
+let PICS = null;
+const pics = () => { if (!PICS) { try { PICS = JSON.parse(localStorage.getItem(PK)) || {}; } catch (e) { PICS = {}; } } return PICS; };
+const cwOf = img => { const a = img.closest("article.msg"); return a ? Math.round(a.clientWidth) : 0; };
+/** Make the pictures in art load now, and hold one still loading at the size it had last time. */
+function steady(art) {
+  for (const img of art.querySelectorAll(".msg-thumb img")) {
+    if (img.loading === "lazy") img.loading = "eager";
+    if ((img.complete && img.naturalWidth) || img.dataset.inkHeld != null || img.closest("[data-broken]")) continue;
+    const m = pics()[img.getAttribute("src")], cw = cwOf(img);
+    if (m && Math.abs(m[0] - cw) <= 2) { img.style.width = m[1] + "px"; img.style.height = m[2] + "px"; img.dataset.inkHeld = ""; }
+  }
+}
+// A picture with no size remembered still grows when it arrives (and a narrower chat moves the pictures against the text). The
+// person's strokes not sent yet that lie by a picture (below the text) move with that picture: where each picture sat is kept
+// per message (in units, from the text's top-left), and each paint compares it with where they sit now.
+const GROUND = new WeakMap();   // art -> {src: [left, top, right, bottom]}
+function ground(art, keep = true) {
+  const f = frameOf(art).getBoundingClientRect(); if (!f.width) return null;
+  const k = W / f.width, g = {};
+  for (const t of art.querySelectorAll(".msg-thumb")) {
+    const img = t.querySelector("img"), r = t.getBoundingClientRect(); if (!img || !r.height) continue;
+    g[img.getAttribute("src")] = [(r.left - f.left) * k, (r.top - f.top) * k, (r.right - f.left) * k, (r.bottom - f.top) * k];
+  }
+  if (keep) GROUND.set(art, g);
+  return g;
+}
+function follow(art) {
+  const was = GROUND.get(art), now = ground(art), th = chatTh(); if (!was || !now || !th || !art.dataset.key) return;
+  const sid = "m-" + art.dataset.key;
+  const fh = frameOf(art).getBoundingClientRect(), H = fh.height * W / fh.width, moves = {};
+  for (const st of K.ownStrokes(th, sid)) {
+    if (!st.pending || !st.p.length) continue;
+    const b = bbox(st.p), cx = b.x + b.w / 2, cy = b.y + b.h / 2; if (cy < H) continue;   // on the text: the text didn't move
+    let best = null, bd = Infinity;
+    for (const [src, r] of Object.entries(was)) {
+      const dx = cx < r[0] ? r[0] - cx : cx > r[2] ? cx - r[2] : 0, dy = cy < r[1] ? r[1] - cy : cy > r[3] ? cy - r[3] : 0, d = Math.hypot(dx, dy * 2);
+      if (d < bd) { bd = d; best = src; }
+    }
+    const a = best && was[best], z = best && now[best]; if (!a || !z) continue;
+    const d = [z[0] - a[0], z[1] - a[1]]; if (Math.abs(d[0]) > .5 || Math.abs(d[1]) > .5) moves[st.id] = d;
+  }
+  if (Object.keys(moves).length) K.shiftStrokes(th, sid, moves);
+}
+const unhold = img => { if (img.dataset.inkHeld != null) { img.style.width = img.style.height = ""; delete img.dataset.inkHeld; } };
+if (typeof document !== "undefined") {
+  document.addEventListener("load", e => {
+    const img = e.target; if (!img || img.tagName !== "IMG" || !img.closest || !img.closest("#main .cm-msgs .msg-thumb")) return;
+    unhold(img);
+    paint();
+    const r = img.getBoundingClientRect(), cw = cwOf(img), P = pics(), k = img.getAttribute("src");
+    if (!r.width || !cw) return;
+    const v = [cw, Math.round(r.width * 10) / 10, Math.round(r.height * 10) / 10];
+    if (P[k] && P[k].join() === v.join()) return;
+    delete P[k]; P[k] = v;
+    const ks = Object.keys(P); for (const x of ks.slice(0, Math.max(0, ks.length - 400))) delete P[x];
+    try { localStorage.setItem(PK, JSON.stringify(P)); } catch (er) {}
+  }, true);
+  document.addEventListener("error", e => {
+    const img = e.target; if (!img || img.tagName !== "IMG" || !img.closest || !img.closest("#main .cm-msgs .msg-thumb")) return;
+    unhold(img); paint();   // a broken one shrinks to its tile
+  }, true);
+}
+// A message that changes size with no scroll or resize to say so (a picture loading, the preview panel opening beside the
+// chat, a re-render) moves its ink at once, not on the next scroll.
+const RO = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => paint()) : null;
+const SEEN = new WeakSet();
+function seen(el) { if (RO && !SEEN.has(el)) { SEEN.add(el); RO.observe(el); } }
+// A re-render of a message drops its ink (the morph keeps only what the render makes): whatever the render, it comes straight back.
+let MOB = null;
+const MO = typeof MutationObserver !== "undefined" ? new MutationObserver(() => { for (const m of MARKS.values()) if (!m.svg.isConnected) { paint(); break; } }) : null;
+function watch(b) { if (MO && MOB !== b) { MO.disconnect(); MOB = b; MO.observe(b, { childList: true, subtree: true }); } }
 addEventListener("scroll", e => { if (e.target === document || (e.target.closest && e.target.closest("#main"))) paint(); }, { capture: true, passive: true });
 addEventListener("resize", () => paint());
 addEventListener("ink:change", () => paint());

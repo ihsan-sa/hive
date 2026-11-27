@@ -157,7 +157,7 @@ const viewFile = (p, f) => openPreview(items(p), Math.max(0, (p.files || []).fin
 function attachment(p, f) {
   const key = p.id + "/" + f.name, on = previewKey() === key ? "" : null;
   if (IMG.test(f.name)) return h("button", { type: "button", class: "msg-thumb", title: f.name + ", click to view", "data-pv-key": key, "data-pv-on": on, onclick: () => viewFile(p, f) },
-    h("img", { src: fileUrl(p, f), alt: f.name, loading: "lazy" }), h("span", null, f.name));
+    h("img", { src: fileUrl(p, f), alt: f.name, loading: "lazy", "data-keep": "style data-ink-held" }), h("span", null, f.name));
   const k = kindOf(f.name);
   // A voice memo or audio file plays in place: a waveform card, with the file's own panel one click away on its name.
   if (VOICE.test(f.name)) return voiceMemo(fileUrl(p, f) + "?view=1", f.name, fsize(f.size), f.size, { key, on, open: () => viewFile(p, f) });
@@ -178,18 +178,24 @@ function attachment(p, f) {
 const INKF = /^ink-(.+)\.(json|png)$/, INKL = /^✎ .*$\n?/gm;
 const inkFiles = (p, files) => p.from === "person" && files.some(f => INKF.test(f.name));
 const inkText = t => t.replace(INKL, "").replace(/\s+$/, "");
-function inkLine(p, ink) {
+function inkLine(p, ink, local = false) {
   const kinds = [...ink.keys()].map(sid => /^m-/.test(sid) ? "m" : sid === "board" ? "b" : "s");
   const n = k => kinds.filter(x => x === k).length;
   const what = [n("m") && (n("m") > 1 ? `${n("m")} messages` : "a message"), n("b") && "the whiteboard", n("s") && (n("s") > 1 ? `${n("s")} writing spaces` : "a writing space")].filter(Boolean);
   const one = ink.size === 1;
   const go = sid => import("../ink/sheet.js").then(m => m.goSheet(p.th, sid, p.id)).catch(() => {});
-  return h("div", { class: "ink-line", "data-sent": "", "data-key": "ink" }, icon("pen"),
+  return h("div", { class: "ink-line", "data-sent": local ? null : "", "data-local": local ? "" : null, "data-key": "ink" }, icon("pen"),
     h("span", { class: "ink-what", title: "Ink on " + (what.length > 1 ? what.slice(0, -1).join(", ") + " and " + what.at(-1) : what[0]) }, one ? "Ink on " + what[0] : `Ink in ${ink.size} places`),
     one ? null : h("span", { class: "ink-sep", "aria-hidden": "true" }, "·", h("span", null, " Show")),
     [...ink].map(([sid, o], i) => h("span", { class: "ink-one" },
       h("button", { type: "button", class: "ink-go", title: "Show it where it was drawn", onclick: () => go(sid) }, one ? "Show where" : String(i + 1)),
-      o.png ? h("button", { type: "button", class: "ink-pic", title: "The picture the agent got", "aria-label": `The picture the agent got${one ? "" : " (" + (i + 1) + ")"}`, onclick: () => viewFile(p, o.png) }, icon("file")) : null)));
+      o.png && !local ? h("button", { type: "button", class: "ink-pic", title: "The picture the agent got", "aria-label": `The picture the agent got${one ? "" : " (" + (i + 1) + ")"}`, onclick: () => viewFile(p, o.png) }, icon("file")) : null)));
+}
+/** The ink in a message still on its way (composer.js packInk): sheet id -> {json, png}, from its file names. */
+function inkOf(files) {
+  const ink = new Map();
+  for (const f of files) { const m = INKF.exec(f.name); if (m) { const o = ink.get(m[1]) || {}; o[m[2]] = f; ink.set(m[1], o); } }
+  return ink;
 }
 function fileRow(p, files) {
   const ink = new Map(), rest = [];
@@ -537,6 +543,8 @@ function appMessage(p, opts) {
   return h("article", { class: "msg", "data-ink-only": inkOnly ? "" : null, tabindex: "-1", "data-key": p.id, "data-who": kind, "data-cont": opts.cont ? "" : null, "data-report": displayText(p).length > LONG ? "" : null,
     "data-state": kind === "me" && p.interrupt ? "interrupt" : null, "data-asks": asks ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
     msgAvatar(p, kind),
+    // E203n: the steps a Stop and send ended stay with the message that ended them, above it and on the agent's side, where they happened
+    kind === "me" && p.interrupt && S.cut[p.id]?.did === "stopped the running command" ? h("div", { class: "msg-cutran", "data-key": "cutran" }, ranFold(p)) : null,
     h("div", { class: "msg-c" },
       messageHead(p, { ...opts, asks }),
       relayLine(p),
@@ -869,13 +877,16 @@ function devMessage(p, opts) {
  *  Failed (R7): the bubble turns red and one line says why, with Try again and Copy text; Discard drops it. */
 export function localMessage(it, { retry, edit, discard }) {
   const failed = it.state === "failed";
+  // ink on its way looks as it will when the board has it: the "✎ …" lines for the agent and its .json/.png don't show, one
+  // quiet ink line does (so Send doesn't flash an ordinary bubble of pictures and text first; person, thread 11261907a87c)
+  const ink = inkOf(it.files), text = ink.size ? inkText(it.text) : it.text, files = ink.size ? it.files.filter(f => !INKF.test(f.name)) : it.files;
   const kids = [
     h("div", { class: "msg-h" }, h("b", { class: "msg-me" }, "You"),
       it.to && !simpleOn() ? [h("span", { class: "msg-to" }, "to"), it.to === "new" ? h("span", { class: "muted" }, "a new agent") : agentRef(it.to)] : null,
       h("span", { class: "msg-end" }, h("time", { class: "meta num msg-time" }, clock(it.t)))),
     it.reply ? h("div", { class: "msg-q", "data-static": "" }, icon("reply"), h("b", null, who(it.reply.from)), h("span", null, short(mdPlain(displayText(it.reply)), 140))) : null,
-    it.text.trim() ? h("div", { class: "msg-b" }, markdown(it.text)) : null,
-    it.files.length ? h("div", { class: "msg-files" }, it.files.map(f => f.url
+    text.trim() ? h("div", { class: "msg-b" }, markdown(text)) : null,
+    ink.size || files.length ? h("div", { class: "msg-files" }, ink.size ? inkLine({ th: it.th, id: null, from: "person" }, ink, true) : null, files.map(f => f.url
       ? h("span", { class: "msg-thumb" }, h("img", { src: f.url, alt: f.name }), h("span", null, f.name))
       : h("span", { class: "msg-file" }, h("b", null, badgeOf(f.name)), h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, fsize(f.size)))))) : null,
     h("div", { class: "msg-rc msg-st", role: failed ? "alert" : "status", "data-tone": failed ? "bad" : null },
@@ -883,8 +894,8 @@ export function localMessage(it, { retry, edit, discard }) {
         button("Try again", () => retry(it), { size: "s", cls: "msg-retry" }),
         button("Copy text", (e, b) => copyPress(b, it.text), { size: "s", kind: "quiet", cls: "msg-copytext" }),
         button("Discard", () => discard(it), { size: "s", kind: "quiet", cls: "msg-discard", title: "Drop this unsent message" })]
-        : h("span", { "data-tone": "quiet" }, statusDot("sending"), it.state === "sent" ? "Sent" : it.files.length && it.uploading ? "Uploading…" : "Sending…"))];
-  return h("article", { class: "msg", "data-key": "local:" + it.lid, "data-who": "me", "data-state": it.state, "aria-label": failed ? "Your message, not sent" : "Your message, sending" },
+        : h("span", { "data-tone": "quiet" }, statusDot("sending"), it.state === "sent" ? "Sent" : files.length && it.uploading ? "Uploading…" : "Sending…"))];
+  return h("article", { class: "msg", "data-key": "local:" + it.lid, "data-who": "me", "data-state": it.state, "data-ink-only": ink.size && !text.trim() && !files.length ? "" : null, "aria-label": failed ? "Your message, not sent" : "Your message, sending" },
     S.app.app ? [h("span", { class: "av", "aria-hidden": "true" }, h("span", null, "Y")), h("div", { class: "msg-c" }, kids)] : kids);
 }
 

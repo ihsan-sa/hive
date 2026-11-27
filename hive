@@ -679,7 +679,11 @@ def cmd_post(a):
     if not a.as_: remind_asks(pid, p["thread"])
     if not a.as_: remind_own(p["thread"])
     receipt(list(dict.fromkeys(to)), ignored, ext, me)
-    if not a.as_ and (w := held_tier_note(to, ext, me, p["thread"])): print(w, file=sys.stderr, flush=True)
+    if not a.as_ and (w := held_tier_note(to, ext, me, p["thread"])):
+        print(w, file=sys.stderr, flush=True)
+        try:  # counted, so whether the warning moves anyone can be read later (i0394, ad6c3 112619138768: it was never logged)
+            with open(STATE / "held-tier-notes.jsonl", "a") as f: f.write(json.dumps({"at": time.time(), "post": pid, "from": me, "thread": p["thread"], "to": list(dict.fromkeys(to))}) + "\n")
+        except Exception: pass
     if not a.as_ and HASH_NAME.fullmatch(me or "") and (w := paused_untiered_note(text, p["thread"])): print(w, file=sys.stderr, flush=True)
     if not a.as_ and HASH_NAME.fullmatch(me or "") and (w := unwoken_ask_note(text, list(dict.fromkeys(to)), me, p["thread"])): print(w, file=sys.stderr, flush=True)
     if (w := effort_hint(to, a)): print(w, file=sys.stderr)

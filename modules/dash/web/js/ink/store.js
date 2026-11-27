@@ -52,6 +52,13 @@ export function dropStroke(th, sid, id) {   // a loop handed to a side chat, or 
   for (const l of [UNDO, REDO]) for (let i = l.length - 1; i >= 0; i--) if (l[i].th === th && l[i].sid === sid && (l[i].add || l[i].drop || {}).id === id) l.splice(i, 1);
   save(th);
 }
+/** Pending strokes moved where the ground under them went (over.js: a picture above them loaded): {id: [dx, dy]}, in units.
+ *  The stroke objects are the ones undo and redo hold, so they move too. */
+export function shiftStrokes(th, sid, moves) {
+  const p = own(pend(th).sheets, sid); if (!p) return;
+  for (const st of p.strokes) { const d = own(moves, st.id); if (d) st.p = st.p.map(q => [Math.round((q[0] + d[0]) * 10) / 10, Math.round((q[1] + d[1]) * 10) / 10, q[2]]); }
+  save(th);
+}
 function apply(op, back) {
   const p = pSheet(op.th, op.sid);
   if (op.add) { if (back) p.strokes = p.strokes.filter(x => x.id !== op.add.id); else p.strokes.push(op.add); }

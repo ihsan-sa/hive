@@ -449,6 +449,14 @@ def linked_record(items, since="2026-11-11"):
             and e.get("status") in ("held", "reverted", "reverted-candidate", "inconclusive")]
     return len(done), sum(e["status"] == "inconclusive" for e in done)
 
+def not_begun(check, t=None):
+    """The first date or time a check names that hasn't come yet (a window not begun reads 0 at log time), or None."""
+    t = iso(t)
+    for m in re.finditer(r"(?<!\d)(\d{4}-\d\d-\d\d)(?:[T ](\d\d:\d\d))?", check or ""):
+        d = m.group(1) + ("T" + m.group(2) if m.group(2) else "")
+        if d > t[:len(d)]: return d
+    return None
+
 def cmd_log(a):
     items = ledger()
     if a.split and not a.check: sys.exit("hive improve log: --split says the --check counts only this change's own cases; give the --check.")
@@ -465,6 +473,8 @@ def cmd_log(a):
     if a.check:
         fields = {**check_fields(a), **({"kind": a.kind} if a.kind else {})}; fields["before"], err = run_check(a.check)
         if err: sys.exit(f"hive improve log: the check doesn't work yet ({err}). It must print one number, now, in ~.")
+        d = not_begun(a.check) if fields["before"] == 0 and fields.get("want") == "down" else None
+        if d: sys.exit(f"hive improve log: the check reads 0 now and you want it down, so it can never read held: it counts from {d}, which hasn't come, and the revisit is compared with this 0, not with --baseline (i0450 read 0 -> 51 as worse against a baseline of 100). Not logged. Count a rolling window that ends now (the last 24 h, the last 7 days), so it reads the baseline today and the change at the revisit.")
         if a.control:
             fields["control"] = a.control; fields["control_before"], err = run_check(a.control)
             if err: sys.exit(f"hive improve log: the control doesn't work yet ({err}).")
