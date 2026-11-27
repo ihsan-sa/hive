@@ -7,6 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { _electron } = require('playwright-core');
+const lib = require('../lib.js');
 
 const win = process.platform === 'win32';    // Windows: install.ps1 run by PowerShell, hive.cmd, and wsl.exe (a compiled stand-in on PATH)
 const mac = process.platform === 'darwin';   // the Mac installer has no accept step and keeps the Hive's command in ~/.hive/bin
@@ -18,6 +19,28 @@ const shots = path.join(root, 'test', 'shots'); fs.mkdirSync(shots, { recursive:
 // (Electron won't start with a different one, so this uses the real one: refuse to touch a person's own machine.)
 if (win && !process.env.CI) { console.error('On Windows this test replaces %LOCALAPPDATA%\\Hive: it only runs on a CI runner (CI=1)'); process.exit(2); }
 const localApp = process.env.LOCALAPPDATA;
+// Signed from the start (step 1): the stand-in installers pin the key the app hands them (in HIVE_APP_KEY) in pins.txt, as
+// root will in pins.json, and print the Hive's id; the stand-in Hives check each post against it, as the root checker will.
+const HIVE = require('crypto').randomBytes(16).toString('hex'), OTHERHIVE = require('crypto').randomBytes(16).toString('hex');
+const pinsFile = path.join(home, 'pins.txt');
+const posts = [];   // every post a stand-in Hive was sent: {at (which Hive), body, raw, r (its check), dash (the X-H2-Dash header)}
+function postsTo(which, hiveId) {
+  const nonces = new Set();
+  return (req, res) => {
+    let b = ''; req.on('data', d => { b += d; });
+    req.on('end', () => {
+      let body = null; try { body = JSON.parse(b); } catch { }
+      const pinned = fs.existsSync(pinsFile) ? [fs.readFileSync(pinsFile, 'utf8').trim()] : [];
+      const r = lib.checkPost(body, { hive: hiveId, pinned, seen: nonces, now: Date.now() });
+      if (r.ok) nonces.add(body.sig.nonce);
+      posts.push({ at: which, body, raw: b, r, dash: req.headers['x-h2-dash'] });
+      res.setHeader('content-type', 'application/json'); res.statusCode = r.ok ? 200 : 403;
+      res.end(JSON.stringify(r.ok ? { id: 'p' + posts.length } : { error: r.why }));
+    });
+  };
+}
+const localPosts = postsTo('local', HIVE), remotePosts = postsTo('remote', OTHERHIVE);
+const rePost = (p, raw) => new Promise((ok, no) => { const q = http.request({ host: '127.0.0.1', port: p, path: '/api/post', method: 'POST', headers: { 'content-type': 'application/json' } }, r => { let o = ''; r.on('data', d => { o += d; }); r.on('end', () => ok({ code: r.statusCode, j: JSON.parse(o) })); }); q.on('error', no); q.end(raw); });
 const ps1 = () => {
   const bad = (home + '\\broken');
   return `Write-Host "The Hive will run in your own account, as you."
@@ -39,9 +62,12 @@ $cmd = @(
 New-Item -ItemType Directory -Force -Path '${home}\\hive' | Out-Null
 New-Item -ItemType File -Force -Path '${home}\\hive\\.hive-installed' | Out-Null
 Write-Host "The Hive is installed. Open this address: http://localhost:${port}/login#SECRETKEY"
+if ($env:HIVE_APP_KEY) { [IO.File]::WriteAllText('${pinsFile}', $env:HIVE_APP_KEY) }
+Write-Host "Hive id: ${HIVE}"
 `;
 };
 const server = http.createServer((req, res) => {
+  if (req.method === 'POST' && req.url === '/api/post') return localPosts(req, res);
   if (req.url === '/install.ps1') {
     ps1Asked++;
     res.setHeader('content-type', 'text/plain; charset=utf-8');
@@ -72,6 +98,8 @@ echo "http://localhost:${port}/login#SECRETKEY"
 X
 chmod +x "$B/hive"; touch "$HOME/hive/.hive-installed"
 echo "The Hive is installed. Open this address: http://localhost:${port}/login#SECRETKEY"
+[ -z "$HIVE_APP_KEY" ] || printf '%s' "$HIVE_APP_KEY" > '${pinsFile}'
+echo "Hive id: ${HIVE}"
 `);
   } else if (req.url.startsWith('/api/proof?n=')) {
     // The stand-in Hive holds the key, so it can make the mark. With `impostor` set it is some other program on the Hive's port.
@@ -92,9 +120,13 @@ echo "The Hive is installed. Open this address: http://localhost:${port}/login#S
 // A second Hive somewhere else (here another port of this computer), for a window with more than one (DESIGN-many-hives.md, step 3).
 // Its key is OTHERKEY. /login signs in with a cookie of its own; its pages show only to that cookie.
 let rport = 0; const rseen = [];
+const LOGO = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 const remote = http.createServer((req, res) => {
+  if (req.method === 'POST' && req.url === '/api/post') return remotePosts(req, res);
   if (req.url.startsWith('/api/proof?n=')) return res.end(require('crypto').createHmac('sha256', 'OTHERKEY').update(`proof:${rport}:${req.url.split('n=')[1]}`).digest('hex'));
-  const page = `<title>Other Hive</title><h1 id="app">The other Hive</h1><p id="remote">remote</p><button id="pop" onclick="window.open('/', 'signin', 'popup,width=500,height=600')">pop</button>`
+  // Its logo (step 8b) is a picture only its signed-in pages can fetch, as a Hive's /api/brand/logo is.
+  if (req.url === '/logo.png' && /(^|;\s*)hive=remote/.test(req.headers.cookie || '')) { res.setHeader('content-type', 'image/png'); return res.end(Buffer.from(LOGO, 'base64')); }
+  const page = `<title>Other Hive</title><link rel="icon" href="/logo.png"><h1 id="app">The other Hive</h1><p id="remote">remote</p><button id="pop" onclick="window.open('/', 'signin', 'popup,width=500,height=600')">pop</button>`
     + `<a id="same" href="/" target="_blank">same</a><a id="other" href="http://127.0.0.1:${port}/thread">other</a><a id="far" href="https://example.com/">far</a>`;
   res.setHeader('content-type', 'text/html');
   if (req.url.startsWith('/login')) { rseen.push(req.url); res.setHeader('set-cookie', 'hive=remote; Path=/; HttpOnly; Max-Age=86400'); return res.end(page); }
@@ -197,6 +229,48 @@ const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.g
   assert.strictEqual(await page.evaluate(() => typeof window.hive), 'undefined', 'the web app gets no bridge to the shell... ');
   await page.screenshot({ path: path.join(shots, '3-app.png') });
 
+  // Signed from the start: the app's own bar sits under the Hive's page, and the first thing typed there reaches the Hive
+  // signed with the key the installer pinned, into the thread the page has open. Nothing to click but Send.
+  let bar = null;
+  for (let end = Date.now() + WAIT; !bar; await new Promise(r => setTimeout(r, 100))) {
+    bar = app.windows().find(p => /composer\.html$/.test(p.url().split(/[?#]/)[0]));
+    if (!bar && Date.now() > end) throw new Error('no composer bar: ' + app.windows().map(p => p.url().replace(/#.*/, '#…')).join(' '));
+  }
+  assert.ok(fs.existsSync(pinsFile), 'the installer was handed the app\'s key');
+  const pin = fs.readFileSync(pinsFile, 'utf8').trim();
+  assert.match(pin, /^[A-Za-z0-9_-]{87}$/, 'a public key, not the private one');
+  const keyAt = path.join(await app.evaluate(({ app }) => app.getPath('userData')), 'device-key.json');
+  const kf = fs.readFileSync(keyAt, 'utf8');
+  if (!win) assert.strictEqual(fs.statSync(keyAt).mode & 0o077, 0, 'the key file is the owner\'s only');
+  assert.ok(!kf.includes(pin), 'the key file holds the private key only');
+  assert.strictEqual(await page.evaluate(() => typeof window.bar), 'undefined', 'the Hive\'s page has no way to the bar');
+  await bar.waitForFunction(() => document.querySelector('#to').textContent === 'To a new thread');
+  await page.evaluate(() => { location.hash = '#comms/abc'; });
+  await bar.waitForFunction(() => document.querySelector('#to').textContent === 'To thread: abc');
+  await bar.locator('#t').fill('Ship the first build.');
+  await bar.locator('#go').click();
+  await bar.waitForFunction(() => /Sent|refused|Couldn|changed/.test(document.querySelector('#note').textContent));
+  assert.strictEqual(await bar.locator('#note').textContent(), 'Sent, signed', 'the bar says it went');
+  const first = posts.at(-1);
+  assert.ok(first && first.at === 'local' && first.r.ok, 'the Hive took it: ' + JSON.stringify(first && first.r));
+  assert.strictEqual(first.body.text, 'Ship the first build.'); assert.strictEqual(first.body.thread, 'abc');
+  assert.strictEqual(first.body.sig.key, pin, 'signed with the pinned key'); assert.strictEqual(first.dash, '1');
+  assert.strictEqual(await bar.locator('#t').inputValue(), '', 'the box is cleared');
+  await bar.screenshot({ path: path.join(shots, '3b-bar.png') });
+  console.log('ok signed from start');
+  // The same post sent again, or to another Hive (even one that pins the same key), is refused; so is a send for a thread
+  // that is no longer the open one.
+  if (!rport) { await new Promise(r => remote.listen(0, '127.0.0.1', r)); rport = remote.address().port; }
+  const again = await rePost(port, first.raw);
+  assert.strictEqual(again.code, 403); assert.strictEqual(again.j.error, 'a copy: this signature was used before');
+  const there = await rePost(rport, first.raw);
+  assert.strictEqual(there.code, 403); assert.strictEqual(there.j.error, 'signed for another Hive');
+  const stale = await bar.evaluate(() => window.bar.send('Delete it all.', 'zzz'));
+  assert.ok(!stale.ok && /thread changed/.test(stale.why), 'a stale thread is refused: ' + JSON.stringify(stale));
+  assert.ok(!posts.some(p => p.body && p.body.text === 'Delete it all.'), 'and never reaches the Hive');
+  await page.evaluate(() => { location.hash = ''; });
+  console.log('ok no replay');
+
   // An inside link loads in the window; an outside one must not (asked of the shell itself: the driver loses track after a blocked link).
   await page.locator('#in').click(); await page.waitForSelector('#thread');
   await page.goBack(); await page.waitForSelector('#out');
@@ -284,7 +358,7 @@ const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.g
   console.log('ok cert refused');
 
   // More than one Hive (DESIGN-many-hives.md, step 3): Hives > Connect, by the address as typed; each Hive in its own session.
-  await new Promise(r => remote.listen(0, '127.0.0.1', r)); rport = remote.address().port;
+  if (!rport) { await new Promise(r => remote.listen(0, '127.0.0.1', r)); rport = remote.address().port; }
   const rorigin = `http://127.0.0.1:${rport}`;
   await menuClick(app, 'hives-connect');
   await setup.waitForSelector('#address');
@@ -343,8 +417,42 @@ const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.g
   await setup.waitForSelector('#tile-' + rid + '.on');
   assert.ok((await showing(app))[0].startsWith(rorigin + '/'), 'and back');
   console.log('ok rail');
+  // Step 8b: a Hive's own logo is on its tile, fetched in its own session (the logo needs its sign-in); with none, the letter.
+  await setup.waitForSelector(`#tile-${rid} .hex img`, { timeout: WAIT });
+  assert.strictEqual(await setup.getAttribute(`#tile-${rid} .hex img`, 'src'), 'data:image/png;base64,' + LOGO, 'the tile shows the Hive\'s logo');
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(userData, 'icons.json'), 'utf8'))[rid], 'data:image/png;base64,' + LOGO, 'and keeps it');
+  assert.strictEqual(await setup.locator('#tile-local .hex img').count(), 0, 'a Hive with no logo has none');
+  assert.strictEqual(await setup.locator('#tile-local .hex').textContent(), 'T', 'but its letter');
+  await setup.screenshot({ path: path.join(shots, '11b-rail-icon.png') });
+  console.log('ok rail icon');
+  // Its logo taken away in its Settings: the page draws the built-in mark, and the tile has its letter again.
+  await rp.evaluate(() => { document.querySelector('link[rel=icon]').href = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg"><path d="M781 389.2l106.6 61.4"/></svg>'); });
+  await setup.waitForFunction(id => !document.querySelector(`#tile-${id} .hex img`), rid, { timeout: WAIT });
+  assert.strictEqual(await setup.locator(`#tile-${rid} .hex`).textContent(), '1', 'its letter: ' + await setup.locator(`#tile-${rid} .hex`).textContent());
+  assert.ok(!(rid in JSON.parse(fs.readFileSync(path.join(userData, 'icons.json'), 'utf8'))), 'and the kept logo went');
+  console.log('ok rail letter');
   const ids0 = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.id));
   const until = async (fn, what) => { const end = Date.now() + WAIT; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) throw new Error(what + ': ' + JSON.stringify(await showing(app))); await new Promise(r => setTimeout(r, 200)); } };
+  // Step 8c: a labelled Menu button on the rail opens the Hives menu (each Hive, Connect, Manage, the sidebar's fold).
+  const viewX = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.at(-1).getBounds().x);
+  assert.strictEqual((await setup.locator('#rail-menu').textContent()).trim(), 'Menu', 'the button says Menu');
+  await app.evaluate(() => { globalThis.lastMainMenu = null; });
+  await setup.click('#rail-menu');
+  const mm = await until(() => app.evaluate(() => { const r = globalThis.lastMainMenu; if (!r) return null; r.menu.closePopup(); return r.ids; }), 'the Hives menu');
+  for (const id of ['hive-local', 'hive-' + rid, 'hives-new-window', 'hives-connect', 'hives-manager', 'hives-sidebar']) assert.ok(mm.includes(id), id + ' in the menu: ' + mm);
+  console.log('ok menu button');
+  // Its Hide folds the rail to a strip in every window and the Hive's page gets the width; a click on the strip opens it again.
+  await setup.click('#rail-fold');
+  await setup.waitForSelector('#rail.folded #rail-open');
+  assert.strictEqual(await setup.locator('#rail .tile').count(), 0, 'folded, no tiles');
+  await until(async () => await viewX() === 16, 'the view beside the strip');
+  assert.strictEqual(JSON.parse(hivesJson()).railFolded, true, 'kept: ' + hivesJson());
+  await setup.screenshot({ path: path.join(shots, '11c-rail-folded.png') });
+  await setup.click('#rail-open');
+  await setup.waitForSelector('#rail:not(.folded) #tile-' + rid);
+  await until(async () => await viewX() === 72, 'the view beside the open rail');
+  assert.ok(!('railFolded' in JSON.parse(hivesJson())), 'open is kept too');
+  await setup.screenshot({ path: path.join(shots, '11c-rail-menu.png') });
   // A link to the Hive's own page with target=_blank opens a window of the app on that Hive, signed in (its session).
   await rp.click('#same');
   await until(async () => { const s = await showing(app); return s.length === 2 && s.every(u => u.startsWith(rorigin + '/')); }, 'a second window on the other Hive');
@@ -374,6 +482,8 @@ const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.g
   await setup2.waitForSelector('#tile-local');
   await setup2.click('#tile-local');
   await until(async () => { const s = await showing(app); return s.some(u => u.startsWith(rorigin + '/')) && s.some(u => u.startsWith(`http://127.0.0.1:${port}/`)); }, 'one window on each Hive');
+  await menuClick(app, 'hives-sidebar');   // the menu's own item folds it too; folded, it stays so after a restart
+  await setup.waitForSelector('#rail.folded #rail-open');
   await new Promise(r => setTimeout(r, 700));   // the windows' places are saved a moment after a move
   await app.close();
 
@@ -383,6 +493,14 @@ const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.g
   assert.strictEqual(await rp2.locator('#remote').count(), 1, 'still signed in to it');
   assert.strictEqual(rseen.length, 1, 'with no second sign-in');
   console.log('ok remote remembered');
+  const pg = app.windows().find(p => /setup\.html/.test(p.url()) && !p.isClosed());
+  await pg.waitForSelector('#rail.folded #rail-open');
+  await hive(app);
+  const xs = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.contentView.children.at(-1)?.getBounds().x));
+  assert.ok(xs.length === 2 && xs.every(x => x === 16), 'each window has the width back: ' + xs);
+  await pg.click('#rail-open');
+  await pg.waitForSelector('#rail:not(.folded) #rail-menu');
+  console.log('ok rail folds');
   // Both windows come back, each on its Hive. Then the local one closes: the app goes on in the other.
   await hive(app);
   assert.strictEqual(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 2, 'both windows came back');

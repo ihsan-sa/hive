@@ -27,5 +27,8 @@ if (location.protocol === 'file:') contextBridge.exposeInMainWorld('hive', {
   railPick: id => ipcRenderer.send('rail-pick', String(id)),
   tileMenu: id => ipcRenderer.send('tile-menu', String(id)),
   newWindow: () => ipcRenderer.send('new-window'),
+  // Step 8c: the rail's Menu button (the Hives menu, under it) and its fold.
+  mainMenu: (x, y) => ipcRenderer.send('main-menu', Number(x), Number(y)),
+  railFold: on => ipcRenderer.send('rail-fold', !!on),
   on: (name, fn) => ipcRenderer.on(name, (_e, ...a) => fn(...a)),
 });

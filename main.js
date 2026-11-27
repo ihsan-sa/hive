@@ -1,7 +1,7 @@
 // The Hive as a desktop app. A thin shell: it finds the Hive on this machine (or installs it with the site's own installer),
 // asks it for its address, and shows the web app in a window. All the product is the web app, so it has one version on every system.
 'use strict';
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, session, net, Menu, screen, clipboard, dialog } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, session, net, Menu, screen, clipboard, dialog, safeStorage } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -111,9 +111,12 @@ function render(W, state, extra) {
 function display(W) {
   if (!alive(W)) return;
   const h = W.chosen, bw = W.bw, mine = W.views.get(h.id), v = !W.aside && mine && !h.pending ? mine : null;
-  for (const c of bw.contentView.children) if (c !== v) bw.contentView.removeChildView(c);
+  const bar = v && barWanted(W) ? barOf(W) : null;
+  for (const c of bw.contentView.children) if (c !== v && c !== bar) bw.contentView.removeChildView(c);
   rail(W);
   if (v) {
+    // The bar goes under the Hive's view in the list (they don't overlap), so the Hive's view stays the top one.
+    if (bar && !bw.contentView.children.includes(bar)) { bw.contentView.addChildView(bar, 0); barThread(W); }
     if (!bw.contentView.children.includes(v)) bw.contentView.addChildView(v);
     layout(W);
     const t = v.webContents.getTitle();
@@ -128,12 +131,88 @@ function display(W) {
   else render(W, 'cantreach', { name: h.name, host: hostOf(h.saved.url), why: h.why || '' });
   bw.webContents.focus();
 }
-const RAIL = 72;   // the rail's width in the page's own pixels (setup.html), so it grows with the page's zoom
+const RAIL = 72, STRIP = 16;   // the rail's width open and folded, in the page's own pixels (setup.html), so they grow with the page's zoom
+const folded = () => store.extra.railFolded === true;   // step 8c: the rail folded to a thin strip, for every window, kept in hives.json
 function layout(W) {
   if (!alive(W)) return;
   const [width, height] = W.bw.getContentSize();
-  const x = many() ? Math.round(RAIL * W.bw.webContents.getZoomFactor()) : 0;
-  for (const c of W.bw.contentView.children) c.setBounds({ x, y: 0, width: Math.max(0, width - x), height });
+  const x = many() ? Math.round((folded() ? STRIP : RAIL) * W.bw.webContents.getZoomFactor()) : 0;
+  const kids = W.bw.contentView.children, bar = W.bar && kids.includes(W.bar) ? Math.min(BAR, height) : 0;
+  for (const c of kids) c.setBounds(c === W.bar ? { x, y: height - bar, width: Math.max(0, width - x), height: bar } : { x, y: 0, width: Math.max(0, width - x), height: height - bar });
+}
+
+// Signed from the start (projects/word-shell/SIGNED-FROM-START.md, step 1). The app keeps one device key in the owner's
+// own account, and draws its own composer bar under the local Hive's page, from its own file: the Hive's page can't read
+// or fill it, and tells it nothing but the open thread, which the app reads from the page's address. What the owner types
+// there is signed for this Hive (its id, from the installer), the thread, the time and a nonce, and posted to the Hive.
+// The bar shows only for a Hive whose installer gave it an id; today's installers give none, so it shows nowhere yet.
+const BAR = 76;
+const composerFile = path.join(__dirname, 'composer.html');
+const composerUrl = require('url').pathToFileURL(composerFile).href;
+const isComposer = u => String(u).split(/[?#]/)[0] === composerUrl;
+const barWanted = W => W.chosen === local && !W.aside && !!hiveUrl && lib.HIVE_ID.test(store.extra.localHive || '');
+function barOf(W) {
+  if (W.bar && !W.bar.webContents.isDestroyed()) return W.bar;
+  const b = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'composer-preload.js'), partition: 'app', ...PREFS } });
+  b.setBackgroundColor(bg());
+  const wc = b.webContents;
+  wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const own = (e, url) => { if (!isComposer(e.url || url)) e.preventDefault(); };
+  wc.on('will-navigate', own); wc.on('will-redirect', own);
+  keys(wc, W); menuFor(wc, null, W);
+  wc.loadFile(composerFile).then(() => barThread(W), () => { });
+  W.bar = b;
+  return b;
+}
+function barThread(W) {
+  if (!alive(W) || !W.bar || W.bar.webContents.isDestroyed()) return;
+  const v = W.views.get(local.id);
+  W.bar.webContents.send('thread', v ? lib.threadOf(v.webContents.getURL()) : '');
+}
+// The key file: { v: 1, enc (the OS keychain locked it, by safeStorage), key (the private key, PKCS8, base64) }, only the
+// owner's to read. An unreadable one is set aside, not deleted, and a new key made (to be pinned again).
+let dev = null;
+const keyFile = () => path.join(app.getPath('userData'), 'device-key.json');
+function deviceKey() {
+  if (dev) return dev;
+  const f = keyFile();
+  if (fs.existsSync(f)) {
+    try { const j = JSON.parse(fs.readFileSync(f, 'utf8')); dev = lib.deviceKey(j.enc ? safeStorage.decryptString(Buffer.from(j.key, 'base64')) : j.key); } catch { }
+    if (dev) return dev;
+    try { fs.renameSync(f, f + '.bad'); } catch { }
+    log('device key unreadable: set aside as device-key.json.bad, a new one made');
+  }
+  const k = lib.newDeviceKey();
+  let enc = false, key = k.pkcs8;
+  try { if (safeStorage.isEncryptionAvailable()) { key = safeStorage.encryptString(k.pkcs8).toString('base64'); enc = true; } } catch { }
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f + '.new', JSON.stringify({ v: 1, enc, key }) + '\n', { mode: 0o600 });
+  fs.renameSync(f + '.new', f);
+  log('device key made, ' + lib.keyFingerprint(k.key) + (enc ? ', kept by the OS keychain' : ''));
+  return dev = k;
+}
+const publicKey = () => { try { return deviceKey().key; } catch (e) { log('device key: ' + e.message); return null; } };
+// The signed post, to the Hive's own address, in its session (so its sign-in cookie goes with it).
+function postSigned(h, url, body) {
+  return new Promise(done => {
+    let q, out = '', end = false;
+    const fin = r => { if (!end) { end = true; clearTimeout(tm); done(r); } };
+    const tm = setTimeout(() => { try { q.abort(); } catch { } fin({ ok: false, why: "The Hive didn't answer. Try again." }); }, 15000);
+    try { q = net.request({ url, method: 'POST', session: sessionFor(h), useSessionCookies: true, redirect: 'error' }); }
+    catch (e) { return fin({ ok: false, why: "Couldn't reach the Hive." }); }
+    q.setHeader('content-type', 'application/json'); q.setHeader('X-H2-Dash', '1');
+    q.on('response', r => {
+      r.on('data', d => { if (out.length < 4096) out += d; });
+      r.on('end', () => {
+        let j = {}; try { j = JSON.parse(out); } catch { }
+        if (r.statusCode >= 200 && r.statusCode < 300) return fin({ ok: true, id: typeof j.id === 'string' ? j.id.slice(0, 40) : '' });
+        fin({ ok: false, why: (typeof j.error === 'string' ? j.error : 'The Hive refused it (' + r.statusCode + ').').slice(0, 200) });
+      });
+      r.on('error', () => fin({ ok: false, why: "The Hive's answer broke off." }));
+    });
+    q.on('error', () => fin({ ok: false, why: "Couldn't reach the Hive." }));
+    q.end(JSON.stringify(body));
+  });
 }
 // The rail: one tile per Hive (the one this window shows marked), and + for Connect. Names are sent as text, drawn as text.
 const COLORS = ['#2f62c9', '#0f7a65', '#8a3fb8', '#b4461b', '#0e6f8a', '#6b6f1a'];
@@ -142,9 +221,35 @@ function where(h) {
 }
 function rail(W) {
   const mac = process.platform === 'darwin';
-  sendTo(W, 'rail', { show: many(), list: hives().map((h, i) => ({ id: h.id, name: h.name, ini: ([...String(h.name).trim()][0] || '?').toUpperCase(), local: h === local,
-    where: where(h), current: h === W.chosen, key: i < 9 ? (mac ? '⌘' : 'Ctrl+') + (i + 1) : '',
+  sendTo(W, 'rail', { show: many(), folded: folded(), list: hives().map((h, i) => ({ id: h.id, name: h.name, ini: ([...String(h.name).trim()][0] || '?').toUpperCase(), local: h === local,
+    where: where(h), current: h === W.chosen, icon: icons[h.id] || null, key: i < 9 ? (mac ? '⌘' : 'Ctrl+') + (i + 1) : '',
     color: h === local ? '#f5b800' : COLORS[remotes.indexOf(h) % COLORS.length], ink: h === local ? '#1a1a1a' : '#ffffff' })) });
+}
+// Each Hive's icon (step 8b), kept in icons.json beside hives.json as {id: data: address}: the picture its page names as its icon,
+// taken inline or fetched from that same Hive in its own session (so with its sign-in), no redirects, 10 s, 256 KB at most.
+// The Hive's built-in mark or no icon gives the tile its letter again; a failed fetch keeps the icon it had.
+let icons = {};
+const iconTry = new Map();   // a count per Hive, so an older fetch that ends late doesn't overwrite a newer answer
+const iconsFile = () => path.join(app.getPath('userData'), 'icons.json');
+function loadIcons() {
+  try { icons = lib.validIcons(JSON.parse(fs.readFileSync(iconsFile(), 'utf8'))); } catch { icons = {}; }
+}
+function setIcon(id, url) {
+  if ((icons[id] || null) === (url || null)) return;
+  if (url) icons[id] = url; else delete icons[id];
+  const tmp = iconsFile() + '.tmp';
+  try { fs.writeFileSync(tmp, JSON.stringify(icons), { mode: 0o600 }); fs.renameSync(tmp, iconsFile()); } catch (e) { log('icons.json not saved: ' + e.message); }
+  for (const W of all()) rail(W);
+}
+function takeIcon(h, wc, urls) {
+  const n = (iconTry.get(h.id) || 0) + 1; iconTry.set(h.id, n);
+  const p = lib.pickIcon(urls, h.same);
+  if (!p) return;
+  if (p.kind !== 'fetch') return setIcon(h.id, p.kind === 'data' ? p.url : null);
+  wc.session.fetch(p.url, { redirect: 'error', signal: AbortSignal.timeout(10000) })
+    .then(async r => r.status === 200 && Number(r.headers.get('content-length') || 0) <= lib.ICON_MAX
+      ? lib.iconData(r.headers.get('content-type'), Buffer.from(await r.arrayBuffer())) : null)
+    .then(d => { if (d && iconTry.get(h.id) === n && hiveById(h.id)) setIcon(h.id, d); }, e => log('icon not fetched from ' + hostOf(p.url) + ': ' + e.message));
 }
 const hostOf = u => { try { return new URL(u).host; } catch { return ''; } };
 function closeView(W, id) {
@@ -251,7 +356,7 @@ async function install(accept) {
   await showSetup('installing');
   // Redact whole lines: a key split across two chunks would slip past the pattern.
   let pend = '';
-  const r = await run(lib.installCommand(process.platform, process.env, accept), s => {
+  const r = await run(lib.installCommand(process.platform, process.env, accept, publicKey()), s => {
     pend += s; const i = Math.max(pend.lastIndexOf('\n'), pend.lastIndexOf('\r'));
     if (i >= 0) { sendLocal('log', lib.redact(lib.plain(pend.slice(0, i + 1)))); pend = pend.slice(i + 1); }
   });
@@ -261,7 +366,13 @@ async function install(accept) {
   log('installer exit ' + r.code + ' -> ' + what + ': ' + lib.plain(r.text).slice(-1500));
   // "Done" with no Hive to show for it (Windows' installer ends the same way when it stops) is a stop: keep what it said on the screen.
   if (what === 'done' && !lib.openCommand(process.platform, process.env)) what = 'failed';
-  if (what === 'done') return open();
+  if (what === 'done') {
+    // The Hive's id, for the signed bar (step 1); an installer that prints none leaves the bar off.
+    const id = lib.hiveIdFrom(r.text);
+    if (id) store.extra.localHive = id; else delete store.extra.localHive;
+    saveHives();
+    return open();
+  }
   localState = [what, ''];
   sendLocal('state', what, { platform: process.platform, note: '' });
 }
@@ -316,6 +427,7 @@ function create(h, rect, at) {
   bw.on('close', () => { clearTimeout(W.tick); if (!quitting) saveAll(all().length > 1 ? W : null); });
   bw.on('closed', () => {
     for (const id of [...W.views.keys()]) closeView(W, id);
+    if (W.bar) { const b = W.bar; W.bar = null; setImmediate(() => { try { if (!b.webContents.isDestroyed()) b.webContents.close(); } catch { } }); }
     wins.delete(W);
     if (last === W) last = all().at(-1) || null;
     menu();
@@ -342,6 +454,8 @@ function viewFor(W, h) {
   W.views.set(h.id, v); W.recent = [h.id, ...W.recent.filter(x => x !== h.id)];
   const wc = v.webContents;
   guard(wc, h, W); keys(wc, W); menuFor(wc, h, W);
+  wc.on('page-favicon-updated', (_e, urls) => takeIcon(h, wc, urls));
+  if (h === local) for (const ev of ['did-navigate', 'did-navigate-in-page']) wc.on(ev, () => { if (W.views.get(h.id) === v) barThread(W); });
   wc.on('page-title-updated', (_e, t) => { if (alive(W) && W.chosen === h && !W.aside && W.views.get(h.id) === v) W.bw.setTitle(t || h.name); });
   wc.on('did-fail-load', (_e, code, desc, url, main) => {
     if (!main || code === -3 || W.views.get(h.id) !== v) return;
@@ -717,7 +831,7 @@ function removeHive(id) {
     closeView(W, h.id);
     if (W.chosen === h) { W.chosen = home(); if (W.chosen === local) { if (hiveUrl && !W.views.has(local.id)) openLocal(W); } else if (!W.views.has(W.chosen.id)) openRemote(W, W.chosen); }
   }
-  forget(h);
+  forget(h); iconTry.delete(h.id); setIcon(h.id, null);
   store.extra.removed = [...removedIds(), h.id];
   if (store.extra.last === h.id) store.extra.last = home().id;
   saveHives();
@@ -740,18 +854,40 @@ async function tileMenu(W, id) {
 
 // The Hives menu: one entry per Hive (the front window's is checked), New Window, then Connect and Manage.
 // Ctrl+1..9 reach the first nine; on Windows and Linux keys() catches them in the pages, so the menu only shows them.
-function menu() {
-  const f = front(), mac = process.platform === 'darwin';
-  const act = fn => () => { const W = front(); if (W) fn(W); else fn(create(home())); };
+// The same items open from the rail's Menu button (step 8c), for window W, with the sidebar's fold at the end.
+function hivesItems(f) {
+  const mac = process.platform === 'darwin';
+  const act = fn => () => { const W = alive(f) ? f : front(); if (W) fn(W); else fn(create(home())); };
   const item = (h, i) => ({ id: 'hive-' + h.id, label: h.name.replace(/&/g, '&&'), type: 'radio', checked: !!f && h === f.chosen && !f.aside,
     ...(i < 9 ? { accelerator: 'CmdOrCtrl+' + (i + 1), registerAccelerator: mac } : {}), click: act(W => choose(W, h)) });
-  const list = { label: mac ? 'Hives' : '&Hives', submenu: [...hives().map(item), { type: 'separator' },
-    { id: 'hives-new-window', label: 'New Window', accelerator: 'CmdOrCtrl+Shift+N', registerAccelerator: mac, click: () => create(front()?.chosen || local) },
+  return [...hives().map(item), { type: 'separator' },
+    { id: 'hives-new-window', label: 'New Window', accelerator: 'CmdOrCtrl+Shift+N', registerAccelerator: mac, click: () => create((alive(f) ? f : front())?.chosen || local) },
     { type: 'separator' },
     { id: 'hives-connect', label: 'Connect to a Hive…', click: act(W => showAside(W, 'connect')) },
-    { id: 'hives-manager', label: 'Manage Hives…', click: act(W => showAside(W, 'hives')) }] };
+    { id: 'hives-manager', label: 'Manage Hives…', click: act(W => showAside(W, 'hives')) },
+    ...(many() ? [{ type: 'separator' }, { id: 'hives-sidebar', label: 'Show Hives Sidebar', type: 'checkbox', checked: !folded(), click: () => fold(!folded()) }] : [])];
+}
+function menu() {
+  const mac = process.platform === 'darwin';
+  const list = { label: mac ? 'Hives' : '&Hives', submenu: hivesItems(front()) };
   // No View menu on the Mac: its Reload would skip the guards.
   Menu.setApplicationMenu(Menu.buildFromTemplate(mac ? [{ role: 'appMenu' }, { role: 'editMenu' }, list, { role: 'windowMenu' }] : [list]));
+}
+// The rail folded to a strip (it opens again on a click on the strip) or open, in every window; kept for the next start.
+function fold(on) {
+  if (folded() === !!on) return;
+  if (on) store.extra.railFolded = true; else delete store.extra.railFolded;
+  saveHives();
+  for (const W of all()) { rail(W); layout(W); }
+  menu();
+}
+// The Menu button's menu, under the button (x, y in the page's pixels); the tests read what it held.
+function mainMenu(W, x, y) {
+  if (!alive(W)) return;
+  const items = hivesItems(W), z = W.bw.webContents.getZoomFactor();
+  const m = Menu.buildFromTemplate(items);
+  if (process.env.HIVE_APP_TEST === '1') globalThis.lastMainMenu = { ids: items.filter(i => i.id).map(i => i.id), menu: m };
+  m.popup({ window: W.bw, x: Math.round(x * z), y: Math.round(y * z) });
 }
 
 // Every session is set up before anything loads in it (DESIGN-many-hives.md R1). sessionFor(hive) gives that Hive its own
@@ -807,6 +943,24 @@ ipcMain.on('download', e => { if (fromSetup(e)) external(lib.downloadPage('updat
 // runner), so the setup screen says the Apple chip download is there and links to the download page.
 ipcMain.on('rosetta', e => { e.returnValue = !!fromSetup(e) && process.platform === 'darwin' && !!app.runningUnderARM64Translation; });
 ipcMain.on('chip-download', e => { if (fromSetup(e)) external(lib.downloadPage()); });
+// The composer bar's send (signed from the start, step 1): only from a window's own bar page, only to the local Hive it
+// sits under, and only into the thread the bar showed when the owner pressed send.
+ipcMain.handle('bar-send', async (e, text, thread) => {
+  const W = e.senderFrame && isComposer(e.senderFrame.url) && all().find(x => x.bar && e.sender === x.bar.webContents);
+  if (!W) return { ok: false, why: 'Not from the bar.' };
+  if (typeof text !== 'string' || !text.trim() || text.length > lib.WORDS_MAX) return { ok: false, why: 'Nothing to send, or too long.' };
+  const v = W.views.get(local.id);
+  if (!barWanted(W) || !v) return { ok: false, why: "The Hive isn't open." };
+  const now = v ? lib.threadOf(v.webContents.getURL()) : '';
+  if (String(thread || '') !== now) { barThread(W); return { ok: false, why: 'The thread changed. Check it and send again.' }; }
+  let body;
+  try { body = lib.signPost(deviceKey(), { hive: store.extra.localHive, thread: now, words: text }); }
+  catch (err) { log('bar sign: ' + err.message); return { ok: false, why: "Couldn't sign it." }; }
+  let url; try { url = new URL(hiveUrl).origin + '/api/post'; } catch { return { ok: false, why: "The Hive's address is wrong." }; }
+  const r = await postSigned(local, url, body);
+  log('bar post ' + (r.ok ? 'sent' : 'refused: ' + r.why) + (now ? ' to thread ' + now : ' to a new thread'));
+  return r;
+});
 // The setup screen asks once its listener is up, so a notice that arrived while the page was loading isn't lost.
 ipcMain.on('newer?', e => { if (fromSetup(e) && newer) e.sender.send('newer', newer); });
 // Close (Not now, Don't install) closes this window; with it the last, the app.
@@ -817,6 +971,8 @@ ipcMain.on('connect', (e, text) => { const W = fromSetup(e); if (W) connect(W, t
 ipcMain.on('open-hive', (e, id) => { const W = fromSetup(e), h = W && hiveById(id); if (h) choose(W, h); });
 ipcMain.on('rail-pick', (e, id) => { const W = fromSetup(e), h = W && hiveById(id); if (h) choose(W, h); });
 ipcMain.on('tile-menu', (e, id) => { const W = fromSetup(e); if (W) tileMenu(W, String(id)); });
+ipcMain.on('main-menu', (e, x, y) => { const W = fromSetup(e); if (W) mainMenu(W, Math.max(0, Number(x) || 0), Math.max(0, Number(y) || 0)); });
+ipcMain.on('rail-fold', (e, on) => { if (fromSetup(e)) fold(!!on); });
 ipcMain.on('new-window', e => { const W = fromSetup(e); if (W) create(W.chosen); });
 ipcMain.on('remove-hive', (e, id) => { if (fromSetup(e)) removeHive(String(id)); });
 ipcMain.on('browser-hive', e => { const W = fromSetup(e); if (W && W.chosen.kind === 'remote') external(W.chosen.saved.url); });
@@ -847,7 +1003,7 @@ else {
     W.bw.focus();
   });
   app.whenReady().then(() => {
-    loadHives(); sessionFor(local);
+    loadHives(); loadIcons(); sessionFor(local);
     // The windows open as they were left, each on its Hive; a window saved before there were many shows the Hive shown last.
     const lastRemote = remotes.find(h => h.id === store.extra.last);
     for (const s of savedWindows()) create(s.hive ? hiveById(s.hive) : lastRemote || home(), s.rect);

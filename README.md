@@ -37,6 +37,7 @@ Run the site's remover first, then delete the app (the usual way for the system)
 - `lib.js`: everything that differs by system, with no Electron in it. `node test/logic.test.js`.
 - `main.js`: the window. Only the setup screen and the local Hive ever load in it; other links go to the browser.
 - `setup.html`, `preload.js`: the setup screen and its three buttons' bridge (the web app gets no bridge).
+- `composer.html`, `composer-preload.js`: the bar under the local Hive's page, where what you type is signed with the app's own key (kept in the app's settings folder as `device-key.json`, locked by the system keychain where there is one) and posted to the Hive. It shows only once the Hive's installer gave it an id.
 - `test/e2e.js`: the real app in a hidden window against a stand-in site and Hive (`xvfb-run -a node test/e2e.js`).
 - `test/smoke.js`: a packaged app starts and shows the setup screen; the workflow runs it on all three systems.
 - `.github/workflows/build.yml`: builds on real Windows, Mac and Linux machines. `build-all.sh`: all of them from here.

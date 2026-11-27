@@ -357,3 +357,73 @@ t('right-click menu: link, box, selection', () => {
   assert.ok(parseAdminList('nope').error && /newer/.test(parseAdminList('{"v":2,"hives":[]}').error) && parseAdminList('{"v":1}').error);
   console.log('ok admin list' + (process.env.ADMIN_JSON ? ' (from core)' : ''));
 }
+{
+  // Step 8b: a Hive's own icon on its rail tile; its built-in mark, or anything that isn't a picture from that Hive, leaves the letter.
+  const { pickIcon, iconData, validIcons, ICON_MAX } = require('../lib');
+  const same = u => u.startsWith('https://h2.example/');
+  assert.deepStrictEqual(pickIcon(['https://h2.example/api/brand/logo?v=17'], same), { kind: 'fetch', url: 'https://h2.example/api/brand/logo?v=17' });
+  assert.strictEqual(pickIcon(['https://elsewhere.example/logo.png'], same), null, 'another site\'s picture is not fetched');
+  assert.strictEqual(pickIcon(['file:///etc/passwd'], () => true), null);
+  assert.deepStrictEqual(pickIcon([], same), { kind: 'none' });
+  const mark = 'data:image/svg+xml,' + encodeURIComponent('<svg><path d="M781 389.2l106.6 61.4"/></svg>');
+  assert.deepStrictEqual(pickIcon([mark], same), { kind: 'none' }, 'the built-in hex mark keeps the letter');
+  assert.strictEqual(pickIcon(['https://h2.example/icons/icon-192.png'], same), null, 'the stock icon (before the page\'s script, or signed out) keeps what the tile had');
+  assert.strictEqual(pickIcon(['https://h2.example/favicon.ico'], same), null);
+  const png = 'data:image/png;base64,iVBORw0KGgo=';
+  assert.deepStrictEqual(pickIcon([png], same), { kind: 'data', url: png });
+  assert.strictEqual(pickIcon(['data:text/html,<script>1</script>'], same), null, 'only pictures');
+  assert.strictEqual(pickIcon(['data:image/png;base64,' + 'A'.repeat(ICON_MAX * 2)], same), null, 'not a huge one');
+  assert.strictEqual(iconData('image/png; charset=binary', Buffer.from([1, 2, 3])), 'data:image/png;base64,AQID');
+  assert.strictEqual(iconData('text/html', Buffer.from('x')), null);
+  assert.strictEqual(iconData('image/png', Buffer.alloc(ICON_MAX + 1)), null);
+  assert.deepStrictEqual(validIcons({ local: png, a1b2c3d4e5f60718: 'https://x/y.png', '../x': png, b1b2c3d4e5f60718: mark }), { local: png }, 'icons.json read back keeps only pictures under Hive ids');
+  assert.deepStrictEqual(validIcons([png]), {});
+  console.log('ok rail icon choice');
+}
+
+t('signed from the start: the device key signs, and a Hive takes only its own fresh, pinned, unchanged posts', () => {
+  const { newDeviceKey, deviceKey, signPost, checkPost, keyFingerprint, threadOf, hiveIdFrom, installCommand } = lib;
+  const dev = newDeviceKey(), other = newDeviceKey();
+  assert.match(dev.key, /^[A-Za-z0-9_-]{87}$/);
+  assert.deepStrictEqual(deviceKey(dev.pkcs8), dev, 'the key read back from its file is the same key');
+  assert.strictEqual(deviceKey('not a key'), null);
+  const H = 'ab'.repeat(16), now = Date.parse('2026-11-27T12:00:00Z'), at = '2026-11-27T12:00:00.000Z';
+  const o = (more = {}) => ({ hive: H, pinned: [dev.key], seen: new Set(), now, ...more });
+  const b = signPost(dev, { hive: H, thread: 'abc', words: 'Ship it.', at, nonce: 'n1' });
+  assert.deepStrictEqual(Object.keys(b), ['text', 'thread', 'reply_to', 'sig']);
+  assert.deepStrictEqual(checkPost(b, o()), { ok: true, fp: keyFingerprint(dev.key) });
+  const no = (body, more) => checkPost(body, o(more)).why;
+  const edit = (f, s = {}) => ({ ...b, ...f, sig: { ...b.sig, ...s } });
+  assert.strictEqual(no(b, { hive: 'cd'.repeat(16) }), 'signed for another Hive');
+  assert.strictEqual(no(b, { seen: new Set(['n1']) }), 'a copy: this signature was used before');
+  assert.strictEqual(no(b, { pinned: [other.key] }), 'the key is not pinned');
+  assert.strictEqual(no(b, { now: now + 301e3 }), 'signed too long ago, or the clocks differ');
+  assert.strictEqual(no(edit({ text: 'Ship it!' })), 'the signature does not match the words');
+  assert.strictEqual(no(edit({ text: 'Do not. Ship it.' })), 'the signed length does not fit the text');
+  assert.strictEqual(no(edit({ thread: 'xyz' })), 'signed for another thread');
+  assert.strictEqual(no(edit({ reply_to: 'p1' })), 'signed for another thread');
+  assert.strictEqual(no(edit({}, { thread: 'xyz' })), 'signed for another thread');
+  assert.strictEqual(no(edit({}, { key: other.key }), { pinned: [other.key] }), 'the signature does not match the words', 'a pinned key can\'t be swapped onto another\'s signature');
+  assert.strictEqual(no(edit({}, { nonce: 'a\nb' })), 'the signature is not in the expected form');
+  assert.strictEqual(no({ text: 'x', thread: 'abc' }), 'not signed');
+  assert.strictEqual(no(edit({}, { v: 1 })), 'not signed');
+  assert.strictEqual(no(edit({}, { s: '%%%' })), 'the signature does not match the words');
+  // Newlines in the words are signed as they are; the fields before them can't hold one, so the words can't be shifted.
+  const ml = signPost(dev, { hive: H, thread: '', words: 'line one\nline two', at, nonce: 'n2' });
+  assert.ok(checkPost(ml, o()).ok);
+  const emoji = signPost(dev, { hive: H, words: 'ok 👍 é', at, nonce: 'n3' });
+  assert.strictEqual(emoji.sig.n, 10, 'the length is in UTF-8 bytes'); assert.ok(checkPost(emoji, o()).ok);
+  // The open thread, from the Hive page's address.
+  assert.strictEqual(threadOf('http://127.0.0.1:8077/#comms/111014537970'), '111014537970');
+  assert.strictEqual(threadOf('http://127.0.0.1:8077/#comms'), '');
+  assert.strictEqual(threadOf('http://127.0.0.1:8077/#comms/a%2Fb'), '', 'only a plain id');
+  assert.strictEqual(threadOf('http://127.0.0.1:8077/#comms/%E0%A4'), '');
+  assert.strictEqual(hiveIdFrom(`\x1b[1mDone.\x1b[0m\nHive id: ${H}\n`), H);
+  assert.strictEqual(hiveIdFrom('Hive id: 1234'), null);
+  // The installer is handed the public key, never the private one.
+  assert.strictEqual(installCommand('linux', {}, false, dev.key).env.HIVE_APP_KEY, dev.key);
+  assert.strictEqual(installCommand('win32', {}, false, dev.key).env.HIVE_APP_KEY, dev.key);
+  assert.strictEqual(installCommand('linux', {}, false, dev.pkcs8).env.HIVE_APP_KEY, undefined);
+  assert.strictEqual(installCommand('linux', {}, false).env.HIVE_APP_KEY, undefined);
+  console.log('ok signed post');
+});

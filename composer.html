@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Hive composer</title>
+<style>
+  :root { color-scheme: dark light; --bg:#111; --fg:#eee; --small:#999; --bd:#444; --box:#1c1c1c; --btn:#eee; --onbtn:#111; --err:#ff8a80; --ok:#8bd48b; }
+  @media (prefers-color-scheme: light) { :root { --bg:#fff; --fg:#111; --small:#555; --bd:#bbb; --box:#f4f4f4; --btn:#111; --onbtn:#fff; --err:#b3261e; --ok:#1e7b34; } }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; border-top: 1px solid var(--bd); box-sizing: border-box; padding: 6px 12px; display: flex; flex-direction: column; gap: 4px; }
+  #head { display: flex; gap: 12px; font-size: 12px; color: var(--small); white-space: nowrap; overflow: hidden; }
+  #to { overflow: hidden; text-overflow: ellipsis; }
+  #note { margin-left: auto; overflow: hidden; text-overflow: ellipsis; }
+  #note.err { color: var(--err); } #note.ok { color: var(--ok); }
+  form { display: flex; gap: 8px; flex: 1; min-height: 0; }
+  textarea { flex: 1; resize: none; background: var(--box); color: var(--fg); border: 1px solid var(--bd); border-radius: 8px; padding: 6px 10px; font: inherit; }
+  textarea:focus { outline: 2px solid var(--fg); outline-offset: -1px; }
+  button { border: 0; border-radius: 8px; padding: 0 16px; background: var(--btn); color: var(--onbtn); font: inherit; font-weight: 600; }
+  button:disabled { opacity: .5; }
+</style></head>
+<body>
+<div id="head"><span id="to">To a new thread</span><span>Signed by this app</span><span id="note" role="status"></span></div>
+<form id="f"><textarea id="t" rows="1" aria-label="Message to your Hive" placeholder="Message your Hive"></textarea><button id="go" type="submit">Send</button></form>
+<script>
+  // The thread comes from the app (it reads the Hive page's address), never from the page itself.
+  let thread = '', busy = false;
+  const $ = id => document.getElementById(id), note = (s, c) => { $('note').textContent = s; $('note').className = c || ''; };
+  const show = t => { thread = t; $('to').textContent = t ? 'To thread: ' + t : 'To a new thread'; };
+  if (window.bar) window.bar.onThread(t => { if (t !== thread) note(''); show(t); });
+  async function send() {
+    const text = $('t').value;
+    if (busy || !text.trim() || !window.bar) return;
+    busy = true; $('go').disabled = true; note('Sending…');
+    let r; try { r = await window.bar.send(text, thread); } catch { r = { ok: false, why: "Couldn't send it." }; }
+    busy = false; $('go').disabled = false;
+    if (r && r.ok) { $('t').value = ''; note('Sent, signed', 'ok'); } else note((r && r.why) || "Couldn't send it.", 'err');
+  }
+  $('f').addEventListener('submit', e => { e.preventDefault(); send(); });
+  $('t').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+</script>
+</body></html>

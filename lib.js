@@ -45,9 +45,11 @@ function openCommand(platform, env, exists = fs.existsSync, read = p => fs.readF
 }
 
 // The installer for this system: the same script the site's one line runs. accept: the person pressed "Accept and install".
-function installCommand(platform, env, accept) {
+function installCommand(platform, env, accept, key) {
   const add = { HIVE_REPORT: env.HIVE_REPORT || '0', HIVE_FROM_APP: '1' };
   if (accept) add.HIVE_ACCEPT = '1';
+  // The app's own public key, for the installer to pin as root (signed from the start, step 2); today's installers ignore it.
+  if (key && /^[A-Za-z0-9_-]{87}$/.test(key)) add.HIVE_APP_KEY = key;
   if (platform === 'win32') {
     const ps = path.win32.join(env.windir || env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     // On an ARM PC this app runs translated, and Windows tells a translated program (and what it starts) that the chip is an Intel one.
@@ -361,4 +363,98 @@ function browserLabel(name) {
 // The proof a Hive gives that it holds the key, tied to the whole origin (scheme, host and port) as well as the moment.
 function proofString(origin, nonce) { return `proof:${origin}:${nonce}`; }
 
-module.exports = { parseAdminList, linkMenu, browserLabel, addressRule, sameHive, newId, hiveUserName, validHive, parseHives, stringifyHives, windowsState, proofString, newerApp, contextItems, downloadPage, downloadPath, appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };
+// A Hive's icon on its rail tile (step 8b): the picture its own page names as its icon (the logo set in its Settings).
+// pickIcon(urls, same) says what to do with the page's icon list: {kind: 'none'} for no icon or the Hive's built-in mark (the
+// tile keeps its letter), {kind: 'data', url} for a picture given inline, {kind: 'fetch', url} for one to fetch from that same
+// Hive, or null for nothing usable (the tile keeps what it had). iconData turns what was fetched into a data: address.
+const ICON_MAX = 256 * 1024;
+const ICON_TYPE = /^image\/(png|jpeg|gif|webp|svg\+xml)$/;
+// The built-in mark (the page drew it because no logo is set) means no icon. The stock icon files come before the page's own
+// script runs, and on pages with no sign-in yet, so they say nothing: the tile keeps what it had.
+const builtInIcon = u => { let d = u; try { d = decodeURIComponent(u); } catch { } return d.startsWith('data:') && d.includes('M781 389.2'); };
+const stockIcon = u => /^https?:/i.test(u) && /\/(icons\/[a-z0-9-]+\.png|favicon\.ico)(\?|#|$)/.test(u);
+function pickIcon(urls, same) {
+  const u = (Array.isArray(urls) ? urls : []).find(x => typeof x === 'string' && x);
+  if (!u || builtInIcon(u)) return { kind: 'none' };
+  if (stockIcon(u)) return null;
+  if (/^data:/i.test(u)) {
+    const m = /^data:([^;,]*)[;,]/i.exec(u);
+    return m && ICON_TYPE.test(m[1].toLowerCase()) && u.length <= ICON_MAX * 2 ? { kind: 'data', url: u } : null;
+  }
+  try { if (!/^https?:$/.test(new URL(u).protocol) || !same(u)) return null; } catch { return null; }
+  return { kind: 'fetch', url: u };
+}
+function iconData(type, buf) {
+  const t = String(type || '').split(';')[0].trim().toLowerCase();
+  if (!ICON_TYPE.test(t) || !buf || !buf.length || buf.length > ICON_MAX) return null;
+  return `data:${t};base64,${Buffer.from(buf).toString('base64')}`;
+}
+// icons.json as read back: only Hive ids and only picture addresses, anything else dropped.
+function validIcons(d) {
+  const out = {};
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return out;
+  for (const [id, u] of Object.entries(d)) if (/^(local|[a-f0-9]{16})$/.test(id) && typeof u === 'string' && pickIcon([u], () => false)?.kind === 'data') out[id] = u;
+  return out;
+}
+
+// Signed from the start (projects/word-shell/SIGNED-FROM-START.md, step 1). The app holds one device key (P-256) in the owner's
+// own account and signs what the owner types in its own composer bar, which the Hive's page can't read or fill. The signed
+// bytes name the Hive (its id, made at install), the thread, the time and a nonce, so a post can't be copied to another Hive
+// or sent twice. The fields and the signature are as the dashboard's sign.js gives them (raw key, r||s), at version 2.
+const crypto = require('crypto');
+const SIG_TAG = 'h2-post-v2', SIG_WINDOW = 300, WORDS_MAX = 20000;
+const HIVE_ID = /^[a-f0-9]{32}$/;
+const b64u = b => Buffer.from(b).toString('base64url');
+function signedBytes(f, words) { return Buffer.from([SIG_TAG, f.at, f.nonce, f.hive, f.thread, f.reply_to, words].join('\n')); }
+// A new device key, as {pkcs8 (base64), key (the raw public key, base64url)}.
+function newDeviceKey() {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  return { pkcs8: privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64'), key: rawKey(publicKey) };
+}
+function rawKey(pub) { const j = pub.export({ format: 'jwk' }); return b64u(Buffer.concat([Buffer.from([4]), Buffer.from(j.x, 'base64url'), Buffer.from(j.y, 'base64url')])); }
+// The device key read back: {pkcs8, key} with the public key taken again from the private one, or null.
+function deviceKey(pkcs8) {
+  try { const k = crypto.createPrivateKey({ key: Buffer.from(String(pkcs8), 'base64'), format: 'der', type: 'pkcs8' }); if (k.asymmetricKeyDetails?.namedCurve !== 'prime256v1') return null; return { pkcs8: String(pkcs8), key: rawKey(crypto.createPublicKey(k)) }; } catch { return null; }
+}
+const keyFingerprint = key => crypto.createHash('sha256').update(Buffer.from(key, 'base64url')).digest('hex').slice(0, 20);
+// The body the app posts: {text, thread, reply_to, sig}. at and nonce are given by the tests only.
+function signPost(dev, { hive, thread = '', reply_to = '', words, at = new Date().toISOString(), nonce = b64u(crypto.randomBytes(16)) }) {
+  const f = { v: 2, key: dev.key, at, nonce, hive, thread, reply_to, n: Buffer.byteLength(words) };   // n: the words' length in UTF-8 bytes, the same count in every language
+  const pk = crypto.createPrivateKey({ key: Buffer.from(dev.pkcs8, 'base64'), format: 'der', type: 'pkcs8' });
+  f.s = b64u(crypto.sign('sha256', signedBytes(f, words), { key: pk, dsaEncoding: 'ieee-p1363' }));
+  return { text: words, thread, reply_to, sig: f };
+}
+// What a Hive's checker says of a posted body: {ok: true, fp} or {ok: false, why}. o: {hive (its id), pinned (raw keys),
+// seen (a Set of nonces already used), now (ms)}. The caller adds the nonce to seen once the post is kept.
+function checkPost(body, o) {
+  const no = why => ({ ok: false, why });
+  const s = body && body.sig, text = body && body.text;
+  if (!s || typeof s !== 'object' || s.v !== 2 || typeof text !== 'string') return no('not signed');
+  for (const k of ['key', 'at', 'nonce', 'hive', 'thread', 'reply_to', 's']) if (typeof s[k] !== 'string' || s[k].includes('\n')) return no('the signature is not in the expected form');
+  if (s.n !== Buffer.byteLength(text) || !text.length || text.length > WORDS_MAX) return no('the signed length does not fit the text');
+  if (s.hive !== o.hive) return no('signed for another Hive');
+  if (s.thread !== String(body.thread ?? '') || s.reply_to !== String(body.reply_to ?? '')) return no('signed for another thread');
+  const t = Date.parse(s.at);
+  if (!/^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(s.at) || !(Math.abs(o.now - t) <= SIG_WINDOW * 1000)) return no('signed too long ago, or the clocks differ');
+  let good = false, raw;
+  try {
+    raw = Buffer.from(s.key, 'base64url');
+    if (raw.length !== 65 || raw[0] !== 4) return no('the key is not a P-256 key');
+    const pub = crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: b64u(raw.subarray(1, 33)), y: b64u(raw.subarray(33)) }, format: 'jwk' });
+    good = crypto.verify('sha256', signedBytes(s, text), { key: pub, dsaEncoding: 'ieee-p1363' }, Buffer.from(s.s, 'base64url'));
+  } catch { return no('the signature cannot be read'); }
+  if (!good) return no('the signature does not match the words');
+  if (o.seen.has(s.nonce)) return no('a copy: this signature was used before');
+  if (!o.pinned.includes(s.key)) return no('the key is not pinned');
+  return { ok: true, fp: keyFingerprint(s.key) };
+}
+// The thread the Hive's page has open (its address ends #comms/<thread>), or '' for none.
+function threadOf(url) {
+  const m = /#comms\/([^/?#]*)$/.exec(String(url));
+  if (!m) return '';
+  try { const t = decodeURIComponent(m[1]); return /^[A-Za-z0-9_.-]{1,64}$/.test(t) ? t : ''; } catch { return ''; }
+}
+// The Hive's id as its installer prints it ("Hive id: <32 hex>"), or null.
+function hiveIdFrom(text) { const m = /^Hive id: ([a-f0-9]{32})\s*$/m.exec(plain(String(text))); return m ? m[1] : null; }
+
+module.exports = { SIG_TAG, HIVE_ID, WORDS_MAX, newDeviceKey, deviceKey, keyFingerprint, signPost, checkPost, threadOf, hiveIdFrom, ICON_MAX, pickIcon, iconData, validIcons, parseAdminList, linkMenu, browserLabel, addressRule, sameHive, newId, hiveUserName, validHive, parseHives, stringifyHives, windowsState, proofString, newerApp, contextItems, downloadPage, downloadPath, appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };

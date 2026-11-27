@@ -30,6 +30,8 @@
       "gate.js",
       "preload.js",
       "setup.html",
+      "composer.html",
+      "composer-preload.js",
       "build/icon.png"
     ],
     "directories": {
