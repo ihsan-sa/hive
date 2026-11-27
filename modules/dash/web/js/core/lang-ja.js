@@ -527,6 +527,7 @@ export default {
   "This takes it off hold. The keeper may start work on it again.": "保留を解除します。管理役が再び作業を始める場合があります。",
   "Save the page": "ページを保存",
   "Not saved": "保存されませんでした",
+  "Not shared.": "共有されませんでした。",
   "Include pictures and small text files you were sent": "受け取った画像と小さなテキストファイルを含める",
   "Messages on the page": "ページ上のメッセージ",
   "It signs out of that ChatGPT account here; runs move to the other Codex logins.": "ここでそのChatGPTアカウントからサインアウトします。実行はほかのCodexのログインに移ります。",

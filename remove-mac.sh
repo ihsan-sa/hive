@@ -87,7 +87,7 @@ main() {
   # Others stay: end this one's processes, delete its user and home, and take off its own command (and, for hive, its app).
   if [ -n "$OTHERS" ]; then
     # shellcheck disable=SC2016  # these expand in the VM
-    { vm_up && "$L" shell --workdir / hive sudo sh -c 'u=$1; loginctl disable-linger "$u" 2>/dev/null; loginctl terminate-user "$u" 2>/dev/null; pkill -KILL -u "$u" 2>/dev/null; sleep 1; userdel -r "$u" 2>/dev/null; ! id "$u" >/dev/null 2>&1' sh "$U" </dev/null; } \
+    { vm_up && "$L" shell --workdir / hive sudo sh -c 'u=$1; loginctl disable-linger "$u" 2>/dev/null; loginctl terminate-user "$u" 2>/dev/null; pkill -KILL -u "$u" 2>/dev/null; sleep 1; userdel -r "$u" 2>/dev/null; sed -i "/^$u /d" /var/lib/hive/ports 2>/dev/null; ! id "$u" >/dev/null 2>&1' sh "$U" </dev/null; } \
       || die "couldn't delete the Hive $U in the VM. Its processes may still run; try again in a minute"
     rm -f "$D/bin/$CMD"
     if [ "$U" = hive ] && grep -qs 'made by the Hive install' "$HOME/Applications/Hive.app/Contents/MacOS/Hive"; then rm -rf "$HOME/Applications/Hive.app"; fi

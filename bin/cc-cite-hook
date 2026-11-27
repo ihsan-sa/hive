@@ -9,7 +9,22 @@ has nothing to cite just repeats). Anything it can't read lets the call through.
 import functools, hashlib, json, os, re, sys
 from pathlib import Path
 
-POST = re.compile(r"\b(hive|hive)\s+post\b")
+# A post is `hive post` / `hive post` where a command starts (line start, after ; & | ( { $( or then/do/else, behind VAR=x,
+# timeout N, env, nice, nohup, exec, time), outside a heredoc body. The bare words anywhere matched 2.6% of Bash calls that
+# weren't posts (`grep 'hive post'`, a test script written by heredoc, a sandbox harness), refusing them and resetting web reads.
+POST_CMD = re.compile(r"(?:^|[;&|(`{]|\$\(|\bthen\b|\bdo\b|\belse\b)\s*(?:[A-Za-z_]\w*=\S*\s+|(?:timeout|env|nice|nohup|command|exec|time)\s+(?:-\S+\s+)*(?:\d\S*\s+)?)*"
+                      r"(?:\S*/)?(?:hive|hive)\s+post\b", re.M)
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n(.*?)(?:^\s*\2\s*$|\Z)", re.S | re.M)
+
+
+class _Post:
+    """POST.search(cmd): a post command in cmd, with heredoc bodies blanked first (the post's own body is text, not a command)."""
+    @staticmethod
+    def search(cmd):
+        return POST_CMD.search(HEREDOC.sub(lambda m: m.group(0)[:m.start(3) - m.start(0)] + "\n" + m.group(0)[m.end(3) - m.start(0):], cmd))
+
+
+POST = _Post()
 FETCH = re.compile(r"\b(curl|wget)\b([^|;&]*)", re.S)
 HOST = re.compile(r"https?://(?:[^/\s'\"@]*@)?(\[[^\]]*\]|[^/\s'\"?#:@]+(?=[/\s'\"?#:]|$))")
 # Not the outside web: this machine, the LAN, the tailnet, and API hosts that return data rather than pages to cite.

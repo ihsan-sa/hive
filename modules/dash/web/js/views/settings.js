@@ -1,7 +1,7 @@
 // Settings: Everyday, Accounts, Buying, Power and sandbox, Data sharing, Secrets, This device, Set once, Connectors, Modules, Access from outside (R7). Shown only where can() allows each part.
 import { status as st } from "../core/status.js";
 import { h, s } from "../core/dom.js";
-import { S, can, built, jget, needsAccount, post, loadApp, said, fullEnded, unreached, kept, keep, KEPT_NOTE } from "../core/store.js";
+import { S, can, built, jget, needsAccount, post, loadApp, loadProjects, said, fullEnded, unreached, kept, keep, KEPT_NOTE } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
 import { stillOn, setStill } from "../core/still.js";
 import { oneKeyOn, setOneKey } from "../core/onekey.js";
@@ -22,6 +22,7 @@ import { copyButton } from "../ui/refs.js";
 import { MODELS, POWER, accountsData, codexPart, forget, keysPart, loadPage, modelPart, pageData, powerPart, reading, rootNote, sandboxPart, sharePart } from "../ui/setup.js";
 import { forgetSecrets, secretParts, secretsLost } from "./secrets.js";
 import { kbWipeSection } from "../ui/kbwipe.js";
+import { uploadFile } from "../core/upload.js";
 import { tryBlock, loadTry, forgetTry } from "../ui/mcptry.js";
 
 // Everything the person is typing lives here, so a poll never loses it.
@@ -317,6 +318,71 @@ function pushBlock(ctx) {
 }
 // The name saves when you leave the box; a picture saves as soon as it's picked. Every tab and page picks them up from /api/app.
 const LOGO_MAX = 2 * 2 ** 20;
+// hive-app 7e2 (DESIGN-many-hives.md): one project out to this device's Downloads as a zip with its history, or one brought in from such a zip.
+// The Hive runs its export / import commands (core/projmove.py makes every check) as a job this page asks after every second; a refusal shows its reason.
+const PM = { pick: "", as: "", lines: null, tried: false };
+async function projJob(d) {
+  let j = await post("/api/project-job", d);
+  const id = j.id;
+  let lost = 0;
+  while (j.state === "running") {
+    await new Promise(r => setTimeout(r, 1000));
+    try { j = await jget("/api/project-job?id=" + encodeURIComponent(id)); lost = 0; }
+    catch (e) {
+      if (e.status === 404) throw Error("your Hive restarted while this ran; start it again");
+      if (e.status === 403) throw Error("this sign-in can't follow it any more (full access ended after a while idle); it goes on running on your Hive, so sign in again and look in Projects");
+      if (!e.status && ++lost < 120) continue;   // a dropped connection: ask again, for two minutes
+      throw Error(e.status ? e.message : "your Hive stopped answering; it may still be running, so look in Projects in a while");
+    }
+  }
+  if (j.state !== "done") throw Error(j.error || "it stopped without saying why");
+  return j;
+}
+function projectsBlock(ctx) {
+  if (!can("config")) return null;
+  if (Array.isArray(S.projects)) PM.tried = false;
+  else if (!S.projects && !PM.tried) { PM.tried = true; loadProjects().then(ctx.update); }   // once: a list that can't be read isn't asked for on every redraw
+  const names = Array.isArray(S.projects) ? S.projects.map(p => p.name) : [];
+  if (!names.includes(PM.pick)) PM.pick = names[0] || "";
+  const busy = isBusy("projects");
+  const out = async () => {
+    const name = PM.pick; if (!name) return;
+    say("projects", `Exporting ${name}…`); PM.lines = null; ctx.update();
+    try {
+      const j = await act("projects", "Exporting " + name, () => projJob({ do: "export", name }), ctx.update);
+      if (!j) return;
+      const a = h("a", { href: "/api/project-job/file?id=" + encodeURIComponent(j.id), download: j.file, hidden: true });
+      document.body.appendChild(a); a.click(); a.remove();
+      PM.lines = j.lines || null;
+      say("projects", `${j.file} is downloading. Bring it in on the other Hive with "Bring in a project", here in its Settings.`, "good");
+    } catch (e) { say("projects", `${name} wasn't exported: ${e.message}`, "bad"); }
+    ctx.update();
+  };
+  const bring = async f => {
+    if (!f) return;
+    const as = PM.as.trim();
+    say("projects", `Bringing in ${f.name}…`); PM.lines = null; ctx.update();
+    try {
+      const j = await act("projects", "Bringing in " + f.name, async () => projJob({ do: "import", ref: await uploadFile(f), ...(as ? { as } : {}) }), ctx.update);
+      if (!j) return;
+      PM.lines = j.lines || null; PM.as = ""; S.projects = null; loadProjects().then(ctx.update);
+      say("projects", `Brought in as ${j.name}: it's in Projects now.`, "good");
+    } catch (e) { say("projects", `${f.name} wasn't brought in: ${e.message}`, "bad"); }
+    ctx.update();
+  };
+  return block({ title: "Projects", key: "projects", sub: "Move a project to another Hive, with its history. Export saves one as a zip on this device; Bring in adds one from such a zip." },
+    h("div", { class: "frow" },
+      h("select", { class: "input", "aria-label": "Project to export", title: "Project to export", value: PM.pick, disabled: !names.length || busy, onchange: (e, n) => { PM.pick = n.value; } },
+        names.length ? names.map(n => h("option", { value: n }, n)) : h("option", { value: "" }, S.projects === "loading" ? "Reading…" : Array.isArray(S.projects) ? "No projects yet" : "Couldn't read the projects")),
+      button("Export", out, { size: "s", icon: "download", disabled: !names.length, busy, title: "Export the project as a zip" })),
+    h("div", { class: "frow" },
+      input({ type: "text", maxlength: 64, placeholder: "its name here (optional)", "aria-label": "Name for the project brought in", value: PM.as, oninput: (e, n) => { PM.as = n.value; } }),
+      h("input", { type: "file", accept: ".zip,application/zip", hidden: true, class: "proj-pick", onchange: (e, n) => { bring(n.files[0]); n.value = ""; } }),
+      button("Bring in a project…", (e, n) => n.parentNode.querySelector(".proj-pick").click(), { size: "s", busy, title: "Bring in a project from a zip" })),
+    msg("projects"),
+    PM.lines && PM.lines.length ? h("ul", { class: "field-h", "aria-label": "What it did" }, PM.lines.map(l => h("li", null, l))) : null);
+}
+
 function brandBlocks(ctx) {
   if (T.name != null && T.name.trim() === (brandName() || "")) delete T.name;
   F.name ??= T.name ?? brandName() ?? "";
@@ -448,6 +514,7 @@ function hiveSection(ctx) {
       // E34 (GAPS row 19): every chat as plain text with its files, in one zip, made by the server (/api/export).
       can("config") ? block({ title: "Download my chats", sub: "Every chat as plain text with its files, in one zip. A big Hive takes a minute.", key: "export",
         actions: button("Download", null, { size: "s", href: "/api/export", icon: "download", title: "Download my chats" }) }) : null,
+      projectsBlock(ctx),
       block({ title: "Agents at once", sub: "Empty means no limit. Saves when you leave the box.",
         actions: [savedMark("Agents at once"), input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", value: E.max, ...invalid("err-max", F.bad.max), oninput: (e, n) => { E.max = n.value; F.badIn.max = n.validity.badInput; }, onchange: saveMax, onfocusout: saveMax })] },
         fieldErr("err-max", F.bad.max), keptNote("max")),

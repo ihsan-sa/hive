@@ -527,6 +527,7 @@ export default {
   "This takes it off hold. The keeper may start work on it again.": "보류가 해제됩니다. 관리자가 이 작업을 다시 시작할 수 있습니다.",
   "Save the page": "페이지 저장",
   "Not saved": "저장되지 않았습니다",
+  "Not shared.": "공유되지 않았습니다.",
   "Include pictures and small text files you were sent": "받은 이미지와 작은 텍스트 파일 포함",
   "Messages on the page": "페이지의 메시지",
   "It signs out of that ChatGPT account here; runs move to the other Codex logins.": "여기에서 해당 ChatGPT 계정을 로그아웃하며, 실행은 다른 Codex 로그인으로 넘어갑니다.",

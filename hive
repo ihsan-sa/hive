@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """hive: the board CLI. Board = ~/board.jsonl, one JSON post per line: {id, at, from, to, thread, text}; a thread opened by an agent working in another one has parent: that thread."""
-import argparse, datetime as dt, fcntl, json, os, re, secrets, shutil, socket, subprocess, sys, tempfile, time, urllib.request, uuid
+import argparse, datetime as dt, fcntl, json, os, pwd, re, secrets, shutil, socket, subprocess, sys, tempfile, time, urllib.request, uuid
 from pathlib import Path
 
 HOME = Path.home()
@@ -1167,7 +1167,11 @@ def cmd_web(a):
         except subprocess.TimeoutExpired: pass
     if recover: dash("stop")
     if web is None:
-        web = {"port": next(p for p in range(8077, 8177) if port_free(p))}
+        given = os.environ.get("HIVE_PORT", "")  # the root install's pick (install.sh pick_port); else the first free one no other Hive here was given
+        try: listed = [(w[0], int(w[1])) for w in (l.split() for l in open(os.environ.get("HIVE_PORTS", "/var/lib/hive/ports"))) if len(w) == 2 and w[1].isdigit()]
+        except OSError: listed = []
+        me = pwd.getpwuid(os.getuid()).pw_name; mine = [p for u, p in listed if u == me]; others = {p for u, p in listed if u != me}
+        web = {"port": int(given) if given.isdigit() else mine[0] if mine else next(p for p in range(8077, 8177) if p not in others and port_free(p))}
     if a.setup and not web.get("secret") or a.new_secret: web["secret"] = secrets.token_urlsafe(32)
     if a.setup or a.new_secret:
         STATE.mkdir(exist_ok=True)
@@ -1819,6 +1823,24 @@ def cmd_goals(a):
     """hive goals: core/goals.py (every goal with who is moving it: focuses, project goals.md, asks)."""
     os.execv(sys.executable, [sys.executable, "-I", str(CORE / "goals.py")] + a.rest)
 
+def cmd_shell(a):
+    """hive shell [NAME]: a login shell in a Hive's home as its user. This Hive's home is the one this command lives in."""
+    if len(a) > 1 or (a and not re.fullmatch(r"[a-z0-9_][a-z0-9_-]{0,31}", a[0])) or a == ["root"]:
+        sys.exit("usage: hive shell [NAME], with NAME a Hive's user name (not root)")
+    me = pwd.getpwuid(os.getuid())
+    if not a or a[0] == me.pw_name:
+        home = str(Path(__file__).resolve().parent.parent)
+        sh = os.environ.get("SHELL") or me.pw_shell or "/bin/bash"
+        if not os.access(sh, os.X_OK): sh = "/bin/sh"
+        os.chdir(home); os.environ["HOME"] = home
+        os.execv(sh, ["-" + os.path.basename(sh)])
+    try: pw = pwd.getpwnam(a[0])
+    except KeyError: sys.exit(f"hive shell: there's no Hive called {a[0]} on this machine (no user by that name)")
+    if pw.pw_uid < 1000 or pw.pw_uid == 65534: sys.exit(f"hive shell: {a[0]} is one of the system's own users, not a Hive")
+    if not shutil.which("sudo"): sys.exit(f"hive shell: getting into {a[0]} needs sudo, and this machine has none")
+    os.execvp("sudo", ["sudo", "-iu", a[0]])
+
+
 def cmd_asks(a):
     """hive asks ...: core/asks.py (the register of the person's asks, so none is dropped)."""
     os.execv(sys.executable, [sys.executable, "-I", str(CORE / "asks.py")] + a.rest)
@@ -1943,6 +1965,11 @@ if sys.argv[1:2] == ["order"]:
     os.execv(sys.executable, [sys.executable, "-I", str(MODULES / "buy" / "order.py")] + sys.argv[2:])
 sp.add_parser("continue", help="hive continue list [--json] | stats [--baseline] [--since D] [--until D]: the continuation pilot, where a run ending on `Next:` in a thread whose goals.md has `Continue: on` is carried on (core/continuation.py)")
 sp.add_parser("judge", help="hive judge stats [--since D] [--lift] [--json] | log [-n N] | replay [--hours H] [--models a,b] | case SNAPSHOT: the stop judge, a trial on half the goal threads each day: when a run stops with nothing else carrying its work on, a separate model reads the goal, its open rungs and the run's posts and says done, blocked, wait or continue; continue and wait wake the agent once. Disagree with a wake by posting a line `Judge missed: why` and stopping. On while ~/.hive/judge-trial.json is in its window (core/judge.py)")
+sp.add_parser("export", help="hive export NAME [--to DIR]: one project (~/projects/NAME) as a zip with its git history, to ~/exports; prints the zip's full path")
+sp.add_parser("import", help="hive import ZIP [--as NAME]: bring a project export back under ~/projects, git history included, never over a project already there")
+if sys.argv[1:2] in (["export"], ["import"]): os.execv(sys.executable, [sys.executable, "-I", str(Path(__file__).resolve().parent / "projmove.py")] + sys.argv[1:])
+sp.add_parser("shell", help="hive shell [NAME]: a terminal in this Hive's home as its user; with NAME, the Hive of that user on this machine (through sudo -iu NAME). On a Mac or Windows the Hive's command does the same from your own terminal")
+if sys.argv[1:2] == ["shell"]: cmd_shell(sys.argv[2:])
 sp.add_parser("skill", help="hive skill list | file NAME <<'X' (SKILL.md with description: and trigger: regex) | rm NAME | match CMD: learned skills, methods a run filed for a step that keeps failing across runs; a later run whose command matches the trigger is pointed at the skill (core/skills.py, projects/hive-meta/moving.md section 8)")
 if sys.argv[1:2] == ["skill"]: os.execv(sys.executable, [sys.executable, "-I", str(CORE / "skills.py")] + sys.argv[2:])
 sp.add_parser("goals", help="hive goals [--idle] [--json]: every goal (the person's focuses in kb/priorities.md, each project's goals.md, the asks) with its thread, last agent post, who is running and open asks; idle goals named (core/goals.py)")

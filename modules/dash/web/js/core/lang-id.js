@@ -527,6 +527,7 @@ export default {
   "This takes it off hold. The keeper may start work on it again.": "Ini mencabutnya dari penangguhan. Pengelola dapat mulai mengerjakannya lagi.",
   "Save the page": "Simpan halaman",
   "Not saved": "Tidak tersimpan",
+  "Not shared.": "Tidak dibagikan.",
   "Include pictures and small text files you were sent": "Sertakan gambar dan berkas teks kecil yang dikirimkan kepada Anda",
   "Messages on the page": "Pesan di halaman",
   "It signs out of that ChatGPT account here; runs move to the other Codex logins.": "Ini mengeluarkan akun ChatGPT itu di sini; proses dialihkan ke akun Codex lain.",

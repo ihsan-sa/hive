@@ -12,7 +12,7 @@ _GAP = re.compile(r"\t+|[ \u00a0]{3,}")
 _PARTICLE = r"(?:de|del|della|di|du|la|le|van|von|der|den|ter|bin|ibn|al|el|da|dos|das)"  # Jean de la Verpilliere
 NAME = rf"{_W}(?:{_SP}[A-Z]\.)*(?:{_SP}(?:{_PARTICLE}{_SP})*{_W}){{1,2}}"
 LINE_NAME = NAME.replace(r"[A-Z]\.", r"[A-Z]\.?", 1)  # a line or cell that is only a name may drop the initial's dot, "Marittza M Adame" (South Texas's chart); in prose "Plan B Funding" would pass
-SUFFIX = r"(?:,?\s+(?:Jr\.?|Sr\.?|II|III|IV|Ph\.?\s?D\.?|Ed\.?\s?D\.?|M\.?D\.?|J\.?D\.?|MBA|M\.?S\.?|DBA|Esq\.?|M\.A\.|MA|M\.?Ed\.?|M\.?P\.?A\.?|MSW|Ed\.?S\.?|CPA|SPHR|SHRM-SCP|GCDF))*"
+SUFFIX = r"(?:,?\s+(?:Jr\.?|Sr\.?|II|III|IV|Ph\.?\s?D\.?|Ed\.?\s?D\.?|M\.?D\.?|J\.?D\.?|MBA|M\.?S\.?|DBA|Esq\.?|M\.A\.|MA|M\.?Ed\.?|M\.?P\.?A\.?|MSW|Ed\.?S\.?|CPA|CMA|CFA|PMP|MPH|MFA|MSN|RN|LCSW|PHR|SPHR|SHRM-SCP|GCDF))*"  # CMA: "Steve Pappageorge, MBA, CMA" over his post (Moraine Valley, fnwords155 6z12r)
 HONOR = r"(?:(?:Dr|Prof|Mr|Ms|Mrs|Mx)\.?\s+)?"
 NOT_NAME = set("""has officially stepped steps expect compensation analysis by blvd boulevard ave avenue road rd drive highway parkway suite log copy position profile vertically integrated projects effectiveness governor senator congressman representative act acts report reports offices hub directory services resources contact contacts apply news events calendar careers staff faculty students alumni tech university college community center centre office department school institute program programs campus board foundation technology artificial intelligence data science workforce president vice dean director chief associate assistant executive senior interim the news read more contact student students services academic affairs human resources learn click home about our staff faculty new state national american united north south east west county city district education learning development innovation career careers business engineering computer health online division professional continuing leadership team trustees chancellor provost professor manager coordinator chair head email phone view all meet his her their this that these those when where with from for and page press release media event events research strategic planning economic public relations information systems digital cyber security machine ai it us january february march april may june july august september october november december monday tuesday wednesday thursday friday saturday sunday he she we they you read share follow privacy policy site map search menu working title property management job jobs salary posting vacancy vacancies opening openings breakfast club summit webinar webinars technical pathway pathways academy academies initiative initiatives partnerships solutions lab labs designer librarian librarians sciences trades skills service aid nursing room rooms auditorium criminal therapy assisting recruit officer officers counsel excellence access equitable success audit internal institutional advancement organizational chart police lieutenant technologies assist request info my salon grooming""".split())
 _LINE_ROLE = re.compile(rf"^(?:the\s+)?(?:(?:program|project|center|centre|department|unit|division|regional|operations|office|workforce|career|academic|student|campus|site|general)[ \t]+){{0,2}}(?:{ROLE})\b", re.I)
@@ -59,12 +59,19 @@ def drop_code(t):
     return HR_CODE.sub("", t or "") if t else t
 
 
+PHONE_TAIL = re.compile(r",?\s*\(?\d{3}\)?[ .-]?\d{3}[ .-]\d{4}(?:\s*(?:x|ext\.?)\s*\d+)?$")
+def drop_phone(t):
+    """A title without the phone cell a directory prints beside the post: "Interim Director, Workforce Development & Strategic Initiatives, 937-512-2220" (Bobo, fnwords155 review)."""
+    return PHONE_TAIL.sub("", t or "").strip(" ,") if t else t
+
+
 def clean_title(t):
     t = drop_code(t.split("\n")[0])
     # Where the post ends ("Special Assistant to the President" goes on past its "to"): "CEO of Nexeon, said:", "..., Dr Alex Groombridge, CTO" (the next person), "CEO, spearheads the ...".
     t = re.split(r"(?<![A-Z])(?<!Assist)(?<!Asst)(?<!Assoc)(?<!Exec)(?<!Coord)(?<!Dept)(?<!aka)[.;:|•]\s|\s[–—-]\s|(?<!Associates)(?<!Associate)(?<!Bachelors)(?<!Bachelor)(?<!Masters)(?<!Master)\sin\s|\s(?:said|says|who|and has|has|is|was|will|at|on)\s|(?<![Aa]ssistant)\sto\s|[\"“”(]|,\s+(?:sees|see|feels|believes|notes|adds|hopes|expects|thinks|wants|plans|looks|knows|argues|stresses)\b|,?\s(?:said|says|added|explained)\b|,\s+(?:Dr|Prof|Mr|Ms|Mrs)\.?\s|,\s+[a-z]+s\s+(?:the|a|an|its)\b|,\s+the\s+[a-z]|,\s+(?:where|which|whose|when)\b|\suntil\s|\sand\s+(?:highly|widely|also|one)\b", t)[0].strip(" ,.")
     t = re.sub(r"\b((?:co-?)?founder)\s+of\s+[a-z][a-z -]*(?:,.*)?$", r"\1", t, flags=re.I)  # "co-founder of advanced materials supplier"
     t = re.sub(r"\s+\S+@\S+.*$", "", t)  # "Interim Director jdoe@example.com": the email is no part of the post
+    t = drop_phone(t)
     t = re.sub(r"(?<=[a-z])\s+(?:Ph\.?D|M\.?B\.?A|Ed\.?D|M\.?Ed|MPA|MPH|MSW|MFA|DBA|JD)\.?$", "", t)  # a degree glued on by a catalog's next line: "Interim Vice President for Lifelong Learning and Workforce Development PhD" (MWCC, fnwords148 CC review #17, #18)
     if len(t) > 160: t = t[:160].rsplit(" ", 1)[0].strip(" ,")  # whole words only: a cut "Inno" read as another employer. 160, not 110: UF's "Associate Vice President for ... and Executive Director of the Career Connections Center" is 120 (fnwords123 review cut it at "the Career")
     return t
@@ -72,7 +79,8 @@ def clean_title(t):
 
 # The title sits in a lookahead: a match takes only the name, so the 90-character tail can't swallow the next "Sam Roe, director ..." in the same paragraph (fnwords41).
 _PATS = [
-    re.compile(rf"(?P<name>{HONOR}{NAME}){SUFFIX}\s*(?:,|\s[–—|-]\s)\s*(?:the\s+|an?\s+|[A-Z][\w&.-]*['’]s\s+)?(?=(?P<title>(?:[A-Z][\w&'-]*\s+|of\s+|for\s+|and\s+){{0,3}}{IROLE}\b[^\n]{{0,90}}))"),
+    # An org named between the name and a lowercase post is dropped: "Kimberly Lea, Palm Beach State College dean of workforce education and development," (a PBSC news story, fnwords155 6z12r).
+    re.compile(rf"(?P<name>{HONOR}{NAME}){SUFFIX}\s*(?:,|\s[–—|-]\s)\s*(?:the\s+|an?\s+|[A-Z][\w&.-]*['’]s\s+|(?:[A-Z][\w&.'’-]*\s+){{0,5}}(?:College|University|Institute)\s+(?=[a-z]))?(?=(?P<title>(?:[A-Z][\w&'-]*\s+|of\s+|for\s+|and\s+){{0,3}}{IROLE}\b[^\n]{{0,90}}))"),
     # The comma after a degree is allowed: "Sammi Morrill, Ph.D., serves as the ... Vice Chancellor" (Alamo, fnwords128).
     re.compile(rf"(?P<name>{HONOR}{NAME}){SUFFIX},?\s+(?:is|was|serves as|served as|has been named|was named|was appointed|has been appointed|became|joined as)\s+(?:the\s+|an?\s+|as\s+)*(?:new\s+)?(?=(?P<title>(?:[A-Z][\w&'-]*\s+|of\s+|for\s+|and\s+){{0,3}}{IROLE}\b[^\n]{{0,90}}))"),
     re.compile(rf"(?<![A-Za-z] )(?P<title>{ROLE}(?:{_SP}(?:of|for){_SP}[A-Z][\w&'-]*(?:{_SP}(?:and{_SP})?[A-Z][\w&'-]*){{0,4}})?){_SP}(?P<name>(?:Dr\.\s+)?{NAME})\b(?!\s+(?:of|for)\b)"),
@@ -89,6 +97,11 @@ _BARE_RANK = re.compile(r"(?:(?:Senior|Executive|Interim|Acting|Managing)\s+)*(?
 _WRAP_TAIL = re.compile(r"([A-Z][\w&'’-]*(?:\s+(?:of\s+|for\s+|and\s+|&\s+)?[A-Z][\w&'’-]*){0,2}),\s")  # the start of a line that ends a wrapped post: "Development, Henry M. Example College"
 _ORGISH = re.compile(r"\b(?:University|College|Institute|School|Academy|Inc|LLC|Ltd|Corporation|Company|Foundation|Department|Office|Center|Centre|Services|Division)\b")
 _CONTACT = re.compile(r"@|\bemail\b|\[email|^\(?\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}$", re.I)
+
+
+def _unit_cell(l):
+    """A line that is only a unit's name ("Workforce", "Career Services"): short words, no post, no person."""
+    return len(l) <= 60 and re.match(r"[A-Z][A-Za-z&' -]+$", l) is not None and not _LINE_ROLE.match(l) and not _STACKED_LAST_FIRST.fullmatch(l) and not _cell_name(l)[0]
 
 
 def _cell_name(cell, flip=False):
@@ -194,17 +207,23 @@ def people_in(text, ld=()):
         add(box[1], box[0], "directory")
     # A directory that stacks "Last, First M", the email, then the post and its unit on lines of their own (Wake Tech's /directory/dept/ pages: "Blanchard Smith, Korrie L" / "[email protected]" / "Dean of Career Services" / "Career Services"). fnwords106 read no one there.
     rows = [l.strip() for l in lines]
+    # A catalog's "Laflam, Jennifer (2025)" prints the year the person came; a directory may print the unit between the contact lines and the post: "Smith, Jimmy" / phone / email / "Workforce" / "Dean of Workforce Education" (Sacramento City's catalog, NTCC's directory, fnwords155 6z12r).
     for i, a in enumerate(rows):
-        m = _STACKED_LAST_FIRST.fullmatch(a)
+        m = _STACKED_LAST_FIRST.fullmatch(re.sub(r"\s*\((?:19|20)\d{2}\)$", "", a))
         if not m or m.group(2).lower() == "interim" or re.fullmatch(SUFFIX, ", " + m.group(2)): continue  # "Erin Tipton, EdD" is a name and its degree, not "Last, First" (a uky.edu event page gave "EdD Erin Tipton", fnwords129)
         name = _cell_name(m.group(2) + " " + m.group(1))[0]
         j = i + 1
         while j < len(rows) and j <= i + 2 and _CONTACT.search(rows[j]): j += 1
+        dept = ""
+        if j > i + 1 and j + 1 < len(rows) and _unit_cell(rows[j]) and _LINE_ROLE.match(rows[j + 1]): dept, j = rows[j], j + 1  # only past a contact line: the unit then the post
         if not name or j >= len(rows) or not _LINE_ROLE.match(rows[j]) or len(rows[j]) >= 160: continue
-        post, unit = rows[j], rows[j + 1] if j + 1 < len(rows) else ""
-        if (unit and len(unit) <= 60 and re.match(r"[A-Z][A-Za-z&' -]+$", unit) and not _LINE_ROLE.match(unit) and not _STACKED_LAST_FIRST.fullmatch(unit) and not _cell_name(unit)[0]
-                and fold(unit) not in fold(post)): post += ", " + unit
+        post, unit = rows[j], dept or (rows[j + 1] if j + 1 < len(rows) else "")
+        if unit and _unit_cell(unit) and fold(unit) not in fold(post) and not (dept and re.search(r"\b(?:of|for)\b|,", post)): post += ", " + unit  # a unit printed before a post that already says of what is no part of it: "Director of CE and Corporate Training" under "Continuing Education & Corporate Training"
         add(name, post, "directory")
+    # A catalog of labelled fields, a blank line between them: "Name Gina De Rosier Cook" / "Position Dean of Workforce Development & Continuing Ed" (Elgin's administrators, fnwords155 6z12r). The label says it is a name, so four words pass ("De" is no particle here).
+    for a, b in zip(rows, rows[1:]):
+        m, n = re.fullmatch(r"Name:?\s+(.+)", a), re.fullmatch(r"(?:Position|Title|Job Title):?\s+(.+)", b)
+        if m and n and re.fullmatch(HONOR + rf"{_W}(?:{_SP}(?:[A-Z]\.?|{_W})){{1,3}}" + SUFFIX, m.group(1)) and _LINE_ROLE.match(n.group(1)) and len(n.group(1)) < 160: add(m.group(1), n.group(1), "directory")
     # A staff list that prints the post above the name and the email under it: "Director, Career Center" / "Audrey Cooper" / "jdoe@example.com", or with a unit line between, "Associate Director" / "Employer Relations" / "Joseph Pietromonico" (TCNJ, fnwords106). The email line is what says the post belongs to the name above it, not the name below.
     for i, a in enumerate(rows):
         if not _LINE_ROLE.match(a) or len(a) >= 160: continue
@@ -450,7 +469,7 @@ def title_on(text, name, title, org=""):
 _VERB_AFTER = re.compile(r",\s*(?:spoke|said|says|leads|runs|opened|told|wrote|added|noted|stated|explained|announced|welcomed|presented|discussed|introduced|praised|launched|led|oversees|joined|was (?:appointed|named|elected|selected|invited|honou?red|recogni[sz]ed)|is (?:a|an|the|responsible|leading)|responsible for|addresses|speaks|presents|welcomes|greets|accepts|receives|delivers|congratulates|discusses|highlights|has (?:led|been|served|worked|overseen|built|helped)|will (?:lead|serve|speak|present|oversee|join)|who (?:leads|oversees|is|has|will|serves|directs)|offers|shares|brings|explains|adds|notes|believes|serves|recalls|recalled)\b|,\s*(?!(?:college|university|school|institute)\b)[a-z]{3,}ed\s+(?!college\b|university\b)")
 
 
-_GIVEN_END = re.compile(r"\s+(?:at|with|from)\s+(?:the\s+)?[A-Z]|[,;.:()\n|–—]|\s-\s")
+_GIVEN_END = re.compile(r"\s+(?:at|with|from)\s+(?:the\s+)?[A-Z]|[,;.:()\n|–—]|\s-\s|\s+(?:who|which|whose|since|where|when)\s")  # a relative clause ends the post: "director of alumni career and professional development who joined UTAA in 2021" read its "joined" and "2021" as unit words (Spaulding, fnwords155 review)
 def title_given(text, name):
     """The post a page prints right after the person's name ("Cheryl Rotyliano, Senior Associate Director of Market Readiness and Employment at the Wake Forest ..."), up to an employer, a comma or a stop; the first such with a role word, or ''."""
     rx = re.compile(name_regex(name).pattern, re.I)
@@ -604,9 +623,11 @@ def title_slot(text, name, title, org=""):
                 own = re.match(r"((?:[\w&.-]+\s+){0,4}[\w&.-]+)['’]s\s+", value)
                 initials = "".join(w[0] for w in re.findall(r"[a-z0-9]+", fold(org)) if w not in ("of", "the", "and", "for", "at"))
                 # "CCAC's Vice President ..." / "MCC's Vice President ...": the org's own initials own the post too (fnwords131).
+                orgpre = re.match(r"((?:[A-Z][\w&.'’-]*\s+){0,5}(?:College|University|Institute))\s+(?=[a-z])", value)  # "Kimberly Lea, Palm Beach State College dean of workforce education and development, has been selected" (a PBSC news story, fnwords155 6z12r): the org's own name, then its post in lowercase
+                bare_value = value[orgpre.end():] if orgpre and org and _own(org, orgpre.group(1)) and set(re.findall(r"[a-z0-9]+", fold(orgpre.group(1)))) <= set(re.findall(r"[a-z0-9]+", fold(org))) | {"the"} else ""   # tried after the whole: a title that keeps the org ("George Mason University vice president for research", Marshall) still matches as printed
                 if own and _own(org, own.group(1)) and (set(re.findall(r"[a-z0-9]+", fold(own.group(1)))) <= set(re.findall(r"[a-z0-9]+", fold(org))) | {"the"} or (len(initials) > 1 and fold(own.group(1)).replace(".", "") == initials)): value = value[own.end():]
                 appt = bool(re.match(r"(?:(?:has been|was|is) (?:appointed|named|promoted|elevated)\b)", tail, re.I))
-                if tail and role(value, appt): return " ".join(sent.split())[:300]
+                if tail and (role(value, appt) or bare_value and role(bare_value, appt)): return " ".join(sent.split())[:300]
                 # "Jane Doe (Dean of Students)": the whole rest of the sentence in brackets.
                 inner = re.fullmatch(r"\(([^()]*)\)\.?", tail)
                 if inner and role(inner.group(1)): return " ".join(sent.split())[:300]

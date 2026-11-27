@@ -139,6 +139,66 @@ def resolve(url, case):
     return page["final_url"]
 
 
+
+ROSTER_PATH = re.compile(r"""["'`](/(?:[\w.-]+/)*[\w.-]*(?:staff|people|directory|personnel)[\w.-]*(?:/[\w.-]+)*)["'`?]""", re.I)
+ROSTER_NOT = re.compile(r"[\[\]{}:]|inactive|former|alumni|emerit|retire|admin|summary|section|categor|count|/new\b", re.I)
+ROSTER_SCRIPTS = 20   # same-site scripts read for a roster path: Purdue CCO's page loads 15 and names /api/staff-management in its layout chunk, the eleventh
+NAME_KEYS, TITLE_KEYS = ("name", "full_name", "fullname", "display_name", "displayname"), ("title", "job_title", "jobtitle", "position", "position_title")
+
+
+def roster_pairs(data):
+    """The (name, title) pairs of a JSON staff list: each object with a name and a title string, its active flag not false. A name may be split into first and last."""
+    out = []
+    def walk(x, depth=0):
+        if depth > 6: return
+        if isinstance(x, list):
+            for y in x: walk(y, depth + 1)
+            return
+        if not isinstance(x, dict): return
+        low = {str(k).lower(): v for k, v in x.items()}
+        name = next((low[k] for k in NAME_KEYS if isinstance(low.get(k), str) and low[k].strip()), "")
+        if not name and isinstance(low.get("first_name"), str) and isinstance(low.get("last_name"), str): name = f"{low['first_name']} {low['last_name']}"
+        title = next((low[k] for k in TITLE_KEYS if isinstance(low.get(k), str) and low[k].strip()), "")
+        if name and title:
+            if not any(low.get(k) is False for k in ("is_active", "active", "isactive", "published")): out.append((" ".join(name.split()), " ".join(title.split())))
+            return
+        for v in x.values(): walk(v, depth + 1)
+    walk(data)
+    return out
+
+
+def script_roster(url):
+    """(JSON address, [(name, title)]) of the staff list a page draws by script, or ("", []). The page's own HTML and its same-site scripts are read for a same-site path with staff, people, directory or personnel in it; the paths are asked shortest first, up to three, and the first JSON with two pairs or more is the roster, with its next pages (up to five) when it says it has more. Purdue CCO's meet-the-staff page prints 1,644 characters and no one: its script reads /api/staff-management, whose JSON lists "Mary Andrade", "Senior Director, Career Success" (fnwords155 review)."""
+    r = net.get(url)
+    if r.error or r.status != 200 or not r.text: return "", []
+    base, host = r.url or url, (urllib.parse.urlsplit(r.url or url).hostname or "").lower()
+    def paths(text):
+        return {m.group(1).rstrip("/") for m in ROSTER_PATH.finditer(text) if not ROSTER_NOT.search(m.group(1)) and ("/api/" in m.group(1).lower() or "json" in m.group(1).lower())}
+    found = paths(r.text)
+    srcs = [urllib.parse.urljoin(base, m.group(1)) for m in re.finditer(r"""<script[^>]+src=["']([^"']+)["']""", r.text, re.I)]
+    for src in [u for u in srcs if (urllib.parse.urlsplit(u).hostname or "").lower() == host][:ROSTER_SCRIPTS]:
+        if found: break
+        sr = net.get(src)
+        if not sr.error and sr.status == 200 and sr.text: found |= paths(sr.text)
+    for path in sorted(found, key=lambda x: (len(x), x))[:3]:
+        api = urllib.parse.urljoin(base, path)
+        if (urllib.parse.urlsplit(api).hostname or "").lower() != host: continue
+        jr = net.get(api)
+        if jr.error or jr.status != 200: continue
+        try: data = json.loads(jr.body)
+        except ValueError: continue
+        pairs = roster_pairs(data)
+        if len(pairs) < 2: continue
+        pg = data.get("pagination") if isinstance(data, dict) else None
+        total = next((pg.get(k) for k in ("totalPages", "total_pages", "pages", "last_page") if isinstance(pg, dict) and isinstance(pg.get(k), int)), 1)
+        for n in range(2, min(total, 5) + 1):
+            nr = net.get(api + ("&" if "?" in api else "?") + f"page={n}")
+            if nr.error or nr.status != 200: break
+            try: pairs += roster_pairs(json.loads(nr.body))
+            except ValueError: break
+        return api, pairs
+    return "", []
+
 LAST = threading.local()   # LAST.route: how this thread's last fetch ended: saved (from the case), direct, browser, archive, blocked or refused. A hunt splits its page-read seconds by it
 
 

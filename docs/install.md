@@ -28,6 +28,13 @@ It runs as you from `~/hive` (`HIVE_DIR=/path` picks another folder) and needs g
 
 **Coming from a v0.x Hive?** The install finds it and asks, then removes the old program and brings your projects, notes and chats across. Logins and keys stay behind, so you sign in again. The old folder stays whole as your backup. If a run fails halfway, run the line again. `HIVE_ACCEPT=1` skips the question.
 
+**A second Hive on the same machine.** Put `HIVE_USER=name` in front of the install line to add another Hive beside the first, with its own Linux user, home, port and sign-in. The first one is left as it was.
+- Linux: `curl -fsSL https://hivelab.ca/install.sh | HIVE_USER=work sh`, then `sudo -iu work hive web` shows its address.
+- Windows: `$env:HIVE_USER = 'work'; irm https://hivelab.ca/install.ps1 | iex`. Its command is `hive-work` (a name that already starts with `hive-` is used as it is). The desktop icon stays with the first Hive. On a Mac, `HIVE_USER=work` goes in front of `sh`, the command is named the same way, and `Hive.app` stays with the first Hive.
+- If that command name already opens another Hive, the install stops and leaves it alone.
+- The main install gives each Hive the first free port from 8077 to 8176 that no other Hive has. It picks under a lock and keeps the list in `/var/lib/hive/ports`, which only root can write, so two installs at once get two ports and running the install again keeps the same one. Removing a Hive gives its port back.
+- The main install also writes `/usr/local/sbin/hive-admin`. As root, `hive-admin list` (add `--json` for programs) shows each Hive in that Linux system: its user, port, whether it is running, version and home folder. The JSON also has its update state.
+
 **macOS** has a test build that hasn't run on a real Mac yet. See the guide's [list of what isn't tested](guide.md#not-tested-yet).
 
 **To read the script first,** download it, read it, then run it:

@@ -166,6 +166,18 @@ hive continue list [--json] | stats [--baseline] [--since D] [--until D]: the co
 
 hive judge stats [--since D] [--lift] [--json] | log [-n N] | replay [--hours H] [--models a,b] | case SNAPSHOT: the stop judge, a trial on half the goal threads each day: when a run stops with nothing else carrying its work on, a separate model reads the goal, its open rungs and the run's posts and says done, blocked, wait or continue; continue and wait wake the agent once. Disagree with a wake by posting a line `Judge missed: why` and stopping. On while ~/.hive/judge-trial.json is in its window (core/judge.py)
 
+## hive export
+
+hive export NAME [--to DIR]: one project (~/projects/NAME) as a zip with its git history, to ~/exports; prints the zip's full path
+
+## hive import
+
+hive import ZIP [--as NAME]: bring a project export back under ~/projects, git history included, never over a project already there
+
+## hive shell
+
+hive shell [NAME]: a terminal in this Hive's home as its user; with NAME, the Hive of that user on this machine (through sudo -iu NAME). On a Mac or Windows the Hive's command does the same from your own terminal
+
 ## hive skill
 
 hive skill list | file NAME <<'X' (SKILL.md with description: and trigger: regex) | rm NAME | match CMD: learned skills, methods a run filed for a step that keeps failing across runs; a later run whose command matches the trigger is pointed at the skill (core/skills.py, projects/hive-meta/moving.md section 8)
