@@ -5,6 +5,6 @@
 set -e
 t=$(git -C "$HOME/core" ls-remote --tags --refs origin 'v2.*' | sed 's#.*refs/tags/##' | grep -Ex 'v2\.[0-9]+\.[0-9]+' | sort -V | tail -n 1)
 [ -n "$t" ]
-mkdir -p "$HOME/.h2"
-python3 -c "import json,sys,pathlib as P;p=P.Path.home()/'.h2/update.json';d=json.loads(p.read_text()) if p.exists() else {};d['tag']=sys.argv[1];p.write_text(json.dumps(d))" "$t"
+mkdir -p "$HOME/.hive"  # where update.py keeps update.json in a Hive (STATE)
+python3 -c "import json,sys,pathlib as P;p=P.Path.home()/'.hive/update.json';d=json.loads(p.read_text()) if p.exists() else {};d['tag']=sys.argv[1];p.write_text(json.dumps(d))" "$t"
 echo "$t"
