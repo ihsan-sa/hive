@@ -4,9 +4,9 @@
 // To add a file: put its suffix after "lang-<code>" in that language's row (projects/everyday/LANGUAGES.md).
 // A row is in pattern order (earlier patterns are tried first); on a shared word the file earlier in the row wins.
 // es-5: screen words; es-6: a conversation's head; es-7: the wall display; es-8 to -13: the rest, view by view; es-15: helpers; -kbwipe, es-16:
-// Wipe the knowledge base, documents; es-17: Buying, Orders, the shop sign-in; -mcp: Add a connector by address; -qr: Open on your phone; es-19: ink (pen toolbar, writing sheets) and where ink shows; es-20: joined ink words, Link's approve line; -copy: the sign-in copy buttons' titles. fr, de, it, pt, ja, ko, hi, id follow the same way.
+// Wipe the knowledge base, documents; es-17: Buying, Orders, the shop sign-in; -mcp: Add a connector by address; -qr: Open on your phone; es-19: ink (pen toolbar, writing sheets) and where ink shows; es-20: joined ink words, Link's approve line; -outbox: the Outbox page and the outward email card; -copy: the sign-in copy buttons' titles. fr, de, it, pt, ja, ko, hi, id follow the same way.
 const FILES = {
-  es: ["", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9", "-10", "-11", "-12", "-13", "-14", "-15", "-kbwipe", "-16", "-17", "-mcp", "-qr", "-18", "-19", "-20", "-21", "-copy"],
+  es: ["", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9", "-10", "-11", "-12", "-13", "-14", "-15", "-kbwipe", "-16", "-17", "-mcp", "-qr", "-18", "-19", "-20", "-21", "-outbox", "-copy"],
   fr: ["", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9", "-10", "-11", "-12", "-13", "-14", "-mcp", "-qr", "-15", "-16", "-copy"],
   de: ["", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9", "-10", "-11", "-12", "-mcp", "-qr", "-copy"],
   it: ["", "-2", "-3", "-4", "-5", "-6", "-7", "-8", "-9", "-10", "-11", "-12", "-mcp", "-qr", "-copy"],

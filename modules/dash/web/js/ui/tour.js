@@ -15,7 +15,7 @@ const SEEN = "hive.tour.seen", SEEN_SIMPLE = "hive.tour.seen.simple";
 
 const here = () => parse().id;
 const q = s => [...document.querySelectorAll(s)].find(e => e.getClientRects().length) || null;   // the first one on screen: on a phone the top tabs are hidden and the bottom bar's are the ones to ring
-const lastMsg = () => { const a = [...document.querySelectorAll(".cm-msgs .msg")].filter(e => e.getClientRects().length); return a.reverse().find(e => e.dataset.who !== "me") || a[0] || q(".cm-msgs"); };   // the newest agent message, not the whole column, so the window has room beside it
+const lastMsg = () => { const a = [...document.querySelectorAll("#main .cm-msgs .msg")].filter(e => e.getClientRects().length); return a.reverse().find(e => e.dataset.who !== "me") || a[0] || q("#main .cm-msgs"); };   // the newest agent message, not the whole column, so the window has room beside it
 const heading = text => [...document.querySelectorAll("#main .sec-t")].find(e => e.textContent.trim() === tr(text)) || null;
 const HOME = '.cp[data-place="home"] .cp-box';   // on a phone it's docked at the bottom of home (css/phone.css)
 // R7 targets (HANDOFF "The tour"): the final selector first, today's element after it until the step that builds the new one lands.

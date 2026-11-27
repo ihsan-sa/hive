@@ -58,18 +58,19 @@ def own_job_hint(text, to, by, minutes):
 # R67's hint reads the reminder's words, so an own-job wait set with --if got none: on 2026-11-26 nine runs set themselves an --if
 # reminder on their own CI run, finished file or unit (a884d x6, a11e9, a0f2b, ac395), each was graded part-done, and in 8 of 9
 # the run the reminder woke delivered. The check itself says it is the agent's own job; it can be the loop of a background waiter.
-IF_JOB = re.compile(r"\bgh (run|api)\b.{0,80}\b(runs?|jobs?)\b|actions/(runs|jobs)|\btest -[ef]\b|\[ -[ef] |\bls\b.{0,80}\bwc -l"
+IF_JOB = re.compile(r"\bgh (run|api)\b.{0,80}\b(runs?|jobs?)\b|\bgh run (view|watch) \d+|actions/(runs|jobs)|\btest -[efs]\b|\[ -[efs] |\bls\b.{0,80}\bwc -l"
                     r"|\bgrep -\w*q\w*\b.{0,40}\b(finished|done|ALL DONE|ok)\b|\bsystemctl\b.{0,40}\b(is-active|ActiveState)\b"
                     r"|\bcurl\b.{0,80}\|\s*grep -\w*q|\bps -p\b|\bgrep -\w*q\w* ['\"]?rc=", re.I)
 IF_NOT_JOB = re.compile(r"\b(hive|h4) (read|search)\b|board\.jsonl|\bprinter\b|\blease\b|\bserialtab\b|\bgh (pr|release)\b|\bping\b", re.I)  # others' posts, a print, a bench
 
 
-def if_job_hint(cond, to, by, wait=None):
+# R90: it keyed on --wait, which is the give-up time, not the job's length: from 16:15 to 01:20 on 2026-11-26 a12a5 set 12 such
+# reminders to first check in 10-90 min with --wait 6h-48h, and only the one with --wait 3h got the hint (that run then waited in-run).
+# The minutes to the first check say how long the agent expects the job to take; over 3 h a reminder is the right tool.
+def if_job_hint(cond, to, by, mins=None):
     """The nudge printed when an agent sets itself an --if reminder whose check is the state of its own job (CI run, finished file, unit)."""
     if not cond or by == "person" or to != by or not IF_JOB.search(cond) or IF_NOT_JOB.search(cond): return ""
-    try:
-        if wait and parse_wait(wait) > OWN_JOB_MIN / 60: return ""
-    except SystemExit: return ""
+    if mins is not None and mins > OWN_JOB_MIN: return ""
     return ("remind: this --if reminder waits on your own job (its check reads a CI run, a finished file or a unit). A run that ends on "
             "it is graded part-done and wakes again for the reading (9 such runs on 2026-11-26). Instead, wait in this run: a background "
             "shell with your check as its loop, e.g. `timeout 3600 sh -c 'until YOUR_CHECK; do sleep 30; done'` with run_in_background, "
@@ -290,7 +291,7 @@ def main(argv):
         it = add(a[0], when, " ".join(rest), to, thread, by=by, cond=cond, wait=wait); print(it["id"], "next", it["due"], "in", it["thread"], (f"once `{cond}` passes" + (f", or at {it['until']} anyway " if it.get("until") else " ")) if cond else "", "(stop it: hive remind rm " + it["id"] + ")")
         try: mins = (dt.datetime.fromisoformat(it["due"]) - dt.datetime.now(dt.datetime.fromisoformat(it["due"]).tzinfo)).total_seconds() / 60 if a[0] == "at" else None
         except (ValueError, TypeError): mins = None
-        if (h := own_job_hint(it["text"], it["to"], by.lower(), mins) or if_job_hint(cond, it["to"], by.lower(), wait)): print(h, file=sys.stderr)
+        if (h := own_job_hint(it["text"], it["to"], by.lower(), mins) or if_job_hint(cond, it["to"], by.lower(), mins)): print(h, file=sys.stderr)
         elif not os.environ.get("HIVE_REMIND_NO_IF") and (h := if_hint(it["text"], cond, by)): print(h, file=sys.stderr)  # the sandbox can't set --if
     elif a[:1] == ["list"]:
         here = woke_thread() if by != "person" else None

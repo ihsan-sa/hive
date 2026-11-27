@@ -134,7 +134,7 @@ function ingestLog(items) {
     } else if (e.event === "woken" || e.event === "reaped") { const s = S.open[e.name + e.session]; if (s) s.byStarter = true; }
     else if (e.event === "killed") S.killed[e.name] = t;
     // what the starter did about a Stop and send, by its post (core/starter.py): the message's receipt says no more than this
-    else if (e.event === "interrupt" && e.post) S.cut[e.post] = { did: e.did, t };
+    else if (e.event === "interrupt" && e.post) S.cut[e.post] = { did: e.did, t, name: e.name };
     else if (e.event === "heir") { const s = S.lastSess[e.name]; if (s) { s.replacedBy = e.heir; S.limitedNow.delete(s.session); S.diedNow.delete(s.session); } } // a new agent took over: the old name isn't "stopped" any more
     else if (e.event === "died") {
       // the starter queued the run that just ended to resume by itself (lost connection, restart, ...): not a failure the person must act on,

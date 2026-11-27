@@ -12,6 +12,7 @@ import agents from "./agents.js";
 import comms from "./comms.js";
 import focus from "./focus.js";
 import mail from "./mail.js";
+import outbox from "./outbox.js";
 import inbox from "./inbox.js";
 import yours from "./yours.js";
 import flow from "./flow.js";
@@ -51,6 +52,7 @@ export default [
   flow,
   inbox,
   mail,
+  outbox,
   made,
   docs,
   secrets,

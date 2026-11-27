@@ -146,6 +146,34 @@ def ddg_twice(q, n):
             if k not in seen: seen.add(k); out.append(a[i])
     return out[:2 * n]
 
+
+def ddg_deep(q, n):
+    """ddg twice (see ddg_twice) and then lite's next result pages, up to n hits, as one ddg list. Discovery asks it: the same two discovery queries named 21 to 31 organisations a run over fnwords150 to fnwords153, from a union of 41, because each engine gave its first 10 to 19 hits and those changed from run to run; bing's feed and lite's plain GET give no second page, but lite's next-page form does, with the page's vqd token (15 more hits a page, 2026-11-26). A later page that fails leaves the first page's answer standing."""
+    out = list(ddg_twice(q, 10))
+    seen = set()
+    for h in out:
+        try: seen.add(canonical(h.url))
+        except ValueError: pass
+    root = base("ddg", "https://lite.duckduckgo.com") + "/lite/"
+    try: r = net.get(root + f"?q={q_(q)}")
+    except Exception: return out[:n]
+    html, s = (r.text if r.status == 200 and not r.error else ""), 0
+    for _ in range(3):
+        vqd = re.search(r"""name=["']vqd["']\s+value=["']([^"']+)["']""", html)
+        nxt = [int(x) for x in re.findall(r"""name=["']s["']\s+value=["'](\d+)["']""", html) if int(x) > s]
+        if len(out) >= n or not vqd or not nxt: break
+        s = min(nxt)
+        try: r = net.get(root + "?" + urllib.parse.urlencode({"q": q, "s": s, "dc": s + 1, "v": "l", "o": "json", "api": "d.js", "vqd": vqd.group(1), "kl": "wt-wt"}))
+        except Exception: break
+        html = r.text if r.status == 200 and not r.error else ""
+        got = _parse_ddg(html, 50)
+        if not got: break
+        for h in got:
+            try: k = canonical(h.url)
+            except ValueError: continue
+            if k not in seen: seen.add(k); out.append(h)
+    return out[:n]
+
 def _bing_target(u):
     """Bing wraps results in a click link holding the real address in u=a1<base64>."""
     u = htmllib.unescape(u)
@@ -261,7 +289,7 @@ def exa(q, n):
     return [Hit(url=x["url"], title=x.get("title") or "", snippet=(x.get("text") or "")[:400], date=parse_date(x.get("publishedDate") or ""), source="exa") for x in d.get("results", [])]
 
 
-SOURCES = {"ddg": ddg, "ddg_twice": ddg_twice, "bing_web": bing_web, "bing": bing, "bing_news": bing_news, "google_news": google_news, "wikipedia": wikipedia, "hn": hn, "arxiv": arxiv, "openalex": openalex, "crossref": crossref, "github": github, "x": x_posts, "linkedin": linkedin, "reddit": reddit, "brave": brave, "tavily": tavily, "exa": exa}
+SOURCES = {"ddg": ddg, "ddg_twice": ddg_twice, "ddg_deep": ddg_deep, "bing_web": bing_web, "bing": bing, "bing_news": bing_news, "google_news": google_news, "wikipedia": wikipedia, "hn": hn, "arxiv": arxiv, "openalex": openalex, "crossref": crossref, "github": github, "x": x_posts, "linkedin": linkedin, "reddit": reddit, "brave": brave, "tavily": tavily, "exa": exa}
 KEYED = {"brave", "tavily", "exa"}
 GROUPS = {"web": ["ddg", "bing_web", "bing"], "news": ["bing_news", "google_news"], "papers": ["openalex", "arxiv", "crossref"], "code": ["github", "hn"], "social": ["x", "reddit", "hn"], "people": ["linkedin", "ddg", "bing_web"], "all": ["ddg", "bing_web", "bing", "bing_news", "google_news", "wikipedia", "hn", "openalex", "arxiv", "github"]}
 

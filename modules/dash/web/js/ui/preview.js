@@ -441,6 +441,8 @@ addEventListener("keydown", e => {
   if (e.target.closest && e.target.closest(".pv-ed")) return;   // in the editor: Escape is the editor's (it never closes the panel over your text)
   if (P.root.querySelector("[data-boxing]")) return;   // a box being drawn: markup.js's Escape stops drawing first
   if (document.body.hasAttribute("data-sc-box") || document.querySelector(".sc-menu")) return;   // a side chat's box being drawn, or its menu open (sidechat.js): those close first
+  if (e.target.closest?.("aside.pv .cp-t, aside.pv .cp input")) return;   // typing in a side chat's box: Escape drops what's open there first, then closes (composer.js onEsc)
+  if (P.root.querySelector(".cp .pop > .menu, .cp-ac")) return;   // the chat box's menu or @ list is open: it closes first (composer.js)
   if (P.root.querySelector(".dv-card,.dv[data-boxing],.dv[data-side] .dv-count[aria-expanded=true]")) return;   // a note being written or a box being drawn: the viewer's Escape cancels that first
   const mc = P.root.querySelector(".pv-mk-card:not([hidden])"), mg = P.root.querySelector(".pv-mk-go:not([hidden])");
   if (mc || mg) { e.stopPropagation(); if (mc) { if (mc._shut) mc._shut(); else mc.hidden = true; } else { mg.hidden = true; getSelection().removeAllRanges(); } return; }   // a file note being written, or the Note button up: Escape drops that first

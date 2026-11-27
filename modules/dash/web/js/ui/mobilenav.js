@@ -14,7 +14,7 @@ import { fullscreen } from "./shell.js";
 
 const ST = { open: false, update: null };
 const lab = v => (typeof v.label === "function" ? v.label() : v.label);
-const GLYPH = { start: "plus", comms: "chat", now: "agents", usage: "usage", settings: "settings", knowledge: "board", yours: "star", inbox: "box", made: "file", mail: "link",
+const GLYPH = { start: "plus", comms: "chat", now: "agents", usage: "usage", settings: "settings", knowledge: "board", yours: "star", inbox: "box", made: "file", mail: "link", outbox: "outbox",
   agents: "agents", timeline: "clock", mesh: "orbit", ledger: "archive", progress: "lineage", flow: "bands", jobs: "dial", rootwarden: "shield", design: "edit" };
 const SHORT = { comms: "Chat", now: "Agents" };
 const BAR = ["comms", "now", "usage", "knowledge"];   // the design's four (Chat, Agents, Usage, Knowledge); More is the fifth

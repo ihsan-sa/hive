@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Hive starter: watch ~/board.jsonl, start a session per @mention, pace on weekly usage, log, back up ~ to git."""
-import concurrent.futures, datetime as dt, json, os, re, secrets, shutil, signal, subprocess, sys, tempfile, time, urllib.request, uuid, zlib
+import concurrent.futures, datetime as dt, json, os, re, secrets, shutil, signal, subprocess, sys, tempfile, threading, time, urllib.request, uuid, zlib
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests load this file by path, under -I
 import spend
@@ -682,14 +682,16 @@ def only_sleeping(pid):
     try: return bool(leaves) and all(Path(f"/proc/{q}/comm").read_text().strip() == "sleep" for q in leaves)
     except OSError: return False
 
-def interrupt_step(name, post_id=None, only=None, min_s=None):
+def interrupt_step(name, post_id=None, only=None, min_s=None, then=None):
     """The person's Interrupt (hive post --interrupt): end the command a running Claude Code agent is waiting on, the way Esc
     does, so the hook hands the post over now (the call ends as a failure, and PostToolUseFailure runs inbox.py) instead of
     after it. Only when it can be done cleanly: one open step, and it is a Bash call in the foreground, with exactly one shell
     of that shape under the claude process that is no background shell (each of those is named in the stream by its task
     id). That shell and everything under it get SIGTERM, nothing harder, so a command can tidy up; it counts as stopped only once
     all of them have exited (the page's receipt quotes this), else it was only asked to. Anything else (a file
-    edit, a web fetch, a subagent, several shells) is left to end on its own. Returns what it did, in a few words."""
+    edit, a web fetch, a subagent, several shells) is left to end on its own. Returns what it did, in a few words. With `then`,
+    a signalled command is waited for on a thread of its own, so the main loop is not held: then(what it did) is called from
+    that thread and this returns None; every other answer is still returned, and `then` is not called."""
     try: rec = json.loads((RUN / f"{name}.json").read_text())
     except (OSError, ValueError): return "no run record"
     if rec.get("harness", "claude-code") != "claude-code": return "not a Claude Code run"
@@ -726,18 +728,48 @@ def interrupt_step(name, post_id=None, only=None, min_s=None):
     q, age = shells[0]
     if age < (INTERRUPT_MIN_S if min_s is None else min_s): return "the command just started"
     if only is not None and not only_sleeping(q): return "the loop is not sleeping now"
+    t0 = uptime_ticks()
     tree = tree_of(q)
-    for k in reversed(tree):
-        try: os.kill(k, signal.SIGTERM)
-        except OSError: pass
+    for k in reversed(tree): sigterm(k)
+    t1 = uptime_ticks()
+    if then is None: return await_end(q, tree, t0, t1)
+    def wait():
+        try: then(await_end(q, tree, t0, t1))
+        except Exception as e: then(f"{type(e).__name__}: {e}"[:200])
+    threading.Thread(target=wait, name=f"interrupt-{name}").start()
+    return None
+
+def uptime_ticks():
+    return int(float(Path("/proc/uptime").read_text().split()[0]) * os.sysconf("SC_CLK_TCK"))
+
+def sigterm(pid):
+    try: os.kill(pid, signal.SIGTERM)
+    except OSError: pass
+
+def started_during(shell, tree, t0, t1):
+    """Processes of the signalled command that began while it was being signalled (ticks t0 to t1), so the walk missed them:
+    a child of one in `tree`, or one in the shell's session whose parent has already gone. What starts after that, such as a
+    command's own tidying up, is left alone."""
+    got = []
+    for d in Path("/proc").iterdir():
+        try: pid = int(d.name); f = (d / "stat").read_text().rsplit(")", 1)[1].split()
+        except (ValueError, OSError, IndexError): continue
+        if pid not in tree and t0 - 1 <= int(f[19]) <= t1 + 1 and (int(f[1]) in tree or int(f[3]) == shell): got.append(pid)
+    return got
+
+def await_end(shell, tree, t0, t1):
+    """Up to INTERRUPT_END_S for everything signalled to exit, signalling what started as the signal went out."""
     def runs(k):
         try: return Path(f"/proc/{k}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
         except (OSError, IndexError): return False
-    end = time.monotonic() + INTERRUPT_END_S
-    while any(runs(k) for k in tree):
+    tree, end = list(tree), time.monotonic() + INTERRUPT_END_S
+    while True:
+        late = started_during(shell, set(tree), t0, t1)
+        for k in late: sigterm(k)
+        tree += late
+        if not late and not any(runs(k) for k in tree): return "stopped the running command"
         if time.monotonic() >= end: return "asked the command to stop"
         time.sleep(0.1)
-    return "stopped the running command"
 
 def stop_wait_loops(st):
     """Each tick: a running agent with a post from the person not yet handed over, sitting in a foreground wait loop
@@ -3380,9 +3412,10 @@ def main():
                     if p.get("interrupt") and p.get("from") == "person" and not fresh:
                         q["interrupt"] = True   # a run parked on a background shell wakes for it as for the phone (waiting_posts)
                         if runs_now(n):
-                            try: did = interrupt_step(n, p.get("id"))
+                            said = lambda did, n=n, post=p.get("id"): log(event="interrupt", name=n, post=post, did=did)
+                            try: did = interrupt_step(n, p.get("id"), then=said)   # E203o: its wait for the command to end runs beside this loop
                             except Exception as e: did = f"{type(e).__name__}: {e}"[:200]
-                            log(event="interrupt", name=n, post=p.get("id"), did=did)
+                            if did is not None: said(did)
                     if (p.get("edit_of") or p.get("retry_of")) and p.get("from") == "person" and not fresh and overtakes(n, p):
                         q["supersede"] = True   # its reply in this chat is overtaken: waiting_posts stops the run at once and resumes it with this post (everyday E12d)
                     st["pending"].setdefault(n, []).append(q)

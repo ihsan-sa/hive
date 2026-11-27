@@ -13,7 +13,7 @@ export function openRail() {
     h("button", { type: "button", class: "rc-t", onclick: refresh }, "Refresh contents"));
   function refresh() {
     entries = [];
-    for (const post of document.querySelectorAll(".cm-msgs article.msg")) {
+    for (const post of document.querySelectorAll("#main .cm-msgs article.msg")) {
       const author = post.getAttribute("aria-label") || [...(post.querySelector(".msg-h")?.children || [])].map(n => n.textContent.trim()).filter(Boolean).join(" · ") || "Message";
       const add = (type, el, label) => entries.push({ type, el, label: label.trim().slice(0, 180), author });
       for (const el of post.querySelectorAll(".md .md-h1,.md .md-h2,.md .md-h3,.md .md-h4,.md .md-h5,.md .md-h6")) add("Outline", el, el.textContent);

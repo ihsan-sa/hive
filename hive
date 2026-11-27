@@ -949,6 +949,11 @@ def manifest(d):
     try: return json.loads((d / "module.json").read_text())
     except (OSError, ValueError): return {}
 
+def module_requires(m):
+    """The module names a module.json lists under requires: a list of names only; anything else counts as none."""
+    r = m.get("requires") if isinstance(m, dict) else None
+    return [x for x in r if isinstance(x, str) and MODULE_NAME.fullmatch(x)] if isinstance(r, list) else []
+
 def module_blurb(text, cap=160):
     """A module's description for a list: the first sentence, and if that's long, whole words up to a clause. Never cut mid-word."""
     text = " ".join(str(text or "").split())
@@ -1086,12 +1091,15 @@ def cmd_module(a):
             if not (MODULES / n).is_dir(): sys.exit(f"{n} isn't installed")
             if (MODULES / n / ".git").exists() and subprocess.run(["git", "-C", str(MODULES / n), "status", "--porcelain"], capture_output=True, text=True).stdout.strip():
                 sys.exit(f"{MODULES / n} has uncommitted changes; commit or discard them first")
+            users = [o.name for o in module_dirs(cat) if o.name not in names and n in module_requires(manifest(o))]
+            if users: sys.exit(f"{n} is needed by {', '.join(users)} (its module.json requires it); remove that first, or both together")
         for n in names:
             d = MODULES / n; module_stop_units(d)
             for link, _ in module_links(d): link.unlink(missing_ok=True)
             shutil.rmtree(d); (STATE / "module-updates" / f"{n}.json").unlink(missing_ok=True); print(f"removed {n}")
         return
-    if not d.exists():
+    fresh = not d.exists()
+    if fresh:
         MODULES.mkdir(exist_ok=True)
         c = cat.get(a.name, {})
         if c.get("bundled"): shutil.copytree(CORE / "modules" / a.name, d)
@@ -1109,6 +1117,15 @@ def cmd_module(a):
             if pinned:
                 shutil.rmtree(d, ignore_errors=True); sys.exit(f"couldn't check {a.name}'s releases, so it wasn't added; try again in a few minutes")
     if not manifest(d): print(f"note: {d} has no module.json, so nothing was linked")
+    for r in module_requires(manifest(d)):  # a module's own libraries (box under support, docdesk, hive-mail) come first, so it is never linked without them
+        if module_dir(r, cat.get(r, {})).is_dir() or r in getattr(a, "adding", ()): continue
+        try:
+            if r not in cat and not fresh: print(f"note: {name} requires {r}, which isn't installed or in the catalog; add it before using {name}"); continue  # an update's relink never fails on it
+            if r not in cat: sys.exit(f"{name} requires {r}, which isn't installed or in the catalog; add {r} first, so {name} wasn't added")
+            print(f"{name} requires {r}: adding it"); cmd_module(argparse.Namespace(do="add", name=[r], json=False, adding={*getattr(a, "adding", ()), name}))
+        except SystemExit:
+            if fresh: shutil.rmtree(d, ignore_errors=True)
+            raise
     try: off = set(json.loads((STATE / "skills-off.json").read_text()))  # skills the person turned off in Settings stay off through an add or an update
     except (OSError, ValueError, TypeError): off = set()
     for link, target in module_links(d):
