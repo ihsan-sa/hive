@@ -14,6 +14,9 @@ Put `HIVE_USER=name` in front of the Windows or Mac install line to add a second
 
 ## Smaller fixes, 2026-11-27
 
+- A new command, `hive shell NAME`, opens a terminal in that Hive's home as its user, from a Mac or Windows terminal or inside a Hive; with no name it opens this Hive's.
+- Running the install line a second time on Windows or a Mac now says the Hive was already here.
+- Bringing in a project refuses zips that hide a second git repository, and leaves no half-unpacked folder behind.
 - Stop and send keeps the stopped step in its place in long chats, shows it as soon as the step stops, and no longer holds up other agents while it waits for the step to end.
 - A failed record of a stopped step no longer runs twice or holds up a restart.
 

@@ -237,7 +237,8 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
   # One command name can't serve two Hives (users work and hive-work would both make hive-work).
   if ((Test-Path $cmdFile) -and -not (Select-String -Quiet -SimpleMatch -Pattern " -u $hu " -Path $cmdFile)) { Fail "$cmdFile already opens another Hive, so I left it. Pick another HIVE_USER."; return }
   # hive ARGS runs in the Hive as its user; hive shell [NAME] is a terminal in a Hive's home as its user (this one's when no name is given).
-  # The first " -u NAME " in the file is this command's Hive: remove.ps1 reads it, so the shell line quotes its user.
+  # The first " -u NAME " in the file is this command's Hive: remove.ps1 reads it, and the shell line's -u %u% never matches.
+  # No quotes round %u%: wsl.exe keeps them as part of the name (getpwnam("hive-work") failed, User not found).
   $cmdText = (@(
     '@echo off', 'setlocal',
     'if /i "%~1"=="shell" goto shell',
@@ -247,7 +248,8 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
     'if not "%~3"=="" goto usage',
     'if "%~2"=="" (set "u={1}") else (set "u=%~2")',
     'if /i "%u%"=="root" goto usage',
-    'wsl.exe -d {0} -u "%u%" --cd ~',
+    'if not "%u%"=="%u: =%" goto usage',
+    'wsl.exe -d {0} -u %u% --cd ~',
     'exit /b %errorlevel%',
     ':usage',
     'echo usage: %~n0 shell [NAME], with NAME a Hive''s user name, not root 1>&2',
