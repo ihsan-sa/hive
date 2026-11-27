@@ -265,6 +265,8 @@ function validHive(h) {
     if (!a.ok) return null;
     out.url = a.url;
     if (!name) out.name = new URL(a.url).hostname;
+    // Its sign-in gate (step 6), kept only in the one form the app reads; any other gate field is dropped.
+    if (h.gate !== undefined) { const g = require('./gate').validGate(h.gate); if (g) out.gate = g; else delete out.gate; }
   } else if (h.kind === 'local') {
     if (typeof h.user !== 'string' || !/^[a-z_][a-z0-9_-]{0,31}$/.test(h.user)) return null;
     if (!name) out.name = h.user === 'hive' ? 'Hive' : h.user;

@@ -20,6 +20,9 @@ if (location.protocol === 'file:') contextBridge.exposeInMainWorld('hive', {
   connectScreen: () => ipcRenderer.send('connect-screen'),
   back: () => ipcRenderer.send('back'),
   retryHive: () => ipcRenderer.send('retry-hive'),
+  // A Hive behind a sign-in gate (step 6): sign in in the browser, or stop waiting for it.
+  signIn: () => ipcRenderer.send('sign-in'),
+  cancelSignIn: () => ipcRenderer.send('cancel-sign-in'),
   // The rail (step 4): show a Hive in this window, its tile's menu, and a new window.
   railPick: id => ipcRenderer.send('rail-pick', String(id)),
   tileMenu: id => ipcRenderer.send('tile-menu', String(id)),

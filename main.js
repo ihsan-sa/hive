@@ -1,11 +1,12 @@
 // The Hive as a desktop app. A thin shell: it finds the Hive on this machine (or installs it with the site's own installer),
 // asks it for its address, and shows the web app in a window. All the product is the web app, so it has one version on every system.
 'use strict';
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, session, Menu, screen, clipboard, dialog } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, session, net, Menu, screen, clipboard, dialog } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const lib = require('./lib');
+const gate = require('./gate');
 
 let hiveUrl = null, child = null, kept = false, fails = 0, newer = null, shown = null;   // shown: the update notification, kept so its click still arrives
 // The Hives the app can show (DESIGN-many-hives.md). The local one is found as before; its rules read its address as it is
@@ -123,6 +124,7 @@ function display(W) {
   bw.setTitle('Hive');
   if (W.aside) return;
   if (h === local) render(W, localState[0], { note: localState[1] });
+  else if (h.signin) render(W, 'signin', { name: h.name, host: hostOf(h.saved.url), waiting: !!h.gateRun, again: !h.fresh, why: h.why || '' });
   else render(W, 'cantreach', { name: h.name, host: hostOf(h.saved.url), why: h.why || '' });
   bw.webContents.focus();
 }
@@ -136,13 +138,13 @@ function layout(W) {
 // The rail: one tile per Hive (the one this window shows marked), and + for Connect. Names are sent as text, drawn as text.
 const COLORS = ['#2f62c9', '#0f7a65', '#8a3fb8', '#b4461b', '#0e6f8a', '#6b6f1a'];
 function where(h) {
-  return h === local ? (hiveUrl ? 'On this computer' : 'On this computer, not running') : hostOf(h.saved.url) + (h.down ? ' · not answering' : '');
+  return h === local ? (hiveUrl ? 'On this computer' : 'On this computer, not running') : hostOf(h.saved.url) + (h.signin ? ' · sign in needed' : h.down ? ' · not answering' : '');
 }
 function rail(W) {
   const mac = process.platform === 'darwin';
   sendTo(W, 'rail', { show: many(), list: hives().map((h, i) => ({ id: h.id, name: h.name, ini: ([...String(h.name).trim()][0] || '?').toUpperCase(), local: h === local,
     where: where(h), current: h === W.chosen, key: i < 9 ? (mac ? '⌘' : 'Ctrl+') + (i + 1) : '',
-    color: h === local ? '#f5b800' : COLORS[(i - 1) % COLORS.length], ink: h === local ? '#1a1a1a' : '#ffffff' })) });
+    color: h === local ? '#f5b800' : COLORS[remotes.indexOf(h) % COLORS.length], ink: h === local ? '#1a1a1a' : '#ffffff' })) });
 }
 const hostOf = u => { try { return new URL(u).host; } catch { return ''; } };
 function closeView(W, id) {
@@ -356,8 +358,15 @@ function viewFor(W, h) {
   return v;
 }
 function openRemote(W, h, at) {
+  if (h.signin) return;   // its window shows the sign-in screen until a sign-in comes back
   h.down = false; h.why = '';
-  viewFor(W, h).webContents.loadURL(at || h.saved.url).catch(() => { });   // a failure arrives as did-fail-load
+  const v = viewFor(W, h);
+  if (!h.saved.gate) return void v.webContents.loadURL(at || h.saved.url).catch(() => { });   // a failure arrives as did-fail-load
+  // Behind a gate: with no sign-in left in its session the window asks for one, rather than load the gate's page.
+  gateCookie(h).then(ok => {
+    if (!alive(W) || W.views.get(h.id) !== v) return;
+    if (ok) v.webContents.loadURL(at || h.saved.url).catch(() => { }); else needSignIn(h);
+  });
 }
 function remoteFailed(W, h, why) {
   h.down = true; h.why = why;
@@ -410,11 +419,11 @@ function guard(wc, h, W) {
     const u = e.url || url;
     if (h.same(u)) return;
     e.preventDefault();
-    // A remote Hive behind a sign-in gate sends its page to the gate. That isn't the Hive, so the view doesn't follow
-    // (the gate sign-in is step 6): the window says so instead of showing a blank page.
+    // A remote Hive behind a sign-in gate sends its page to the gate. That isn't the Hive, so the view doesn't follow:
+    // the window asks for a sign-in in the browser (a Cloudflare Access gate, step 6), or says where it was sent.
     if (h.kind === 'remote' && (e.isMainFrame ?? isMain) && W && W.views.get(h.id)?.webContents === wc) {
       const at = hostOf(u);
-      if (h.pending) h.blocked = at; else remoteFailed(W, h, `It sent the app to ${at} to sign in, which the app can't do yet.`);
+      if (h.pending) h.blocked = at; else gateOrFail(W, h, at);
       return;
     }
     external(u);
@@ -530,11 +539,22 @@ async function connectNow(W, t) {
   const have = remotes.find(h => lib.sameHive(a.url, h.saved.url));
   if (have) { choose(W, have); return ''; }
   const full = new URL(t); full.search = '';   // the address as typed, #key and all: it is loaded once, never stored
+  const s = { id: lib.newId([...remotes.map(h => h.id), ...store.hives.map(x => x.id), ...removedIds()]), kind: 'remote', url: a.url, name: new URL(a.url).hostname, order: remotes.length + 1 };
+  const h = remoteFrom(s);
+  // A Hive behind a sign-in gate (step 6) is kept at once and signed in to in the browser; its window waits for that.
+  let g = null;
+  try { g = await gate.probe(sessionFetch(h), a.url); }
+  catch (e) { forget(h); store.extra.removed = [...removedIds(), h.id]; saveHives(); log('connect refused ' + hostOf(a.url) + ': ' + e.message); return e.message; }
+  if (g) {
+    if (!alive(W)) return '';
+    s.gate = g; h.signin = true; h.fresh = true;
+    keep(W, h, ' (behind a sign-in gate)');
+    signIn(h);
+    return '';
+  }
   // Over plain http (this computer only) the server must first show it holds the key; over https the certificate is the proof.
   if (full.protocol === 'http:' && !await proves(full.href)) return "What answers at that address didn't show it is the Hive with that key, so the app sent it nothing.";
   if (!alive(W)) return '';
-  const s = { id: lib.newId([...remotes.map(h => h.id), ...store.hives.map(x => x.id), ...removedIds()]), kind: 'remote', url: a.url, name: new URL(a.url).hostname, order: remotes.length + 1 };
-  const h = remoteFrom(s);
   h.pending = true;
   const v = viewFor(W, h);
   let why = '', timer;
@@ -542,7 +562,7 @@ async function connectNow(W, t) {
     await Promise.race([v.webContents.loadURL(full.href), new Promise((_r, no) => { timer = setTimeout(() => no(new Error('ERR_TIMED_OUT')), 30000); })]);
   } catch (e) { why = failWords(0, e.code || e.message); }
   clearTimeout(timer);
-  if (h.blocked) why = `It sent the app to ${h.blocked} to sign in, which the app can't do yet.`;
+  if (h.blocked) why = sentOn(h.blocked);
   if (!why && !alive(W)) why = 'The window closed.';
   if (why) {
     if (alive(W)) closeView(W, h.id);
@@ -552,18 +572,127 @@ async function connectNow(W, t) {
     return why;
   }
   h.pending = false;
+  keep(W, h, '');
+  return '';
+}
+// A Hive just connected to joins the list, and window W shows it.
+function keep(W, h, note) {
   remotes.push(h);
   // Connected with no Hive on this computer (the welcome's "somewhere else"): nothing is installed, and the windows that
   // were offering to set one up go to this Hive. Setting one up later is on the Hives screen.
   const none = !hasLocal() || (!hiveUrl && !child && !lib.openCommand(process.platform, process.env));
   if (none) store.extra.noLocal = true;
   saveHives();
-  log('connected ' + hostOf(a.url) + (none ? ' (no Hive on this computer)' : ''));
+  log('connected ' + hostOf(h.saved.url) + note + (none ? ' (no Hive on this computer)' : ''));
   choose(W, h);
   if (none) for (const o of all()) if (o !== W && o.chosen === local) choose(o, h);
   // The other windows' rails gain the new Hive (and the rail shows, now that there are two).
   for (const o of all()) if (o !== W) { if (o.aside) rail(o); else display(o); }
-  return '';
+}
+
+// Sign-in gates (DESIGN-many-hives.md step 6). A Hive behind Cloudflare Access is signed in to in the person's own
+// browser (gate.js). The token that comes back becomes the CF_Authorization cookie in that Hive's session only, and when
+// it runs out the windows on that Hive ask for a sign-in again. The token itself is never logged or kept anywhere else.
+const sentOn = at => `It sent the app on to ${at}, which isn't the Hive and isn't a sign-in the app knows, so the app stopped there.`;
+// A request through a Hive's own session (its name lookup, proxy and certificate rules) for gate.js. No cookies go with
+// it, and a redirect is answered, not followed (Electron's own fetch refuses that).
+function sessionFetch(h) {
+  return (url, o = {}) => new Promise((res, rej) => {
+    const q = net.request({ url, method: o.method || 'GET', session: sessionFor(h), redirect: 'manual', credentials: 'omit', useSessionCookies: false });
+    for (const [k, v] of Object.entries(o.headers || {})) q.setHeader(k, v);
+    const done = (status, headers, body) => res({ status, ok: status >= 200 && status < 300, text: async () => body, json: async () => JSON.parse(body), arrayBuffer: async () => Buffer.from(body),
+      headers: { get: n => { const v = headers[String(n).toLowerCase()]; return v === undefined ? null : Array.isArray(v) ? v.join(', ') : String(v); } } });
+    q.on('redirect', (status, _m, _to, headers) => { q.abort(); done(status, headers, ''); });
+    q.on('response', r => {
+      const bits = []; let n = 0;
+      r.on('data', d => { n += d.length; if (n > 1 << 20) { q.abort(); rej(new Error('answer too long')); } else bits.push(d); });
+      r.on('end', () => done(r.statusCode, r.headers, Buffer.concat(bits).toString('utf8'))); r.on('error', rej);
+    });
+    q.on('error', rej);
+    q.end();
+  });
+}
+const gateOrigin = h => new URL(h.saved.url).origin;
+// True when the Hive's session holds a sign-in with time left; it sets the timer for when that runs out.
+async function gateCookie(h) {
+  let c = [];
+  try { c = await sessionFor(h).cookies.get({ url: gateOrigin(h) + '/', name: 'CF_Authorization' }); } catch { }
+  const exp = Math.max(0, ...c.map(x => x.expirationDate || 0));
+  if (!(exp > Date.now() / 1000 + 10)) return false;
+  runsOut(h, exp);
+  return true;
+}
+function runsOut(h, exp) {
+  clearTimeout(h.expiry);
+  // (a timer can't wait past about 24 days; a longer sign-in is looked at again then)
+  const ms = Math.min(exp * 1000 - Date.now(), 2 ** 31 - 1);
+  h.expiry = setTimeout(() => { if (exp * 1000 - Date.now() > 1000) return runsOut(h, exp); log('sign-in to ' + hostOf(h.saved.url) + ' ran out'); needSignIn(h); }, Math.max(0, ms));
+}
+// Every window on Hive h shows its sign-in screen (its views go: without a sign-in they would show the gate's page).
+function needSignIn(h) {
+  if (!remotes.includes(h)) return;
+  h.signin = true;
+  // A sign-in the gate no longer takes goes too, so the next open doesn't try it again.
+  sessionFor(h).cookies.remove(gateOrigin(h) + '/', 'CF_Authorization').catch(() => { });
+  for (const W of all()) { closeView(W, h.id); if (W.chosen === h && !W.aside) display(W); else rail(W); }
+}
+// A Hive that sent its page somewhere else: if that is a Cloudflare Access gate, sign in to it; else say where it went.
+async function gateOrFail(W, h, at) {
+  let g = null;
+  try { g = await gate.probe(sessionFetch(h), h.saved.url); } catch (e) { return remoteFailed(W, h, e.message); }
+  if (!g) return remoteFailed(W, h, sentOn(at));
+  if (!h.saved.gate || h.saved.gate.aud !== g.aud || h.saved.gate.team !== g.team) { h.saved.gate = g; saveHives(); }
+  needSignIn(h);
+}
+// Opens the sign-in in the browser and waits for it; once it is back the windows on h load the Hive. Asked again while
+// waiting, it opens the same page again.
+async function signIn(h) {
+  if (h.gateRun) return void external(h.gateRun.url);
+  const run = h.gateRun = { stop: new AbortController(), url: '' };
+  h.why = '';
+  const redo = () => { for (const W of all()) { if (W.chosen === h && !W.aside) display(W); else rail(W); } };
+  try {
+    const f = sessionFetch(h);
+    // The gate is asked again first: its keys or its app may have changed since, and an address no longer gated just opens.
+    const g = await gate.probe(f, h.saved.url);
+    if (run.stop.signal.aborted) return;
+    if (!g) { h.signin = false; h.gateRun = null; delete h.saved.gate; saveHives(); return void reopen(h); }
+    if (JSON.stringify(g) !== JSON.stringify(h.saved.gate)) { h.saved.gate = g; saveHives(); }
+    const a = gate.ask(h.saved.url, g);
+    run.url = a.url;
+    redo();
+    log('sign-in to ' + hostOf(h.saved.url) + ' opened in the browser');
+    if (process.env.HIVE_APP_TEST === '1' && process.env.HIVE_GATE_BROWSER) fs.writeFileSync(process.env.HIVE_GATE_BROWSER, a.url);   // the test plays the browser
+    external(a.url);
+    const got = await gate.wait(f, g, a, run.stop.signal);
+    if (!got || run.stop.signal.aborted) return;
+    const https = new URL(h.saved.url).protocol === 'https:';
+    // Host-only (no domain), HttpOnly, Secure over https, and gone when the token runs out.
+    await sessionFor(h).cookies.set({ url: gateOrigin(h) + '/', name: 'CF_Authorization', value: got.token, httpOnly: true, secure: https, sameSite: 'lax', expirationDate: got.exp });
+    log('signed in to ' + hostOf(h.saved.url) + ' for ' + Math.round((got.exp - Date.now() / 1000) / 60) + ' min');
+    h.signin = false; h.fresh = false; h.gateRun = null;
+    runsOut(h, got.exp);
+    reopen(h);
+  } catch (e) {
+    if (run.stop.signal.aborted) return;
+    h.why = String(e.message || e).slice(0, 300);
+    log('sign-in to ' + hostOf(h.saved.url) + ' stopped: ' + h.why);
+  } finally {
+    if (h.gateRun === run) { h.gateRun = null; redo(); }
+  }
+}
+function stopSignIn(h) {
+  if (!h.gateRun) return;
+  h.gateRun.stop.abort(); h.gateRun = null;
+  for (const W of all()) { if (W.chosen === h && !W.aside) display(W); else rail(W); }
+}
+// The windows on h load it again (after a sign-in, or when it turned out to have no gate after all).
+function reopen(h) {
+  for (const W of all()) {
+    if (W.chosen !== h) { rail(W); continue; }
+    closeView(W, h.id); openRemote(W, h);
+    if (!W.aside) display(W); else rail(W);
+  }
 }
 // What a Hive's session holds (its sign-in, its stored pages) goes when the Hive is removed; its folder goes at the next start.
 function forget(h) {
@@ -574,6 +703,7 @@ function removeHive(id) {
   const h = remotes.find(r => r.id === id);
   if (!h) return;
   remotes = remotes.filter(r => r !== h);
+  stopSignIn(h); clearTimeout(h.expiry);
   if (!remotes.length) delete store.extra.noLocal;   // with no Hive left, the window offers the choice again
   for (const w of [...h.popups]) try { w.close(); } catch { }
   for (const W of all()) {
@@ -687,6 +817,9 @@ ipcMain.on('hives', e => { const W = fromSetup(e); if (W) showAside(W, 'hives');
 ipcMain.on('connect-screen', e => { const W = fromSetup(e); if (W) showAside(W, 'connect'); });
 ipcMain.on('back', e => { const W = fromSetup(e); if (W) { W.aside = false; display(W); menu(); } });
 ipcMain.on('retry-hive', e => { const W = fromSetup(e); if (W) choose(W, W.chosen); });
+// A gated Hive's sign-in screen (step 6): sign in in the browser (again, while waiting, opens the page again), or stop waiting.
+ipcMain.on('sign-in', e => { const W = fromSetup(e); if (W && W.chosen.kind === 'remote' && W.chosen.signin) signIn(W.chosen); });
+ipcMain.on('cancel-sign-in', e => { const W = fromSetup(e); if (W && W.chosen.kind === 'remote') stopSignIn(W.chosen); });
 // Set up a Hive on this computer after all (the Hives screen): the local Hive is back in the list and this window shows its setup.
 ipcMain.on('setup-local', e => {
   const W = fromSetup(e); if (!W) return;

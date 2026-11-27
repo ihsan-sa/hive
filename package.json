@@ -12,13 +12,14 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node test/logic.test.js && node test/page.test.js",
+    "test": "node test/logic.test.js && node test/gate.test.js && node test/page.test.js",
     "dist": "electron-builder --linux --win --mac --publish never"
   },
   "devDependencies": {
     "electron": "45.4.1",
     "electron-builder": "26.18.0",
-    "playwright-core": "^1.62.1"
+    "playwright-core": "^1.62.1",
+    "tweetnacl": "1.0.3"
   },
   "build": {
     "appId": "cc.ihsan.hive",
@@ -26,6 +27,7 @@
     "files": [
       "main.js",
       "lib.js",
+      "gate.js",
       "preload.js",
       "setup.html",
       "build/icon.png"

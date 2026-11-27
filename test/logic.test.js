@@ -318,3 +318,14 @@ t('right-click menu: link, box, selection', () => {
   assert.strictEqual(browserLabel('x'.repeat(80)), 'Open link in your browser');
   console.log('ok link menu');
 }
+{
+  // A remote Hive's sign-in gate (step 6) is kept only in the form the app reads.
+  const { validHive } = require('../lib');
+  const base = { id: 'a'.repeat(16), kind: 'remote', url: 'https://h2.example.cc/', name: 'H2' };
+  const aud = 'c'.repeat(64);
+  assert.deepStrictEqual(validHive({ ...base, gate: { team: 'Team.cloudflareaccess.com', aud, x: 1 } }).gate, { team: 'team.cloudflareaccess.com', aud });
+  assert.ok(!('gate' in validHive({ ...base, gate: { team: 'evil.com', aud } })), 'a gate somewhere else is dropped');
+  assert.ok(!('gate' in validHive({ ...base, gate: 'x' })));
+  assert.ok(!('gate' in validHive(base)));
+  console.log('ok saved gate');
+}

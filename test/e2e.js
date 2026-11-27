@@ -138,6 +138,14 @@ class P { static int Main(string[] a) {
   const r = require('child_process').spawnSync(csc, ['/nologo', `/out:${path.join(wslDir, 'wsl.exe')}`, path.join(wslDir, 'wsl.cs')], { encoding: 'utf8' });
   assert.strictEqual(r.status, 0, 'compiling the stand-in wsl.exe: ' + r.stdout + r.stderr);
 }
+// Windows: the app keeps its Hives and windows in the real %APPDATA%\\Hive (as with LOCALAPPDATA, Electron won't take another).
+// The test's go at its start, its end and on a failure, so the next run (the packaged app's, real.js) doesn't open a Hive of the test's.
+function forgetHives() {
+  if (!win) return;
+  const d = path.join(process.env.APPDATA, 'Hive');
+  for (const f of ['hives.json', 'window-state.json']) fs.rmSync(path.join(d, f), { force: true });
+  try { for (const p of fs.readdirSync(path.join(d, 'Partitions'))) if (p.startsWith('hive-')) fs.rmSync(path.join(d, 'Partitions', p), { recursive: true, force: true }); } catch { }
+}
 // A machine with no Hive on it.
 function wipe() { for (const d of ['hive', '.hive']) fs.rmSync(path.join(home, d), { recursive: true, force: true });
   if (win) fs.rmSync(path.join(localApp, 'Hive'), { recursive: true, force: true }); }
@@ -157,7 +165,7 @@ const showing = app => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllW
 const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.getApplicationMenu().getMenuItemById(id); if (!m) throw new Error('no menu item ' + id); m.click(); }, id);
 
 (async () => {
-  await new Promise(r => server.listen(0, '127.0.0.1', r)); port = server.address().port; buildWsl();
+  await new Promise(r => server.listen(0, '127.0.0.1', r)); port = server.address().port; buildWsl(); forgetHives();
   const t0 = Date.now();
   let { app, page } = await start();
 
@@ -718,12 +726,69 @@ const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.g
   assert.ok(ps1Asked === ps0 && !said.includes('installer exit') && !fs.existsSync(path.join(home, 'hive')) && !fs.existsSync(path.join(home, '.hive')), 'nothing was installed: ' + said.slice(-800));
   assert.ok(said.includes('no Hive on this computer'), 'and the log says so');
   console.log('ok remote only');
-  remote.close();
 
-  if (win) wipe();
+  // A Hive behind a sign-in gate (step 6), against a stand-in Cloudflare Access (test/gatefake.js) on 127.0.0.1. The window
+  // asks for a sign-in in the browser (the test plays the browser: it opens the address the app wrote down), the token
+  // comes back sealed, and the Hive opens. The sign-in is kept over a restart, asked for again when the gate turns it
+  // away, and again when it runs out. The token is never in hives.json or the app's log.
+  const gf = await require('./gatefake').make().listen();
+  const browserFile = path.join(home, 'gate-browser.txt');
+  const gateEnv = { HIVE_GATE_TEAM: gf.team, HIVE_GATE_STORE: gf.origin + '/', HIVE_GATE_BROWSER: browserFile };
+  const signInBrowser = async () => {   // waits for the app to open the sign-in, then signs in there
+    for (let i = 0; i < 100 && !fs.existsSync(browserFile); i++) await new Promise(r => setTimeout(r, 100));
+    const u = fs.readFileSync(browserFile, 'utf8'); fs.rmSync(browserFile);
+    assert.ok(u.startsWith(gf.origin + '/cdn-cgi/access/cli?'), 'the sign-in page: ' + u.slice(0, 60));
+    await fetch(u);
+  };
+  const screen = t => page.waitForFunction(t => document.querySelector('#title')?.textContent === t, t, { timeout: WAIT });
+  ({ app, page } = await start(gateEnv));
+  await hive(app, rorigin);
+  await menuClick(app, 'hives-manager');
+  await page.getByRole('button', { name: 'Connect to a Hive…' }).click();
+  await page.waitForSelector('#address');
+  await page.fill('#address', `127.0.0.1:${gf.port}`); await page.click('#go');
+  await screen('Sign in to 127.0.0.1');
+  await page.getByRole('button', { name: 'Open the sign-in page again' }).waitFor();
+  await page.screenshot({ path: path.join(shots, '12-signin.png') });
+  assert.ok(await page.evaluate(() => [...document.querySelectorAll('#rail .hex')].every(x => x.style.background)), 'every tile has its colour, with no Hive on this computer too');
+  await signInBrowser();
+  await hive(app, gf.origin);
+  const saved = JSON.parse(hivesJson()).hives.find(x => x.url.startsWith(gf.origin));
+  assert.deepStrictEqual(saved.gate, { team: gf.team, aud: gf.aud }, 'the gate is kept: ' + hivesJson());
+  await app.close();
+  ({ app, page } = await start(gateEnv));
+  await hive(app, gf.origin);   // the sign-in is still there after a restart, so it opens with no question
+  assert.strictEqual(gf.tokens.length, 1, 'one sign-in so far');
+  console.log('ok gate signin');
+
+  // The gate turns the sign-in away (here: it is gone from the session): the window asks again. This sign-in is short.
+  gf.ttl = 14;
+  await app.evaluate(({ session }, [id, o]) => session.fromPartition('persist:hive-' + id).cookies.remove(o + '/', 'CF_Authorization'), [saved.id, gf.origin]);
+  (await hive(app, gf.origin)).reload().catch(() => { });
+  await screen('Sign in to 127.0.0.1');
+  await page.getByRole('button', { name: 'Sign in again in your browser' }).click();
+  await signInBrowser();
+  await hive(app, gf.origin);
+  const ranAt = Date.now();
+  // ... and when it runs out, the window asks again, then opens once signed in.
+  await page.getByRole('button', { name: 'Sign in again in your browser' }).waitFor({ timeout: 30000 });
+  assert.ok(Date.now() - ranAt > 5000, 'asked again only once it ran out');
+  gf.ttl = 3600;
+  await page.getByRole('button', { name: 'Sign in again in your browser' }).click();
+  await signInBrowser();
+  await hive(app, gf.origin);
+  await app.close();
+  const told = fs.readFileSync(path.join(userData, 'app.log'), 'utf8') + hivesJson();
+  assert.strictEqual(gf.tokens.length, 3);
+  for (const t of gf.tokens) for (const bit of t.split('.')) assert.ok(!told.includes(bit), 'no token in the log or hives.json');
+  assert.ok(told.includes('ran out'), 'the log says it ran out');
+  console.log('ok gate expiry');
+  gf.close(); remote.close();
+
+  if (win) { wipe(); forgetHives(); }
   server.close(); fs.rmSync(home, { recursive: true, force: true });
   console.log('ok e2e');
 })().catch(async e => { console.error('FAILED', e);
   // What the window showed when it stopped, so a runner's failure can be read from its log and artifacts.
   try { console.error('screen:', await cur.locator('#title').textContent({ timeout: 2000 }), '| log:', await cur.locator('#log').textContent({ timeout: 2000 }), '| install.ps1 served:', ps1Asked);
-    await cur.screenshot({ path: path.join(shots, 'e2e-failed.png') }); } catch { } try { if (win) wipe(); } catch { } process.exit(1); });
+    await cur.screenshot({ path: path.join(shots, 'e2e-failed.png') }); } catch { } try { if (win) wipe(); } catch { } try { forgetHives(); } catch { } process.exit(1); });
