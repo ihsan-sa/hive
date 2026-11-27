@@ -169,26 +169,42 @@ function barThread(W) {
   const v = W.views.get(local.id);
   W.bar.webContents.send('thread', v ? lib.threadOf(v.webContents.getURL()) : '');
 }
-// The key file: { v: 1, enc (the OS keychain locked it, by safeStorage), key (the private key, PKCS8, base64) }, only the
-// owner's to read. An unreadable one is set aside, not deleted, and a new key made (to be pinned again).
-let dev = null;
+// The key file: { v: 1, enc (safeStorage locked it), store (the backend that did, on Linux), key (the private key, PKCS8,
+// base64) }, only the owner's to read. On Linux with no keyring Electron falls back to a fixed password ("basic_text"): that
+// is no lock, so it's written down as such and never called a keychain. A file that can't be read is set aside (with the
+// time, so a second one doesn't overwrite the first) and a new key made, to be pinned again; a keychain that is locked just
+// now (a start at login before it opens) is not a bad file, so then there's no key until it opens and nothing is replaced.
+let dev = null, devWhy = '';
 const keyFile = () => path.join(app.getPath('userData'), 'device-key.json');
+const keyStore = () => { try { return process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'os'; } catch { return 'unknown'; } };
+const keyLocked = () => { const b = keyStore(); return b !== 'basic_text' && b !== 'unknown'; };
 function deviceKey() {
   if (dev) return dev;
   const f = keyFile();
   if (fs.existsSync(f)) {
-    try { const j = JSON.parse(fs.readFileSync(f, 'utf8')); dev = lib.deviceKey(j.enc ? safeStorage.decryptString(Buffer.from(j.key, 'base64')) : j.key); } catch { }
-    if (dev) return dev;
-    try { fs.renameSync(f, f + '.bad'); } catch { }
-    log('device key unreadable: set aside as device-key.json.bad, a new one made');
+    let j = null, plainKey = null;
+    try { j = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { }
+    if (j && j.enc && typeof j.key === 'string') {
+      try { plainKey = safeStorage.decryptString(Buffer.from(j.key, 'base64')); }
+      catch (e) {
+        if (!safeStorage.isEncryptionAvailable()) { devWhy = 'locked'; log('device key: the keychain is not open yet (' + e.message + '); nothing replaced'); return null; }
+      }
+    } else if (j) plainKey = j.key;
+    dev = plainKey == null ? null : lib.deviceKey(plainKey);
+    if (dev) { devWhy = ''; return dev; }
+    const bad = f + '.bad-' + new Date().toISOString().replace(/[:.]/g, '-');
+    try { fs.renameSync(f, bad); } catch { }
+    log('device key unreadable: set aside as ' + path.basename(bad) + ', a new one made (it needs pinning again)');
+    devWhy = 'new';
   }
-  const k = lib.newDeviceKey();
+  const k = lib.newDeviceKey(), store = keyStore();
   let enc = false, key = k.pkcs8;
   try { if (safeStorage.isEncryptionAvailable()) { key = safeStorage.encryptString(k.pkcs8).toString('base64'); enc = true; } } catch { }
   fs.mkdirSync(path.dirname(f), { recursive: true });
-  fs.writeFileSync(f + '.new', JSON.stringify({ v: 1, enc, key }) + '\n', { mode: 0o600 });
+  try { fs.unlinkSync(f + '.new'); } catch { }   // a leftover would keep its own mode: write a fresh one, the owner's only
+  fs.writeFileSync(f + '.new', JSON.stringify({ v: 1, enc, store, key }) + '\n', { mode: 0o600, flag: 'wx' });
   fs.renameSync(f + '.new', f);
-  log('device key made, ' + lib.keyFingerprint(k.key) + (enc ? ', kept by the OS keychain' : ''));
+  log('device key made, ' + lib.keyFingerprint(k.key) + (enc && keyLocked() ? ', locked by the OS keychain' : ', not locked by a keychain (' + (enc ? store : 'none') + '): only the file\'s mode keeps it'));
   return dev = k;
 }
 const publicKey = () => { try { return deviceKey().key; } catch (e) { log('device key: ' + e.message); return null; } };
@@ -206,7 +222,7 @@ function postSigned(h, url, body) {
       r.on('end', () => {
         let j = {}; try { j = JSON.parse(out); } catch { }
         if (r.statusCode >= 200 && r.statusCode < 300) return fin({ ok: true, id: typeof j.id === 'string' ? j.id.slice(0, 40) : '' });
-        fin({ ok: false, why: (typeof j.error === 'string' ? j.error : 'The Hive refused it (' + r.statusCode + ').').slice(0, 200) });
+        fin({ ok: false, why: 'The Hive said: ' + (typeof j.error === 'string' ? lib.plain(j.error).replace(/\s+/g, ' ') : 'no (' + r.statusCode + ')').slice(0, 160) });   // its words, marked as its
       });
       r.on('error', () => fin({ ok: false, why: "The Hive's answer broke off." }));
     });
@@ -516,7 +532,8 @@ function guard(wc, h, W) {
       // A plain link to the Hive's own page (target=_blank, a middle click) opens a window of the app on it; a page the
       // Hive opens as a popup (a sign-in) stays a popup, which keeps the opener's session: the same Hive and no other.
       if (W && (disposition === 'foreground-tab' || disposition === 'background-tab')) { create(h, null, url); return { action: 'deny' }; }
-      return { action: 'allow', overrideBrowserWindowOptions: { autoHideMenuBar: true, backgroundColor: bg(), webPreferences: { ...PREFS } } };
+      // Framed, opaque and not on top, whatever the page asked: a popup can't pass for the app's own bar.
+      return { action: 'allow', overrideBrowserWindowOptions: { frame: true, transparent: false, alwaysOnTop: false, autoHideMenuBar: true, backgroundColor: bg(), webPreferences: { ...PREFS } } };
     }
     const o = otherHive(h, url);
     if (o) showIn(o, url); else external(url);
@@ -948,16 +965,20 @@ ipcMain.on('chip-download', e => { if (fromSetup(e)) external(lib.downloadPage()
 ipcMain.handle('bar-send', async (e, text, thread) => {
   const W = e.senderFrame && isComposer(e.senderFrame.url) && all().find(x => x.bar && e.sender === x.bar.webContents);
   if (!W) return { ok: false, why: 'Not from the bar.' };
-  if (typeof text !== 'string' || !text.trim() || text.length > lib.WORDS_MAX) return { ok: false, why: 'Nothing to send, or too long.' };
+  if (typeof text !== 'string' || !text.trim() || text.length > lib.WORDS_MAX || !text.isWellFormed()) return { ok: false, why: 'Nothing to send, or too long.' };
+  if (lib.hiddenChars(text)) return { ok: false, why: 'It has hidden characters (bidi or zero-width) in it. Take them out, or type it.' };
   const v = W.views.get(local.id);
   if (!barWanted(W) || !v) return { ok: false, why: "The Hive isn't open." };
   const now = v ? lib.threadOf(v.webContents.getURL()) : '';
   if (String(thread || '') !== now) { barThread(W); return { ok: false, why: 'The thread changed. Check it and send again.' }; }
   let body;
-  try { body = lib.signPost(deviceKey(), { hive: store.extra.localHive, thread: now, words: text }); }
+  let key = null; try { key = deviceKey(); } catch (err) { log('bar key: ' + err.message); }
+  if (!key) return { ok: false, why: devWhy === 'locked' ? 'Your keychain is locked. Unlock it and send again.' : "Couldn't sign it." };
+  try { body = lib.signPost(key, { hive: store.extra.localHive, thread: now, words: text }); }
   catch (err) { log('bar sign: ' + err.message); return { ok: false, why: "Couldn't sign it." }; }
   let url; try { url = new URL(hiveUrl).origin + '/api/post'; } catch { return { ok: false, why: "The Hive's address is wrong." }; }
   const r = await postSigned(local, url, body);
+  if (!r.ok && devWhy === 'new') r.why += ' (This app made a new key after its old one could not be read, so the Hive needs it pinned again.)';
   log('bar post ' + (r.ok ? 'sent' : 'refused: ' + r.why) + (now ? ' to thread ' + now : ' to a new thread'));
   return r;
 });

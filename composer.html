@@ -10,7 +10,7 @@
   #head { display: flex; gap: 12px; font-size: 12px; color: var(--small); white-space: nowrap; overflow: hidden; }
   #to { overflow: hidden; text-overflow: ellipsis; }
   #note { margin-left: auto; overflow: hidden; text-overflow: ellipsis; }
-  #note.err { color: var(--err); } #note.ok { color: var(--ok); }
+  #note.err, #to.err { color: var(--err); } #note.ok { color: var(--ok); }
   form { display: flex; gap: 8px; flex: 1; min-height: 0; }
   textarea { flex: 1; resize: none; background: var(--box); color: var(--fg); border: 1px solid var(--bd); border-radius: 8px; padding: 6px 10px; font: inherit; }
   textarea:focus { outline: 2px solid var(--fg); outline-offset: -1px; }
@@ -21,15 +21,30 @@
 <div id="head"><span id="to">To a new thread</span><span>Signed by this app</span><span id="note" role="status"></span></div>
 <form id="f"><textarea id="t" rows="1" aria-label="Message to your Hive" placeholder="Message your Hive"></textarea><button id="go" type="submit">Send</button></form>
 <script>
-  // The thread comes from the app (it reads the Hive page's address), never from the page itself.
-  let thread = '', busy = false;
+  // The thread comes from the app (it reads the Hive page's address), never from the page itself. The page can still change
+  // its own address, so a change while there is text in the box, or text longer than the box shows, takes a second Send.
+  let thread = '', busy = false, check = '';
   const $ = id => document.getElementById(id), note = (s, c) => { $('note').textContent = s; $('note').className = c || ''; };
-  const show = t => { thread = t; $('to').textContent = t ? 'To thread: ' + t : 'To a new thread'; };
-  if (window.bar) window.bar.onThread(t => { if (t !== thread) note(''); show(t); });
+  const label = t => t ? 'To thread: ' + t : 'To a new thread';
+  const show = t => { thread = t; $('to').textContent = label(t); };
+  if (window.bar) window.bar.onThread(t => {
+    if (t === thread) return;
+    show(t);
+    if ($('t').value.trim()) { check = 'thread'; $('to').className = 'err'; note('The thread changed while you typed.', 'err'); }
+    else { check = ''; $('to').className = ''; note(''); }
+  });
+  const lines = () => $('t').value.split('\n').length;
+  const hidden = () => $('t').scrollHeight > $('t').clientHeight + 2;
+  $('t').addEventListener('input', () => {
+    if (check === 'long') check = '';
+    if (!check) note(lines() > 1 ? lines() + ' lines' : '');
+  });
   async function send() {
     const text = $('t').value;
     if (busy || !text.trim() || !window.bar) return;
-    busy = true; $('go').disabled = true; note('Sending…');
+    if (check === 'thread') { check = ''; $('to').className = ''; note('The thread changed: ' + label(thread).toLowerCase() + ' now. Send again to post there.', 'err'); return; }
+    if (hidden() && check !== 'long') { check = 'long'; note('It is ' + lines() + ' lines, more than the box shows. Read it all, then Send again.', 'err'); return; }
+    check = ''; busy = true; $('go').disabled = true; note('Sending…');
     let r; try { r = await window.bar.send(text, thread); } catch { r = { ok: false, why: "Couldn't send it." }; }
     busy = false; $('go').disabled = false;
     if (r && r.ok) { $('t').value = ''; note('Sent, signed', 'ok'); } else note((r && r.why) || "Couldn't send it.", 'err');

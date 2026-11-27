@@ -419,6 +419,8 @@ function deviceKey(pkcs8) {
 const keyFingerprint = key => crypto.createHash('sha256').update(Buffer.from(key, 'base64url')).digest('hex').slice(0, 20);
 // The body the app posts: {text, thread, reply_to, sig}. at and nonce are given by the tests only.
 function signPost(dev, { hive, thread = '', reply_to = '', words, at = new Date().toISOString(), nonce = b64u(crypto.randomBytes(16)) }) {
+  for (const v of [hive, thread, reply_to, at, nonce]) if (typeof v !== 'string' || v.includes('\n')) throw new Error('a signed field is not one line');
+  if (typeof words !== 'string' || !words.isWellFormed()) throw new Error('the words are not well-formed text');   // lone surrogates would all sign as U+FFFD
   const f = { v: 2, key: dev.key, at, nonce, hive, thread, reply_to, n: Buffer.byteLength(words) };   // n: the words' length in UTF-8 bytes, the same count in every language
   const pk = crypto.createPrivateKey({ key: Buffer.from(dev.pkcs8, 'base64'), format: 'der', type: 'pkcs8' });
   f.s = b64u(crypto.sign('sha256', signedBytes(f, words), { key: pk, dsaEncoding: 'ieee-p1363' }));
@@ -431,7 +433,7 @@ function checkPost(body, o) {
   const s = body && body.sig, text = body && body.text;
   if (!s || typeof s !== 'object' || s.v !== 2 || typeof text !== 'string') return no('not signed');
   for (const k of ['key', 'at', 'nonce', 'hive', 'thread', 'reply_to', 's']) if (typeof s[k] !== 'string' || s[k].includes('\n')) return no('the signature is not in the expected form');
-  if (s.n !== Buffer.byteLength(text) || !text.length || text.length > WORDS_MAX) return no('the signed length does not fit the text');
+  if (!text.isWellFormed() || s.n !== Buffer.byteLength(text) || !text.length || text.length > WORDS_MAX) return no('the signed length does not fit the text');
   if (s.hive !== o.hive) return no('signed for another Hive');
   if (s.thread !== String(body.thread ?? '') || s.reply_to !== String(body.reply_to ?? '')) return no('signed for another thread');
   const t = Date.parse(s.at);
@@ -455,6 +457,15 @@ function threadOf(url) {
   try { const t = decodeURIComponent(m[1]); return /^[A-Za-z0-9_.-]{1,64}$/.test(t) ? t : ''; } catch { return ''; }
 }
 // The Hive's id as its installer prints it ("Hive id: <32 hex>"), or null.
-function hiveIdFrom(text) { const m = /^Hive id: ([a-f0-9]{32})\s*$/m.exec(plain(String(text))); return m ? m[1] : null; }
+// Two different ids in one run (something the installer ran printed its own) give none: the bar stays off rather than sign for
+// a Hive it can't be sure of.
+function hiveIdFrom(text) {
+  const ids = new Set([...plain(String(text)).matchAll(/^Hive id: ([a-f0-9]{32})\s*$/gm)].map(m => m[1]));
+  return ids.size === 1 ? [...ids][0] : null;
+}
+// Characters that change what a text shows without showing themselves (bidi controls, zero-width marks): the bar won't sign
+// text holding them, since what the owner reads may not be what gets signed.
+const HIDDEN = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
+const hiddenChars = text => HIDDEN.test(String(text));
 
-module.exports = { SIG_TAG, HIVE_ID, WORDS_MAX, newDeviceKey, deviceKey, keyFingerprint, signPost, checkPost, threadOf, hiveIdFrom, ICON_MAX, pickIcon, iconData, validIcons, parseAdminList, linkMenu, browserLabel, addressRule, sameHive, newId, hiveUserName, validHive, parseHives, stringifyHives, windowsState, proofString, newerApp, contextItems, downloadPage, downloadPath, appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };
+module.exports = { SIG_TAG, HIVE_ID, WORDS_MAX, newDeviceKey, deviceKey, keyFingerprint, signPost, checkPost, threadOf, hiveIdFrom, hiddenChars, ICON_MAX, pickIcon, iconData, validIcons, parseAdminList, linkMenu, browserLabel, addressRule, sameHive, newId, hiveUserName, validHive, parseHives, stringifyHives, windowsState, proofString, newerApp, contextItems, downloadPage, downloadPath, appendLog, tailLog, diskCheck, windowState, shortcut, SITE, openCommand, installCommand, installResult, localUrl, isLocal, pin, proofAsk, proofOk, sameApp, redact, plain };

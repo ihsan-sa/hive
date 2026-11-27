@@ -242,6 +242,9 @@ const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.g
   const keyAt = path.join(await app.evaluate(({ app }) => app.getPath('userData')), 'device-key.json');
   const kf = fs.readFileSync(keyAt, 'utf8');
   if (!win) assert.strictEqual(fs.statSync(keyAt).mode & 0o077, 0, 'the key file is the owner\'s only');
+  const kj = JSON.parse(kf);
+  assert.ok(typeof kj.store === 'string', 'the key file says what locked it');
+  if (win || mac) assert.strictEqual(kj.enc, true, 'Windows and the Mac lock the key with the OS keychain');
   assert.ok(!kf.includes(pin), 'the key file holds the private key only');
   assert.strictEqual(await page.evaluate(() => typeof window.bar), 'undefined', 'the Hive\'s page has no way to the bar');
   await bar.waitForFunction(() => document.querySelector('#to').textContent === 'To a new thread');
@@ -249,7 +252,7 @@ const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.g
   await bar.waitForFunction(() => document.querySelector('#to').textContent === 'To thread: abc');
   await bar.locator('#t').fill('Ship the first build.');
   await bar.locator('#go').click();
-  await bar.waitForFunction(() => /Sent|refused|Couldn|changed/.test(document.querySelector('#note').textContent));
+  await bar.waitForFunction(() => /Sent|refused|Couldn|changed|said/.test(document.querySelector('#note').textContent));
   assert.strictEqual(await bar.locator('#note').textContent(), 'Sent, signed', 'the bar says it went');
   const first = posts.at(-1);
   assert.ok(first && first.at === 'local' && first.r.ok, 'the Hive took it: ' + JSON.stringify(first && first.r));
@@ -268,6 +271,25 @@ const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.g
   const stale = await bar.evaluate(() => window.bar.send('Delete it all.', 'zzz'));
   assert.ok(!stale.ok && /thread changed/.test(stale.why), 'a stale thread is refused: ' + JSON.stringify(stale));
   assert.ok(!posts.some(p => p.body && p.body.text === 'Delete it all.'), 'and never reaches the Hive');
+  // The page changes its thread while the owner types: the next Send only says so, and nothing goes until a second one.
+  await page.evaluate(() => { location.hash = '#comms/abc'; });
+  await bar.waitForFunction(() => document.querySelector('#to').textContent === 'To thread: abc');
+  await bar.locator('#t').fill('Second one.');
+  await page.evaluate(() => { location.hash = '#comms/def'; });
+  await bar.waitForFunction(() => document.querySelector('#note').textContent === 'The thread changed while you typed.');
+  await bar.locator('#go').click();
+  await bar.waitForFunction(() => /Send again/.test(document.querySelector('#note').textContent));
+  assert.ok(!posts.some(p => p.body && p.body.text === 'Second one.'), 'a thread switch under the owner sends nothing');
+  await bar.locator('#go').click();
+  await bar.waitForFunction(() => /Sent|refused|Couldn|said/.test(document.querySelector('#note').textContent));
+  assert.strictEqual(await bar.locator('#note').textContent(), 'Sent, signed');
+  assert.strictEqual(posts.at(-1).body.text, 'Second one.'); assert.strictEqual(posts.at(-1).body.thread, 'def', 'to the thread it showed at the second Send');
+  // Text with hidden characters, or a lone surrogate, is never signed.
+  for (const t of ['Ship it.\u202E.ti pihs', 'a\u200Bb']) {
+    const r = await bar.evaluate(t => window.bar.send(t, 'def'), t);
+    assert.ok(!r.ok && /hidden/.test(r.why), 'hidden characters refused: ' + JSON.stringify(r));
+  }
+  assert.ok(!(await bar.evaluate(() => window.bar.send('a\uD800b', 'def'))).ok, 'ill-formed text refused');
   await page.evaluate(() => { location.hash = ''; });
   console.log('ok no replay');
 

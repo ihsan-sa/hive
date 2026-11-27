@@ -420,6 +420,18 @@ t('signed from the start: the device key signs, and a Hive takes only its own fr
   assert.strictEqual(threadOf('http://127.0.0.1:8077/#comms/%E0%A4'), '');
   assert.strictEqual(hiveIdFrom(`\x1b[1mDone.\x1b[0m\nHive id: ${H}\n`), H);
   assert.strictEqual(hiveIdFrom('Hive id: 1234'), null);
+  assert.strictEqual(hiveIdFrom(`Hive id: ${H}\nagain\nHive id: ${H}\n`), H, 'the same id twice is still that id');
+  assert.strictEqual(hiveIdFrom(`Hive id: ${'f'.repeat(32)}\nHive id: ${H}\n`), null, 'two different ids give none');
+  // The signer itself refuses a field that could shift the words, and text that isn't well formed (lone surrogates).
+  assert.throws(() => signPost(dev, { hive: H, thread: 'a\nb', words: 'x' }), /one line/);
+  assert.throws(() => signPost(dev, { hive: H, words: 'x', nonce: 'n\n' }), /one line/);
+  assert.throws(() => signPost(dev, { hive: undefined, words: 'x' }), /one line/);
+  assert.throws(() => signPost(dev, { hive: H, words: 'a\uD800b' }), /well-formed/);
+  const lone = signPost(dev, { hive: H, words: 'a\uFFFDb', at, nonce: 'n4' }); lone.text = 'a\uD800b';
+  assert.strictEqual(no(lone), 'the signed length does not fit the text', 'a lone surrogate never checks as U+FFFD');
+  // Hidden characters (bidi, zero-width) are found; plain text, emoji and accents are not.
+  assert.ok(lib.hiddenChars('Ship it.\u202E.ti pihs')); assert.ok(lib.hiddenChars('a\u200Bb')); assert.ok(lib.hiddenChars('\uFEFFx'));
+  assert.ok(!lib.hiddenChars('ok 👍 é, line\ntwo'));
   // The installer is handed the public key, never the private one.
   assert.strictEqual(installCommand('linux', {}, false, dev.key).env.HIVE_APP_KEY, dev.key);
   assert.strictEqual(installCommand('win32', {}, false, dev.key).env.HIVE_APP_KEY, dev.key);
