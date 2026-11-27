@@ -1,0 +1,63 @@
+name: many hives
+on: {push: {branches: [test-many-hives, test-train]}}
+permissions: {contents: read}
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - {name: ubuntu-24.04, url: "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"}
+          - {name: debian-12, url: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - name: Give this user KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+        sudo udevadm control --reload-rules; sudo udevadm trigger --name-match=kvm
+    - name: Install QEMU
+      run: sudo apt-get update -qq; sudo apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils
+    - name: Several Hives on one machine
+      env:
+        IMAGE_URL: ${{ matrix.image.url }}
+        INSIDE: inside-many.sh
+        HIVE_BRANCH: train-candidate
+        INSTALL_URL: https://raw.githubusercontent.com/ihsan-sa/hive/train-candidate/get.sh
+      run: bash run-vm.sh
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+      - name: Several Hives in the one Hive WSL system
+        shell: powershell
+        run: ./win-many.ps1
+  mac:
+    runs-on: macos-15-intel
+    timeout-minutes: 75
+    env:
+      HIVE_SITE: https://raw.githubusercontent.com/ihsan-sa/hive/train-candidate
+      HIVE_BRANCH: train-candidate
+      HIVE_CHECK_AUTO: "1"
+    steps:
+    - uses: actions/checkout@v4
+      with: { ref: train-candidate }
+    - uses: actions/checkout@v4
+      with: { path: rig }
+    - name: The first Hive, the real line
+      timeout-minutes: 42
+      run: |
+        sed 's|"$SITE/install.sh"|"$SITE/get.sh"|' get-mac.sh > line.sh; ! cmp -s get-mac.sh line.sh
+        HIVE_VOICE=0 HIVE_CHECK_LINE=line.sh sh mac-check.sh > install.log 2>&1 < /dev/null || true
+        tail -n 30 install.log
+        grep -q '^done, 0 failed\.' install.log && ! grep -q '^done, [1-9][0-9]* failed' install.log
+    - name: A second Hive beside it
+      timeout-minutes: 25
+      run: sh rig/mac-many.sh < /dev/null
+    - name: Uninstall what is left
+      if: always()
+      timeout-minutes: 5
+      run: |
+        { sleep 5; echo delete; sleep 5; } | HIVE_USER=hive-work HIVE_KEEP=none script -q /dev/null sh remove-mac.sh || true
