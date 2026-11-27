@@ -171,13 +171,17 @@ function barThread(W) {
 }
 // The key file: { v: 1, enc (safeStorage locked it), store (the backend that did, on Linux), key (the private key, PKCS8,
 // base64) }, only the owner's to read. On Linux with no keyring Electron falls back to a fixed password ("basic_text"): that
-// is no lock, so it's written down as such and never called a keychain. A file that can't be read is set aside (with the
+// is no lock, so it's written down as such and never called a keychain. The Mac doesn't use its keychain at all while the
+// app is ad-hoc signed: each update changes the signature, so macOS would ask for the login password before every read of
+// the key (a dialog to click, and on a runner with no one to answer it, a hang). There the file's mode keeps it, in the
+// owner's account, out of the agents' reach (they run as another user, in the Hive's VM); a signed build can switch it on. A file that can't be read is set aside (with the
 // time, so a second one doesn't overwrite the first) and a new key made, to be pinned again; a keychain that is locked just
 // now (a start at login before it opens) is not a bad file, so then there's no key until it opens and nothing is replaced.
 let dev = null, devWhy = '';
 const keyFile = () => path.join(app.getPath('userData'), 'device-key.json');
-const keyStore = () => { try { return process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'os'; } catch { return 'unknown'; } };
-const keyLocked = () => { const b = keyStore(); return b !== 'basic_text' && b !== 'unknown'; };
+const keyStore = () => { if (process.platform === 'darwin') return 'file'; try { return process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'os'; } catch { return 'unknown'; } };
+const useKeychain = () => process.platform !== 'darwin';
+const keyLocked = () => { const b = keyStore(); return b !== 'basic_text' && b !== 'unknown' && b !== 'file'; };
 function deviceKey() {
   if (dev) return dev;
   const f = keyFile();
@@ -199,7 +203,7 @@ function deviceKey() {
   }
   const k = lib.newDeviceKey(), store = keyStore();
   let enc = false, key = k.pkcs8;
-  try { if (safeStorage.isEncryptionAvailable()) { key = safeStorage.encryptString(k.pkcs8).toString('base64'); enc = true; } } catch { }
+  try { if (useKeychain() && safeStorage.isEncryptionAvailable()) { key = safeStorage.encryptString(k.pkcs8).toString('base64'); enc = true; } } catch { }
   fs.mkdirSync(path.dirname(f), { recursive: true });
   try { fs.unlinkSync(f + '.new'); } catch { }   // a leftover would keep its own mode: write a fresh one, the owner's only
   fs.writeFileSync(f + '.new', JSON.stringify({ v: 1, enc, store, key }) + '\n', { mode: 0o600, flag: 'wx' });

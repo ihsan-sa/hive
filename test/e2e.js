@@ -244,7 +244,8 @@ const menuClick = (app, id) => app.evaluate(({ Menu }, id) => { const m = Menu.g
   if (!win) assert.strictEqual(fs.statSync(keyAt).mode & 0o077, 0, 'the key file is the owner\'s only');
   const kj = JSON.parse(kf);
   assert.ok(typeof kj.store === 'string', 'the key file says what locked it');
-  if (win || mac) assert.strictEqual(kj.enc, true, 'Windows and the Mac lock the key with the OS keychain');
+  if (win) assert.strictEqual(kj.enc, true, 'Windows locks the key with the OS keychain');
+  if (mac) assert.ok(kj.enc === false && kj.store === 'file', 'the Mac keeps the key in its 0600 file, not the keychain, while the app is ad-hoc signed');
   assert.ok(!kf.includes(pin), 'the key file holds the private key only');
   assert.strictEqual(await page.evaluate(() => typeof window.bar), 'undefined', 'the Hive\'s page has no way to the bar');
   await bar.waitForFunction(() => document.querySelector('#to').textContent === 'To a new thread');
