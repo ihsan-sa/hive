@@ -11,11 +11,11 @@ function InU($u, $c) { $b = B64 $c; & wsl.exe -d Hive -u $u --cd ~ -- bash -lc "
 function Port($u) { $j = (& wsl.exe -d Hive -u root -- cat "/home/$u/.hive/web.json" 2>$null) -join ''; try { [string](($j | ConvertFrom-Json).port) } catch { '' } }
 function Code($p) { $c = '000'; foreach ($i in 1..20) { $c = & curl.exe -s -m 10 -o NUL -w '%{http_code}' "http://localhost:$p/login"; if ($c -match '^[234]') { break }; Start-Sleep 3 }; $c }
 function Mask($s) { ($s -replace 'login#\S*', 'login#...') }
-$raw = 'https://raw.githubusercontent.com/ihsan-sa/hive/train-candidate'
+$raw = 'https://raw.githubusercontent.com/ihsan-sa/hive/test-many-cand'
 $real = irm "$raw/get.ps1"
 function Run-Candidate($user) {
   if ($user) { $env:HIVE_USER = $user } else { Remove-Item Env:HIVE_USER -ErrorAction SilentlyContinue }
-  $c = $real.Replace("'/install.sh -o", "'/get.sh -o").Replace('HIVE_INSIDE=1 sh', 'HIVE_BRANCH=train-candidate HIVE_INSIDE=1 sh')
+  $c = $real.Replace("'/install.sh -o", "'/get.sh -o").Replace('HIVE_INSIDE=1 sh', 'HIVE_BRANCH=test-many-cand HIVE_INSIDE=1 sh')
   $c = $c -replace "\`$site = '[^']*'", "`$site = '$raw'"
   $log = Join-Path $env:TEMP ("run" + (Get-Random) + ".txt")
   Start-Transcript -Path $log | Out-Null
@@ -64,7 +64,9 @@ $h0 = (& wsl.exe -d Hive -u hive-work -- sh -c $st) -join "`n"
 $t3 = Run-Candidate 'hive-work'
 $t3 -split "`n" | Select-Object -Last 8 | ForEach-Object { Mask $_ } | Out-Host
 $il = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Hive') -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
-if ($il) { $it = Get-Content -Raw $il.FullName; Check 'second run: the inner install says it was already here' ($it -match 'already here') } else { "  (no inner install log under LOCALAPPDATA\Hive)" }
+# What the person sees: the Linux installer's "already here" comes up as a note (core 2026-11-27), and nothing is set up again.
+Check 'second run: says the Hive was already here' ($t3 -match 'already here')
+if ($il) { $it = Get-Content -Raw $il.FullName; Check "second run: the inner install didn't set it up again" ($it -notmatch 'Setting up the Hive and Codex') } else { "  (no inner install log under LOCALAPPDATA\Hive)" }
 "hive-work core after: " + ((& wsl.exe -d Hive -u hive-work -- git -C /home/hive-work/core rev-parse --short HEAD) -join '')
 Check 'second run changed nothing (port, core)' (((& wsl.exe -d Hive -u hive-work -- sh -c $st) -join "`n") -eq $h0)
 

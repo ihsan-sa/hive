@@ -35,6 +35,7 @@ h0=$(state | shasum)
 HIVE_USER=hive-work sh line.sh > many-2.log 2>&1 && ok "the same line again" || bad "the same line again"
 tail -n 4 many-2.log | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/; s/^/--   | /'
 grep -q 'Setting up the Hive' many-2.log && bad "the second run set it up again" || ok "the second run didn't set it up again"
+grep -q 'already here' many-2.log && ok "the second run says the Hive was already here" || bad "the second run says the Hive was already here"
 h1=$(state | shasum); note "hive-work core after: $(as hive-work 'git -C ~/core rev-parse --short HEAD')"
 [ "$h0" = "$h1" ] && ok "the second run changed nothing (port, core)" || bad "the second run changed something"
 

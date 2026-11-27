@@ -23,8 +23,8 @@ jobs:
       env:
         IMAGE_URL: ${{ matrix.image.url }}
         INSIDE: inside-many.sh
-        HIVE_BRANCH: train-candidate
-        INSTALL_URL: https://raw.githubusercontent.com/ihsan-sa/hive/train-candidate/get.sh
+        HIVE_BRANCH: test-many-cand
+        INSTALL_URL: https://raw.githubusercontent.com/ihsan-sa/hive/test-many-cand/get.sh
       run: bash run-vm.sh
   windows:
     runs-on: windows-2025
@@ -38,12 +38,12 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 75
     env:
-      HIVE_SITE: https://raw.githubusercontent.com/ihsan-sa/hive/train-candidate
-      HIVE_BRANCH: train-candidate
+      HIVE_SITE: https://raw.githubusercontent.com/ihsan-sa/hive/test-many-cand
+      HIVE_BRANCH: test-many-cand
       HIVE_CHECK_AUTO: "1"
     steps:
     - uses: actions/checkout@v4
-      with: { ref: train-candidate }
+      with: { ref: test-many-cand }
     - uses: actions/checkout@v4
       with: { path: rig }
     - name: The first Hive, the real line
