@@ -12,6 +12,14 @@ Put `HIVE_USER=name` in front of the Windows or Mac install line to add a second
 
 `hive export NAME` saves a project as one zip with its git history, and `hive import ZIP` brings it in on another Hive without overwriting anything. Hooks and commands in its git settings are left out.
 
+## Writing by hand: faster, endless paper, maths and pictures
+
+The pen keeps up on a page full of ink, where it used to stutter and stall. A writing space's page now goes on in every direction, and ink outside the sheet is kept, shown and sent with the rest. The tool row floats, can be dragged anywhere and stays where you put it, and has its own **Send** button. Maths and pictures in a writing space's problem are now drawn instead of shown as typed.
+
+## More room in a chat, and writing spaces open with a tap
+
+The up arrow at the end of a conversation's header hides the top bar, the header and the status line; the down arrow brings them back, and the choice is remembered on that device. Tapping or clicking a writing space now opens its page.
+
 ## Smaller fixes, 2026-11-27
 
 - Each release is now checked with two Hives side by side on Linux, Windows and the Mac before it goes out.

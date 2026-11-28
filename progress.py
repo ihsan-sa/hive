@@ -37,6 +37,37 @@ CLOSING = ("unjudgeable", "expired", "inseparable", "level")
 LEVEL_HOW = re.compile(r"\b(?:sd|s\.d\.|stdev|std|spread|range|count|n\s*=\s*\d+|\d+\s+(?:readings?|reads|samples|cases|items|pages|runs|rows|posts))\b", re.I)
 LEVEL_PRE = re.compile(r"\bpre-?landing\b|\bbefore (?:it |the change )?land", re.I)
 
+LEVEL_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}(?:T[\d:]+Z?)?|\b\d{1,2}-\d{1,2}\b|\b\d{1,2}:\d{2}Z?\b")
+LEVEL_NUM = r"-?\d+(?:\.\d+)?"
+
+def level_numbers(text):
+    """The numbers in text with dates and times taken out (a dated baseline or expect adds stray numbers)."""
+    return [float(x) for x in re.findall(LEVEL_NUM, LEVEL_DATE.sub(" ", str(text or "")))]
+
+LEVEL_STOP = {"was", "is", "are", "at", "of", "to", "the", "and", "now", "then", "day", "days", "per", "with", "from", "for", "about", "last", "week"}
+LEVEL_CMP = re.compile(r"(?:>=|<=|>|<|=<|=>|\bat least|\bat most|\babove|\bbelow|\bover|\bunder)\s*(" + LEVEL_NUM + r")", re.I)
+LEVEL_BY = re.compile(r"\bby\s+(" + LEVEL_NUM + r")", re.I)
+
+def level_gap(expect, before):
+    """How far row e's expect sits from its baseline, or None when the expect names no target (a4418 11271923e68c): 'by N' is
+    the baseline moved N, else the number after a comparison (>=, at least, below ...); a bare first number is not taken."""
+    x = LEVEL_DATE.sub(" ", str(expect or ""))
+    m = LEVEL_BY.search(x)
+    if m: return abs(float(m.group(1)))
+    m = LEVEL_CMP.search(x)
+    return abs(float(m.group(1)) - before) if m else None
+
+def level_baselines(e, why):
+    """The befores a level closing may name for row e (rung 186 (a), a4418 112707394fb0): the baseline's first number, a number
+    after a label that --why names beside the same number ('live 41%, plain 51%' with 'plain 51' in --why), and the row's numeric before; not any number."""
+    base = LEVEL_DATE.sub(" ", str(e.get("baseline") or ""))
+    out = level_numbers(base)[:1]
+    for label, n in re.findall(r"([A-Za-z_][\w-]*)\W{0,3}(" + LEVEL_NUM + r")", base):  # a4418 11271923e68c: the label beside that same number in --why
+        if len(label) < 3 or label.lower() in LEVEL_STOP: continue
+        if re.search(r"\b" + re.escape(label) + r"\W{0,3}" + re.escape(n) + r"(?![\d.])", why or "", re.I): out.append(float(n))
+    if isinstance(e.get("before"), (int, float)): out.append(float(e["before"]))
+    return out
+
 def level_want(e):
     """The way row e's number should move: its want, else what its expect says (>= 50, below live), else None."""
     if e.get("want") in ("up", "down"): return e["want"]
@@ -610,11 +641,15 @@ def cmd_judge(a):
             if not e.get("expect"): sys.exit(f"hive improve judge: {a.id} has no expect on the record; level says a change didn't reach its expect, so a row with none can't take it.")
             if None in (a.now, a.before, a.band) or a.band <= 0:
                 sys.exit("hive improve judge: level needs --now N (the fresh reading), --before N (the row's logged baseline) and --band N (the noise band, above 0).")
-            logged = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", str(e.get("baseline") or ""))] + ([float(e["before"])] if isinstance(e.get("before"), (int, float)) else [])
+            logged = level_baselines(e, a.why)
             if not logged: sys.exit(f"hive improve judge: {a.id} has no baseline number on the record, so there is no before to be level with.")
             if not any(abs(a.before - x) < 1e-9 for x in logged):
-                sys.exit(f"hive improve judge: --before {a.before:g} is not {a.id}'s logged baseline ({e.get('baseline') or e.get('before')}); level reads against the baseline it was logged with.")
+                sys.exit(f"hive improve judge: --before {a.before:g} is not {a.id}'s logged baseline ({e.get('baseline') or e.get('before')}); level reads against the baseline it was logged with (its first number, or one after a label --why names too).")
             want = level_want(e)
+            gap = level_gap(e.get("expect"), a.before)
+            if gap is not None and gap <= a.band:  # rung 186 (b): an expect inside the band can't be told from level
+                sys.exit(f"hive improve judge: {a.id}'s expect ({e['expect']}) is {gap:g} from its baseline {a.before:g}, inside the band {a.band:g}: "
+                         f"reaching it and staying level read the same, so level says nothing. Give a narrower band from a stated spread, or judge it inconclusive.")
             if not want: sys.exit(f"hive improve judge: {a.id}'s expect ({e['expect']}) names no way for the number to move, so up or down can't be told apart from level.")
             if not (src and LEVEL_HOW.search(a.why)):
                 sys.exit("hive improve judge: level needs --why to say how the band was set (the spread: sd or range over N readings, or the set's count) and where the reading is (a file path or a post id).")

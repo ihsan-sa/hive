@@ -212,6 +212,7 @@
   body:not([data-view=thread],[data-kb=open]):has(.cm[data-in]:not([data-home])) .cm{height:calc(100dvh - var(--nav-h))}   /* the top bar is hidden here, so its height is not taken off: it left a blank strip above the bottom bar on Files, Inbox, Mail, Needs and Yours */
   body:not([data-kb=open]):has(.top .lost):has(.cm[data-in]:not([data-home])) .cm{height:calc(100dvh - var(--bar-h) - var(--nav-h))}   /* E207: the "Can't reach your Hive" band keeps the top bar showing (components.css), so its height comes off, or the composer or read-only line sat below the screen */
   body[data-view=thread]:not([data-kb=open]):has(.top .lost) .cm{height:calc(100dvh - var(--bar-h))}
+  body:not([data-view=thread],[data-kb=open]):not(:has(.top .lost)) #main .cm[data-top=hidden][data-in]{height:calc(100dvh - var(--nav-h))}   /* top area put away: the bottom bar stays */
   body[data-kb=open] .cm,body[data-kb=open] .kb{height:var(--vvh,100dvh)}
   body[data-kb=open] #main{min-height:0}
 }

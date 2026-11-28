@@ -32,6 +32,14 @@ export function plen(d) {
 }
 
 // ---------- the person's strokes ----------
+/** outline() of a finished stroke, worked out once: its points array is never changed in place (a move makes a new one). A page of
+ *  hundreds of strokes was outlined again, all of it, at every pen lift, and writing lagged (the person, 112720500c2d). */
+const DONE = new WeakMap();
+export function outlineOf(st) {
+  if (!st.p) return "";
+  let d = DONE.get(st.p); if (d === undefined) DONE.set(st.p, d = outline(st));
+  return d;
+}
 /** A stroke's outline: a closed path to fill, width from pressure (a pen) or from speed (a mouse, whose pressure is flat). */
 export function outline(st) {
   const raw = st.p || [], hl = st.t === "hl", base = st.w || (hl ? 16 : 2.8);
@@ -150,6 +158,7 @@ export function wrapNote(s, n = 60) {
   if (out.length > 3) { out.length = 3; out[2] = out[2].replace(/\s*\S*$/, "") + "…"; }
   return out;
 }
+export const FAR = 20000;   // the Write page's paper has no sides: how far from the sheet ink or a mark may be, in sheet units
 export const NOTE = 22;   // a note's size in sheet units
 const noteW = (s, n = NOTE) => s.length * n * .5;
 
@@ -159,7 +168,7 @@ const noteW = (s, n = NOTE) => s.length * n * .5;
 /** z: notes drawn that much bigger (ink over a narrow message, snap.js zoomOf), so they are placed at that size. */
 export function markParts(m, seed, own = [], find = null, h = 4000, z = 1) {
   const r = rnd(seed), k = m.k, N = NOTE * z;
-  let pts = (m.pts || []).map(p => [Math.max(0, Math.min(W, p[0])), Math.max(-400, Math.min(Math.max(h + 400, 4000), p[1]))]);
+  let pts = (m.pts || []).map(p => [Math.max(-FAR, Math.min(W + FAR, p[0])), Math.max(-FAR, Math.min(Math.max(h + 400, 4000), p[1]))]);
   let rect = null;
   if (m.anchor && find) rect = find(m.anchor);
   if (m.anchor && !rect) return null;

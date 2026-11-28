@@ -7,7 +7,7 @@ import { agentLabel, capFirst } from "../core/model.js";
 import { wordsIn } from "../ui/sidechat.js";
 import { W, LINE } from "./grammar.js";
 import * as K from "./store.js";
-import { Sheet, inkLayerSvg, liveSheet, sheetTitle, wordsRect } from "./sheet.js";
+import { Sheet, inkBox, inkLayerSvg, liveSheet, sheetTitle, wordsRect } from "./sheet.js";
 import { bbox, isLoop } from "./draw.js";
 
 const RL = 36, TT = 28, RT = 20, FT = 40, RP = 12, TOP = TT + RT;   // the frame round the content, in units
@@ -45,8 +45,10 @@ async function sheetShot(th, sid, p) {
     for (const e of sh.el.querySelectorAll("[data-pending]")) e.removeAttribute("data-pending");
     await fontsIn();
     const M = sh.model(), H = sh.H, r = sh.c.getBoundingClientRect(), k = W / r.width;
-    const png = await render({ y0: 0, y1: H, title: `${M.title} · sheet ${sid}`, on: sid, paint: (ctx, base) => {
-      paper(ctx, base, M.info.paper || "ruled", H, host);
+    // ink from the Write page's endless paper widens the picture past the sheet's sides and top
+    const [x0, y0, x1] = inkBox(K.ownStrokes(th, sid), H);
+    const png = await render({ x0, x1, y0, y1: H, what: "sheet", title: `${M.title} · sheet ${sid}`, on: sid, paint: (ctx, base) => {
+      paper(ctx, base, M.info.paper || "ruled", H, host, y0, x0, x1);
       const T = base.multiply(new DOMMatrix([k, 0, 0, k, -r.left * k, -r.top * k]));
       paintHtml(ctx, sh.p, T, base);
       paintSvg(ctx, sh.svg, T);
@@ -139,7 +141,7 @@ function bgOf(el) {
 // ---------- the frame: title, rulers, footer ----------
 /** Draw content x0..x1, y0..y1 (units) into a framed PNG. paint(ctx, base): base maps content units to canvas px.
  *  x0..x1 is 0..800 unless ink runs past the sides of what it was drawn on. */
-async function render({ x0 = 0, x1 = W, y0, y1, title, on, paint }) {
+async function render({ x0 = 0, x1 = W, y0, y1, title, on, paint, what = "message" }) {
   const cw = x1 - x0, CW = RL + cw + RP, ch = Math.max(LINE, y1 - y0), total = TOP + ch + FT, S = Math.min(1.5, 2400 / total, 2400 / CW);
   const cv = document.createElement("canvas"); cv.width = Math.ceil(CW * S); cv.height = Math.ceil(total * S);
   const draw = safe => {
@@ -149,7 +151,7 @@ async function render({ x0 = 0, x1 = W, y0, y1, title, on, paint }) {
     ctx.save(); ctx.beginPath(); ctx.rect(S * RL, S * TOP, S * cw, S * ch); ctx.clip();
     try { paint(ctx, base, safe); } catch (e) { console.warn("ink paint", e); }
     ctx.restore();
-    frame(ctx, S, x0, x1, y0, ch, title, on);
+    frame(ctx, S, x0, x1, y0, ch, title, on, what);
     return ctx;
   };
   draw(false);
@@ -159,10 +161,10 @@ async function render({ x0 = 0, x1 = W, y0, y1, title, on, paint }) {
 let SAFE = false;   // a picture from elsewhere tainted the canvas: draw images as labelled boxes instead
 const blob = cv => new Promise((res, rej) => { try { cv.toBlob(b => b ? res(b) : rej(new Error("toBlob")), "image/png"); } catch (e) { rej(e); } });
 
-function frame(ctx, S, x0, x1, y0, ch, title, on) {
+function frame(ctx, S, x0, x1, y0, ch, title, on, what) {
   ctx.save(); ctx.setTransform(S, 0, 0, S, 0, 0);
   const grey = "#8a8f98", faint = "#c9cdd3", cw = x1 - x0, CW = RL + cw + RP, wide = x0 < 0 || x1 > W;
-  if (wide) {   // where the message itself is: dashed lines at 0 and 800
+  if (wide) {   // where the message (or sheet) itself is: dashed lines at 0 and 800
     ctx.save(); ctx.strokeStyle = "#9aa3b0"; ctx.lineWidth = 1 / S; ctx.setLineDash([4, 4]); ctx.beginPath();
     for (const x of [0, W]) { ctx.moveTo(RL + x - x0, TOP); ctx.lineTo(RL + x - x0, TOP + ch); }
     ctx.stroke(); ctx.restore();
@@ -182,30 +184,31 @@ function frame(ctx, S, x0, x1, y0, ch, title, on) {
   ctx.stroke();
   // footer: the reply, taught in two lines
   ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.fillStyle = "#4a4f57"; ctx.font = "11px ui-monospace, monospace";
-  ctx.fillText(`${wide ? "message is 0–800 (dashed), ink beyond it shown" : "800 units wide"} · to mark this up, reply with \`\`\`ink on=${on} then lines like`, RL, TOP + ch + 16);
+  ctx.fillText(`${wide ? `${what} is 0–800 (dashed), ink beyond it shown` : "800 units wide"} · to mark this up, reply with \`\`\`ink on=${on} then lines like`, RL, TOP + ch + 16);
   ctx.fillText(`circle x,y r40 "note" · arrow x,y -> x,y · text x,y "words" · check x,y`, RL, TOP + ch + 31);
   ctx.restore();
 }
 
 /** The sheet's paper, drawn from its kind (the CSS draws it with gradients the canvas can't read). */
-function paper(ctx, base, kind, H, el, from = 0) {
+function paper(ctx, base, kind, H, el, from = 0, x0 = 0, x1 = W) {
   // the tokens are light-dark() pairs: a probe's computed colour resolves them for the host's scheme
   const probe = document.createElement("i"); el.append(probe);
   const v = n => { probe.style.color = `var(${n})`; const c = getComputedStyle(probe).color; return c && !CLEAR(c) ? c : ""; };
   const cols = { rule: v("--paper-rule"), margin: v("--paper-margin"), grid: v("--paper-grid"), dot: v("--paper-dot") }; probe.remove();
   ctx.save(); ctx.setTransform(base);
-  ctx.fillStyle = "#fff"; ctx.fillRect(0, from, W, H - from);
+  const w = x1 - x0, first = (step, at = 0, lo = from) => Math.ceil((lo - at) / step) * step + at;   // the lines stay where they are on the sheet
+  ctx.fillStyle = "#fff"; ctx.fillRect(x0, from, w, H - from);
   if (kind === "ruled") {
     ctx.fillStyle = cols.rule || "#dfe5ee";
-    for (let y = LINE; y <= H; y += LINE) ctx.fillRect(0, y - 1, W, 1);
-    ctx.fillStyle = cols.margin || "rgba(200,80,60,.35)"; ctx.fillRect(44, 0, 1, H);
+    for (let y = first(LINE, 0, from + 1); y <= H; y += LINE) ctx.fillRect(x0, y - 1, w, 1);
+    ctx.fillStyle = cols.margin || "rgba(200,80,60,.35)"; ctx.fillRect(44, from, 1, H - from);
   } else if (kind === "grid") {
     ctx.fillStyle = cols.grid || "#e8ecf2";
-    for (let y = 0; y <= H; y += LINE) ctx.fillRect(0, y, W, 1);
-    for (let x = 0; x <= W; x += LINE) ctx.fillRect(x, 0, 1, H);
+    for (let y = first(LINE); y <= H; y += LINE) ctx.fillRect(x0, y, w, 1);
+    for (let x = first(LINE, 0, x0); x <= x1; x += LINE) ctx.fillRect(x, from, 1, H - from);
   } else if (kind === "dot") {
     ctx.fillStyle = cols.dot || "#c4c8cf";
-    for (let y = Math.ceil(from / 24) * 24 + 12; y <= H; y += 24) for (let x = 12; x <= W; x += 24) { ctx.beginPath(); ctx.arc(x, y, 1.1, 0, 7); ctx.fill(); }
+    for (let y = first(24, 12); y <= H; y += 24) for (let x = first(24, 12, x0); x <= x1; x += 24) { ctx.beginPath(); ctx.arc(x, y, 1.1, 0, 7); ctx.fill(); }
   }
   ctx.restore();
 }

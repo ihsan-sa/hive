@@ -76,6 +76,13 @@ if (typeof document !== "undefined") document.addEventListener("keydown", e => {
 });
 const sideBtn = () => h("button", { type: "button", class: "btn cm-sidebtn", "data-kind": "icon", "data-key": "sidebtn", "aria-pressed": String(!sideHid), "aria-label": sideHid ? "Show the conversation list" : "Hide the conversation list",
   title: (sideHid ? "Show" : "Hide") + " the conversation list (Ctrl+\\)", onclick: toggleSide }, icon("sidebar"));
+// Hide the whole top area (the app bar with Chat's pages, and the conversation's header and status line) so the page gets the height
+// (the person, 112720497dfd). A small button at the top corner brings it back. Kept on this device; it holds only while a conversation is open.
+let topHid = (() => { try { return localStorage.getItem("cm.tophid") === "1"; } catch (e) { return false; } })();
+function toggleTop() { topHid = !topHid; try { localStorage.setItem("cm.tophid", topHid ? "1" : "0"); } catch (e) {} C.menu = C.more = null; L.ctx && L.ctx.update();
+  requestAnimationFrame(() => document.querySelector(topHid ? ".cm-topshow" : ".cm-tophide")?.focus({ preventScroll: true })); }
+const topBtn = () => h("button", { type: "button", class: "btn cm-tophide", "data-kind": "icon", "data-key": "tophide", "aria-label": "Hide the top area", title: "Hide the top area: the bar, this header and the status line", onclick: toggleTop }, icon("chevron-up"));
+const topShow = () => h("button", { type: "button", class: "btn cm-topshow", "data-kind": "icon", "data-key": "topshow", "aria-label": "Show the top area", title: "Show the top area", onclick: toggleTop }, icon("chevron-down"));
 const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize the conversation list", tabindex: "0", "data-key": "grip", title: "Drag to resize, or click to widen a step (from the widest it goes back to the narrowest); double-click resets",
   // A click that doesn't move is the one-press way (WCAG 2.5.7): a step wider, and from the widest back to the narrowest.
   onpointerdown: e => { e.preventDefault(); const g = e.target.closest(".cm-grip"), box = g.closest(".cm"), x0 = e.clientX, w0 = sideNow(box); g.setPointerCapture(e.pointerId); g.dataset.on = "1";
@@ -1350,6 +1357,7 @@ function head(c, ctx) {
       c.thread && app() ? inkEyeButton(c.thread) : null,   // and hide what is drawn there (shows only when something is)
       c.thread ? button("Files", () => import("../ui/preview.js").then(m => m.openFiles()), { kind: "icon", icon: "folder", cls: "cm-files", title: "Files: this conversation's and the projects'" }) : null,
       c.thread ? asideBtn(c.thread) : null,
+      c.thread ? topBtn() : null,
       c.thread ? h("button", { type: "button", class: "btn cm-more-b", "data-kind": "icon", "aria-label": "More tools", title: "More tools", "aria-expanded": String(more),
         onclick: e => { e.stopPropagation(); C.more = more ? null : c.thread; ctx.update(); } }, icon("more")) : null),
     statusBar(c.thread),   // where it stands: its own row under the title and the tools (hidden on a phone, where the title's sub line says it)
@@ -2026,7 +2034,8 @@ function frame(ctx, c, pane) {
         c.thread && !can("post") ? readOnly(c.thread) : null,   // §5b: where this address can't post, say so in the composer's place
         post && c.thread ? composer({ thread: c.thread, update: ctx.update, top: app() ? strip(c.thread) : null }) : null,
         post && c.all ? h("p", { class: "cm-hint meta", "data-key": "hint" }, "To start something new, use New conversation.") : null]);
-    return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home && !c.list ? "" : null, "data-list": c.list ? "" : null, "data-side": sideHid && c.arg ? "hidden" : null, style: `--cm-w:${sideW}px` },
+    const noTop = topHid && !pane && !c.archived && !c.home && !!c.thread;   // the top area is put away (chrome css: .cm[data-top])
+    return h("div", { class: "cm", "data-key": "comms", "data-top": noTop ? "hidden" : null, "data-in": c.arg ? "" : null, "data-home": c.home && !c.list ? "" : null, "data-list": c.list ? "" : null, "data-side": sideHid && c.arg ? "hidden" : null, style: `--cm-w:${sideW}px` },
       h("nav", { class: "cm-side", "aria-label": app() ? "Conversations" : "Threads" },
         h("div", { class: "cm-filters" },
           // R14: the phone's way to the rail. Home has one row that opens it as a page; that page has a way back (css/phone.css shows these only there).
@@ -2047,6 +2056,7 @@ function frame(ctx, c, pane) {
         grip()),   // last, so Tab reaches it after the list it sits on the right edge of (WCAG 2.4.3)
       h("section", { class: "cm-convo", "aria-label": "Conversation", ...(post && c.thread ? dropZone(c.thread) : {}) },
         convo,
+        noTop ? topShow() : null,
         !c.thread ? quickPanel(ctx.update) : null,
         post && c.thread ? h("div", { class: "cm-drop", "aria-hidden": "true", "data-key": "drop" }, "Drop files to attach them") : null));
 }

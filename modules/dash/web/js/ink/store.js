@@ -9,7 +9,21 @@ import { S } from "../core/store.js";
 import { parseInk, fences, W, LINE } from "./grammar.js";
 
 export { W, LINE };
-const say = th => dispatchEvent(new CustomEvent("ink:change", { detail: { th } }));
+// pendOnly: only the person's unsent ink changed, so what the board's posts fold to stays as it is
+const say = (th, pendOnly = false) => dispatchEvent(new CustomEvent("ink:change", { detail: { th, pendOnly } }));
+
+// ---- the hand: while it writes, redraws nobody asked for wait (app.js schedule) ----
+let handAt = -1e9, handSince = 0;
+const HAND_GAP = 900, HAND_MAX = 8000;
+export function handMoved() { const t = performance.now(); if (t - handAt > HAND_GAP) handSince = t; handAt = t; }
+export const writePage = () => typeof document !== "undefined" && document.documentElement.hasAttribute("data-ink-focus");
+/** How long a redraw should still wait for the pen, in ms (0: go). The Write page covers the app, so everything under it waits;
+ *  writing on the chat itself holds a redraw until a pause, HAND_MAX at most. */
+export function inkWait() {
+  if (writePage()) return 1000;
+  const t = performance.now(), left = handAt + HAND_GAP - t;
+  return left > 0 && t - handSince < HAND_MAX ? left : 0;
+}
 
 // ---- the tool in hand (one for the whole page) ----
 export const TOOL = { t: "pen", c: "ink", pen: false, pencil: false };
@@ -38,11 +52,26 @@ export function pend(th) {
   if (!v) { try { v = JSON.parse(localStorage.getItem(PK(th)) || "null"); } catch (e) { v = null; } if (!v || typeof v.sheets !== "object") v = { sheets: {} }; PEND.set(th, v); }
   return v;
 }
-function save(th) {
+// Writing every unsent stroke to localStorage at each pen lift stalled the next one, so it waits for a short pause (WRITE_MAX at
+// most), and goes at once when the page is hidden or left, or ink is sent or discarded (now).
+const DIRTY = new Set(), WRITE_GAP = 400, WRITE_MAX = 2000;
+let writeT = 0, dirtyAt = 0;
+function flush() {
+  clearTimeout(writeT); writeT = 0;
+  for (const th of DIRTY) {
+    const v = PEND.get(th); if (!v) continue;
+    try { Object.keys(v.sheets).length ? localStorage.setItem(PK(th), JSON.stringify(v)) : localStorage.removeItem(PK(th)); } catch (e) {}
+  }
+  DIRTY.clear();
+}
+if (typeof document !== "undefined") { addEventListener("pagehide", flush); document.addEventListener("visibilitychange", () => { if (document.hidden) flush(); }); }
+function save(th, now = false) {
   const v = pend(th);
   for (const [k, s] of Object.entries(v.sheets)) if (!s.strokes.length && !s.erase.length) delete v.sheets[k];
-  try { Object.keys(v.sheets).length ? localStorage.setItem(PK(th), JSON.stringify(v)) : localStorage.removeItem(PK(th)); } catch (e) {}
-  say(th);
+  if (!DIRTY.size) dirtyAt = Date.now();
+  DIRTY.add(th);
+  if (now) flush(); else { clearTimeout(writeT); writeT = setTimeout(flush, Math.max(0, Math.min(WRITE_GAP, dirtyAt + WRITE_MAX - Date.now()))); }
+  say(th, true);
 }
 const pSheet = (th, sid, meta) => { const v = pend(th); return own(v.sheets, sid) || (v.sheets[sid] = { strokes: [], erase: [], ...(meta || {}) }); };
 // Undo and redo stay in this page: [{th, sid, add: stroke} | {th, sid, erase: id} | {th, sid, drop: stroke}]
@@ -100,7 +129,7 @@ export function clearPending(th, sid, { sent = false } = {}) {
   if (sent) { const hd = HOLD.get(th) || HOLD.set(th, {}).get(th); for (const k of sid ? [sid] : Object.keys(v.sheets)) if (v.sheets[k]) hd[k] = { strokes: v.sheets[k].strokes, erase: v.sheets[k].erase, t: Date.now() }; }
   if (sid) delete v.sheets[sid]; else v.sheets = {};
   for (const l of [UNDO, REDO]) for (let i = l.length - 1; i >= 0; i--) if (l[i].th === th && (!sid || l[i].sid === sid)) l.splice(i, 1);
-  save(th);
+  save(th, true);
 }
 /** After a send: only the strokes and erasures that went (packed, from snap.js inkPack) leave pending; they are held on screen
  *  until the board brings them back. Ink drawn while the message was being packed stays for the next one. */
@@ -113,11 +142,11 @@ export function clearSent(th, packed) {
     p.strokes = p.strokes.filter(x => !ids.has(x.id)); p.erase = p.erase.filter(e => !er.has(e));
     for (const l of [UNDO, REDO]) for (let i = l.length - 1; i >= 0; i--) { const o = l[i]; if (o.th === th && o.sid === sid && (ids.has((o.add || o.drop || {}).id) || er.has(o.erase))) l.splice(i, 1); }
   }
-  save(th);
+  save(th, true);
 }
 /** Every sheet with ink in this chat: on the board, pending, or sent and not back yet. */
 export const sheetIds = th => new Set([...fold(th).sheets.keys(), ...Object.keys(pend(th).sheets), ...Object.keys(HOLD.get(th) || {})]);
-addEventListener("storage", e => { if (e.key && e.key.startsWith("ink:") && e.key !== "ink:played") { const th = e.key.slice(4); PEND.delete(th); say(th); } });
+addEventListener("storage", e => { if (e.key && e.key.startsWith("ink:") && e.key !== "ink:played") { const th = e.key.slice(4); PEND.delete(th); DIRTY.delete(th); say(th, true); } });
 
 export const sid = () => Date.now().toString(36).slice(-5) + Math.random().toString(36).slice(2, 6);
 

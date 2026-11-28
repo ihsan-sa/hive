@@ -7,12 +7,12 @@ import { h, s } from "../core/dom.js";
 import { S } from "../core/store.js";
 import { agentLabel, capFirst } from "../core/model.js";
 import { chatCtx } from "../rich/artifact.js";
-import { inlineMath } from "../rich/math.js";
+import { printedNodes } from "./printed.js";
 import { button } from "../ui/kit.js";
 import { icon } from "../ui/icons.js";
 import { parseInk, W, LINE } from "./grammar.js";
 import * as K from "./store.js";
-import { outline, markParts, bbox, snapShape, nearStroke, isLoop, writeMs, noteMs, plen } from "./draw.js";
+import { outline, outlineOf, markParts, bbox, snapShape, nearStroke, isLoop, writeMs, noteMs, plen, FAR } from "./draw.js";
 
 const LIVE = new Map();   // th \0 sid -> {el, ghost, sheet}
 const COARSE = matchMedia("(any-pointer: coarse)");
@@ -20,15 +20,6 @@ const COLORS = { red: "var(--ag-1)", violet: "var(--ag-2)", purple: "var(--ag-2)
 export const sheetTitle = (sh, sid) => sid === "board" ? "Whiteboard" : /^m-/.test(sid) ? msgName(S.byId[sid.slice(2)]) : (sh && sh.title) || "Writing space";
 const msgName = post => !post ? "a message" : K.isPerson(post.from) ? "your message" : capFirst(agentLabel(post.from) || post.from) + "'s message";
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
-
-// ---------- printed text: plain lines on the rules, $maths$ inline (never markdown() inside a figure) ----------
-function printedLine(line) {
-  const out = [], re = /\$([^$\n]+)\$/g; let at = 0, m;
-  while ((m = re.exec(line))) { if (m.index > at) out.push(line.slice(at, m.index)); out.push(inlineMath(m[1], m[0])); at = m.index + m[0].length; }
-  if (at < line.length) out.push(line.slice(at));
-  return out.length ? out : [" "];
-}
-const printedNodes = text => String(text || "").split("\n").map(l => h("div", {}, ...printedLine(l.trimEnd())));
 
 const BLOCK = "p,li,div,h1,h2,h3,h4,h5,h6,td,th,pre,blockquote,dd,dt";
 /** Where printed words are in root (an @"words" anchor): their client rect, or null. The text is read as shown: runs of space
@@ -72,7 +63,7 @@ function markG(m, seed, own, find, H, at, pen, z = 1) {
   }
   return { g, at: at + 120, box: p.box };
 }
-const strokeP = (st, pend) => s("path", { class: "ink-s", d: outline(st), "data-tool": st.t === "hl" ? "hl" : null, "data-pending": pend ? "" : null, "data-id": st.id, style: st.t === "hl" ? null : `color:${K.PENS[st.c] || K.PENS.ink}` });
+const strokeP = (st, pend) => s("path", { class: "ink-s", d: outlineOf(st), "data-tool": st.t === "hl" ? "hl" : null, "data-pending": pend ? "" : null, "data-id": st.id, style: st.t === "hl" ? null : `color:${K.PENS[st.c] || K.PENS.ink}` });
 
 /** The ink on a sheet with no paper of its own (a message, the whiteboard): the agents' layers and the person's strokes, in an
  *  <svg class=ink-svg> 800 units wide and H high. find(words) places @"words" anchors; play starts fresh layers' write-on. */
@@ -111,6 +102,19 @@ export function thumb(th, sid, { marks = null, who = null, w = 72, hgt = 48 } = 
   return sv;
 }
 
+// ---------- how far the paper reaches ----------
+const G = 96;   // the paper grows in steps of 96 units, a whole number of rules (32) and dots (24), so they stay lined up
+/** The part of sheet units a sheet shows, [x0, y0, x1, y1]: its 800 × H, and out to any ink of the person's past the left,
+ *  right or top (the Write page has no sides; a bottom edge is already in H). */
+export function inkBox(own, H) {
+  let a = 0, b = 0, c = W;
+  for (const st of own) for (const p of st.p) { if (p[0] < a) a = p[0]; if (p[1] < b) b = p[1]; if (p[0] > c) c = p[0]; }
+  // a stroke that strays a few units over an edge doesn't zoom the sheet out
+  if (a > -16) a = 0; if (b > -16) b = 0; if (c < W + 16) c = W;
+  return [a < 0 ? Math.floor((a - 16) / G) * G : 0, b < 0 ? Math.floor((b - 16) / G) * G : 0, c > W ? Math.ceil((c + 16) / G) * G : W, H];
+}
+const union = (a, b) => b ? [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])] : a;
+
 // ---------- the live sheet ----------
 export class Sheet {
   /** mode: "msg" (in a message), "focus" (the Write page: a finger draws), "static" (no chat: printed only),
@@ -127,8 +131,9 @@ export class Sheet {
     this.p = h("div", { class: "ink-sheet-p" });
     this.gPrint = s("g", { class: "ink-printed" }); this.gOwn = s("g", { class: "ink-own" }); this.gLayers = s("g", { class: "ink-layers" }); this.gLive = s("g", { class: "ink-live" });
     this.svg = s("svg", { class: "ink-svg", viewBox: `0 0 ${W} ${6 * LINE}`, "aria-hidden": "true" }, this.gPrint, this.gLayers, this.gOwn, this.gLive);
-    this.invite = h("div", { class: "ink-invite" }, icon("pen"), mode === "focus" ? "Write here" : COARSE.matches ? "Write here with your Pencil" : "Write here", mode === "msg" && !COARSE.matches ? h("small", {}, "drag to draw") : null);
-    this.c = h("div", { class: "ink-sheet-c", "data-paper": "ruled" }, this.p, this.svg, this.invite, h("div", { class: "ink-grow" }));
+    this.invite = h("div", { class: "ink-invite" }, icon("pen"), mode !== "msg" ? "Write here" : COARSE.matches ? "Tap to open, or write with your Pencil" : "Write here", mode === "msg" && !COARSE.matches ? h("small", {}, "drag to draw, click to open") : null);
+    this.paper = h("div", { class: "ink-paper" });
+    this.c = h("div", { class: "ink-sheet-c", "data-paper": "ruled" }, this.paper, this.p, this.svg, this.invite, h("div", { class: "ink-grow" }));
     this.f = h("div", { class: "ink-sheet-f" });
     this.el = h("div", { class: "ink-sheet", "data-mode": mode, "data-own": "", "data-sig": sid, "data-key": "ink-" + sid, "data-sheet": sid, "data-empty": "" }, this.head, this.c, this.f);
     this.el._sheet = this;
@@ -138,15 +143,22 @@ export class Sheet {
       c.addEventListener("pointermove", e => this.move(e), sig);
       c.addEventListener("pointerup", e => this.up(e), sig);
       c.addEventListener("pointercancel", e => this.up(e, true), sig);
+      // A tap or a plain click on the sheet (or its title line) opens its page (the person, 112720497dfd); a scroll sends no click, a drag still draws.
+      if (mode === "msg") this.el.addEventListener("click", e => {
+        const tap = this.tap; this.tap = false;
+        if (!th || e.target.closest("a, button, input, .rc-im, .ink-sheet-f")) return;
+        if (tap || (this.head.contains(e.target) && !getSelection().toString())) openFocus(th, sid);
+      }, sig);
       // iPad Safari: a Pencil on a pan-y surface would scroll; claiming its touch keeps the stroke (a finger still scrolls)
       const stylus = e => { if ([...e.touches].some(t => t.touchType === "stylus")) e.preventDefault(); };
       c.addEventListener("touchstart", stylus, { passive: false, signal: this.ac.signal });
       c.addEventListener("touchmove", stylus, { passive: false, signal: this.ac.signal });
-      addEventListener("ink:change", e => { if (!e.detail || e.detail.th === th) this.paint(); }, sig);
+      // under the Write page the chat's copy waits until it closes (closeFocus says so again)
+      addEventListener("ink:change", e => { if ((!e.detail || e.detail.th === th) && !(mode === "msg" && K.writePage())) this.paint(); }, sig);
       addEventListener("ink:tool", () => this.toolAttr(), sig);
       this.toolAttr();
     }
-    this.ro = new ResizeObserver(() => this.measure()); this.ro.observe(this.c);
+    this.ro = new ResizeObserver(() => this.measure()); this.ro.observe(this.c); this.ro.observe(this.p);   // maths and pictures arrive late
     this.io = new IntersectionObserver(es => { for (const e of es) { this.seen = e.isIntersecting && mode !== "snap"; if (this.seen) this.play(); } }, { threshold: .25 }); this.io.observe(this.el);
     this.ac.signal.addEventListener("abort", () => { this.ro.disconnect(); this.io.disconnect(); });
     this.paint();
@@ -174,7 +186,59 @@ export class Sheet {
   find(words) {
     if (!this.c.isConnected || !this.k) return null;
     const R = wordsRect(this.p, words), C = this.c.getBoundingClientRect(); if (!R) return null;
-    return { x: (R.left - C.left) * this.k, y: (R.top - C.top) * this.k, w: R.width * this.k, h: R.height * this.k };
+    const k = W / C.width;   // not this.k: a sheet zoomed out to hold wide ink is drawn smaller than it is laid out
+    return { x: (R.left - C.left) * k, y: (R.top - C.top) * k, w: R.width * k, h: R.height * k };
+  }
+  /** Lay the drawing and the paper over what shows. In a message, ink past the sheet's edges zooms the whole sheet out to fit;
+   *  on the Write page (this.view, grown by roam) the page scrolls over it, and what was in view stays put as it grows. */
+  lay(more) {
+    const H = this.H, box = inkBox(this.th ? K.ownStrokes(this.th, this.sid) : [], H);
+    const focus = this.mode === "focus" && this.sc, was = this.view;
+    this.box = box;
+    const v = focus ? (this.view = union(union(box, was), more)) : box, [x0, y0, x1, y1] = v, w = x1 - x0, hh = y1 - y0;
+    const plain = !x0 && !y0 && x1 === W && y1 === H, pc = n => n * 100 + "%";
+    this.svg.setAttribute("viewBox", `${x0} ${y0} ${w} ${hh}`);
+    for (const el of [this.svg, this.paper]) Object.assign(el.style, plain ? { left: "", top: "", width: "", height: "" } : { left: pc(x0 / W), top: pc(y0 / H), width: pc(w / W), height: pc(hh / H) });
+    if (this.mode === "msg") {
+      const f = W / w;
+      Object.assign(this.c.style, plain ? { transform: "", transformOrigin: "", marginBottom: "" } : { transform: `scale(${f}) translate(${pc(-x0 / W)}, ${pc(-y0 / H)})`, transformOrigin: "0 0", marginBottom: pc((hh * f - H) / W) });
+    }
+    if (!focus) return;
+    const s = this.base / W, sc = this.sc, at = [sc.scrollLeft, sc.scrollTop];
+    Object.assign(sc.firstChild.style, { width: w * s + "px", height: hh * s + "px" });
+    Object.assign(this.el.style, { width: this.base + "px", left: -x0 * s + "px", top: -y0 * s + "px" });
+    if (was && x0 < was[0]) sc.scrollLeft = at[0] + (was[0] - x0) * s;
+    if (was && y0 < was[1]) sc.scrollTop = at[1] + (was[1] - y0) * s;
+  }
+  /** The Write page opens in scroller sc: the sheet at its width, a screen of paper on every side of it. */
+  open(sc) {
+    this.sc = sc; this.fit(); this.measure(); this.paint();
+    const s = this.base / W, sw = Math.ceil(sc.clientWidth / s / G) * G, sh = Math.ceil(sc.clientHeight / s / G) * G;
+    this.view = union(this.view, [-sw, -sh, W + sw, this.H + sh]); this.lay();
+    sc.scrollLeft = -this.view[0] * s - (sc.clientWidth - this.base) / 2; sc.scrollTop = -this.view[1] * s;
+    sc.addEventListener("scroll", () => this.roam(), { passive: true, signal: this.ac.signal });
+    addEventListener("resize", () => this.turn(), { signal: this.ac.signal });
+  }
+  fit() { this.base = Math.max(280, Math.min(1000, this.sc.clientWidth - 24)); this.el.style.width = this.base + "px"; this.size = [this.sc.clientWidth, this.sc.clientHeight]; }
+  /** A turned iPad or a resized window: what was in the middle of the view stays there. */
+  turn() {
+    const sc = this.sc, [w, h] = this.size, s = this.base / W, v = this.view;
+    const x = v[0] + (sc.scrollLeft + w / 2) / s, y = v[1] + (sc.scrollTop + h / 2) / s;
+    this.fit(); this.lay();
+    const s2 = this.base / W; sc.scrollLeft = (x - v[0]) * s2 - this.size[0] / 2; sc.scrollTop = (y - v[1]) * s2 - this.size[1] / 2;
+    this.roam();
+  }
+  /** Endless paper: whenever the view comes within half a screen of an edge, a screen more is laid there. */
+  roam() {
+    const sc = this.sc, v = this.view; if (!sc || !v || !sc.clientWidth) return;
+    const s = this.base / W, cw = sc.clientWidth, ch = sc.clientHeight, sw = Math.ceil(cw / s / G) * G, sh = Math.ceil(ch / s / G) * G;
+    const n = v.slice();
+    if (sc.scrollLeft < cw / 2 && v[0] > -FAR) n[0] -= sw;
+    if (sc.scrollTop < ch / 2 && v[1] > -FAR) n[1] -= sh;
+    if (sc.scrollWidth - sc.scrollLeft - cw < cw / 2 && v[2] < FAR) n[2] += sw;
+    if (sc.scrollHeight - sc.scrollTop - ch < ch / 2 && v[3] < FAR) n[3] += sh;
+    if (n.every((x, i) => x === v[i])) return;
+    this.lay(n);
   }
   paint() {
     const M = this.model(), th = this.th, sid = this.sid;
@@ -182,7 +246,11 @@ export class Sheet {
     this.c.dataset.paper = M.info.paper || "ruled";
     // printed text and figure: rebuilt only when the offer changes
     const psig = M.printed + "\0" + JSON.stringify(M.figure);
-    if (this.psig !== psig) { this.psig = psig; this.p.replaceChildren(...(M.printed ? printedNodes(M.printed) : [])); this.figDone = false; }
+    if (this.psig !== psig) {
+      this.psig = psig; this.figDone = false;
+      const at = M.sh && M.sh.offers.findLast(o => o.parsed.printed === M.printed), post = at && S.byId[at.post];
+      this.p.replaceChildren(...(M.printed ? printedNodes(M.printed, post) : []));
+    }
     const top = this.rows * LINE, own = th ? K.ownStrokes(th, sid) : [], pend = th && Object.hasOwn(K.pend(th).sheets, sid) ? K.pend(th).sheets[sid] : null;
     // height: the rows the problem takes, the writing lines asked for, and room for everything drawn
     let H = top + (M.info.h || 6 * LINE), low = 0;
@@ -196,14 +264,14 @@ export class Sheet {
     }
     this.H = H;
     this.c.style.setProperty("--h", H); this.c.style.setProperty("--rows", this.rows);
-    this.svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    this.lay();
     if (!this.figDone && (!M.figure.some(m => m.anchor) || this.k)) {
       this.figDone = true; this.gPrint.replaceChildren();
       M.figure.forEach((m, i) => { const r = markG(m, sid + "p" + i, [], w => this.find(w), H, 0, "var(--ink-2)"); if (r) this.gPrint.append(r.g); });
     }
     // the person's ink
     const hid = th ? K.hidden(th, sid) : new Set();
-    this.gOwn.replaceChildren(...own.map(st => strokeP(st, st.pending)));
+    this.paintOwn(own);
     this.gOwn.toggleAttribute("data-hidden", hid.has("person"));
     // the agents' layers: each built once (its own snap boxes are the person's ink sent before it), then kept
     const keep = new Set(), sentBefore = [];
@@ -245,6 +313,19 @@ export class Sheet {
         button("Undo", () => K.undo(th), { kind: "quiet", size: "s", icon: "undo" }),
         button("Send work", () => dispatchEvent(new CustomEvent("ink:send", { detail: { th, sids: [sid] } })), { kind: "primary", size: "s" }));
     } else this.f.replaceChildren();
+    if (this.send) this.send.disabled = !(n || er);
+  }
+  /** The person's strokes, one path each, kept from paint to paint: only what changed touches the page. */
+  paintOwn(own) {
+    const had = this.own || new Map(), now = this.own = new Map(), g = this.gOwn;
+    let at = g.firstChild;
+    for (const st of own) {
+      let el = had.get(st.p);
+      if (!el || now.has(st.p)) el = strokeP(st, st.pending); else el.toggleAttribute("data-pending", !!st.pending);
+      now.set(st.p, el);
+      if (el === at) at = at.nextSibling; else g.insertBefore(el, at);
+    }
+    while (at) { const next = at.nextSibling; at.remove(); at = next; }
   }
   /** Start the write-on of layers that are fresh, once the sheet is on screen. */
   play() {
@@ -259,9 +340,21 @@ export class Sheet {
   }
 
   // ---------- input ----------
-  pt(e) { const r = this.c.getBoundingClientRect(), k = W / r.width; return [(e.clientX - r.left) * k, (e.clientY - r.top) * k, e.pointerType === "pen" ? (e.pressure || .5) : .5]; }
+  pt(e, r = this.c.getBoundingClientRect()) {
+    const k = W / r.width; let x = (e.clientX - r.left) * k, y = (e.clientY - r.top) * k;
+    // in a message a stroke stops at the sheet's edges (more paper is on the Write page)
+    if (this.mode !== "focus" && this.box) { x = Math.max(this.box[0], Math.min(this.box[2], x)); y = Math.max(this.box[1], y); }
+    return [x, y, e.pointerType === "pen" ? (e.pressure || .5) : .5];
+  }
   down(e) {
     if (!this.th) return;
+    K.handMoved();
+    // The Pencil always writes: a stroke whose lift never arrived is finished here, and a palm that started one is dropped. Waiting
+    // for that lift left the sheet deaf to the pen.
+    if (this.cur && e.pointerType === "pen") { if (this.curType === "pen") this.up({ pointerId: this.pid, pointerType: "pen", clientX: -1e4, clientY: -1e4 }); else this.cancel(); }
+    if (e.isPrimary) this.tap = false;
+    // where a press began, to tell a tap from a stroke; a palm resting while (or just after) the Pencil writes is not a tap
+    if (this.mode === "msg") this.press = e.isPrimary && !this.cur && !(e.pointerType === "touch" && Date.now() - (this.penAt || 0) < 1500) ? { id: e.pointerId, x: e.clientX, y: e.clientY, far: 0 } : null;
     if (this.cur && (e.pointerType !== "touch" || this.curType !== "touch")) return;   // a palm or a second pointer while writing
     if (e.pointerType === "touch") {
       if (this.mode !== "focus") return;   // a finger scrolls, except on the Write page
@@ -284,24 +377,29 @@ export class Sheet {
   }
   move(e) {
     if (this.pan && this.touches && this.touches.has(e.pointerId)) {
+      if (this.curType === "pen" && (this.cur || Date.now() - (this.penAt || 0) < 600)) { this.touches.set(e.pointerId, [e.clientX, e.clientY]); return; }   // a palm moving as the Pencil writes must not slide the paper
       const was = this.touches.get(e.pointerId), sc = this.c.closest(".ink-focus-s");
       if (sc) { sc.scrollTop -= (e.clientY - was[1]) / this.touches.size; sc.scrollLeft -= (e.clientX - was[0]) / this.touches.size; }
       this.touches.set(e.pointerId, [e.clientX, e.clientY]); return;
     }
+    this.moved(e);
     if (!this.cur || e.pointerId !== this.pid) return;
-    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    K.handMoved();
+    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e], r = this.c.getBoundingClientRect();
     for (const ev of evs.length ? evs : [e]) {
-      const p = this.pt(ev);
+      const p = this.pt(ev, r);
       if (this.cur.erase) { this.erase(p); continue; }
       const q = this.cur.p.at(-1); if (Math.hypot(p[0] - q[0], p[1] - q[1]) < .8) continue;
       this.cur.p.push(p);
       if (Math.hypot(p[0] - this.holdAt[0], p[1] - this.holdAt[1]) > 3) this.hold(p);
     }
     if (this.cur.erase) return;
-    this.livePath.setAttribute("d", outline(this.cur));
+    // the line under the pen is drawn once a frame, however many points arrive in it
+    this.liveRaf ||= requestAnimationFrame(() => { this.liveRaf = 0; if (this.cur && !this.cur.erase) this.livePath.setAttribute("d", outline(this.cur)); });
     const y = this.cur.p.at(-1)[1];
-    if (y > this.H - LINE * 1.2) { this.extra += 2 * LINE; this.paint(); }   // writing nears the bottom: the paper grows two lines
+    if (this.mode !== "focus" && y > this.H - LINE * 1.2) { this.extra += 2 * LINE; this.paint(); }   // writing nears the bottom: the paper grows two lines
   }
+  moved(e) { const q = this.press; if (q && e.pointerId === q.id) q.far = Math.max(q.far, Math.hypot(e.clientX - q.x, e.clientY - q.y)); }
   hold(p) {
     this.holdAt = p; clearTimeout(this.holdT);
     this.holdT = setTimeout(() => {   // held still: the stroke becomes the shape it meant
@@ -315,11 +413,20 @@ export class Sheet {
   }
   cancel() { clearTimeout(this.holdT); this.cur = null; this.gLive.replaceChildren(); this.el.removeAttribute("data-writing"); }
   up(e, cancelled) {
+    this.moved(e);
+    K.handMoved();
+    if (e.pointerType === "pen") this.penAt = Date.now();
+    // A tap: a finger or a click that stayed put, or the Pencil on a sheet you haven't written on (with ink there, its tap is a dot). Not with the pen or eraser on.
+    const q = this.press, mine = q && q.id === e.pointerId;
+    if (mine) this.press = null;
+    const tap = !!mine && !cancelled && q.far < (e.pointerType === "mouse" ? 4 : 10) && (e.pointerType === "touch" || (!K.TOOL.pen && K.TOOL.t !== "eraser" && (e.pointerType !== "pen" || !K.ownStrokes(this.th, this.sid).length)));
+    if (tap) this.tap = true;
     if (this.touches) { this.touches.delete(e.pointerId); if (!this.touches.size) this.pan = false; }
     if (!this.cur || e.pointerId !== this.pid) return;
     clearTimeout(this.holdT);
     const cur = this.cur; this.cur = null; this.el.removeAttribute("data-writing");
     if (cur.erase) return;
+    if (tap) { this.gLive.replaceChildren(); return; }   // it opens the page, so it leaves no dot
     if (cancelled && cur.p.length < 3) { this.gLive.replaceChildren(); return; }
     if (cur.lasso) {
       const b = isLoop(cur.p, 10) || bbox(cur.p), r = this.c.getBoundingClientRect(), k = r.width / W;
@@ -428,22 +535,57 @@ export function openFocus(th, sid) {
   closeFocus();
   const sheet = new Sheet(th, sid, { mode: "focus" });
   const done = () => closeFocus();
-  const bar = h("div", { class: "ink-focus-tb" });
+  const bar = h("div", { class: "ink-focus-tb", role: "toolbar", "aria-label": "Pen" });
+  const sc = h("div", { class: "ink-focus-s" }, h("div", { class: "ink-pad" }, sheet.el));
   const back = document.activeElement;
   const page = h("div", { class: "ink-focus", role: "dialog", "aria-modal": "true", tabindex: "-1", "data-th": th, "aria-label": "Write on " + sheet.model().title },
     h("div", { class: "ink-focus-h" }, h("b", {}, sheet.model().title), button("Done", done, { kind: "primary", size: "s" })),
-    h("div", { class: "ink-focus-s" }, sheet.el), bar);
-  import("./toolbar.js").then(m => bar.replaceChildren(...m.toolRow(th, { dock: "focus" }))).catch(() => {});
+    sc, bar);
+  const send = sheet.send = button("Send", () => { closeFocus(); dispatchEvent(new CustomEvent("ink:send", { detail: { th, sids: [sid] } })); }, { kind: "primary", size: "s", cls: "ink-send", title: "Send what you wrote" });
+  send.disabled = !(K.inkPending(th)?.sheets || []).includes(sid);
+  const place = movable(bar, page, sheet.ac.signal);
+  import("./toolbar.js").then(m => { bar.replaceChildren(place.grip, ...m.toolRow(th, { dock: "focus" }), h("hr"), send); place(); }).catch(() => {});
   const key = e => { if (e.key === "Escape" && !e.defaultPrevented && !document.querySelector(".ink-bubble")) { e.preventDefault(); done(); } };
   addEventListener("keydown", key, { signal: sheet.ac.signal });
   document.body.append(page);
   FOCUS = { page, sheet, back };
   document.documentElement.setAttribute("data-ink-focus", "");
+  sheet.open(sc);
   page.focus({ preventScroll: true });
+}
+/** The Write page's toolbar floats and goes where it is dragged (by its grip or any bare part of it; arrows on the grip), and
+ *  stays there next time. The place is kept as a share of the free room, so it survives a turned iPad. */
+const TB = "dash.ink.tb";
+function movable(bar, page, signal) {
+  const grip = h("button", { type: "button", class: "ink-grip", "aria-label": "Move the toolbar", title: "Drag to move the toolbar" });
+  let at = null, from = null;
+  try { const v = JSON.parse(localStorage.getItem(TB)); if (Array.isArray(v) && v.every(Number.isFinite)) at = v; } catch (e) {}
+  const head = () => page.firstElementChild.offsetHeight;   // never over the title and Done
+  const room = () => [Math.max(1, page.clientWidth - bar.offsetWidth), Math.max(1, page.clientHeight - head() - bar.offsetHeight)];
+  const place = () => {
+    if (!at) return;
+    const [w, hh] = room(); Object.assign(bar.style, { left: at[0] * w + "px", top: head() + at[1] * hh + "px", bottom: "auto", translate: "none" });
+  };
+  const go = (x, y) => { const [w, hh] = room(), c = n => Math.max(0, Math.min(1, n)); at = [c(x / w), c((y - head()) / hh)]; place(); };
+  const keep = () => { try { localStorage.setItem(TB, JSON.stringify(at)); } catch (e) {} };
+  bar.addEventListener("pointerdown", e => {
+    if (e.target !== bar && e.target !== grip) return;
+    e.preventDefault(); const r = bar.getBoundingClientRect(); from = [e.pointerId, e.clientX - r.left, e.clientY - r.top];
+    bar.setPointerCapture(e.pointerId);
+  }, { signal });
+  bar.addEventListener("pointermove", e => { if (from && e.pointerId === from[0]) { const p = page.getBoundingClientRect(); go(e.clientX - p.left - from[1], e.clientY - p.top - from[2]); } }, { signal });
+  for (const t of ["pointerup", "pointercancel"]) bar.addEventListener(t, e => { if (from && e.pointerId === from[0]) { from = null; if (at) keep(); } }, { signal });
+  grip.addEventListener("keydown", e => {
+    const d = { ArrowLeft: [-24, 0], ArrowRight: [24, 0], ArrowUp: [0, -24], ArrowDown: [0, 24] }[e.key]; if (!d) return;
+    e.preventDefault(); go(bar.offsetLeft - (at ? 0 : bar.offsetWidth / 2) + d[0], bar.offsetTop + d[1]); keep();
+  }, { signal });
+  addEventListener("resize", place, { signal });
+  place.grip = grip; return place;
 }
 export function closeFocus() {
   if (!FOCUS) return;
-  const back = FOCUS.back; FOCUS.sheet.ac.abort(); FOCUS.page.remove(); FOCUS = null;
+  const back = FOCUS.back, FOCUS_TH = FOCUS.sheet.th; FOCUS.sheet.ac.abort(); FOCUS.page.remove(); FOCUS = null;
   if (back && back.isConnected && back.focus) back.focus({ preventScroll: true });
   document.documentElement.removeAttribute("data-ink-focus");
+  dispatchEvent(new CustomEvent("ink:change", { detail: { th: FOCUS_TH, pendOnly: true } }));   // what waited under the page draws now
 }

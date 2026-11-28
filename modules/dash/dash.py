@@ -648,6 +648,8 @@ def record_loadtime(d, route):
     keep = {k: round(float(d[k])) for k in ("ttfb", "dom", "boot", "chat", "load", "files", "bytes", "width") if isinstance(d.get(k), (int, float)) and not isinstance(d.get(k), bool)}
     if not keep or any(v < 0 or v > 10**9 for v in keep.values()): raise ValueError("no figures")
     keep.update(t=time.strftime("%Y-%m-%dT%H:%M:%S"), route=route, cold=d.get("cold") is True, hidden=d.get("hidden") is True)
+    if d.get("nobox") is True: keep["nobox"] = True   # R-1128-a: the page had no prompt box, so there is no chat time
+    if isinstance(d.get("page"), str) and re.fullmatch(r"#[A-Za-z~_-]{0,20}", d["page"]): keep["page"] = d["page"]
     LOADTIMES.parent.mkdir(parents=True, exist_ok=True)
     try: lines = LOADTIMES.read_text().splitlines()[-199:]
     except OSError: lines = []

@@ -4236,14 +4236,17 @@ button.rc-buy-open:disabled{opacity:.6;cursor:progress}
 .ink-sheet-h .btn{flex:none}
 /* the printed problem: real text, selectable, readable by the agent; set in sheet units so each line sits on a rule */
 .ink-sheet-c{--rule-gap:4cqw;position:relative;aspect-ratio:800/var(--h,192);touch-action:pan-y pinch-zoom;cursor:crosshair}
+.ink-sheet-c,.ink-focus{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}   /* a resting palm or a slow stroke selected text or opened iOS's menu mid-writing */
+.ink-paper{position:absolute;inset:0}
 .ink-sheet-p{position:absolute;left:7cqw;top:0;right:3cqw;font-size:2.5cqw;line-height:4cqw;color:var(--ink);cursor:text}
 .ink-sheet-p>*{margin:0}
+.ink-sheet-p .ink-pic{display:block;max-width:100%;max-height:48cqw;margin:1cqw 0;border-radius:var(--r-s);background:#fff;pointer-events:none}
 @container (max-width:520px){.ink-sheet-p{font-size:3.6cqw;line-height:8cqw}}
-.ink-sheet-c[data-paper=ruled]{background:repeating-linear-gradient(to bottom,transparent 0 calc(var(--rule-gap) - 1px),var(--paper-rule) calc(var(--rule-gap) - 1px) var(--rule-gap));background-position:0 -1px}
+.ink-sheet-c[data-paper=ruled]>.ink-paper{background:linear-gradient(transparent calc(var(--rule-gap) - 1px),var(--paper-rule) 0) 0 -1px/100% var(--rule-gap)}   /* a tile, not a repeating gradient: over a large paper that dropped lines */
 .ink-sheet-c[data-paper=ruled]::before{content:"";position:absolute;top:0;bottom:0;left:5.5cqw;width:1px;background:var(--paper-margin)}
-.ink-sheet-c[data-paper=grid]{background-image:linear-gradient(var(--paper-grid) 1px,transparent 1px),linear-gradient(90deg,var(--paper-grid) 1px,transparent 1px);background-size:var(--rule-gap) var(--rule-gap)}
-.ink-sheet-c[data-paper=dot]{background-image:radial-gradient(circle,var(--paper-dot) 1.1px,transparent 1.4px);background-size:calc(var(--rule-gap) * .75) calc(var(--rule-gap) * .75)}
-.ink-sheet-c[data-paper=blank]{background:none}
+.ink-sheet-c[data-paper=grid]>.ink-paper{background-image:linear-gradient(var(--paper-grid) 1px,transparent 1px),linear-gradient(90deg,var(--paper-grid) 1px,transparent 1px);background-size:var(--rule-gap) var(--rule-gap)}
+.ink-sheet-c[data-paper=dot]>.ink-paper{background-image:radial-gradient(circle,var(--paper-dot) 1.1px,transparent 1.4px);background-size:calc(var(--rule-gap) * .75) calc(var(--rule-gap) * .75)}
+.ink-sheet-c[data-paper=blank]>.ink-paper{background:none}
 .ink-sheet-c[data-tool=eraser]{cursor:cell}
 .ink-invite{position:absolute;left:7.5cqw;top:calc((var(--rows,0) + .55) * var(--rule-gap));display:flex;align-items:center;gap:8px;color:var(--ink-3);font:22px/1 var(--hand);pointer-events:none;transition:opacity var(--dur-l) var(--ease)}
 .ink-invite .ic{width:18px;height:18px;stroke-width:1.6}
@@ -4292,6 +4295,13 @@ body:has(.ink-bubble) .msg-tools{visibility:hidden}
 .ink-tb{position:fixed;z-index:60;display:flex;align-items:center;gap:2px;height:var(--ink-tb-h);padding:2px 6px;border-radius:var(--r-pill);background:var(--surface);box-shadow:var(--e2)}
 .ink-tb[data-dock=float]{top:calc(var(--bar-h) + 56px);right:16px;bottom:auto}
 :root[data-ink-focus] .ink-tb[data-dock=float]{display:none}
+/* The top area put away (the person, 112720497dfd): no app bar, no conversation header or status line; one small button at the top brings them back.
+   A lost connection keeps the bar, which says so. :has() ties it to an open conversation, so leaving it brings the bar back. */
+body:has(.cm[data-top=hidden]):not(:has(.top .lost)) #top,.cm[data-top=hidden] .cm-head{display:none}
+body:has(.cm[data-top=hidden]):not(:has(.top .lost)) #main{min-height:100dvh}
+body:not([data-kb=open]):not(:has(.top .lost)) #main .cm[data-top=hidden]{height:100dvh;padding-top:env(safe-area-inset-top,0px)}
+body:has(.cm[data-top=hidden]):not(:has(.top .lost)) .ink-tb[data-dock=float]{top:calc(env(safe-area-inset-top,0px) + 56px)}
+.cm .cm-convo>.cm-topshow{position:absolute;z-index:30;top:calc(env(safe-area-inset-top,0px) + 6px);left:50%;translate:-50% 0;background:var(--surface);border:1px solid var(--line-2);box-shadow:0 2px 8px rgb(0 0 0 / .14);width:44px;height:32px}
 .ink-tb[data-dock=head]{position:static;height:var(--ctl);padding:0 2px;gap:0;border-radius:var(--r-m);box-shadow:0 0 0 1px var(--line)}
 .ink-t{position:relative;display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;border-radius:var(--r-pill);background:none;color:var(--ink-2);cursor:pointer}
 .ink-tb[data-dock=head] .ink-t{width:var(--ctl);height:var(--ctl);border-radius:var(--r-s)}
@@ -4357,14 +4367,19 @@ body[data-ink-off] svg.ink-mark:not(.ink-live){display:none}
 .ink-card[data-err]{border-style:dashed}
 
 /* the Write page: the sheet fills the screen and a finger draws; Done returns to the chat with the ink pending */
-.ink-focus{position:fixed;inset:0;z-index:85;display:grid;grid-template-rows:auto minmax(0,1fr) auto;background:var(--bg)}
+.ink-focus{position:fixed;inset:0;z-index:85;display:grid;grid-template-rows:auto minmax(0,1fr);background:var(--bg)}
 .ink-focus-h{display:flex;align-items:center;gap:var(--s2);height:var(--bar-h);padding:0 var(--s2) 0 var(--s3);border-bottom:1px solid var(--line);background:var(--surface)}
 .ink-focus-h b{flex:1;min-width:0;font-size:var(--fs-title);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ink-focus-s{overflow:auto;padding:var(--s3)}
-.ink-focus .ink-sheet{margin:0 auto;max-width:1000px}
-.ink-focus .ink-sheet-h{display:none}
+/* the Write page: endless paper (sheet.js lay/roam sizes .ink-pad and places the sheet in it) under a toolbar that moves */
+.ink-focus-s{overflow:auto;overscroll-behavior:none;background:var(--paper);touch-action:none}
+.ink-pad{position:relative;overflow:hidden}
+.ink-focus .ink-sheet{position:absolute;margin:0;overflow:visible;background:none;box-shadow:none}
+.ink-focus .ink-sheet-h,.ink-focus .ink-sheet-f,.ink-focus .ink-sheet-c::before,.ink-focus .ink-grow{display:none}
 .ink-focus .ink-sheet-c{touch-action:none}
-.ink-focus-tb{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:2px;padding:4px 8px calc(4px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line);background:var(--surface)}
+.ink-focus-tb{position:absolute;z-index:2;left:50%;bottom:calc(10px + env(safe-area-inset-bottom,0px));translate:-50% 0;width:max-content;max-width:calc(100% - 16px);display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:2px;padding:4px 8px;border:1px solid var(--line-2);border-radius:var(--r-l);background:var(--surface);box-shadow:var(--e2);touch-action:none;cursor:grab}
+.ink-grip{align-self:stretch;width:28px;min-height:44px;border:0;border-radius:var(--r-s);background:radial-gradient(circle,var(--ink-3) 1.5px,transparent 2px) 50% 50%/8px 8px;background-clip:content-box;padding:10px 6px;cursor:grab;touch-action:none}
+.ink-grip:focus-visible{outline:none;box-shadow:var(--ring)}
+.ink-focus-tb .ink-send{height:36px;margin-left:4px}
 .ink-focus-tb .ink-t{width:44px;height:44px}
 @media (max-width:640px){
   .ink-pen-l,.ink-pen kbd,.ink-on-k{display:none}
@@ -4373,6 +4388,7 @@ body[data-ink-off] svg.ink-mark:not(.ink-live){display:none}
   .ink-bubble .btn{height:40px}
   .ink-chip{height:44px}
   .ink-focus-tb .ink-sw{width:28px}
+  .ink-focus-tb hr:nth-of-type(2){flex:0 0 100%;width:auto;height:1px;margin:0}
 }
 @media print{.ink-tb,.ink-bubble,.ink-invite,.ink-on{display:none}}
 /* the person's sent ink (ui/message.js inkLine): one quiet line under the message, however many sheets */

@@ -288,7 +288,7 @@ const MO = typeof MutationObserver !== "undefined" ? new MutationObserver(() => 
 function watch(b) { if (MO && MOB !== b) { MO.disconnect(); MOB = b; MO.observe(b, { childList: true, subtree: true }); } }
 addEventListener("scroll", e => { if (e.target === document || (e.target.closest && e.target.closest("#main"))) paint(); }, { capture: true, passive: true });
 addEventListener("resize", () => paint());
-addEventListener("ink:change", () => paint());
+addEventListener("ink:change", () => { if (!K.writePage()) paint(); });
 addEventListener("hashchange", () => { closeBubble(); paint(); });
 /** After the chat view renders (comms.js frame). */
 export function sync() { paint(); }

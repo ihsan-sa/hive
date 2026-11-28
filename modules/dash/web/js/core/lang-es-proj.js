@@ -29,6 +29,8 @@ const W = {
   "Bring in a project": "Traer un proyecto",
   "Exporting": "Exportando",
   "Bringing in": "Trayendo",
+  // the store's own failure when the Hive gives no answer (store.js ask), in "X wasn't exported: …" (drive_app_lang notices, 11-27)
+  "can't reach the server": "no se puede llegar al servidor",
 };
 const er = e => W[e] || e;   // the job's own error words, when they are these
 export default {
