@@ -1,5 +1,5 @@
 name: macos
-on: { push: { branches: [test-train] } }
+on: { push: { branches: [test-train, test-mac-many] } }
 permissions: { contents: read }
 jobs:
   install:
