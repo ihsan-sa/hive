@@ -30,11 +30,20 @@ const menuCommand = () => {
 async function open() {
   const { exec, words } = menuCommand();
   const app = await _electron.launch({ executablePath: words[0], args: [...words.slice(1), '--no-sandbox'], env: { ...process.env, HIVE_APP_TEST: '1' } });
+  const said = []; for (const s of [app.process().stdout, app.process().stderr]) s?.on('data', d => said.push(...String(d).split('\n').filter(Boolean)));
   await app.firstWindow();
   const where = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => (w.contentView.children.at(-1)?.webContents ?? w.webContents).getURL().split('#')[0])[0] || '').catch(() => '');
   const end = Date.now() + 4 * 60000; let at = '';
   while (!signedIn(at = await where())) {
-    if (Date.now() > end) { await app.close().catch(() => { }); throw new Error(`the window never reached the Hive signed in (at "${at}")`); }
+    if (Date.now() > end) {
+      // What the app showed, for a run that can't be watched: every window and view, a picture, and what the app printed.
+      const seen = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ title: w.getTitle(), shown: w.isVisible(),
+        views: [w.webContents, ...w.contentView.children.map(v => v.webContents).filter(Boolean)].map(c => ({ url: c.getURL().split('#')[0], loading: c.isLoading(), crashed: c.isCrashed() })) }))).catch(e => 'no answer: ' + e.message);
+      const win = await app.firstWindow().catch(() => null);
+      if (win) await win.screenshot({ path: path.join(__dirname, 'shots', 'deb-not-signed-in.png') }).catch(() => { });
+      await app.close().catch(() => { });
+      throw new Error(`the window never reached the Hive signed in (at "${at}"); windows ${JSON.stringify(seen)}; the app said: ${said.slice(-20).join(' | ').replace(/#\S+/g, '#…') || 'nothing'}`);
+    }
     await sleep(1000);
   }
   return { app, exec, at };
