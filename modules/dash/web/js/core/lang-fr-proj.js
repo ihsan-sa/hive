@@ -1,6 +1,16 @@
 // fr: Settings › Projects, export a project and bring one in (settings.js projectsBlock, projJob); product-test rung, 2026-11-27.
 // Exact English keys; the patterns are the status lines with a project or file name in them.
 const W = {
+  // E207: the line in a conversation's reply place while it shows the copy kept on this device (views/comms.js readOnly)
+  "Offline. This is the copy kept on this device, read only; replies need a connection.": "Hors ligne. C'est la copie gardée sur cet appareil, en lecture seule ; répondre demande une connexion.",
+  "Showing the chats this device last read. Trying again every few seconds.": "Affichage des discussions lues en dernier sur cet appareil. Nouvel essai toutes les quelques secondes.",
+  "On, with the first line of each reply. It shows on your phone's lock screen and passes through ntfy.sh, a public service. Anyone who learns the topic below can read those lines, so keep it to yourself.": "Activé, avec la première ligne de chaque réponse. Elle s’affiche sur l’écran verrouillé du téléphone et passe par ntfy.sh, un service public. Quiconque connaît le sujet ci-dessous peut lire ces lignes, alors gardez-le pour vous.",
+  "Show the reply's first line in the alert": "Afficher la première ligne de la réponse dans l’alerte",
+  "Hide the reply's first line": "Masquer la première ligne de la réponse",
+  "The alerts now carry the reply's first line.": "Les alertes affichent maintenant la première ligne de la réponse.",
+  "The alerts no longer carry any words from a reply.": "Les alertes ne contiennent plus aucun mot d’une réponse.",
+  "Off: the alert only says something is waiting, so nothing from a reply shows on the lock screen.": "Désactivé : l’alerte dit seulement que quelque chose attend, donc rien d’une réponse ne s’affiche sur l’écran verrouillé.",
+  "Anyone who can see your phone's lock screen can read that line.": "Toute personne qui voit l’écran verrouillé de votre téléphone peut lire cette ligne.",
   "it stopped without saying why": "il s'est arrêté sans dire pourquoi",
   "your Hive restarted while this ran; start it again": "votre Hive a redémarré pendant l'opération ; relancez-la",
   "this sign-in can't follow it any more (full access ended after a while idle); it goes on running on your Hive, so sign in again and look in Projects": "cette connexion ne peut plus la suivre (l'accès complet a pris fin après un moment d'inactivité) ; elle continue sur votre Hive, alors reconnectez-vous et regardez dans Projets",
@@ -19,6 +29,8 @@ const W = {
   "Bring in a project": "Importer un projet",
   "Exporting": "Export de",
   "Bringing in": "Import de",
+  // the store's own failure when the Hive gives no answer (store.js ask), in "X wasn't exported: …" (drive_app_lang notices, 11-27)
+  "can't reach the server": "impossible de joindre le serveur",
 };
 const er = e => W[e] || e;   // the job's own error words, when they are these
 export default {

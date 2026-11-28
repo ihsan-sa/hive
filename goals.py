@@ -659,11 +659,16 @@ def tick(txt, words, post):
     """Tick the one open or blocked rung whose text holds `words` (any case), appending `(post ID)`. Returns (new text, the rung line) or raises ValueError.
     Rounds ticked rungs by hand and left the id off: 1073 of 1601 ticks across project goals.md files had none (2026-11-11), and the
     rsi-lab bench's s5u replay showed runs that knew their id was wrong stopping anyway. A tool that checks the id makes it a step, not a memory."""
+    # The words must end where a word ends: "step 7e" ticked rung 7e2 once 7e was ticked by hand (k3270, hive-app 0fa15f9).
     lines = txt.split("\n"); w = words.lower().strip()
-    hits = [i for i, l in enumerate(lines) if re.match(r"\s*-\s+\[[ !]\]\s", l) and w in l.lower()]
+    whole = re.compile(re.escape(w) + (r"(?!\w)" if w[-1:].isalnum() or w[-1:] == "_" else ""))
+    open_ = [i for i, l in enumerate(lines) if re.match(r"\s*-\s+\[[ !]\]\s", l)]
+    hits = [i for i in open_ if whole.search(lines[i].lower())]
     if len(hits) != 1:
         cands = [lines[i].strip()[:100] for i in hits]
-        raise ValueError(f"{len(hits)} open rungs hold {words!r}" + ("; say more of it:\n  " + "\n  ".join(cands) if cands else ""))
+        inside = [lines[i].strip()[:100] for i in open_ if i not in hits and w in lines[i].lower()]
+        raise ValueError(f"{len(hits)} open rungs hold {words!r}" + ("; say more of it:\n  " + "\n  ".join(cands) if cands else "")
+                         + ("; only inside a longer word in:\n  " + "\n  ".join(inside) if inside and not hits else ""))
     i = hits[0]; l = re.sub(r"\[[ !]\]", "[x]", lines[i], count=1).rstrip()
     lines[i] = l + f" (post {post})"
     return "\n".join(lines), lines[i]
@@ -671,6 +676,20 @@ def tick(txt, words, post):
 
 PERSON_HOLD = re.compile(r"\b(pause[ds]?|pausing|stop|stopped|halt|hold off|on hold|don'?t (run|start|touch))\b", re.I)
 PERSON_GO = re.compile(r"\b(un-?pause[ds]?|resume[ds]?|carry on|go ahead|start again|continue)\b", re.I)
+
+# "pause this until I say to resume" names the go word only as the end of the pause (11271037b019: the keeper's list kept
+# hive-mail-outbound dispatchable). Drop that clause before looking for a go.
+UNTIL_GO = re.compile(r"\b(?:until|till|unless)\s+(?:i|we|told|you(?:'re| are) told)\b[^.,!?;\n]*?\b(?:un-?pause[ds]?|resume[ds]?|carry on|go ahead|start again|continue)\b", re.I)
+# "or until tomorrow 1pm": the pause ends at that time on this machine's clock, the day after the post.
+UNTIL_TOMORROW = re.compile(r"\b(?:until|till)\s+tomorrow\s+(?:at\s+)?(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*([ap])\.?m\b", re.I)
+
+def stated_end_passed(text, at):
+    m = UNTIL_TOMORROW.search(text)
+    if not m: return False
+    try: day = dt.datetime.fromisoformat(str(at).replace("Z", "+00:00")).astimezone().date() + dt.timedelta(days=1)
+    except (TypeError, ValueError): return False
+    hour = int(m.group(1)) % 12 + (12 if m.group(3).lower() == "p" else 0)
+    return now() >= dt.datetime.combine(day, dt.time(hour, int(m.group(2) or 0))).astimezone()
 
 # A question about pausing is not a pause: "Should we pause the voice board? what is most active" held its thread
 # (11160857c8f0), as "hello? why is this paused" would have. "Can you pause X?" is still a request, so it holds.
@@ -713,7 +732,8 @@ def person_held_of(threads, board=None):
         # once the same-day-only rule landed (review a6e64, 2026-11-23).
         if age_d > 1.5 and re.search(r"\buntil\s+(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|noon\b|midnight\b|tomorrow\b|tonight\b|this (?:morning|afternoon|evening)\b|later today\b)", text, re.I): continue
         if age_d > 8 and re.search(r"\buntil\s+(?:mon|tues|wednes|thurs|fri|satur|sun)day\b", text, re.I): continue
-        if PERSON_HOLD.search(text) and not PERSON_GO.search(text) and not hold_is_question(text):
+        if stated_end_passed(text, p.get("at")): continue
+        if PERSON_HOLD.search(text) and not PERSON_GO.search(UNTIL_GO.sub("", text)) and not hold_is_question(text):
             out[th] = f"the person's newest post here, {p.get('id')}, reads as a pause: \"{' '.join(text.split())[:80]}\""
     return out
 

@@ -19,8 +19,18 @@ const GLYPH = { start: "plus", comms: "chat", now: "agents", usage: "usage", set
 const SHORT = { comms: "Chat", now: "Agents" };
 const BAR = ["comms", "now", "usage", "knowledge"];   // the design's four (Chat, Agents, Usage, Knowledge); More is the fifth
 const DEV_MAIN = ["comms", "now", "agents", "usage"];
+// R-1128-d: a tab's word longer than its fifth of a phone (Spanish "Conocimiento" at 390 read "Conocimie…") is set smaller until it fits,
+// down to 9 px, rather than cut. Measured after each draw, so it holds for any language and width.
+function fitBar() {
+  for (const l of document.querySelectorAll(".bnav-l")) {
+    l.style.fontSize = "";
+    const cw = l.clientWidth, sw = l.scrollWidth;
+    if (cw && sw > cw) l.style.fontSize = Math.max(9, Math.floor(parseFloat(getComputedStyle(l).fontSize) * cw / sw * 10) / 10) + "px";
+  }
+}
 export function mobileNav({ views, current, nav, update }) {
   ST.update = update;
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(fitBar);
   const on = v => (typeof v.tab === "function" ? v.tab() : v.tab);
   const app = S.app.app && nav;
   let main, groups, active;
@@ -74,6 +84,7 @@ export function setView(id, arg) {
 
 if (typeof document !== "undefined") {
   addEventListener("hashchange", () => { ST.open = false; });
+  addEventListener("resize", () => requestAnimationFrame(fitBar));
   addEventListener("keydown", e => { if (e.key === "Escape" && ST.open && ST.update) { ST.open = false; ST.update(); } });
 
   // The keyboard. Android (interactive-widget=resizes-content, index.html) shrinks the page itself; iOS leaves it and shrinks

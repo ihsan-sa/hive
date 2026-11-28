@@ -36,6 +36,7 @@ import { pickBar, onPick } from "../ui/pick.js";
 import { when } from "../ui/when.js";
 import { loadTiers, focusTierChip, threadTierChip, pauseOf, askPause, pausedStrip } from "../ui/worktiers.js";
 import { downloadMarkdown, printScript } from "../ui/export.js";
+import { remember as keepForOffline } from "../core/offline.js";
 import { shareDialog } from "../ui/share.js";
 import { pinned, important, faded, meta as tmeta, archived, setMeta, renameDialog, openCard, openFor, doneFor, markSeen, threadCrumb, titleExtras } from "../ui/threadmeta.js";
 import { callFor, hangUp } from "../ui/phone.js";
@@ -75,6 +76,13 @@ if (typeof document !== "undefined") document.addEventListener("keydown", e => {
 });
 const sideBtn = () => h("button", { type: "button", class: "btn cm-sidebtn", "data-kind": "icon", "data-key": "sidebtn", "aria-pressed": String(!sideHid), "aria-label": sideHid ? "Show the conversation list" : "Hide the conversation list",
   title: (sideHid ? "Show" : "Hide") + " the conversation list (Ctrl+\\)", onclick: toggleSide }, icon("sidebar"));
+// Hide the whole top area (the app bar with Chat's pages, and the conversation's header and status line) so the page gets the height
+// (the person, 112720497dfd). A small button at the top corner brings it back. Kept on this device; it holds only while a conversation is open.
+let topHid = (() => { try { return localStorage.getItem("cm.tophid") === "1"; } catch (e) { return false; } })();
+function toggleTop() { topHid = !topHid; try { localStorage.setItem("cm.tophid", topHid ? "1" : "0"); } catch (e) {} C.menu = C.more = null; L.ctx && L.ctx.update();
+  requestAnimationFrame(() => document.querySelector(topHid ? ".cm-topshow" : ".cm-tophide")?.focus({ preventScroll: true })); }
+const topBtn = () => h("button", { type: "button", class: "btn cm-tophide", "data-kind": "icon", "data-key": "tophide", "aria-label": "Hide the top area", title: "Hide the top area: the bar, this header and the status line", onclick: toggleTop }, icon("chevron-up"));
+const topShow = () => h("button", { type: "button", class: "btn cm-topshow", "data-kind": "icon", "data-key": "topshow", "aria-label": "Show the top area", title: "Show the top area", onclick: toggleTop }, icon("chevron-down"));
 const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize the conversation list", tabindex: "0", "data-key": "grip", title: "Drag to resize, or click to widen a step (from the widest it goes back to the narrowest); double-click resets",
   // A click that doesn't move is the one-press way (WCAG 2.5.7): a step wider, and from the widest back to the narrowest.
   onpointerdown: e => { e.preventDefault(); const g = e.target.closest(".cm-grip"), box = g.closest(".cm"), x0 = e.clientX, w0 = sideNow(box); g.setPointerCapture(e.pointerId); g.dataset.on = "1";
@@ -423,11 +431,11 @@ function syncDrafts(c, box) {
   const sig = ds.map(a => a.name + ":" + (a.draft ? a.draft.text.length : "-") + ":" + (a.steps || []).map(s => (s.running ? "r" : "d") + (s.out || "").length).join("/")).join();
   // E203o: steps with no reply being written sit where they happened: above the first message the person sent after the newest of them started,
   // on the board or still on its way (L.out)
-  const mine = (S.threads.get(th)?.posts || []).filter(p => p.from === "person"), sending = outFor(th).some(x => x.state !== "failed");
+  const mine = (S.threads.get(th)?.posts || []).filter(p => p.from === "person"), sending = outFor(th).filter(x => x.state !== "failed");
   const above = ds.map(a => {
     const t = !a.draft && a.steps.at(-1).t; if (!t) return null;
     for (const p of mine) { const el = p.t > t * 1e3 + 999 && box.querySelector(`:scope > [data-key="${CSS.escape(p.id)}"]`); if (el) return el; }
-    return sending ? L.out : null;
+    return sending.some(x => x.t > t * 1e3 + 999) ? L.out : null;   // a send still on its way only if it, too, came after the steps started
   });
   const full = sig + "|" + above.map(el => el && (el.dataset.key || "out")).join();
   // placed groups stay put while nothing but other placed groups sits between each and its message (a message appended since would)
@@ -1349,6 +1357,7 @@ function head(c, ctx) {
       c.thread && app() ? inkEyeButton(c.thread) : null,   // and hide what is drawn there (shows only when something is)
       c.thread ? button("Files", () => import("../ui/preview.js").then(m => m.openFiles()), { kind: "icon", icon: "folder", cls: "cm-files", title: "Files: this conversation's and the projects'" }) : null,
       c.thread ? asideBtn(c.thread) : null,
+      c.thread ? topBtn() : null,
       c.thread ? h("button", { type: "button", class: "btn cm-more-b", "data-kind": "icon", "aria-label": "More tools", title: "More tools", "aria-expanded": String(more),
         onclick: e => { e.stopPropagation(); C.more = more ? null : c.thread; ctx.update(); } }, icon("more")) : null),
     statusBar(c.thread),   // where it stands: its own row under the title and the tools (hidden on a phone, where the title's sub line says it)
@@ -1967,6 +1976,7 @@ export default {
     if (!S.live) return h("div", { class: "page" }, S.failed ? empty("Couldn't read the conversations. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     const cv = conversation(ctx.arg);
     if (cv.thread && cv.thread !== opened) { opened = cv.thread; apiPost("/api/opened", { thread: cv.thread }).catch(() => {}); }   // R107: the open beacon, once per thread open, no UI, no retry
+    if (cv.thread && !S.offline) keepForOffline(cv.thread, S.threads.get(cv.thread), { name: S.threadNames[cv.thread], meta: S.threadMeta[cv.thread], status: S.threadStatus[cv.thread] });   // E207: what this device read, for opening it with no connection
     return frame(ctx, cv);
   },
 };
@@ -2024,7 +2034,8 @@ function frame(ctx, c, pane) {
         c.thread && !can("post") ? readOnly(c.thread) : null,   // §5b: where this address can't post, say so in the composer's place
         post && c.thread ? composer({ thread: c.thread, update: ctx.update, top: app() ? strip(c.thread) : null }) : null,
         post && c.all ? h("p", { class: "cm-hint meta", "data-key": "hint" }, "To start something new, use New conversation.") : null]);
-    return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home && !c.list ? "" : null, "data-list": c.list ? "" : null, "data-side": sideHid && c.arg ? "hidden" : null, style: `--cm-w:${sideW}px` },
+    const noTop = topHid && !pane && !c.archived && !c.home && !!c.thread;   // the top area is put away (chrome css: .cm[data-top])
+    return h("div", { class: "cm", "data-key": "comms", "data-top": noTop ? "hidden" : null, "data-in": c.arg ? "" : null, "data-home": c.home && !c.list ? "" : null, "data-list": c.list ? "" : null, "data-side": sideHid && c.arg ? "hidden" : null, style: `--cm-w:${sideW}px` },
       h("nav", { class: "cm-side", "aria-label": app() ? "Conversations" : "Threads" },
         h("div", { class: "cm-filters" },
           // R14: the phone's way to the rail. Home has one row that opens it as a page; that page has a way back (css/phone.css shows these only there).
@@ -2045,6 +2056,7 @@ function frame(ctx, c, pane) {
         grip()),   // last, so Tab reaches it after the list it sits on the right edge of (WCAG 2.4.3)
       h("section", { class: "cm-convo", "aria-label": "Conversation", ...(post && c.thread ? dropZone(c.thread) : {}) },
         convo,
+        noTop ? topShow() : null,
         !c.thread ? quickPanel(ctx.update) : null,
         post && c.thread ? h("div", { class: "cm-drop", "aria-hidden": "true", "data-key": "drop" }, "Drop files to attach them") : null));
 }
@@ -2052,6 +2064,7 @@ function frame(ctx, c, pane) {
 /** The read-only footer: a lock, one sentence, and (in the developer look, which has no strip) the thread's live agents inline, no actions. */
 function readOnly(th) {
   const run = app() ? [] : (S.live ? S.live.agents : []).filter(a => a.thread === th && a.alive);
+  if (S.offline) return h("div", { class: "cm-ro", "data-key": "ro-off", role: "status" }, icon("lock"), h("span", null, "Offline. This is the copy kept on this device, read only; replies need a connection."));   // E207
   return h("div", { class: "cm-ro", "data-key": "ro" }, icon("lock"), h("span", null, "Read-only here. This address can't post."),
     run.length ? h("span", { class: "cm-ro-a" }, run.map(a => { const d = a.doing && app() ? (ownStep(a.doing) ? "" : plainStep(a.doing)) : a.doing; return h("span", { class: "cm-ro-l", "data-key": a.name, title: d || null }, statusDot(agentState(a).key), agentRef(a.name), d ? h("span", { class: "meta" }, short(d, 48)) : null); })) : null);
 }

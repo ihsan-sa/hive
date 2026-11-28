@@ -817,7 +817,9 @@ def helper_hook(name, rec, payload, seen):
     return ("The person has just posted to the agent that started you; it can't read it until you hand back. Finish the step you "
             "are on and return what you have now, saying what is left, rather than finishing the whole job. Don't answer the post yourself.")
 
-POLL = re.compile(r"\b(until|while)\b[^\n]*\bsleep\b|--wait\b")
+# 11-27 (a1b7b): `for … in …; do …; sleep`, `tail -f /dev/null` and `read -t N` waits held person posts 2-5 min unpointed
+POLL = re.compile(r"\b(until|while)\b[^\n]*\bsleep\b|\bfor\s+(?:\w+\s+in\b|\(\()[^\n]*\bsleep\b|--wait\b|\btail\s+-f\s+/dev/null\b|\bread\s+-t\s*[0-9]")
+STOPPED_LOOP = re.compile(r"\b(until|while)\b[\s\S]*?\bsleep\b|\bfor\s+(?:\w+\s+in\b|\(\()[\s\S]*?\bsleep\b|\btail\s+-f\s+/dev/null\b")  # = starter.WAIT_LOOP
 
 def wait_note(name, rec, payload, ps):
     """The posts sat behind a foreground poll loop (`until ...; sleep`, `while ...sleep`, `--wait`): the hook can hand posts over only
@@ -852,7 +854,7 @@ def stopped_note(payload, ps):
     get through (starter.WAIT_LOOP, D16). Say so, so the run doesn't read it as its own command failing."""
     ti = payload.get("tool_input") or {}
     if payload.get("hook_event_name") != "PostToolUseFailure" or payload.get("tool_name") != "Bash" or ti.get("run_in_background"): return ""
-    if not re.search(r"\b(until|while)\b[\s\S]*?\bsleep\b", str(ti.get("command", ""))) or not any(p.get("from") == "person" for p in ps): return ""
+    if not STOPPED_LOOP.search(str(ti.get("command", ""))) or not any(p.get("from") == "person" for p in ps): return ""
     return ("\n\nYour wait loop was stopped so the person's post could reach you: it did not fail. Read the post first; if you still "
             "need the wait, use `hive wait --until 'CMD' --timeout 590`, which returns as soon as a post arrives.")
 

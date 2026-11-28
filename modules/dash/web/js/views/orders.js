@@ -21,7 +21,7 @@ async function load(ctx) {
 function card(o) {
   const when = o.updated ? ago(Date.parse(o.updated)) : null;
   const meta = [o.tracking ? "tracking " + o.tracking : null, o.receipt ? "receipt " + o.receipt : null, o.agent, when].filter(Boolean).join(" · ");
-  const go = o.url && https(o.url) && !OVER.has(o.state);
+  const go = o.url && https(o.url) && !OVER.has(o.state) && !o.test;
   return block({ title: o.shop || "Order", sub: o.total || null, state: statusLabel(TONE[o.state] || "off", o.state_words), key: "order-" + o.id },
     h("ul", { class: "order-items" }, (o.items || []).map(i => h("li", null, i))),
     o.why ? h("p", { class: "field-h order-note" }, o.why) : null,
@@ -38,7 +38,7 @@ export default {
     if (!can("logins")) return h("div", { class: "page", "data-width": "narrow" }, empty("Orders need full mode. Sign in again if your hour is up.", { kind: "page", title: "Orders" }));
     const v = O.v;
     if (!O.loading && Date.now() - O.t > 15000) setTimeout(() => load(ctx), 0);   // re-read while the page is open
-    const all = (v && v.orders) || [], open = all.filter(o => !OVER.has(o.state)), done = all.filter(o => OVER.has(o.state));
+    const all = (v && v.orders) || [], over = o => OVER.has(o.state) || o.test, open = all.filter(o => !over(o)), done = all.filter(over);   // a Link test-mode buy moved no money: finished, never open
     return h("div", { class: "page", "data-width": "narrow", "data-key": "orders" },
       pageHeader({ title: "Orders", lead: "You pay at the shop, or approve in Link. Nothing on this page pays or sends anything." }),
       O.err ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, "Couldn't read the orders: " + O.err) : null,

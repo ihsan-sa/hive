@@ -660,7 +660,10 @@ INTERRUPT_END_S = 3  # how long a signalled command has to exit before "stopped"
 # A foreground loop that only waits: `until …; sleep`, `while …; do sleep`. Posts reach a run only when a tool call ends, so the
 # person's "stop the print asap" sat 200 s behind aca94's `until … sleep 20` (112600330ff4, D16): the starter ends such a loop for
 # any post from the person, as Interrupt does. Other commands, a lease's `--wait` included, are left to end on their own.
-WAIT_LOOP = re.compile(r"\b(until|while)\b[\s\S]*?\bsleep\b")
+# 11-27 read-back (a1b7b): of 4 long calls that held the person's posts in 11-24..27, two were loops this missed: `for i in
+# $(seq 1 55); do …; sleep 10; done` (ac009, 316 s) and `timeout 300 tail -f /dev/null` (a884d, a sleep where foreground sleep
+# is refused; 141 s). Both count now; only_sleeping still leaves a loop doing work between its sleeps.
+WAIT_LOOP = re.compile(r"\b(until|while)\b[\s\S]*?\bsleep\b|\bfor\s+(?:\w+\s+in\b|\(\()[\s\S]*?\bsleep\b|\btail\s+-f\s+/dev/null\b")
 WAIT_LOOP_MIN_S = 15  # a younger loop is most likely about to end anyway
 # A heredoc body is text, not commands: a test file written with `cat <<'EOF'` that mentions until and sleep is no wait loop
 # (78 of 745 matches in afba3's 4-day replay, 11260550182a).
@@ -679,7 +682,10 @@ def only_sleeping(pid):
         try: par[q] = int(Path(f"/proc/{q}/stat").read_text().rsplit(")", 1)[1].split()[1])
         except (OSError, ValueError, IndexError): return False
     leaves = [q for q in tree if q not in par.values()]
-    try: return bool(leaves) and all(Path(f"/proc/{q}/comm").read_text().strip() == "sleep" for q in leaves)
+    def idle(q):   # `sleep`, or `tail -f /dev/null`, which never prints (the stand-in for a refused foreground sleep)
+        c = Path(f"/proc/{q}/comm").read_text().strip()
+        return c == "sleep" or c == "tail" and Path(f"/proc/{q}/cmdline").read_bytes().split(b"\0")[1:4] == [b"-f", b"/dev/null", b""]
+    try: return bool(leaves) and all(idle(q) for q in leaves)
     except OSError: return False
 
 def interrupt_step(name, post_id=None, only=None, min_s=None, then=None):
@@ -2532,6 +2538,9 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     if kind != "warden": prompt += group_note(first, fresh=not resume)
     if kind != "warden": prompt += memory_note(first)
     if kind != "warden": prompt += page_edit_note(name, first)
+    if (left := next((p["left"] for p in posts if p.get("left")), None)) and not resume:
+        prompt += (f" An earlier run of @{name} on {left['model']} stopped at that model's usage limit with this work under way, and you have none of its memory. "
+                   f"Check the thread and the files on disk for what it already did before doing it again; its stream log is {left['out']} (search it, don't read it whole).")
     if (k := next((p["continue"] for p in posts if p.get("continue")), None)):
         prompt += guarded("wake_note", k, first.get("thread"), bool(heir_of)) or ""
     fb = next((p["fallback"] for p in posts if p.get("fallback")), None)
@@ -2811,10 +2820,14 @@ def improver(c, st, alive, login):
     the 11 rounds on Opus each landed a change, the 58 on the Sonnet default each ran under 3 min and 52 landed none."""
     every = c.get("improve_every_s", 0)
     if not every or not login: return
-    if any(isinstance(r, dict) and r.get("thread") == "improve" for r in alive.values()): return
-    if any(p.get("thread") == "improve" for ps in st["pending"].values() for p in ps): return
-    if any(r.get("thread") == "improve" for r in st.get("resume", {}).values()): return
     t = time.time()
+    # The period counts from when the last round ended: a round held 3 h on a Codex limit finished at 00:21 and the next one was
+    # dispatched 11 s later on the same 8 h of results (2026-11-28, a0f98 then afeaf).
+    if (any(isinstance(r, dict) and r.get("thread") == "improve" for r in alive.values())
+            or any(p.get("thread") == "improve" for ps in st["pending"].values() for p in ps)
+            or any(r.get("thread") == "improve" for r in st.get("resume", {}).values())):
+        if "improve_at" in st: st["improve_at"] = t
+        return
     if t - st.setdefault("improve_at", t) < every: return  # first boot: wait a full period
     st["improve_at"] = t
     post(IMPROVE, ["new"], "improve", c.get("improve_model"))
@@ -3456,6 +3469,19 @@ def main():
         for n, r in ([] if hold else list(st.get("resume", {}).items())):  # a provider run held on its limit, asked since for a Claude model: its session can't move, so the post wakes it as a new run
             if login and provider_of(c, r.get("model")) and any(p.get("model") in MODELS for p in st["pending"].get(n, [])) and provider_room(c, *provider_of(c, r.get("model"))[:2], pcache):
                 st["resume"].pop(n); log(event="resume_dropped_for_claude", name=n); stop_cleared(n, r, st, f"@{n} starts again as a new run on Claude")
+        for n, r in ([] if hold or not login else list(st.get("resume", {}).items())):
+            # the same rule as for waiting posts (fallback_back_to_claude, below), for a run stopped on Codex's limit: it went there only because Claude
+            # was full. Seven such resumes waited on Codex's reset with Claude free, a PLL merge among them (watchdog trip, 2026-11-27)
+            pv = provider_of(c, r.get("model"))
+            if n in alive or not pv or r.get("fallback") != "fallback" or "shells" in r or r.get("reaped") or not provider_room(c, pv[0], pv[1], pcache): continue
+            q = {"id": r["post"], "thread": r.get("thread"), "from": r.get("from"), "left": {"model": r["model"], "out": r.get("out")}}
+            ps = st["pending"].setdefault(n, [])
+            for p in ps:
+                if p.get("fallback") == "fallback": p.pop("model", None); p.pop("fallback")
+            if not any(p["id"] == q["id"] and not p.get("continue") for p in ps): ps.insert(0, q)
+            else: next(p for p in ps if p["id"] == q["id"] and not p.get("continue"))["left"] = q["left"]
+            stays_on(st, c, n, q)
+            st["resume"].pop(n); log(event="fallback_back_to_claude", name=n, resume=True); stop_cleared(n, r, st, f"@{n} starts again as a new run on Claude")
         drop_stale_resumes(st)
         for n, r in ([] if hold else list(st.get("resume", {}).items())):  # resume limit-stopped sessions first, same name and session
             if (not login and not provider_of(c, r.get("model"))) or n in alive or len(alive) >= (c.get("max_sessions") or float("inf")): continue
@@ -3514,7 +3540,7 @@ def main():
                 # Read it, don't remove it: the dash's read marks come from this file, and with it gone a post the agent had used
                 # showed "hasn't seen this" until its next start (the person asked, 110515296d61). A fresh start empties it.
                 seen = set(got.read_text().split())
-                st["pending"][n] = [p for p in st["pending"][n] if p["id"] not in seen or p.get("continue")]  # a continuation's id is the post it follows, not a post for this agent
+                st["pending"][n] = [p for p in st["pending"][n] if p["id"] not in seen or p.get("continue") or p.get("left")]  # a continuation's id is the post it follows, not a post for this agent
                 if not st["pending"][n]:
                     st["pending"].pop(n); log(event="delivered", name=n); continue
             if any(p.get("free") for p in st["pending"][n]) and not any(p.get("fallback") for p in st["pending"][n]):

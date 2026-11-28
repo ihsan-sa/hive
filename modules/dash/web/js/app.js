@@ -20,6 +20,7 @@ import { offerTour } from "./ui/tour.js";
 import { initSwitcher } from "./ui/switcher.js";
 import { watchVersion } from "./ui/newversion.js";
 import { tellShell } from "./ui/rootword.js";
+import { inkWait } from "./ink/store.js";
 
 const byId = new Map(views.map(v => [v.id, v]));
 const top = document.getElementById("top"), main = document.getElementById("main");
@@ -92,10 +93,12 @@ function crashPage(v, e) {
 // While the person types, a redraw from a poll waits until they pause (TYPE_HOLD), at most TYPE_MAX: a keystroke that landed inside a whole-page
 // redraw waited for it, and typing in a prompt box lagged (the person, 11231146bc6e). Their own actions (ctx.update) still draw at once.
 const TYPE_HOLD = 600, TYPE_MAX = 3000;
-let typedAt = 0, heldSince = 0, heldT = 0;
+let typedAt = 0, heldSince = 0, heldT = 0, penT = 0;
 addEventListener("keydown", e => { if (e.target && e.target.closest && e.target.closest("textarea, input, [contenteditable]")) typedAt = performance.now(); }, { capture: true, passive: true });
 function schedule(force) {
   if (!force) {
+    const pen = inkWait();   // nor while the pen writes: a redraw under it stalled the stroke (the person, 112720500c2d)
+    if (pen > 0) { if (!penT) penT = setTimeout(() => { penT = 0; schedule(false); }, pen); return; }
     const t = performance.now(), wait = typedAt + TYPE_HOLD - t;
     if (wait > 0 && (!heldSince || t - heldSince < TYPE_MAX)) { heldSince ||= t; if (!heldT) heldT = setTimeout(() => { heldT = 0; schedule(false); }, wait); return; }
   }

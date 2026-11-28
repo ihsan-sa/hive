@@ -1,6 +1,16 @@
 // it: Settings › Projects, export a project and bring one in (settings.js projectsBlock, projJob); product-test rung, 2026-11-27.
 // Exact English keys; the patterns are the status lines with a project or file name in them.
 const W = {
+  // E207: the line in a conversation's reply place while it shows the copy kept on this device (views/comms.js readOnly)
+  "Offline. This is the copy kept on this device, read only; replies need a connection.": "Offline. È la copia salvata su questo dispositivo, solo lettura; per rispondere serve una connessione.",
+  "Showing the chats this device last read. Trying again every few seconds.": "Mostro le chat lette per ultime su questo dispositivo. Riprovo ogni pochi secondi.",
+  "On, with the first line of each reply. It shows on your phone's lock screen and passes through ntfy.sh, a public service. Anyone who learns the topic below can read those lines, so keep it to yourself.": "Attivo, con la prima riga di ogni risposta. Compare sulla schermata di blocco del telefono e passa da ntfy.sh, un servizio pubblico. Chi conosce l’argomento qui sotto può leggere quelle righe, quindi tienilo per te.",
+  "Show the reply's first line in the alert": "Mostra la prima riga della risposta nell’avviso",
+  "Hide the reply's first line": "Nascondi la prima riga della risposta",
+  "The alerts now carry the reply's first line.": "Gli avvisi ora mostrano la prima riga della risposta.",
+  "The alerts no longer carry any words from a reply.": "Gli avvisi non contengono più parole di una risposta.",
+  "Off: the alert only says something is waiting, so nothing from a reply shows on the lock screen.": "Spento: l’avviso dice solo che qualcosa ti aspetta, quindi niente di una risposta compare sulla schermata di blocco.",
+  "Anyone who can see your phone's lock screen can read that line.": "Chiunque veda la schermata di blocco del tuo telefono può leggere quella riga.",
   "it stopped without saying why": "si è fermato senza dire perché",
   "your Hive restarted while this ran; start it again": "il tuo Hive si è riavviato durante l'operazione; riavviala",
   "this sign-in can't follow it any more (full access ended after a while idle); it goes on running on your Hive, so sign in again and look in Projects": "questo accesso non può più seguirla (l'accesso completo è scaduto dopo un po' di inattività); continua sul tuo Hive, quindi accedi di nuovo e guarda in Progetti",
@@ -19,6 +29,8 @@ const W = {
   "Bring in a project": "Importa un progetto",
   "Exporting": "Esportazione di",
   "Bringing in": "Importazione di",
+  // the store's own failure when the Hive gives no answer (store.js ask), in "X wasn't exported: …" (drive_app_lang notices, 11-27)
+  "can't reach the server": "impossibile raggiungere il server",
 };
 const er = e => W[e] || e;   // the job's own error words, when they are these
 export default {

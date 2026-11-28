@@ -240,7 +240,8 @@ function phoneBlock(ctx) {
   const P = F.phone;
   if (!can("config") || !P) return null;
   if (P.failed) return block({ live: true, title: "Phone alerts", key: "phone", sub: `Couldn't read whether phone alerts are on: ${P.failed}.`, actions: button("Try again", () => loadPhone(ctx), { size: "s" }) });
-  const sub = P.on
+  const sub = P.on && P.preview ? "On, with the first line of each reply. It shows on your phone's lock screen and passes through ntfy.sh, a public service. Anyone who learns the topic below can read those lines, so keep it to yourself."   // E208
+    : P.on
     ? `On. When something is waiting for you and you haven't seen it, your Hive sends one line to ntfy.sh${P.line ? `: "${P.line}"` : ""}. That is all it sends: no names, no words from your agents${P.link ? ", and a link back to this address" : ""}. Anyone who learns the topic below can read those lines, so keep it to yourself.`
     : `Off. Turn it on to get a line on your phone when your Hive asks you something or finishes a job, even with this page closed. It uses ntfy.sh, a free public service with no account: your Hive sends it one line${P.line ? ` ("${P.line}")` : ""} and nothing else.`;
   return block({ title: "Phone alerts", key: "phone", sub,
@@ -250,6 +251,9 @@ function phoneBlock(ctx) {
       h("p", null, "On your phone: install the ntfy app (free), tap +, choose \"Subscribe to topic\", and enter this topic:"),
       h("p", null, h("code", null, P.topic), " ", copyButton(P.topic)),
       h("p", { class: "field-h" }, P.link ? "Tapping the alert opens " + P.link : "Tapping the alert won't open your Hive: you turned this on from an address a phone can't reach. Turn it off and on again from your Hive's public address to add the link."),
+      // E208: the reply's own first line, off until asked for, because it shows on the lock screen and goes through ntfy.sh
+      button(P.preview ? "Hide the reply's first line" : "Show the reply's first line in the alert", () => phoneDo(ctx, P.preview ? "preview-off" : "preview-on", P.preview ? "The alerts no longer carry any words from a reply." : "The alerts now carry the reply's first line."), { size: "s" }),
+      h("p", { class: "field-h" }, P.preview ? "Anyone who can see your phone's lock screen can read that line." : "Off: the alert only says something is waiting, so nothing from a reply shows on the lock screen."),
       button(P.runs ? "Stop run-finished alerts" : "Also tell me when a run I started ends", () => phoneDo(ctx, P.runs ? "runs-off" : "runs-on", P.runs ? "Run-finished alerts off." : "You will get a line when a run you started ends."), { size: "s" }),
       button("Make a new topic", () => confirm({ title: "Make a new topic?", body: ["The topic your phone follows stops working. You'd subscribe to the new one on your phone."], ok: "Make a new topic", onOk: () => phoneDo(ctx, "topic", "New topic. Subscribe to it on your phone; the old one is dead.") }), { size: "s" }),
       P.error ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, P.error) : null, msg("phone")) : msg("phone"));
@@ -1046,6 +1050,7 @@ function buyingPart(ctx) {
 export default {
   id: "settings", label: "Settings", about: "accounts, modules, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
   enter(ctx) { F.navShown = null; F.keysOpen = null; F.flash = {}; F.ed = null; F.lost = false; F.name = null; F.saved = null; if (!F.accessTyped) F.access = null;   /* unsaved access edits stay for the session (3.3.7) */ F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); loadConns(ctx); loadShops(ctx); readBuying(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update);
+    if (!S.projects && !PM.tried) { PM.tried = true; loadProjects().then(ctx.update); }   // the project list (a read) asks beside the page's other reads, not after /api/app answers: on a slow link that was a second wait (drive_app_slow)
   },
   back(ctx) { loadCfg(ctx); loadPhone(ctx); loadVoice(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); loadConns(ctx); loadShops(ctx); readBuying(ctx); if (can("tier")) loadTiers(ctx.update, true); if (S.app.settings && can("config")) loadPage(ctx.update); },   // what enter reads, without enter's clearing: what the person is typing stays
   leave() { F.goTo = null; clearTimeout(shopTimer); shopTimer = null; F.shopTurn = (F.shopTurn || 0) + 1; F.shops = null; clearInterval(upTimer); upTimer = null; clearTimeout(voiceTimer); voiceTimer = null; forget(); forgetSecrets(); buyTurn++; if (Buy) Buy.forgetBuying(); F.connIn = {}; forgetTry(); },   // tokens typed in Connectors but not saved don't outlive the screen

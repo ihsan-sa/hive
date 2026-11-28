@@ -90,6 +90,9 @@ _PATS = [
 _LAST_FIRST = re.compile(r"([A-Z][\w'’]+(?:-[A-Z][\w'’]+)?),\s+((?:[A-Z][a-z][\w'’-]*|[A-Z]\.)(?:\s+(?:[A-Z]\.?|[A-Z][a-z][\w'’-]*))?)")  # "Seado, Christina", "Garcia-Lopez, Ana M", "Lee, J. R." (review 112215240022)
 
 
+_PRONOUN_WORD = r"(?:she|her|hers|he|him|his|they|them|their|theirs|ze|zir|zirs|xe|xem|xyr|any|all)"
+# A profile card's pronouns line between the name and the post: "Pronouns:" / "He/Him/His" (WMU's /directory/ profiles, fnwords157 6z12u). A label, not a post or another person.
+_PRONOUN_LINE = re.compile(rf"\s*(?:pronouns?\s*:?\s*)?\(?{_PRONOUN_WORD}(?:\s*/\s*{_PRONOUN_WORD})+\)?\s*|\s*pronouns?\s*:?\s*", re.I)
 _STACKED_LAST_FIRST = re.compile(r"([A-Z][\w'’]+(?:[ -][A-Z][\w'’]+)?),\s+([A-Z][a-z][\w'’-]*(?:\s+(?:[A-Z]\.?|[A-Z][a-z][\w'’-]*))?)")  # a line that is only "Blanchard Smith, Korrie L": a two-word surname is fine on a line of its own
 _STAFF_HEAD = re.compile(r"(?:Meet\s+(?:the|our)\s+)?([A-Z][\w&',. -]{2,60}?)\s+(?:Staff|Team|Staff Directory)")
 _UNIT_LINE = re.compile(r"(?:[A-Z][\w&'.-]*\s+){1,5}(?:Center|Centre|Studio|Services|Office|Department|Division|Hub)")
@@ -97,6 +100,19 @@ _BARE_RANK = re.compile(r"(?:(?:Senior|Executive|Interim|Acting|Managing)\s+)*(?
 _WRAP_TAIL = re.compile(r"([A-Z][\w&'’-]*(?:\s+(?:of\s+|for\s+|and\s+|&\s+)?[A-Z][\w&'’-]*){0,2}),\s")  # the start of a line that ends a wrapped post: "Development, Henry M. Example College"
 _ORGISH = re.compile(r"\b(?:University|College|Institute|School|Academy|Inc|LLC|Ltd|Corporation|Company|Foundation|Department|Office|Center|Centre|Services|Division)\b")
 _CONTACT = re.compile(r"@|\bemail\b|\[email|^\(?\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}$", re.I)
+
+
+# A directory that prints the post short: "Drew Woodrow Thurman" / "Dir, Workforce Quality & Dev", "VP Inst & Stu Svcs" (Houston CC's profile listing, fnwords157 6z12x). Only a capitalised short rank opening a line, before a comma, a capital or the line's end, is spelled out; "dir" in prose stays.
+_SHORT_RANK = re.compile(r"^([ \t\u00a0]*)((?:(?:Sr|Exec|Assoc|Asst|Interim|Senior|Executive|Associate|Assistant)\.?[ \t]+)*)(Dir|AVP|SVP|EVP|VP)\b\.?(?=,|[ \t]+[A-Z&]|[ \t]*$)")
+_SHORT_WORD = {"sr": "Senior", "exec": "Executive", "assoc": "Associate", "asst": "Assistant", "dir": "Director", "avp": "Associate Vice President", "svp": "Senior Vice President", "evp": "Executive Vice President", "vp": "Vice President"}
+
+
+def _rank_long(l):
+    """A line whose post opens on a short rank, with the rank spelled out: "Dir, Workforce Quality & Dev" is "Director, Workforce Quality & Dev"."""
+    m = _SHORT_RANK.match(l)
+    if not m: return l
+    pre = " ".join(_SHORT_WORD.get(w.rstrip(".").lower(), w) for w in m.group(2).split())
+    return m.group(1) + (pre + " " if pre else "") + _SHORT_WORD[m.group(3).lower()] + l[m.end():]
 
 
 def _unit_cell(l):
@@ -159,7 +175,7 @@ def people_in(text, ld=()):
         add(m.group("name"), title, "prose")
     lines, gap, blank = [], [], False
     for l in text.split("\n"):
-        if l.strip(): lines.append(l); gap.append(blank); blank = False
+        if l.strip(): lines.append(_rank_long(l)); gap.append(blank); blank = False
         else: blank = True
     def head_unit(l):
         m = _STAFF_HEAD.fullmatch(re.sub(r"^The\s+", "", l.strip()))
@@ -592,7 +608,9 @@ def title_slot(text, name, title, org=""):
     then = re.compile(rf"^(?:she|he|they|{re.escape(toks[-1]) if toks else 'she'})\s+(?:is|serves as|has been)\s+(.*)$", re.I)
     contact = re.compile(r"\s*(?:[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\+?[\d(][\d ().-]{6,}\d)\s*$")
     def contact_line(line):
-        return bool(re.fullmatch(r"\s*(?:(?:e-?mail|phone|tel|fax|contact)\b.*|[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\[email\s*protected\]|\+?[\d(][\d ().-]{6,}\d)\s*", line, re.I))  # "[email protected]": Cloudflare hides the address (Wake Tech, ASU)
+        # One item, or several on the one line: "jdoe@example.com (608) 555-0100" (Madison College's directory, 6z12x).
+        item = r"(?:[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\[email\s*protected\]|\+?[\d(][\d ().-]{6,}\d)"
+        return bool(re.fullmatch(r"\s*(?:(?:e-?mail|phone|tel|fax|contact)\b.*|" + item + r"(?:\s*[|,;/]?\s*" + item + r")*)\s*", line, re.I))  # "[email protected]": Cloudflare hides the address (Wake Tech, ASU)
     for i, line in enumerate(lines):
         # A directory row: "Jane Doe<TAB>Dean of Students<TAB>jdoe@example.com", nothing but contact cells after the post.
         if "\t" in line:
@@ -648,13 +666,16 @@ def title_slot(text, name, title, org=""):
             # A name alone on its line (bar an address or phone) takes the line under it, or else the line over it,
             # but over only when nothing under it reads as another post and the line above that isn't someone else.
             bare = contact.sub("", sent)
+            bare = re.sub(rf"\s*\(\s*{_PRONOUN_WORD}(?:\s*/\s*{_PRONOUN_WORD})+\s*\)\s*$", "", bare, flags=re.I)  # "Jane Doe (she/her)": the pronouns are no part of the line
             if _alone(bare, rx.search(bare) or m):
                 # Blocks that print the post above the name: "Vice President, Student Success" / "Shelli Allen" / blank / "Vice President, Workforce Development" / "Elisa Waldman". The post over the name, in its block, is theirs; the one past the blank line is the next person's (JCCC's cabinet page, fnwords113 review).
                 if i and not opens[i] and i + 1 < len(lines) and opens[i + 1] and _LINE_ROLE.match(lines[i - 1]) and len(lines[i - 1]) < 160 and (i < 2 or opens[i - 1]):
                     # "Vice President, Student Success and Engagement/Chief Student Affairs Officer (CSAO)": two posts, either one theirs.
                     if role(lines[i - 1]) or any(role(x) for x in re.split(r"\s*/\s*", lines[i - 1]) if x): return " ".join((lines[i - 1] + " " + sent).split())[:300]
                     continue
-                below = lines[i + 1] if i + 1 < len(lines) else ""
+                nxt = i + 1
+                while nxt < len(lines) and _PRONOUN_LINE.fullmatch(lines[nxt]): nxt += 1
+                below = lines[nxt] if nxt < len(lines) else ""
                 # A card's post may run on into its email or phone on the same line.
                 post = below
                 while True:
@@ -664,7 +685,7 @@ def title_slot(text, name, title, org=""):
                     post = post[:end.start()].rstrip(" |,;")
                 if below and role(post): return " ".join((sent + " " + below).split())[:300]
                 # A card splits the post over two lines: "Dean" then "Business & Workforce Development,Administration".
-                two = lines[i + 2] if i + 2 < len(lines) else ""
+                two = lines[nxt + 1] if nxt + 1 < len(lines) else ""
                 if below and two and not contact_line(below) and not contact_line(two) and not _alone_name(two) and len(below.split()) <= 8 and role(below + " " + two):
                     return " ".join((sent + " " + below + " " + two).split())[:300]
                 # ... with the rank printed after the post: "Director, Senior," / "Career and Professional Development Services" (ASU's profile pages, fnwords108).

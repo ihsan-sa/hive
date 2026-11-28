@@ -6,14 +6,23 @@ A release can ship several times a day. A Hive installs each one as soon as it's
 
 ## More than one Hive on a machine
 
-Put `HIVE_USER=name` in front of the Windows or Mac install line to add a second Hive beside the first, with its own command (`hive-name`). The first Hive is left as it was. The same word in front of the uninstall line removes just that Hive, after saying how many the system holds; the system goes with its last one. Each Hive's port is picked under a lock and kept in a list only root writes, so two Hives installed at the same time get two ports, a reinstall keeps its own, and removing a Hive gives its port back. As root, `hive-admin list` shows every Hive on the machine, with its user, port, version, whether it is running, and its update state (`--json`). The [install page](docs/install.md) has the lines to run.
+Put `HIVE_USER=name` in front of the Windows or Mac install line to add a second Hive beside the first, with its own command (`hive-name`). The first Hive is left as it was. The same word in front of the uninstall line removes just that Hive, after saying how many the system holds; the system goes with its last one. Each Hive's port is picked under a lock and kept in a list only root writes, so two Hives installed at the same time get two ports, a reinstall keeps its own, and removing a Hive gives its port back. On Windows, two Hives can be installed at the same time; each writes its own install log. As root, `hive-admin list` shows every Hive on the machine, with its user, port, version, whether it is running, and its update state (`--json`). The [install page](docs/install.md) has the lines to run.
 
 ## Move a project between Hives
 
 `hive export NAME` saves a project as one zip with its git history, and `hive import ZIP` brings it in on another Hive without overwriting anything. Hooks and commands in its git settings are left out.
 
+## Writing by hand: faster, endless paper, maths and pictures
+
+The pen keeps up on a page full of ink, where it used to stutter and stall. A writing space's page now goes on in every direction, and ink outside the sheet is kept, shown and sent with the rest. The tool row floats, can be dragged anywhere and stays where you put it, and has its own **Send** button. Maths and pictures in a writing space's problem are now drawn instead of shown as typed.
+
+## More room in a chat, and writing spaces open with a tap
+
+The up arrow at the end of a conversation's header hides the top bar, the header and the status line; the down arrow brings them back, and the choice is remembered on that device. Tapping or clicking a writing space now opens its page.
+
 ## Smaller fixes, 2026-11-27
 
+- Each release is now checked with two Hives side by side on Linux, Windows and the Mac before it goes out.
 - A new command, `hive shell NAME`, opens a terminal in that Hive's home as its user, from a Mac or Windows terminal or inside a Hive; with no name it opens this Hive's.
 - Running the install line a second time on Windows or a Mac now says the Hive was already here.
 - Bringing in a project refuses zips that hide a second git repository, and leaves no half-unpacked folder behind.

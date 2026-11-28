@@ -130,6 +130,9 @@ function bandNow(current) {
 function band(current) {
   if (S.failed && S.signedOut) return banner({ tone: "bad", cls: "lost", dismiss: false, text: [h("b", null, "Your sign-in has run out."), " Sign in again to see your Hive; your typing is kept."],
     actions: button("Sign in again", () => location.reload(), { size: "s", kind: "quiet" }) });
+  // E207: nothing came this load, so the chats are the copy kept on this device (core/offline.js): say that, not which read failed
+  if (S.failed && S.offline) return banner({ tone: "bad", cls: "lost", dismiss: false, text: [h("b", null, "Can't reach your Hive."), " Showing the chats this device last read. Trying again every few seconds."],
+    actions: button("Try now", () => poll(), { size: "s", kind: "quiet" }) });
   if (S.failed) return banner({ tone: "bad", cls: "lost", dismiss: false, text: [h("b", null, "Can't reach your Hive."), S.fresh ? ` What you see is from ${clock(S.fresh)}.` : "", S.failWhy ? " " + S.failWhy : "", " Trying again every few seconds; your typing is kept."],
     actions: button("Try now", () => poll(), { size: "s", kind: "quiet" }) });
   const sign = signInWords(); if (sign) return stateBand("band.signin", "bad", statusDot("limited"), sign,

@@ -14,8 +14,10 @@ export function reportLoad() {
     const t0 = performance.now(), res = performance.getEntriesByType("resource");
     const send = () => {
       sessionStorage.setItem("loadtime.sent", "1");
+      // R-1128-a: a load opened on a page with no prompt box (#agents, #settings) gave up after 100 ticks and sent that ~12 s as "chat",
+      // which read as a slow visible load. It now sends no chat time, nobox: true, and the page's first hash segment (never a thread name).
       const chat = document.querySelector(".cm-home .cp-box, .cm-conv .cp-box") ? performance.now() : null;
-      const body = { ttfb: nav.responseStart, dom: nav.domContentLoadedEventEnd, load: nav.loadEventEnd || performance.now(), boot: t0, chat: chat ?? performance.now(), files: res.length, bytes: res.reduce((a, r) => a + (r.transferSize || 0), 0), width: innerWidth, cold: res.length > 20 && res.every(r => r.transferSize > 0), hidden: hid || window.h2LoadHidden === true || document.visibilityState === "hidden" };
+      const body = { ttfb: nav.responseStart, dom: nav.domContentLoadedEventEnd, load: nav.loadEventEnd || performance.now(), boot: t0, ...(chat === null ? { nobox: true } : { chat }), page: (location.hash.match(/^#[a-z~_-]{1,20}/i) || ["#"])[0], files: res.length, bytes: res.reduce((a, r) => a + (r.transferSize || 0), 0), width: innerWidth, cold: res.length > 20 && res.every(r => r.transferSize > 0), hidden: hid || window.h2LoadHidden === true || document.visibilityState === "hidden" };
       post("/api/loadtime", body).catch(() => {});
     };
     let n = 0; const tick = () => { if (document.querySelector(".cp-box") || ++n > 100) send(); else setTimeout(tick, 100); };

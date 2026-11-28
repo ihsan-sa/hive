@@ -24,7 +24,7 @@ import { wordBoxButton, wordBoxPanel, forCard, replyWord, cardWhy, openApproval,
 import { approveLabel, kindOf } from "./wordkind.js";
 import { rootBox, boxOrigin } from "./rootbox.js";
 import { delivery } from "./message.js";   // circular, used only at render time
-import { inkPending, clearPending, clearSent, pend as inkPend, fold as inkSheets } from "../ink/store.js";
+import { inkPending, clearPending, clearSent, pend as inkPend, fold as inkSheets, writePage } from "../ink/store.js";
 import { thumb as inkThumb, sheetTitle } from "../ink/sheet.js";
 
 // menu: which of the bar's menus is open (to | add | aa | model), or false. mode: thread → "interrupt" while armed.
@@ -343,7 +343,7 @@ function inkUndoChip(th) {
       window.dispatchEvent(new CustomEvent("ink:change", { detail: { th } })); refresh();
     } }, "Undo"));
 }
-addEventListener("ink:change", e => { const th = e.detail && e.detail.th; if ((CP.update || CP.side) && document.querySelector(`.cp[data-key="${CSS.escape("cp:" + (th || ""))}"]`)) refresh(); });
+addEventListener("ink:change", e => { const th = e.detail && e.detail.th; if (!writePage() && (CP.update || CP.side) && document.querySelector(`.cp[data-key="${CSS.escape("cp:" + (th || ""))}"]`)) refresh(); });
 // Send work on a writing space (ink/sheet.js).
 addEventListener("ink:send", e => {
   const { th } = e.detail || {}; if (!th) return;
