@@ -18,10 +18,34 @@ as hive 'mkdir -p ~/projects/demo && cd ~/projects/demo && git init -q -b main &
 B1=$(vm sudo stat -c %s /home/hive/board.jsonl); S1=$(vm sudo sha256sum /home/hive/board.jsonl | cut -c1-64)
 
 # Two more at once, as a person running the line in two Terminal windows would.
+# Bounded, and loud: a bare wait printed nothing for 8 minutes when the step's timeout killed it (run 46028297245),
+# so every minute says where each install is, and past the deadline the logs and the VM's processes are shown before both are stopped.
+mask() { sed -E 's/login#[^ ]*/login#.../g; s/#[A-Za-z0-9_-]{6,}/#SECRET/g'; }
+vmt() { vm "$@" & vp=$!; ( sleep 60; kill "$vp" 2>/dev/null ) >/dev/null 2>&1 & vk=$!; wait "$vp"; vr=$?; pkill -P "$vk" 2>/dev/null; kill "$vk" 2>/dev/null; return $vr; }  # its sleep must not hold the step's output open  # macOS has no timeout(1)
+stuck() {
+  echo "--   the two installs, at $1:"
+  for f in many-1.log many-1b.log; do echo "=== $f (last 40 lines)"; tail -n 40 "$f" | mask; done
+  echo "=== on the Mac"; ps -axo pid,ppid,etime,args | grep -E 'limactl|line\.sh|ssh' | grep -v grep | cut -c1-220 | mask
+  echo "=== in the VM"
+  vmt sudo sh -c 'ps -eo pid,ppid,etime,stat,wchan:20,args --forest | grep -v "\[" | cut -c1-220; echo "--- locks"; ls -l /proc/[0-9]*/fd 2>/dev/null | grep -E "lock|dpkg" | head; for l in /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock; do fuser -v "$l" 2>&1 | tail -n +2; done; echo "--- logind"; timeout 5 loginctl list-users; timeout 5 loginctl list-sessions; echo "--- journal"; journalctl -n 40 --no-pager | cut -c1-200; echo "--- homes"; ls -la /home; for h in /home/hive-work /home/hive-two; do echo "$h:"; ls -la "$h" 2>/dev/null | head -n 30; done' 2>&1 | mask
+}
 HIVE_USER=hive-work sh line.sh > many-1.log 2>&1 & a=$!
 HIVE_USER=hive-two sh line.sh > many-1b.log 2>&1 & b=$!
-wait $a && ok "install hive-work (at the same time as hive-two)" || { bad "install hive-work"; tail -n 30 many-1.log | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/'; }
-wait $b && ok "install hive-two (at the same time as hive-work)" || { bad "install hive-two"; tail -n 30 many-1b.log | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/'; }
+t0=$(date +%s); limit=${MANY_LIMIT:-780}; ra=""; rb=""; ta=""; tb=""
+while [ -z "$ra" ] || [ -z "$rb" ]; do
+  sleep 10; t=$(( $(date +%s) - t0 ))
+  if [ -z "$ra" ] && ! kill -0 "$a" 2>/dev/null; then wait "$a"; ra=$?; ta=$t; note "hive-work's line ended after $t s (exit $ra)"; fi
+  if [ -z "$rb" ] && ! kill -0 "$b" 2>/dev/null; then wait "$b"; rb=$?; tb=$t; note "hive-two's line ended after $t s (exit $rb)"; fi
+  [ $((t % 60)) -lt 10 ] && [ $t -ge 60 ] && note "$((t / 60)) min: hive-work | $(tail -n 1 many-1.log | cut -c1-120 | mask)  //  hive-two | $(tail -n 1 many-1b.log | cut -c1-120 | mask)"
+  if [ $t -ge "$limit" ]; then
+    bad "the two installs at once didn't finish in $limit s"; stuck "$t s"
+    for p in $a $b; do pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null; done
+    pkill -f 'HIVE_USER=hive-(work|two) HIVE_INSIDE' 2>/dev/null
+    echo FAILED; exit 1
+  fi
+done
+[ "$ra" = 0 ] && ok "install hive-work (at the same time as hive-two), $ta s" || { bad "install hive-work"; tail -n 30 many-1.log | mask; }
+[ "$rb" = 0 ] && ok "install hive-two (at the same time as hive-work), $tb s" || { bad "install hive-two"; tail -n 30 many-1b.log | mask; }
 tail -n 6 many-1.log | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/; s/^/--   hive-work | /'
 tail -n 6 many-1b.log | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/; s/^/--   hive-two | /'
 [ -x "$HOME/.hive/bin/hive-work" ] && ok "hive-work command on the Mac" || bad "hive-work command on the Mac"

@@ -33,7 +33,8 @@ jobs:
         tail -n 80 install.log
         grep -q '^done, 0 failed\.' install.log && ! grep -q '^done, [1-9][0-9]* failed' install.log
     - name: Two more Hives beside it, installed at once (rig/mac-many.sh; many.yml does Linux and Windows)
-      timeout-minutes: 8
+      # mac-many.sh stops the two installs itself after 13 min (MANY_LIMIT) and shows why, so this limit is only a backstop.
+      timeout-minutes: 16
       run: sh rig/mac-many.sh < /dev/null
     - name: The report
       if: always()
@@ -46,7 +47,7 @@ jobs:
         ps -axo pid,etime,command | grep -i -E 'lima|hive' | grep -v grep | cut -c1-200 || true
         echo "=== inside the VM"
         L="$HOME/.hive/lima-dist/bin/limactl"
-        timeout 60 "$L" shell --workdir / hive sh -c 'ps -eo pid,ppid,etime,stat,args --forest | cut -c1-200; echo ---; tail -n 30 /home/hive/.h2/voice-setup.log 2>/dev/null; journalctl -n 30 --no-pager 2>/dev/null | cut -c1-200' </dev/null || true
+        perl -e 'alarm 60; exec @ARGV' "$L" shell --workdir / hive sh -c 'ps -eo pid,ppid,etime,stat,args --forest | cut -c1-200; echo ---; tail -n 30 /home/hive/.h2/voice-setup.log 2>/dev/null; journalctl -n 30 --no-pager 2>/dev/null | cut -c1-200' </dev/null || true
     - name: Uninstall, for real
       if: always()
       timeout-minutes: 8
